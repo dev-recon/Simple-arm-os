@@ -1,0 +1,239 @@
+#include <kernel/syscalls.h>
+#include <kernel/process.h>
+#include <kernel/memory.h>
+#include <kernel/vfs.h>
+#include <kernel/kernel.h>
+#include <kernel/string.h>
+#include <kernel/task.h>
+#include <kernel/userspace.h>
+
+/* Forward declarations de toutes les fonctions statiques */
+
+int sys_brk(void* addr)
+{
+    process_t* proc = current_task->process ;
+    uint32_t new_brk = (uint32_t)addr;
+    uint32_t old_brk;
+    uint32_t addr_to_unmap;
+    vma_t* heap_vma;
+    
+    if (!proc || !proc->vm) return -EINVAL;
+    
+    old_brk = proc->vm->heap_end;
+    
+    /* If addr is NULL, return current brk */
+    if (!addr) {
+        return (int)old_brk;
+    }
+    
+    /* Align to page boundary */
+    new_brk = ALIGN_UP(new_brk, PAGE_SIZE);
+    
+    if (new_brk < old_brk) {
+        /* Shrinking heap */
+        heap_vma = find_vma(proc->vm, proc->vm->heap_start);
+        if (!heap_vma) return -ENOMEM;
+        
+        /* Unmap pages */
+        for (addr_to_unmap = new_brk; addr_to_unmap < old_brk; addr_to_unmap += PAGE_SIZE) {
+            if (addr_to_unmap >= proc->vm->heap_start) {
+                unmap_user_page(proc->vm->pgdir, addr_to_unmap);
+            }
+        }
+    } else if (new_brk > old_brk) {
+        /* Growing heap */
+        heap_vma = find_vma(proc->vm, proc->vm->heap_start);
+        if (!heap_vma) return -ENOMEM;
+        
+        /* Check if we have enough space */
+        if (new_brk > proc->vm->stack_start) {
+            return -ENOMEM;
+        }
+        
+        /* Pages will be allocated on demand via page faults */
+    }
+    
+    proc->vm->heap_end = new_brk;
+    return (int)new_brk;
+}
+
+
+int sys_dup(int oldfd)
+{
+    file_t* file;
+    int newfd;
+    
+    if (oldfd < 0 || oldfd >= MAX_FILES) return -EBADF;
+    
+    file = current_task->process->files[oldfd];
+    if (!file) return -EBADF;
+    
+    newfd = allocate_fd(current_task);
+    if (newfd < 0) return -EMFILE;
+    
+    file->ref_count++;
+    current_task->process->files[newfd] = file;
+    
+    return newfd;
+}
+
+int sys_dup2(int oldfd, int newfd)
+{
+    file_t* file;
+    
+    if (oldfd < 0 || oldfd >= MAX_FILES) return -EBADF;
+    if (newfd < 0 || newfd >= MAX_FILES) return -EBADF;
+    
+    if (oldfd == newfd) return newfd;
+    
+    file = current_task->process->files[oldfd];
+    if (!file) return -EBADF;
+    
+    /* Close newfd if it's open */
+    if (current_task->process->files[newfd]) {
+        close_file(current_task->process->files[newfd]);
+    }
+    
+    file->ref_count++;
+    current_task->process->files[newfd] = file;
+    
+    return newfd;
+}
+
+int sys_pipe(int pipefd[2])
+{
+    /* TODO: Implement pipes */
+    (void)pipefd;
+    return -ENOSYS;
+}
+
+int sys_chdir(const char* path)
+{
+    char* kernel_path;
+    inode_t* inode;
+    
+    kernel_path = copy_string_from_user(path);
+    if (!kernel_path) return -EFAULT;
+    
+    inode = path_lookup(kernel_path);
+    kfree(kernel_path);
+    
+    if (!inode) return -ENOENT;
+    
+    if (!S_ISDIR(inode->mode)) {
+        put_inode(inode);
+        return -ENOTDIR;
+    }
+    
+    /* TODO: Update current working directory */
+    put_inode(inode);
+    
+    return 0;
+}
+
+int sys_getcwd(char* buf, size_t size)
+{
+    const char* cwd = "/";
+    size_t len = strlen(cwd);
+    
+    if (size < len + 1) return -ERANGE;
+    
+    if (copy_to_user(buf, cwd, len + 1) < 0) {
+        return -EFAULT;
+    }
+    
+    return (int)(len + 1);
+}
+
+int sys_access(const char* pathname, int mode)
+{
+    char* kernel_path;
+    inode_t* inode;
+    
+    /* Suppression du warning unused parameter */
+    (void)mode;
+    
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path) return -EFAULT;
+    
+    inode = path_lookup(kernel_path);
+    kfree(kernel_path);
+    
+    if (!inode) return -ENOENT;
+    
+    put_inode(inode);
+    return 0;
+}
+
+int sys_umask(int mask)
+{
+    /* Suppression du warning unused parameter */
+    (void)mask;
+    
+    /* TODO: Implement umask */
+    return 022; /* Default umask */
+}
+
+int sys_chmod(const char* pathname, mode_t mode)
+{
+    /* Suppression des warnings unused parameter */
+    (void)pathname;
+    (void)mode;
+    
+    /* TODO: Implement chmod */
+    return -ENOSYS;
+}
+
+int sys_chown(const char* pathname, uid_t owner, gid_t group)
+{
+    /* Suppression des warnings unused parameter */
+    (void)pathname;
+    (void)owner;
+    (void)group;
+    
+    /* TODO: Implement chown */
+    return -ENOSYS;
+}
+
+int sys_unlink(const char* pathname)
+{
+    char* kernel_path;
+    
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path) return -EFAULT;
+    
+    kfree(kernel_path);
+    
+    /* TODO: Implement unlink */
+    return -ENOSYS;
+}
+
+int sys_rmdir(const char* pathname)
+{
+    char* kernel_path;
+    
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path) return -EFAULT;
+    
+    kfree(kernel_path);
+    
+    /* TODO: Implement rmdir */
+    return -ENOSYS;
+}
+
+int sys_mkdir(const char* pathname, mode_t mode)
+{
+    char* kernel_path;
+    
+    /* Suppression du warning unused parameter */
+    (void)mode;
+    
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path) return -EFAULT;
+    
+    kfree(kernel_path);
+    
+    /* TODO: Implement mkdir */
+    return -ENOSYS;
+}
+

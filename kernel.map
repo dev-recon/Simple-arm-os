@@ -1,0 +1,1384 @@
+
+Discarded input sections
+
+ .comment       0x00000000       0x13 kernel/main.o
+ .comment       0x00000000       0x13 kernel/internals/ls_process.o
+ .comment       0x00000000       0x13 kernel/memory/helpers.o
+ .comment       0x00000000       0x13 kernel/memory/physical.o
+ .comment       0x00000000       0x13 kernel/memory/virtual.o
+ .comment       0x00000000       0x13 kernel/memory/mmu.o
+ .comment       0x00000000       0x13 kernel/memory/kmalloc.o
+ .comment       0x00000000       0x13 kernel/memory/memory_detect.o
+ .comment       0x00000000       0x13 kernel/process/process.o
+ .comment       0x00000000       0x13 kernel/process/fork.o
+ .comment       0x00000000       0x13 kernel/process/exec.o
+ .comment       0x00000000       0x13 kernel/process/signal.o
+ .comment       0x00000000       0x13 kernel/fs/vfs.o
+ .comment       0x00000000       0x13 kernel/fs/fat32.o
+ .comment       0x00000000       0x13 kernel/fs/fat32_vfs.o
+ .comment       0x00000000       0x13 kernel/fs/userfs_loader.o
+ .comment       0x00000000       0x13 kernel/drivers/ata.o
+ .comment       0x00000000       0x13 kernel/drivers/keyboard.o
+ .comment       0x00000000       0x13 kernel/drivers/display.o
+ .comment       0x00000000       0x13 kernel/drivers/console.o
+ .comment       0x00000000       0x13 kernel/drivers/uart.o
+ .comment       0x00000000       0x13 kernel/drivers/ide.o
+ .comment       0x00000000       0x13 kernel/drivers/ramfs.o
+ .comment       0x00000000       0x13 kernel/drivers/tar_parser_ramfs.o
+ .comment       0x00000000       0x13 kernel/interrupt/exception.o
+ .comment       0x00000000       0x13 kernel/interrupt/gic.o
+ .comment       0x00000000       0x13 kernel/interrupt/timer.o
+ .comment       0x00000000       0x13 kernel/syscalls/syscalls.o
+ .comment       0x00000000       0x13 kernel/syscalls/file.o
+ .comment       0x00000000       0x13 kernel/syscalls/process_syscalls.o
+ .comment       0x00000000       0x13 kernel/user/userspace.o
+ .comment       0x00000000       0x13 kernel/lib/kprintf.o
+ .comment       0x00000000       0x13 kernel/lib/string.o
+ .comment       0x00000000       0x13 kernel/lib/font_8x16.o
+ .comment       0x00000000       0x13 kernel/lib/divmod.o
+ .comment       0x00000000       0x13 kernel/lib/debug_print.o
+ .comment       0x00000000       0x13 kernel/lib/math.o
+ .comment       0x00000000       0x13 kernel/task/task.o
+ .comment       0x00000000       0x13 kernel/task/task_test.o
+ .comment       0x00000000       0x13 kernel/task/kernel_tasks.o
+ .comment       0x00000000       0x13 kernel/sync/spinlock.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+RAM              0x40010000         0x7d000000         xrw
+*default*        0x00000000         0xffffffff
+
+Linker script and memory map
+
+                0x40010000                        . = 0x40010000
+
+.vectors        0x40010000      0x1a4
+ *(.vectors)
+ .vectors       0x40010000      0x1a4 kernel/boot.o
+                0x40010000                vectors
+                0x40010060                PUT32
+                0x40010078                GET32
+                0x40010090                PUT8
+                0x400100a8                GET8
+                0x400100c0                PUT16
+                0x400100d8                GET16
+                0x400100f0                PUT32_STRONG
+                0x40010118                GET32_STRONG
+                0x40010140                TEST_MMIO
+                0x400101a4                        __start = .
+                0x400101a4                        __kernel_start = .
+
+.text.boot
+ *(.text.boot)
+
+.text           0x400101b0    0x337a8
+                0x400101b0                        __text_start = .
+ *(.text)
+ .text          0x400101b0      0x18c kernel/boot.o
+                0x400101b0                _start
+ .text          0x4001033c      0xa70 kernel/main.o
+                0x40010390                __stack_chk_fail
+                0x400103c4                init_early_uart
+                0x40010438                panic
+                0x40010478                early_init
+                0x40010568                test_heap_health
+                0x40010658                kernel_main
+ .text          0x40010dac      0xd10 kernel/internals/ls_process.o
+                0x40010dac                format_file_entry
+                0x40010f30                ls_read_directory
+                0x400111c0                spawn_ls_process
+                0x400114b0                ls_process_main
+                0x400115cc                execute_ls_command_sync
+                0x40011690                execute_ls_command_async
+                0x400116fc                test_process_system_with_ls
+                0x40011820                test_ramfs_cluster_content
+ .text          0x40011abc     0x5b5c kernel/memory/helpers.o
+                0x40011f14                analyze_l1_entry
+                0x400121d8                analyze_l2_entry
+                0x40012460                dump_mmu_control_registers
+                0x400127d0                analyze_virtual_address
+                0x40012bbc                full_mmu_diagnostic
+                0x40012c94                debug_mmu_before_crash
+                0x40012cc4                debug_crash_address
+                0x400138d8                setup_temp_mapping_slots
+                0x40013b20                init_temp_mapping_system
+                0x40013b98                preallocate_temp_mapping_system
+                0x40014028                create_l2_access_zone
+                0x400144e8                map_temp_page_multi
+                0x40014914                unmap_temp_page_multi
+                0x40014c30                map_temp_page_large
+                0x40014cb8                unmap_temp_page_large
+                0x40014d04                map_temp_page_multi2
+                0x40014f54                unmap_temp_page_multi2
+                0x40015214                map_temp_page
+                0x4001524c                unmap_temp_page
+                0x4001583c                debug_temp_mappings
+                0x40015a00                map_temp_user_page
+                0x40015b58                unmap_temp_user_page
+                0x40015bec                get_phys_from_temp_mapping
+                0x40015c24                get_phys_addr_from_pgdir
+                0x40015d38                map_temp_page2
+                0x4001606c                unmap_temp_page2
+                0x400161a4                zero_fill_bss
+                0x40016848                get_page_entry_arm
+                0x40016ac0                check_page_permissions
+                0x40016c7c                get_current_ttrb0
+                0x40016ca4                get_address_space_info
+                0x40016fa0                validate_split_ttbr_config
+                0x400170f8                flush_tlb_for_asid
+                0x400171a4                get_vm_space_stats
+                0x40017420                test_temp_mapping
+ .text          0x40017618      0xff8 kernel/memory/physical.o
+                0x40017618                init_memory
+                0x4001816c                allocate_physical_page
+                0x4001825c                free_physical_page
+                0x40018328                allocate_contiguous_pages
+                0x400184a4                free_contiguous_pages
+                0x400185c8                get_free_page_count
+                0x400185ec                get_total_page_count
+ .text          0x40018610     0x24b8 kernel/memory/virtual.o
+                0x400186e8                create_vm_space
+                0x40018a88                destroy_vm_space
+                0x40018bec                create_vma
+                0x40018ddc                fork_vm_space
+                0x4001a530                switch_to_vm_space
+                0x4001a604                get_vm_asid
+                0x4001a640                find_vma
+                0x4001a780                debug_asid_usage
+                0x4001a940                validate_vm_space
+ .text          0x4001aac8     0x2d80 kernel/memory/mmu.o
+                0x4001ab28                dump_l1
+                0x4001ac1c                get_optimal_ttbcr_n
+                0x4001ac84                get_split_boundary
+                0x4001aedc                configure_alignment_policy
+                0x4001af74                check_endianness
+                0x4001b084                setup_mmu
+                0x4001b780                set_current_asid
+                0x4001b8a4                get_current_asid
+                0x4001b8d0                switch_address_space
+                0x4001b9c8                switch_address_space_with_asid
+                0x4001ba9c                vm_allocate_asid
+                0x4001bac4                vm_free_asid
+                0x4001baf4                vm_get_current_asid
+                0x4001bbe0                map_user_stack
+                0x4001bcec                map_user_page
+                0x4001c2c0                map_kernel_page
+                0x4001c3ec                get_physical_address
+                0x4001c6ac                get_physical_address2
+                0x4001c9cc                invalidate_tlb_all
+                0x4001c9f4                invalidate_tlb_page
+                0x4001ca38                invalidate_tlb_page_asid
+                0x4001ca94                invalidate_tlb_asid
+                0x4001cacc                get_ttbr0
+                0x4001caf4                set_ttbr0
+                0x4001cb20                get_kernel_pgdir
+                0x4001cb44                debug_mmu_state
+                0x4001ce2c                debug_kernel_stack_integrity
+                0x4001d3ec                check_memory_corruption
+                0x4001d624                dump_kernel_stack
+                0x4001d7cc                setup_svc_stack
+ .text          0x4001d848      0x75c kernel/memory/kmalloc.o
+                0x4001d848                init_kernel_heap
+                0x4001d9c4                kmalloc
+                0x4001dbf0                kfree
+                0x4001ddf8                kcalloc
+                0x4001de60                krealloc
+                0x4001dee8                kheap_stats
+ .text          0x4001dfa4      0x7fc kernel/memory/memory_detect.o
+                0x4001dfa4                init_memory_detection
+                0x4001dfd0                detect_memory
+ .text          0x4001e7a0      0x710 kernel/process/process.o
+                0x4001e7a0                init_main
+                0x4001e7dc                init_process_system
+                0x4001e930                init_process_main
+                0x4001eb8c                create_process
+                0x4001ebec                destroy_process
+                0x4001ecf8                find_process_by_pid
+                0x4001ede8                get_current_task
+                0x4001ee3c                get_current_process
+ .text          0x4001eeb0     0x10dc kernel/process/fork.o
+                0x4001eeb0                copy_process_files
+                0x4001efb8                close_all_process_files
+                0x4001f07c                return_to_caller_with_value
+                0x4001f200                waitpid_resume_point
+                0x4001f654                clean_children_list
+                0x4001f7c4                find_zombie_child2
+                0x4001f8fc                find_zombie_child
+                0x4001f9d4                has_children2
+                0x4001fae8                has_children
+                0x4001fb9c                remove_child_from_parent
+                0x4001fcf8                orphan_children
+                0x4001fe3c                wakeup_parent
+ .text          0x4001ff8c      0x980 kernel/process/exec.o
+                0x4001ff8c                read_elf_header
+                0x40020040                validate_elf_header
+                0x4002011c                load_elf_segments
+                0x40020324                load_segment
+ .text          0x4002090c     0x1f34 kernel/process/signal.o
+                0x4002090c                init_signal_stack_allocator
+                0x40020b08                init_process_signals
+                0x40020da4                cleanup_process_signals
+                0x40020f28                print_signal_stack_stats
+                0x40021048                send_signal
+                0x4002126c                wake_up_process_for_signal
+                0x40021310                has_pending_signals
+                0x40021384                deliver_signal
+                0x40021d20                sys_kill
+                0x40021e84                sys_signal
+                0x4002201c                sys_sigaction
+                0x400221e0                sys_sigreturn
+                0x40022478                check_pending_signals
+ .text          0x40022840      0xb0c kernel/fs/vfs.o
+                0x40022840                init_vfs
+                0x40022b1c                init_vfs2
+                0x40022d34                create_inode
+                0x40022e28                get_inode
+                0x40022ee4                put_inode
+                0x40022fe4                path_lookup
+                0x4002314c                allocate_fd
+                0x400231dc                free_fd
+                0x40023230                get_root_inode
+                0x40023288                close_cloexec_files
+ .text          0x4002334c     0x2f74 kernel/fs/fat32.o
+                0x40023404                fat32_parse_boot_sector
+                0x40023b3c                ata_read_sectors_debug
+                0x40023f9c                fat32_mount
+                0x40024818                fat32_mount2
+                0x4002557c                test_ata_before_fat32
+                0x400256d0                get_fat32_root_cluster
+                0x400256f4                cluster_to_sector
+                0x40025750                get_next_cluster
+                0x400257c0                fat32_read_cluster
+                0x40025858                fat32_read_file
+                0x4002598c                fat32_find_file
+                0x40025b84                fat32_83_to_name
+                0x40025cf0                fat32_date_to_unix
+                0x40025e04                get_fat32_bytes_per_cluster
+                0x40025e28                get_fat32_sectors_per_cluster
+                0x40025e4c                is_fat32_mounted
+                0x40025e70                debug_src_pointer_issue
+                0x40025f94                validate_src_pointer
+                0x40026150                run_pointer_arithmetic_test
+                0x40026198                init_fat32
+                0x4002620c                mount_fat32_filesystem
+ .text          0x400262c0      0xaf0 kernel/fs/fat32_vfs.o
+ .text          0x40026db0        0x0 kernel/fs/userfs_loader.o
+ .text          0x40026db0     0x3200 kernel/drivers/ata.o
+                0x400275ec                check_qemu_virtio_config
+                0x400276f0                init_ata
+                0x40028138                ata_read_sectors
+                0x40028210                ata_write_sectors
+                0x400283e8                ata_irq_handler
+                0x400297f8                ata_set_real_mode
+                0x40029864                ata_simple_test
+                0x40029c08                ata_is_initialized
+                0x40029c2c                ata_get_capacity_sectors
+                0x40029c54                ata_get_sector_size
+                0x40029c78                ata_is_ready
+                0x40029cc8                virtio_diagnose_device_state
+                0x40029f5c                virtio_comprehensive_test
+ .text          0x40029fb0      0x7f0 kernel/drivers/keyboard.o
+                0x40029fb0                init_keyboard
+                0x4002a06c                keyboard_irq_handler
+                0x4002a0e0                handle_scancode
+                0x4002a324                convert_to_ascii_mac_fr
+                0x4002a49c                add_to_keyboard_buffer
+                0x4002a534                keyboard_getchar
+ .text          0x4002a7a0      0xc08 kernel/drivers/display.o
+                0x4002a7a0                init_display
+                0x4002aa08                init_display2
+                0x4002abd0                clear_screen
+                0x4002ac84                put_pixel
+                0x4002ad20                draw_char
+                0x4002ae48                console_putchar
+                0x4002b08c                console_puts
+                0x4002b0e4                scroll_screen
+                0x4002b24c                framebuffer_write
+                0x4002b2c8                framebuffer_read
+ .text          0x4002b3a8      0x14c kernel/drivers/console.o
+                0x4002b3a8                console_device_read
+                0x4002b484                console_device_write
+                0x4002b4c8                init_console_devices
+ .text          0x4002b4f4      0xbe8 kernel/drivers/uart.o
+                0x4002b4f4                uart_init
+                0x4002b5a0                uart_putc
+                0x4002b670                uart_puts
+                0x4002b6e0                uart_getc
+                0x4002b724                uart_put_hex
+                0x4002b80c                uart_put_dec
+                0x4002b924                uart_put_bin
+                0x4002b9e0                uart_printf
+                0x4002bb28                uart_test_loopback
+                0x4002bbe0                uart_dump_registers
+                0x4002bd60                putchar_kernel
+                0x4002bd98                uart_flush
+                0x4002be40                uart_has_data
+                0x4002c028                create_uart_console_file
+ .text          0x4002c0dc      0xc34 kernel/drivers/ide.o
+                0x4002c364                ide_irq_handler
+                0x4002c3d4                init_ide
+                0x4002c568                ide_identify
+                0x4002c7a0                ide_read_sector
+                0x4002ca58                ide_comprehensive_test
+                0x4002cc38                ide_quick_test
+ .text          0x4002cd10     0x6444 kernel/drivers/ramfs.o
+                0x4002cd10                create_fat32_boot_sector
+                0x4002cf94                create_fat32_fat_tables
+                0x4002d058                create_fat32_root_directory
+                0x4002d904                create_fat32_filesystem_from_userfs2
+                0x4002da3c                create_fat32_filesystem_from_userfs
+                0x4002dbd8                debug_memory_layout_ramfs
+                0x4002dd8c                init_ramfs
+                0x4002e010                ramfs_is_initialized
+                0x4002e034                ramfs_get_capacity_sectors
+                0x4002e070                ramfs_get_sector_size
+                0x4002e094                ramfs_is_ready
+                0x4002e0e4                ramfs_read_sectors
+                0x4002e258                ramfs_write_sectors
+                0x4002ffd4                ramfs_test
+                0x40030f44                ramfs_tar_test
+                0x40031870                ramfs_tar_test2
+                0x40032018                debug_ramfs_creation_step_by_step
+                0x40032490                test_fat32_read_function
+                0x400325d0                debug_root_directory_reading
+ .text          0x40033154     0x1a08 kernel/drivers/tar_parser_ramfs.o
+                0x400342e4                fix_root_in_tar_parser
+                0x400344ec                parse_tar_to_ramfs
+                0x40034adc                load_userfs_from_memory
+ .text          0x40034b5c      0x5f8 kernel/interrupt/exception.o
+                0x40034b5c                undefined_instruction_handler
+                0x40034ba4                prefetch_abort_handler
+                0x40034bf8                data_abort_handler
+ .text          0x40035154      0x1b8 kernel/interrupt/interrupt.o
+                0x40035154                irq_handler
+                0x4003517c                fiq_handler
+                0x400351a0                gic_cpu_interface_init
+                0x400351bc                gic_distributor_init
+                0x4003521c                gic_get_active_irq
+                0x4003522c                gic_ack_irq
+                0x40035234                gic_enable_irq
+                0x40035250                gic_disable_irq
+                0x4003526c                timer_get_frequency
+                0x40035274                timer_get_count
+                0x4003527c                timer_set_compare
+                0x40035284                timer_enable
+                0x40035294                timer_disable
+                0x400352a4                flush_dcache_range
+                0x400352d4                invalidate_icache_all
+                0x400352e8                memory_barrier_full
+                0x400352f4                memory_barrier_read
+                0x400352fc                memory_barrier_write
+ .text          0x4003530c     0x104c kernel/interrupt/gic.o
+                0x4003530c                init_gic
+                0x400358e8                fiq_c_handler
+                0x4003590c                irq_c_handler
+                0x40035aa8                enable_irq
+                0x40035e1c                disable_irq
+                0x40035ea0                test_timer_irq_virt
+                0x40035f38                comprehensive_irq_test_virt
+                0x40036048                test_virtio_irq_virt
+                0x4003616c                complete_gic_debug_virt
+                0x400361f8                set_irq_edge_triggered
+                0x400362ec                gic_enable_irq_kernel
+                0x4003631c                gic_ack_irq_kernel
+ .text          0x40036358      0xaa0 kernel/interrupt/timer.o
+                0x40036358                init_timer_software
+                0x40036434                update_timer_software
+                0x40036600                trigger_timer_interrupt
+                0x40036668                timer_set_timeout
+                0x400366c0                init_timer
+                0x400367e4                timer_irq_handler
+                0x4003690c                timer_irq_handler2
+                0x40036ad4                timer_enable_scheduling
+                0x40036b10                timer_disable_scheduling
+                0x40036b38                get_timer_frequency
+                0x40036b80                get_timer_count
+                0x40036c04                get_system_ticks
+                0x40036c34                get_time_ms
+                0x40036c70                debug_timer_state
+                0x40036de0                wake_up_sleeping_processes
+ .text          0x40036df8      0x18c kernel/syscalls/syscall.o
+                0x40036df8                swi_handler
+                0x40036e78                signal_return_trampoline
+                0x40036e8c                context_switch_virt
+                0x40036ed8                save_user_context
+                0x40036ef0                restore_user_context
+                0x40036f08                setup_signal_frame
+                0x40036f34                flush_syscall_cache
+                0x40036f54                enable_performance_counters
+                0x40036f78                read_cycle_counter
+ .text          0x40036f84      0xe28 kernel/syscalls/syscalls.o
+                0x40036fc8                sys_execve
+                0x40037574                sys_fork
+                0x40037854                sys_exit
+                0x4003797c                kernel_waitpid
+                0x40037afc                sys_waitpid
+                0x40037b88                syscall_handler
+                0x40037c2c                sys_getpid
+                0x40037c8c                sys_getppid
+                0x40037cec                sys_getuid
+                0x40037d08                sys_getgid
+                0x40037d24                sys_print
+ .text          0x40037dac      0x7f0 kernel/syscalls/file.o
+                0x40037dac                sys_read
+                0x40037e80                sys_write
+                0x40037f54                sys_close
+                0x40037ffc                sys_open
+                0x400381c0                sys_lseek
+                0x40038330                sys_stat
+                0x4003845c                create_file
+                0x400384b8                close_file
+ .text          0x4003859c      0x72c kernel/syscalls/process_syscalls.o
+                0x4003859c                sys_brk
+                0x40038760                sys_dup
+                0x40038840                sys_dup2
+                0x40038978                sys_pipe
+                0x4003899c                sys_chdir
+                0x40038a3c                sys_getcwd
+                0x40038ad0                sys_access
+                0x40038b50                sys_umask
+                0x40038b74                sys_chmod
+                0x40038b9c                sys_chown
+                0x40038bc8                sys_unlink
+                0x40038c1c                sys_rmdir
+                0x40038c70                sys_mkdir
+ .text          0x40038cc8      0xc80 kernel/user/userspace.o
+                0x40038cc8                is_valid_user_ptr
+                0x40038d0c                unmap_user_page
+                0x40038d60                strnlen_user
+                0x40038de0                is_valid_user_range
+                0x40038ec0                copy_to_user
+                0x40038fb8                copy_from_user
+                0x400390b0                strncpy_from_user
+                0x40039210                copy_to_user_safe
+                0x40039270                copy_string_from_user
+                0x40039344                copy_argv_from_user
+                0x400394d8                cleanup_exec_args
+                0x400395e4                count_strings
+                0x40039648                setup_stack_strings
+                0x40039670                copy_string_array
+                0x40039700                setup_user_stack
+ .text          0x40039948     0x12d8 kernel/lib/kprintf.o
+                0x40039de4                kvprintf
+                0x4003a8f8                kprintf
+                0x4003aa24                set_debug
+                0x4003aa54                get_debug
+                0x4003aa78                kprintf_test
+ .text          0x4003ac20     0x1664 kernel/lib/string.o
+                0x4003ac20                memset
+                0x4003ac94                memcpy
+                0x4003ad18                memcmp
+                0x4003add0                strlen
+                0x4003ae24                strcmp
+                0x4003aea4                strncmp
+                0x4003af64                strcpy
+                0x4003afc4                strncpy
+                0x4003b084                strdup
+                0x4003b0ec                strchr
+                0x4003b168                strtok
+                0x4003b2cc                init_spinlock2
+                0x4003b2f8                spin_lock2
+                0x4003b344                spin_unlock2
+                0x4003b374                tolower
+                0x4003b3c4                toupper
+                0x4003b414                isalpha
+                0x4003b470                isdigit
+                0x4003b4b4                isalnum
+                0x4003b510                isspace
+                0x4003b584                strstr
+                0x4003b67c                strrchr
+                0x4003b9d4                snprintf
+                0x4003c0f4                strcat
+                0x4003c1a8                strncat
+ .text          0x4003c284        0x0 kernel/lib/font_8x16.o
+ .text          0x4003c284       0xc0 kernel/lib/divmod.o
+                0x4003c284                __aeabi_uidiv
+                0x4003c2f4                __aeabi_uidivmod
+ .text          0x4003c344      0x120 kernel/lib/debug_print.o
+                0x4003c344                debug_print_hex
+                0x4003c3a8                debug_print_dec
+                0x4003c40c                simple_kprintf
+ .text          0x4003c464      0x10c kernel/lib/math.o
+                0x4003c4d8                fast_modulo_power_of_2
+ .text          0x4003c570     0x49c0 kernel/task/task.o
+                0x4003c570                set_process_stack
+                0x4003c9b4                task_create_copy
+                0x4003ccec                validate_task_list
+                0x4003cee0                switch_to_idle_stack
+                0x4003cfc8                init_task_system
+                0x4003d064                cleanup_task_system
+                0x4003d1c4                validate_task_stack_safe
+                0x4003d384                task_type_to_string
+                0x4003d3fc                task_dump_stacks_detailed
+                0x4003d8e0                task_create
+                0x4003db58                init_standard_files
+                0x4003dbd4                task_create_process
+                0x4003dec8                setup_task_context
+                0x4003dfe4                task_destroy
+                0x4003e0d8                verify_ready_queue_integrity
+                0x4003e27c                yield
+                0x4003e2f8                is_on_kernel_stack
+                0x4003e360                is_on_task_stack
+                0x4003e3e0                debug_idle_corruption_source
+                0x4003e528                protect_idle_task
+                0x4003e768                save_task_context_safe
+                0x4003e8d0                schedule
+                0x4003ecc4                schedule_extended
+                0x4003ed18                sched_start
+                0x4003f048                add_task_to_list
+                0x4003f250                idle_task_func
+                0x4003f2c4                task_find_by_id
+                0x4003f374                task_find_by_name
+                0x4003f444                task_set_priority
+                0x4003f4c0                task_get_priority
+                0x4003f4fc                task_set_state
+                0x4003f560                task_get_state
+                0x4003f59c                task_state_string
+                0x4003f64c                task_dump_info
+                0x4003f788                task_dump_stacks
+                0x4003fb78                task_check_stack_integrity
+                0x4003fdf4                task_list_all
+                0x4003ff8c                task_sleep_ms
+                0x40040000                task_get_count
+                0x40040024                task_print_stats
+                0x40040110                debug_context_switch_entry
+                0x40040160                debug_context_switch_middle
+                0x400401b0                debug_context_switch_first_exec
+                0x40040200                debug_context_switch_restore
+                0x40040250                debug_null_old_ctx
+                0x400402a0                debug_null_new_ctx
+                0x400402cc                debug_current_task_detailed
+                0x400405d8                debug_context_registers
+                0x4004077c                debug_print_sp
+                0x40040844                debug_print_sp2
+                0x4004090c                debug_print_sp3
+                0x400409d4                add_to_ready_queue
+                0x40040ac4                remove_from_ready_queue
+                0x40040b38                destroy_zombie_process
+                0x40040c34                is_in_ready_queue
+                0x40040d78                debug_all_task_stacks
+ .text          0x40040f30      0x1a0 kernel/task/task_switch.o
+                0x40040f30                __task_switch_to_user
+                0x40040f6c                __task_first_switch_v2
+                0x40040f90                task_exit_wrapper
+                0x40040f9c                __task_switch_asm_debug
+ .text          0x400410d0      0x950 kernel/task/task_test.o
+                0x400410d0                test_task_system
+                0x400417c4                test_basic_task_functions
+                0x40041898                test_task_stress
+ .text          0x40041a20     0x1954 kernel/task/kernel_tasks.o
+                0x40041a20                kernel_main_loop
+                0x40041af4                create_system_tasks
+                0x40041c1c                shutdown_task_system
+                0x40041c64                system_monitor_task
+                0x40041d84                memory_test_task
+                0x40041f64                simple_shell_task2
+                0x400420c0                shell_process_command
+                0x4004222c                print_system_stats
+                0x400422bc                print_memory_stats
+                0x400423b4                test_context_switch_minimal
+                0x4004247c                minimal_test_func
+                0x40042564                ultra_simple_test
+                0x40042668                ultra_simple_func
+                0x400426a4                test_robust_context_switch
+                0x400427dc                robust_test_func
+                0x40042930                test_robust_context_switch_fixed
+                0x40042a0c                robust_test_func_v2
+                0x40042ae4                test_current_task_simple
+                0x40042be4                main_current_task_debug
+                0x40042c90                list_all_processes
+                0x40042e2c                working_child
+                0x400430e8                simple_shell_task
+                0x4004318c                simple_shell_task3
+ .text          0x40043374      0x5e4 kernel/sync/spinlock.o
+                0x40043374                init_spinlock
+                0x400433d8                init_spinlock_named
+                0x40043454                spin_lock
+                0x400434d4                spin_unlock
+                0x4004355c                spin_trylock
+                0x400435e4                spin_lock_irqsave
+                0x40043644                spin_unlock_irqrestore
+                0x40043690                spin_is_locked
+                0x400436dc                spin_dump_info
+                0x400437c0                spin_get_name
+                0x40043800                test_spinlocks
+ *(.text.*)
+                0x40043958                        __text_end = .
+
+.glue_7         0x40043958        0x0
+ .glue_7        0x40043958        0x0 linker stubs
+
+.glue_7t        0x40043958        0x0
+ .glue_7t       0x40043958        0x0 linker stubs
+
+.vfp11_veneer   0x40043958        0x0
+ .vfp11_veneer  0x40043958        0x0 linker stubs
+
+.v4_bx          0x40043958        0x0
+ .v4_bx         0x40043958        0x0 linker stubs
+
+.iplt           0x40043958        0x0
+ .iplt          0x40043958        0x0 kernel/boot.o
+
+.rodata         0x40043960    0x17367
+                0x40043960                        __rodata_start = .
+ *(.rodata)
+ .rodata        0x40043960       0x6c kernel/boot.o
+                0x40043990                get_cpu_id
+                0x4004399c                get_stack_pointer
+                0x400439a4                align_stack_pointer
+                0x400439b0                invalidate_caches
+                0x400439c4                debug_breakpoint
+ .rodata        0x400439cc      0x898 kernel/main.o
+ .rodata        0x40044264      0x9a3 kernel/internals/ls_process.o
+ *fill*         0x40044c07        0x1 
+ .rodata        0x40044c08     0x3260 kernel/memory/helpers.o
+ .rodata        0x40047e68      0x991 kernel/memory/physical.o
+ *fill*         0x400487f9        0x3 
+ .rodata        0x400487fc     0x1716 kernel/memory/virtual.o
+ *fill*         0x40049f12        0x2 
+ .rodata        0x40049f14     0x1ba3 kernel/memory/mmu.o
+ *fill*         0x4004bab7        0x1 
+ .rodata        0x4004bab8      0x1cb kernel/memory/kmalloc.o
+ *fill*         0x4004bc83        0x1 
+ .rodata        0x4004bc84      0x3c8 kernel/memory/memory_detect.o
+ .rodata        0x4004c04c      0x3f7 kernel/process/process.o
+ *fill*         0x4004c443        0x1 
+ .rodata        0x4004c444      0x742 kernel/process/fork.o
+ *fill*         0x4004cb86        0x2 
+ .rodata        0x4004cb88      0x10c kernel/process/exec.o
+ .rodata        0x4004cc94      0xa37 kernel/process/signal.o
+ *fill*         0x4004d6cb        0x1 
+ .rodata        0x4004d6cc      0x316 kernel/fs/vfs.o
+ *fill*         0x4004d9e2        0x2 
+ .rodata        0x4004d9e4     0x16c4 kernel/fs/fat32.o
+ .rodata        0x4004f0a8      0x1de kernel/fs/fat32_vfs.o
+ *fill*         0x4004f286        0x2 
+ .rodata        0x4004f288     0x1bc7 kernel/drivers/ata.o
+ *fill*         0x40050e4f        0x1 
+ .rodata        0x40050e50       0x2e kernel/drivers/keyboard.o
+ *fill*         0x40050e7e        0x2 
+ .rodata        0x40050e80      0x1d1 kernel/drivers/display.o
+ *fill*         0x40051051        0x3 
+ .rodata        0x40051054       0x1d kernel/drivers/console.o
+ *fill*         0x40051071        0x3 
+ .rodata        0x40051074       0xd7 kernel/drivers/uart.o
+ *fill*         0x4005114b        0x1 
+ .rodata        0x4005114c      0x632 kernel/drivers/ide.o
+ *fill*         0x4005177e        0x2 
+ .rodata        0x40051780     0x2d05 kernel/drivers/ramfs.o
+ *fill*         0x40054485        0x3 
+ .rodata        0x40054488      0x492 kernel/drivers/tar_parser_ramfs.o
+ *fill*         0x4005491a        0x2 
+ .rodata        0x4005491c      0x5d9 kernel/interrupt/exception.o
+ *fill*         0x40054ef5        0x3 
+ .rodata        0x40054ef8      0xab6 kernel/interrupt/gic.o
+ *fill*         0x400559ae        0x2 
+ .rodata        0x400559b0      0x3b3 kernel/interrupt/timer.o
+ *fill*         0x40055d63        0x1 
+ .rodata        0x40055d64      0x5f1 kernel/syscalls/syscalls.o
+ *fill*         0x40056355        0x3 
+ .rodata        0x40056358        0x2 kernel/syscalls/process_syscalls.o
+ *fill*         0x4005635a        0x2 
+ .rodata        0x4005635c      0x19f kernel/user/userspace.o
+ *fill*         0x400564fb        0x1 
+ .rodata        0x400564fc      0x22e kernel/lib/kprintf.o
+ *fill*         0x4005672a        0x2 
+ .rodata        0x4005672c       0x1b kernel/lib/string.o
+ *fill*         0x40056747        0x1 
+ .rodata        0x40056748       0x68 kernel/lib/debug_print.o
+ .rodata        0x400567b0     0x23c4 kernel/task/task.o
+ .rodata        0x40058b74       0x69 kernel/task/task_switch.o
+ *fill*         0x40058bdd        0x3 
+ .rodata        0x40058be0      0x712 kernel/task/task_test.o
+ *fill*         0x400592f2        0x2 
+ .rodata        0x400592f4     0x174c kernel/task/kernel_tasks.o
+ .rodata        0x4005aa40      0x287 kernel/sync/spinlock.o
+ *(.rodata.*)
+                0x4005acc7                        __rodata_end = .
+
+.rel.dyn        0x4005acc8        0x0
+ .rel.iplt      0x4005acc8        0x0 kernel/boot.o
+
+.data           0x4005c000     0x8c94
+                0x4005c000                        __data_start = .
+ *(.data)
+ .data          0x4005c000        0x4 kernel/boot.o
+                0x4005c000                dtb_address
+ .data          0x4005c004        0x4 kernel/main.o
+                0x4005c004                __stack_chk_guard
+ .data          0x4005c008        0x0 kernel/internals/ls_process.o
+ .data          0x4005c008        0x0 kernel/memory/helpers.o
+ .data          0x4005c008        0x0 kernel/memory/physical.o
+ .data          0x4005c008        0x0 kernel/memory/virtual.o
+ *fill*         0x4005c008     0x3ff8 
+ .data          0x40060000     0x4108 kernel/memory/mmu.o
+                0x40064000                kernel_pgdir
+                0x40064008                asid_map
+ .data          0x40064108        0x0 kernel/memory/kmalloc.o
+ .data          0x40064108        0x0 kernel/memory/memory_detect.o
+ .data          0x40064108        0x0 kernel/process/process.o
+ .data          0x40064108        0x0 kernel/process/fork.o
+ .data          0x40064108        0x0 kernel/process/exec.o
+ .data          0x40064108       0x20 kernel/process/signal.o
+ .data          0x40064128        0x4 kernel/fs/vfs.o
+ .data          0x4006412c        0x0 kernel/fs/fat32.o
+ .data          0x4006412c       0x40 kernel/fs/fat32_vfs.o
+                0x4006412c                fat32_file_ops
+                0x40064144                fat32_dir_ops
+                0x4006415c                fat32_inode_ops
+ .data          0x4006416c        0x0 kernel/fs/userfs_loader.o
+ .data          0x4006416c        0x1 kernel/drivers/ata.o
+ *fill*         0x4006416d        0x3 
+ .data          0x40064170       0xa7 kernel/drivers/keyboard.o
+ .data          0x40064217        0x0 kernel/drivers/display.o
+ .data          0x40064217        0x0 kernel/drivers/console.o
+ *fill*         0x40064217        0x1 
+ .data          0x40064218       0x28 kernel/drivers/uart.o
+                0x40064218                uart_lock
+                0x40064228                uart_console_fops
+ .data          0x40064240        0x8 kernel/drivers/ide.o
+ .data          0x40064248       0x34 kernel/drivers/ramfs.o
+ .data          0x4006427c        0xc kernel/drivers/tar_parser_ramfs.o
+ .data          0x40064288        0x0 kernel/interrupt/exception.o
+ .data          0x40064288        0x0 kernel/interrupt/interrupt.o
+ .data          0x40064288        0x0 kernel/interrupt/gic.o
+ .data          0x40064288        0x0 kernel/interrupt/timer.o
+ .data          0x40064288        0x0 kernel/syscalls/syscall.o
+ .data          0x40064288      0x400 kernel/syscalls/syscalls.o
+ .data          0x40064688        0x0 kernel/syscalls/file.o
+ .data          0x40064688        0x0 kernel/syscalls/process_syscalls.o
+ .data          0x40064688        0x0 kernel/user/userspace.o
+ .data          0x40064688        0x0 kernel/lib/kprintf.o
+ .data          0x40064688        0x0 kernel/lib/string.o
+ .data          0x40064688      0x5f0 kernel/lib/font_8x16.o
+                0x40064688                font_8x16
+ .data          0x40064c78        0x0 kernel/lib/divmod.o
+ .data          0x40064c78        0x0 kernel/lib/debug_print.o
+ .data          0x40064c78        0x0 kernel/lib/math.o
+ .data          0x40064c78       0x18 kernel/task/task.o
+                0x40064c80                task_lock
+ .data          0x40064c90        0x0 kernel/task/task_switch.o
+ .data          0x40064c90        0x0 kernel/task/task_test.o
+ .data          0x40064c90        0x4 kernel/task/kernel_tasks.o
+ .data          0x40064c94        0x0 kernel/sync/spinlock.o
+ *(.data.*)
+                0x40064c94                        __data_end = .
+
+.igot.plt       0x40064c94        0x0
+ .igot.plt      0x40064c94        0x0 kernel/boot.o
+
+.bss            0x40065000   0x999000
+                0x40065000                        __bss_start = .
+ *(.bss)
+ .bss           0x40065000        0x0 kernel/boot.o
+ .bss           0x40065000        0x4 kernel/main.o
+ .bss           0x40065004      0x200 kernel/internals/ls_process.o
+ .bss           0x40065204      0x1bc kernel/memory/helpers.o
+                0x4006537c                l2_table_addresses
+ .bss           0x400653c0       0x14 kernel/memory/physical.o
+ .bss           0x400653d4        0x0 kernel/memory/virtual.o
+ .bss           0x400653d4        0x0 kernel/memory/mmu.o
+ .bss           0x400653d4       0x10 kernel/memory/kmalloc.o
+                0x400653d4                heap_base
+                0x400653d8                heap_size
+                0x400653e0                free_list
+ .bss           0x400653e4        0x0 kernel/memory/memory_detect.o
+ .bss           0x400653e4        0x4 kernel/process/process.o
+ .bss           0x400653e8        0x0 kernel/process/fork.o
+ .bss           0x400653e8        0x0 kernel/process/exec.o
+ .bss           0x400653e8       0x10 kernel/process/signal.o
+ .bss           0x400653f8     0x1014 kernel/fs/vfs.o
+ *fill*         0x4006640c        0x4 
+ .bss           0x40066410      0x424 kernel/fs/fat32.o
+                0x40066410                fat32_fs
+ .bss           0x40066834        0x0 kernel/fs/fat32_vfs.o
+ .bss           0x40066834        0x0 kernel/fs/userfs_loader.o
+ *fill*         0x40066834        0xc 
+ .bss           0x40066840      0x688 kernel/drivers/ata.o
+ .bss           0x40066ec8      0x114 kernel/drivers/keyboard.o
+ .bss           0x40066fdc       0x30 kernel/drivers/display.o
+                0x40067008                framebuffer_base
+ .bss           0x4006700c        0x0 kernel/drivers/console.o
+ .bss           0x4006700c        0x0 kernel/drivers/uart.o
+ .bss           0x4006700c        0x4 kernel/drivers/ide.o
+ .bss           0x40067010   0x9900a4 kernel/drivers/ramfs.o
+                0x40067010                ramfs_device
+ .bss           0x409f70b4     0x4000 kernel/drivers/tar_parser_ramfs.o
+ .bss           0x409fb0b4        0x0 kernel/interrupt/exception.o
+ .bss           0x409fb0b4        0x0 kernel/interrupt/interrupt.o
+ .bss           0x409fb0b4        0x8 kernel/interrupt/gic.o
+ *fill*         0x409fb0bc        0x4 
+ .bss           0x409fb0c0       0x15 kernel/interrupt/timer.o
+ .bss           0x409fb0d5        0x0 kernel/syscalls/syscall.o
+ *fill*         0x409fb0d5      0xf2b 
+ .bss           0x409fc000     0x1000 kernel/syscalls/syscalls.o
+ .bss           0x409fd000        0x0 kernel/syscalls/file.o
+ .bss           0x409fd000        0x0 kernel/syscalls/process_syscalls.o
+ .bss           0x409fd000        0x0 kernel/user/userspace.o
+ .bss           0x409fd000      0x404 kernel/lib/kprintf.o
+                0x409fd000                DEBUG
+ .bss           0x409fd404        0x4 kernel/lib/string.o
+ .bss           0x409fd408        0x0 kernel/lib/font_8x16.o
+ .bss           0x409fd408        0x0 kernel/lib/divmod.o
+ .bss           0x409fd408        0x0 kernel/lib/debug_print.o
+ .bss           0x409fd408        0x0 kernel/lib/math.o
+ .bss           0x409fd408       0x2c kernel/task/task.o
+                0x409fd408                current_task
+                0x409fd40c                task_list_head
+                0x409fd410                task_count
+                0x409fd418                idle_task
+                0x409fd41c                init_process
+ .bss           0x409fd434        0x0 kernel/task/task_switch.o
+ .bss           0x409fd434       0x10 kernel/task/task_test.o
+ .bss           0x409fd444        0x8 kernel/task/kernel_tasks.o
+ .bss           0x409fd44c        0x0 kernel/sync/spinlock.o
+ *(.bss.*)
+ *(COMMON)
+                0x409fe000                        . = ALIGN (0x1000)
+ *fill*         0x409fd44c      0xbb4 
+                0x409fe000                        __bss_end = .
+
+.stack          0x409fe000     0x8000
+                0x409fe000                        . = ALIGN (0x1000)
+                0x409fe000                        __stack_bottom = .
+                0x40a06000                        . = (. + 0x8000)
+ *fill*         0x409fe000     0x8000 
+                0x40a06000                        __stack_top = .
+
+.abtpile        0x40a06000      0x400
+                0x40a06000                        . = ALIGN (0x8)
+                0x40a06000                        __abt_stack_bottom = .
+                0x40a06400                        . = (. + 0x400)
+ *fill*         0x40a06000      0x400 
+                0x40a06400                        __abt_stack_top = .
+
+.irqpile        0x40a06400      0x800
+                0x40a06400                        . = ALIGN (0x8)
+                0x40a06400                        __irq_stack_bottom = .
+                0x40a06c00                        . = (. + 0x800)
+ *fill*         0x40a06400      0x800 
+                0x40a06c00                        __irq_stack_top = .
+
+.svcpile        0x40a06c00     0x1000
+                0x40a06c00                        . = ALIGN (0x8)
+                0x40a06c00                        __svc_stack_bottom = .
+                0x40a07c00                        . = (. + 0x1000)
+ *fill*         0x40a06c00     0x1000 
+                0x40a07c00                        __svc_stack_top = .
+                0x40a08000                        . = ALIGN (0x1000)
+                0x40a08000                        __end = .
+                0x40a08000                        __kernel_end = .
+                0x40a08000                        __heap_start = .
+
+.heap           0x40a07c00   0x800400
+                0x40a08000                        . = ALIGN (0x1000)
+ *fill*         0x40a07c00      0x400 
+                0x40a08000                        __heap_start = .
+                0x41208000                        . = (. + 0x800000)
+ *fill*         0x40a08000   0x800000 
+                0x41208000                        __heap_end = .
+                0x41208000                        __free_memory_start = .
+                0x009f7e5c                        __kernel_size = (__kernel_end - __kernel_start)
+                0x00800000                        __heap_size = (__heap_end - __heap_start)
+                0x40000000                        __ram_start = 0x40000000
+                0x40000000                        __ram_end = 0x140000000
+                0x00000000                        __ram_size = (__ram_end - __ram_start)
+
+.debug_info     0x00000000    0x225df
+ *(.debug_info)
+ .debug_info    0x00000000       0x22 kernel/boot.o
+ .debug_info    0x00000022      0xf4d kernel/main.o
+ .debug_info    0x00000f6f     0x1041 kernel/internals/ls_process.o
+ .debug_info    0x00001fb0     0x2ca6 kernel/memory/helpers.o
+ .debug_info    0x00004c56      0x6ce kernel/memory/physical.o
+ .debug_info    0x00005324     0x16c1 kernel/memory/virtual.o
+ .debug_info    0x000069e5     0x2266 kernel/memory/mmu.o
+ .debug_info    0x00008c4b      0x412 kernel/memory/kmalloc.o
+ .debug_info    0x0000905d      0x452 kernel/memory/memory_detect.o
+ .debug_info    0x000094af      0xe47 kernel/process/process.o
+ .debug_info    0x0000a2f6     0x10f6 kernel/process/fork.o
+ .debug_info    0x0000b3ec      0xa0b kernel/process/exec.o
+ .debug_info    0x0000bdf7     0x15b8 kernel/process/signal.o
+ .debug_info    0x0000d3af      0xeeb kernel/fs/vfs.o
+ .debug_info    0x0000e29a     0x133d kernel/fs/fat32.o
+ .debug_info    0x0000f5d7      0xa49 kernel/fs/fat32_vfs.o
+ .debug_info    0x00010020       0x5e kernel/fs/userfs_loader.o
+ .debug_info    0x0001007e     0x1da8 kernel/drivers/ata.o
+ .debug_info    0x00011e26      0xdd1 kernel/drivers/keyboard.o
+ .debug_info    0x00012bf7      0x8e4 kernel/drivers/display.o
+ .debug_info    0x000134db      0x53b kernel/drivers/console.o
+ .debug_info    0x00013a16      0x9e2 kernel/drivers/uart.o
+ .debug_info    0x000143f8      0x4e4 kernel/drivers/ide.o
+ .debug_info    0x000148dc     0x1ed9 kernel/drivers/ramfs.o
+ .debug_info    0x000167b5     0x11f2 kernel/drivers/tar_parser_ramfs.o
+ .debug_info    0x000179a7      0x34b kernel/interrupt/exception.o
+ .debug_info    0x00017cf2       0x26 kernel/interrupt/interrupt.o
+ .debug_info    0x00017d18      0x873 kernel/interrupt/gic.o
+ .debug_info    0x0001858b      0xeb6 kernel/interrupt/timer.o
+ .debug_info    0x00019441       0x26 kernel/syscalls/syscall.o
+ .debug_info    0x00019467     0x1436 kernel/syscalls/syscalls.o
+ .debug_info    0x0001a89d      0xf15 kernel/syscalls/file.o
+ .debug_info    0x0001b7b2      0xe8e kernel/syscalls/process_syscalls.o
+ .debug_info    0x0001c640      0x79f kernel/user/userspace.o
+ .debug_info    0x0001cddf      0x606 kernel/lib/kprintf.o
+ .debug_info    0x0001d3e5      0x9d9 kernel/lib/string.o
+ .debug_info    0x0001ddbe       0x8d kernel/lib/font_8x16.o
+ .debug_info    0x0001de4b       0xb2 kernel/lib/divmod.o
+ .debug_info    0x0001defd      0x15d kernel/lib/debug_print.o
+ .debug_info    0x0001e05a       0xeb kernel/lib/math.o
+ .debug_info    0x0001e145     0x210a kernel/task/task.o
+ .debug_info    0x0002024f       0x51 kernel/task/task_switch.o
+ .debug_info    0x000202a0      0xd30 kernel/task/task_test.o
+ .debug_info    0x00020fd0     0x1354 kernel/task/kernel_tasks.o
+ .debug_info    0x00022324      0x2bb kernel/sync/spinlock.o
+
+.debug_abbrev   0x00000000     0x6c7b
+ *(.debug_abbrev)
+ .debug_abbrev  0x00000000       0x12 kernel/boot.o
+ .debug_abbrev  0x00000012      0x3e5 kernel/main.o
+ .debug_abbrev  0x000003f7      0x36e kernel/internals/ls_process.o
+ .debug_abbrev  0x00000765      0x467 kernel/memory/helpers.o
+ .debug_abbrev  0x00000bcc      0x22a kernel/memory/physical.o
+ .debug_abbrev  0x00000df6      0x37b kernel/memory/virtual.o
+ .debug_abbrev  0x00001171      0x522 kernel/memory/mmu.o
+ .debug_abbrev  0x00001693      0x1bb kernel/memory/kmalloc.o
+ .debug_abbrev  0x0000184e      0x1c8 kernel/memory/memory_detect.o
+ .debug_abbrev  0x00001a16      0x36b kernel/process/process.o
+ .debug_abbrev  0x00001d81      0x38e kernel/process/fork.o
+ .debug_abbrev  0x0000210f      0x23f kernel/process/exec.o
+ .debug_abbrev  0x0000234e      0x3e4 kernel/process/signal.o
+ .debug_abbrev  0x00002732      0x371 kernel/fs/vfs.o
+ .debug_abbrev  0x00002aa3      0x344 kernel/fs/fat32.o
+ .debug_abbrev  0x00002de7      0x24e kernel/fs/fat32_vfs.o
+ .debug_abbrev  0x00003035       0x26 kernel/fs/userfs_loader.o
+ .debug_abbrev  0x0000305b      0x419 kernel/drivers/ata.o
+ .debug_abbrev  0x00003474      0x318 kernel/drivers/keyboard.o
+ .debug_abbrev  0x0000378c      0x1ff kernel/drivers/display.o
+ .debug_abbrev  0x0000398b      0x196 kernel/drivers/console.o
+ .debug_abbrev  0x00003b21      0x33b kernel/drivers/uart.o
+ .debug_abbrev  0x00003e5c      0x1e8 kernel/drivers/ide.o
+ .debug_abbrev  0x00004044      0x391 kernel/drivers/ramfs.o
+ .debug_abbrev  0x000043d5      0x323 kernel/drivers/tar_parser_ramfs.o
+ .debug_abbrev  0x000046f8      0x117 kernel/interrupt/exception.o
+ .debug_abbrev  0x0000480f       0x14 kernel/interrupt/interrupt.o
+ .debug_abbrev  0x00004823      0x1c6 kernel/interrupt/gic.o
+ .debug_abbrev  0x000049e9      0x398 kernel/interrupt/timer.o
+ .debug_abbrev  0x00004d81       0x14 kernel/syscalls/syscall.o
+ .debug_abbrev  0x00004d95      0x3ac kernel/syscalls/syscalls.o
+ .debug_abbrev  0x00005141      0x2c5 kernel/syscalls/file.o
+ .debug_abbrev  0x00005406      0x2a7 kernel/syscalls/process_syscalls.o
+ .debug_abbrev  0x000056ad      0x2bc kernel/user/userspace.o
+ .debug_abbrev  0x00005969      0x231 kernel/lib/kprintf.o
+ .debug_abbrev  0x00005b9a      0x270 kernel/lib/string.o
+ .debug_abbrev  0x00005e0a       0x5a kernel/lib/font_8x16.o
+ .debug_abbrev  0x00005e64       0x7c kernel/lib/divmod.o
+ .debug_abbrev  0x00005ee0       0xe1 kernel/lib/debug_print.o
+ .debug_abbrev  0x00005fc1       0x92 kernel/lib/math.o
+ .debug_abbrev  0x00006053      0x472 kernel/task/task.o
+ .debug_abbrev  0x000064c5       0x21 kernel/task/task_switch.o
+ .debug_abbrev  0x000064e6      0x2db kernel/task/task_test.o
+ .debug_abbrev  0x000067c1      0x379 kernel/task/kernel_tasks.o
+ .debug_abbrev  0x00006b3a      0x141 kernel/sync/spinlock.o
+
+.debug_line     0x00000000     0xe6e0
+ *(.debug_line)
+ .debug_line    0x00000000      0x128 kernel/boot.o
+ .debug_line    0x00000128      0x34e kernel/main.o
+ .debug_line    0x00000476      0x4a4 kernel/internals/ls_process.o
+ .debug_line    0x0000091a     0x15fb kernel/memory/helpers.o
+ .debug_line    0x00001f15      0x4cd kernel/memory/physical.o
+ .debug_line    0x000023e2      0x931 kernel/memory/virtual.o
+ .debug_line    0x00002d13      0xb29 kernel/memory/mmu.o
+ .debug_line    0x0000383c      0x29c kernel/memory/kmalloc.o
+ .debug_line    0x00003ad8      0x282 kernel/memory/memory_detect.o
+ .debug_line    0x00003d5a      0x29e kernel/process/process.o
+ .debug_line    0x00003ff8      0x699 kernel/process/fork.o
+ .debug_line    0x00004691      0x2ca kernel/process/exec.o
+ .debug_line    0x0000495b      0x9a2 kernel/process/signal.o
+ .debug_line    0x000052fd      0x3db kernel/fs/vfs.o
+ .debug_line    0x000056d8      0xb03 kernel/fs/fat32.o
+ .debug_line    0x000061db      0x420 kernel/fs/fat32_vfs.o
+ .debug_line    0x000065fb       0x3a kernel/fs/userfs_loader.o
+ .debug_line    0x00006635      0xc91 kernel/drivers/ata.o
+ .debug_line    0x000072c6      0x2d7 kernel/drivers/keyboard.o
+ .debug_line    0x0000759d      0x3b4 kernel/drivers/display.o
+ .debug_line    0x00007951       0xe8 kernel/drivers/console.o
+ .debug_line    0x00007a39      0x3cc kernel/drivers/uart.o
+ .debug_line    0x00007e05      0x3c7 kernel/drivers/ide.o
+ .debug_line    0x000081cc     0x15e2 kernel/drivers/ramfs.o
+ .debug_line    0x000097ae      0x786 kernel/drivers/tar_parser_ramfs.o
+ .debug_line    0x00009f34      0x1b6 kernel/interrupt/exception.o
+ .debug_line    0x0000a0ea       0xbb kernel/interrupt/interrupt.o
+ .debug_line    0x0000a1a5      0x43f kernel/interrupt/gic.o
+ .debug_line    0x0000a5e4      0x2cc kernel/interrupt/timer.o
+ .debug_line    0x0000a8b0       0xaa kernel/syscalls/syscall.o
+ .debug_line    0x0000a95a      0x4a6 kernel/syscalls/syscalls.o
+ .debug_line    0x0000ae00      0x37a kernel/syscalls/file.o
+ .debug_line    0x0000b17a      0x2f7 kernel/syscalls/process_syscalls.o
+ .debug_line    0x0000b471      0x4b4 kernel/user/userspace.o
+ .debug_line    0x0000b925      0x5cd kernel/lib/kprintf.o
+ .debug_line    0x0000bef2      0x7d3 kernel/lib/string.o
+ .debug_line    0x0000c6c5       0x51 kernel/lib/font_8x16.o
+ .debug_line    0x0000c716       0x6f kernel/lib/divmod.o
+ .debug_line    0x0000c785       0x9a kernel/lib/debug_print.o
+ .debug_line    0x0000c81f       0xa7 kernel/lib/math.o
+ .debug_line    0x0000c8c6     0x1355 kernel/task/task.o
+ .debug_line    0x0000dc1b       0xb7 kernel/task/task_switch.o
+ .debug_line    0x0000dcd2      0x253 kernel/task/task_test.o
+ .debug_line    0x0000df25      0x5e0 kernel/task/kernel_tasks.o
+ .debug_line    0x0000e505      0x1db kernel/sync/spinlock.o
+
+.debug_str      0x00000000     0x5bec
+ *(.debug_str)
+ .debug_str     0x00000000     0x5bec kernel/boot.o
+                                 0x42 (size before relaxing)
+ .debug_str     0x00005bec      0xaa8 kernel/main.o
+ .debug_str     0x00005bec      0xa4c kernel/internals/ls_process.o
+ .debug_str     0x00005bec      0xd79 kernel/memory/helpers.o
+ .debug_str     0x00005bec      0x521 kernel/memory/physical.o
+ .debug_str     0x00005bec      0x7fe kernel/memory/virtual.o
+ .debug_str     0x00005bec      0xdb8 kernel/memory/mmu.o
+ .debug_str     0x00005bec      0x334 kernel/memory/kmalloc.o
+ .debug_str     0x00005bec      0x41b kernel/memory/memory_detect.o
+ .debug_str     0x00005bec      0x932 kernel/process/process.o
+ .debug_str     0x00005bec      0x8a1 kernel/process/fork.o
+ .debug_str     0x00005bec      0x605 kernel/process/exec.o
+ .debug_str     0x00005bec      0xb55 kernel/process/signal.o
+ .debug_str     0x00005bec      0x854 kernel/fs/vfs.o
+ .debug_str     0x00005bec      0x8e5 kernel/fs/fat32.o
+ .debug_str     0x00005bec      0x5c6 kernel/fs/fat32_vfs.o
+ .debug_str     0x00005bec      0x1ac kernel/fs/userfs_loader.o
+ .debug_str     0x00005bec      0xcc9 kernel/drivers/ata.o
+ .debug_str     0x00005bec      0x8ca kernel/drivers/keyboard.o
+ .debug_str     0x00005bec      0x511 kernel/drivers/display.o
+ .debug_str     0x00005bec      0x3b9 kernel/drivers/console.o
+ .debug_str     0x00005bec      0x539 kernel/drivers/uart.o
+ .debug_str     0x00005bec      0x310 kernel/drivers/ide.o
+ .debug_str     0x00005bec      0xcf5 kernel/drivers/ramfs.o
+ .debug_str     0x00005bec      0x9b2 kernel/drivers/tar_parser_ramfs.o
+ .debug_str     0x00005bec      0x30b kernel/interrupt/exception.o
+ .debug_str     0x00005bec       0x51 kernel/interrupt/interrupt.o
+ .debug_str     0x00005bec      0x3ec kernel/interrupt/gic.o
+ .debug_str     0x00005bec      0x918 kernel/interrupt/timer.o
+ .debug_str     0x00005bec       0x4e kernel/syscalls/syscall.o
+ .debug_str     0x00005bec      0xb96 kernel/syscalls/syscalls.o
+ .debug_str     0x00005bec      0x85f kernel/syscalls/file.o
+ .debug_str     0x00005bec      0x81d kernel/syscalls/process_syscalls.o
+ .debug_str     0x00005bec      0x4d1 kernel/user/userspace.o
+ .debug_str     0x00005bec      0x2f6 kernel/lib/kprintf.o
+ .debug_str     0x00005bec      0x3a5 kernel/lib/string.o
+ .debug_str     0x00005bec      0x1bb kernel/lib/font_8x16.o
+ .debug_str     0x00005bec      0x183 kernel/lib/divmod.o
+ .debug_str     0x00005bec      0x1fe kernel/lib/debug_print.o
+ .debug_str     0x00005bec      0x1e8 kernel/lib/math.o
+ .debug_str     0x00005bec     0x1049 kernel/task/task.o
+ .debug_str     0x00005bec       0x93 kernel/task/task_switch.o
+ .debug_str     0x00005bec      0x805 kernel/task/task_test.o
+ .debug_str     0x00005bec      0xbe7 kernel/task/kernel_tasks.o
+ .debug_str     0x00005bec      0x2b6 kernel/sync/spinlock.o
+
+/DISCARD/
+ *(.comment)
+ *(.note*)
+ *(.eh_frame*)
+ *(.ARM.exidx*)
+ *(.ARM.extab*)
+LOAD kernel/boot.o
+LOAD kernel/main.o
+LOAD kernel/internals/ls_process.o
+LOAD kernel/memory/helpers.o
+LOAD kernel/memory/physical.o
+LOAD kernel/memory/virtual.o
+LOAD kernel/memory/mmu.o
+LOAD kernel/memory/kmalloc.o
+LOAD kernel/memory/memory_detect.o
+LOAD kernel/process/process.o
+LOAD kernel/process/fork.o
+LOAD kernel/process/exec.o
+LOAD kernel/process/signal.o
+LOAD kernel/fs/vfs.o
+LOAD kernel/fs/fat32.o
+LOAD kernel/fs/fat32_vfs.o
+LOAD kernel/fs/userfs_loader.o
+LOAD kernel/drivers/ata.o
+LOAD kernel/drivers/keyboard.o
+LOAD kernel/drivers/display.o
+LOAD kernel/drivers/console.o
+LOAD kernel/drivers/uart.o
+LOAD kernel/drivers/ide.o
+LOAD kernel/drivers/ramfs.o
+LOAD kernel/drivers/tar_parser_ramfs.o
+LOAD kernel/interrupt/exception.o
+LOAD kernel/interrupt/interrupt.o
+LOAD kernel/interrupt/gic.o
+LOAD kernel/interrupt/timer.o
+LOAD kernel/syscalls/syscall.o
+LOAD kernel/syscalls/syscalls.o
+LOAD kernel/syscalls/file.o
+LOAD kernel/syscalls/process_syscalls.o
+LOAD kernel/user/userspace.o
+LOAD kernel/lib/kprintf.o
+LOAD kernel/lib/string.o
+LOAD kernel/lib/font_8x16.o
+LOAD kernel/lib/divmod.o
+LOAD kernel/lib/debug_print.o
+LOAD kernel/lib/math.o
+LOAD kernel/task/task.o
+LOAD kernel/task/task_switch.o
+LOAD kernel/task/task_test.o
+LOAD kernel/task/kernel_tasks.o
+LOAD kernel/sync/spinlock.o
+OUTPUT(kernel.elf elf32-littlearm)
+LOAD linker stubs
+
+.ARM.attributes
+                0x00000000       0x32
+ .ARM.attributes
+                0x00000000       0x18 kernel/boot.o
+ .ARM.attributes
+                0x00000018       0x33 kernel/main.o
+ .ARM.attributes
+                0x0000004b       0x33 kernel/internals/ls_process.o
+ .ARM.attributes
+                0x0000007e       0x33 kernel/memory/helpers.o
+ .ARM.attributes
+                0x000000b1       0x33 kernel/memory/physical.o
+ .ARM.attributes
+                0x000000e4       0x33 kernel/memory/virtual.o
+ .ARM.attributes
+                0x00000117       0x33 kernel/memory/mmu.o
+ .ARM.attributes
+                0x0000014a       0x33 kernel/memory/kmalloc.o
+ .ARM.attributes
+                0x0000017d       0x33 kernel/memory/memory_detect.o
+ .ARM.attributes
+                0x000001b0       0x33 kernel/process/process.o
+ .ARM.attributes
+                0x000001e3       0x33 kernel/process/fork.o
+ .ARM.attributes
+                0x00000216       0x33 kernel/process/exec.o
+ .ARM.attributes
+                0x00000249       0x33 kernel/process/signal.o
+ .ARM.attributes
+                0x0000027c       0x33 kernel/fs/vfs.o
+ .ARM.attributes
+                0x000002af       0x33 kernel/fs/fat32.o
+ .ARM.attributes
+                0x000002e2       0x33 kernel/fs/fat32_vfs.o
+ .ARM.attributes
+                0x00000315       0x33 kernel/fs/userfs_loader.o
+ .ARM.attributes
+                0x00000348       0x33 kernel/drivers/ata.o
+ .ARM.attributes
+                0x0000037b       0x33 kernel/drivers/keyboard.o
+ .ARM.attributes
+                0x000003ae       0x33 kernel/drivers/display.o
+ .ARM.attributes
+                0x000003e1       0x33 kernel/drivers/console.o
+ .ARM.attributes
+                0x00000414       0x33 kernel/drivers/uart.o
+ .ARM.attributes
+                0x00000447       0x33 kernel/drivers/ide.o
+ .ARM.attributes
+                0x0000047a       0x33 kernel/drivers/ramfs.o
+ .ARM.attributes
+                0x000004ad       0x33 kernel/drivers/tar_parser_ramfs.o
+ .ARM.attributes
+                0x000004e0       0x33 kernel/interrupt/exception.o
+ .ARM.attributes
+                0x00000513       0x18 kernel/interrupt/interrupt.o
+ .ARM.attributes
+                0x0000052b       0x33 kernel/interrupt/gic.o
+ .ARM.attributes
+                0x0000055e       0x33 kernel/interrupt/timer.o
+ .ARM.attributes
+                0x00000591       0x18 kernel/syscalls/syscall.o
+ .ARM.attributes
+                0x000005a9       0x33 kernel/syscalls/syscalls.o
+ .ARM.attributes
+                0x000005dc       0x33 kernel/syscalls/file.o
+ .ARM.attributes
+                0x0000060f       0x33 kernel/syscalls/process_syscalls.o
+ .ARM.attributes
+                0x00000642       0x33 kernel/user/userspace.o
+ .ARM.attributes
+                0x00000675       0x33 kernel/lib/kprintf.o
+ .ARM.attributes
+                0x000006a8       0x33 kernel/lib/string.o
+ .ARM.attributes
+                0x000006db       0x33 kernel/lib/font_8x16.o
+ .ARM.attributes
+                0x0000070e       0x33 kernel/lib/divmod.o
+ .ARM.attributes
+                0x00000741       0x33 kernel/lib/debug_print.o
+ .ARM.attributes
+                0x00000774       0x33 kernel/lib/math.o
+ .ARM.attributes
+                0x000007a7       0x33 kernel/task/task.o
+ .ARM.attributes
+                0x000007da       0x16 kernel/task/task_switch.o
+ .ARM.attributes
+                0x000007f0       0x33 kernel/task/task_test.o
+ .ARM.attributes
+                0x00000823       0x33 kernel/task/kernel_tasks.o
+ .ARM.attributes
+                0x00000856       0x33 kernel/sync/spinlock.o
+
+.debug_aranges  0x00000000      0x598
+ .debug_aranges
+                0x00000000       0x28 kernel/boot.o
+ .debug_aranges
+                0x00000028       0x20 kernel/main.o
+ .debug_aranges
+                0x00000048       0x20 kernel/internals/ls_process.o
+ .debug_aranges
+                0x00000068       0x20 kernel/memory/helpers.o
+ .debug_aranges
+                0x00000088       0x20 kernel/memory/physical.o
+ .debug_aranges
+                0x000000a8       0x20 kernel/memory/virtual.o
+ .debug_aranges
+                0x000000c8       0x20 kernel/memory/mmu.o
+ .debug_aranges
+                0x000000e8       0x20 kernel/memory/kmalloc.o
+ .debug_aranges
+                0x00000108       0x20 kernel/memory/memory_detect.o
+ .debug_aranges
+                0x00000128       0x20 kernel/process/process.o
+ .debug_aranges
+                0x00000148       0x20 kernel/process/fork.o
+ .debug_aranges
+                0x00000168       0x20 kernel/process/exec.o
+ .debug_aranges
+                0x00000188       0x20 kernel/process/signal.o
+ .debug_aranges
+                0x000001a8       0x20 kernel/fs/vfs.o
+ .debug_aranges
+                0x000001c8       0x20 kernel/fs/fat32.o
+ .debug_aranges
+                0x000001e8       0x20 kernel/fs/fat32_vfs.o
+ .debug_aranges
+                0x00000208       0x18 kernel/fs/userfs_loader.o
+ .debug_aranges
+                0x00000220       0x20 kernel/drivers/ata.o
+ .debug_aranges
+                0x00000240       0x20 kernel/drivers/keyboard.o
+ .debug_aranges
+                0x00000260       0x20 kernel/drivers/display.o
+ .debug_aranges
+                0x00000280       0x20 kernel/drivers/console.o
+ .debug_aranges
+                0x000002a0       0x20 kernel/drivers/uart.o
+ .debug_aranges
+                0x000002c0       0x20 kernel/drivers/ide.o
+ .debug_aranges
+                0x000002e0       0x20 kernel/drivers/ramfs.o
+ .debug_aranges
+                0x00000300       0x20 kernel/drivers/tar_parser_ramfs.o
+ .debug_aranges
+                0x00000320       0x20 kernel/interrupt/exception.o
+ .debug_aranges
+                0x00000340       0x20 kernel/interrupt/interrupt.o
+ .debug_aranges
+                0x00000360       0x20 kernel/interrupt/gic.o
+ .debug_aranges
+                0x00000380       0x20 kernel/interrupt/timer.o
+ .debug_aranges
+                0x000003a0       0x20 kernel/syscalls/syscall.o
+ .debug_aranges
+                0x000003c0       0x20 kernel/syscalls/syscalls.o
+ .debug_aranges
+                0x000003e0       0x20 kernel/syscalls/file.o
+ .debug_aranges
+                0x00000400       0x20 kernel/syscalls/process_syscalls.o
+ .debug_aranges
+                0x00000420       0x20 kernel/user/userspace.o
+ .debug_aranges
+                0x00000440       0x20 kernel/lib/kprintf.o
+ .debug_aranges
+                0x00000460       0x20 kernel/lib/string.o
+ .debug_aranges
+                0x00000480       0x18 kernel/lib/font_8x16.o
+ .debug_aranges
+                0x00000498       0x20 kernel/lib/divmod.o
+ .debug_aranges
+                0x000004b8       0x20 kernel/lib/debug_print.o
+ .debug_aranges
+                0x000004d8       0x20 kernel/lib/math.o
+ .debug_aranges
+                0x000004f8       0x20 kernel/task/task.o
+ .debug_aranges
+                0x00000518       0x20 kernel/task/task_switch.o
+ .debug_aranges
+                0x00000538       0x20 kernel/task/task_test.o
+ .debug_aranges
+                0x00000558       0x20 kernel/task/kernel_tasks.o
+ .debug_aranges
+                0x00000578       0x20 kernel/sync/spinlock.o
+
+.debug_ranges   0x00000000       0x20
+ .debug_ranges  0x00000000       0x20 kernel/boot.o
+
+.debug_frame    0x00000000     0x64b0
+ .debug_frame   0x00000000      0x274 kernel/main.o
+ .debug_frame   0x00000274      0x1a4 kernel/internals/ls_process.o
+ .debug_frame   0x00000418      0xa24 kernel/memory/helpers.o
+ .debug_frame   0x00000e3c      0x210 kernel/memory/physical.o
+ .debug_frame   0x0000104c      0x3c8 kernel/memory/virtual.o
+ .debug_frame   0x00001414      0x600 kernel/memory/mmu.o
+ .debug_frame   0x00001a14      0x110 kernel/memory/kmalloc.o
+ .debug_frame   0x00001b24      0x154 kernel/memory/memory_detect.o
+ .debug_frame   0x00001c78      0x13c kernel/process/process.o
+ .debug_frame   0x00001db4      0x1f0 kernel/process/fork.o
+ .debug_frame   0x00001fa4       0xb4 kernel/process/exec.o
+ .debug_frame   0x00002058      0x3b8 kernel/process/signal.o
+ .debug_frame   0x00002410      0x1b0 kernel/fs/vfs.o
+ .debug_frame   0x000025c0      0x3bc kernel/fs/fat32.o
+ .debug_frame   0x0000297c      0x120 kernel/fs/fat32_vfs.o
+ .debug_frame   0x00002a9c      0x494 kernel/drivers/ata.o
+ .debug_frame   0x00002f30      0x16c kernel/drivers/keyboard.o
+ .debug_frame   0x0000309c      0x1a8 kernel/drivers/display.o
+ .debug_frame   0x00003244       0x8c kernel/drivers/console.o
+ .debug_frame   0x000032d0      0x2b0 kernel/drivers/uart.o
+ .debug_frame   0x00003580      0x1ac kernel/drivers/ide.o
+ .debug_frame   0x0000372c      0x638 kernel/drivers/ramfs.o
+ .debug_frame   0x00003d64      0x378 kernel/drivers/tar_parser_ramfs.o
+ .debug_frame   0x000040dc       0x64 kernel/interrupt/exception.o
+ .debug_frame   0x00004140      0x1fc kernel/interrupt/gic.o
+ .debug_frame   0x0000433c      0x288 kernel/interrupt/timer.o
+ .debug_frame   0x000045c4      0x1f0 kernel/syscalls/syscalls.o
+ .debug_frame   0x000047b4      0x18c kernel/syscalls/file.o
+ .debug_frame   0x00004940      0x208 kernel/syscalls/process_syscalls.o
+ .debug_frame   0x00004b48      0x264 kernel/user/userspace.o
+ .debug_frame   0x00004dac      0x180 kernel/lib/kprintf.o
+ .debug_frame   0x00004f2c      0x3ac kernel/lib/string.o
+ .debug_frame   0x000052d8       0x58 kernel/lib/divmod.o
+ .debug_frame   0x00005330       0x88 kernel/lib/debug_print.o
+ .debug_frame   0x000053b8       0x5c kernel/lib/math.o
+ .debug_frame   0x00005414      0x9cc kernel/task/task.o
+ .debug_frame   0x00005de0      0x134 kernel/task/task_test.o
+ .debug_frame   0x00005f14      0x3fc kernel/task/kernel_tasks.o
+ .debug_frame   0x00006310      0x1a0 kernel/sync/spinlock.o
+
+.debug_rnglists
+                0x00000000      0x19d
+ .debug_rnglists
+                0x00000000       0x2d kernel/internals/ls_process.o
+ .debug_rnglists
+                0x0000002d       0x17 kernel/memory/virtual.o
+ .debug_rnglists
+                0x00000044       0x17 kernel/memory/mmu.o
+ .debug_rnglists
+                0x0000005b       0x17 kernel/process/fork.o
+ .debug_rnglists
+                0x00000072       0x22 kernel/fs/fat32.o
+ .debug_rnglists
+                0x00000094       0x8d kernel/drivers/ramfs.o
+ .debug_rnglists
+                0x00000121       0x22 kernel/drivers/tar_parser_ramfs.o
+ .debug_rnglists
+                0x00000143       0x43 kernel/lib/kprintf.o
+ .debug_rnglists
+                0x00000186       0x17 kernel/task/task.o
