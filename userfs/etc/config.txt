@@ -1,0 +1,16 @@
+[system]
+kernel_version=1.0.0
+debug_level=2
+heap_size=8MB
+userfs_enabled=true
+
+[filesystem]
+type=userfs
+base_dir=./userfs
+executable_dirs=/bin,/usr/bin
+library_dirs=/usr/lib
+
+[development]
+compile_target=arm-none-eabi
+optimization_level=O2
+debug_symbols=true

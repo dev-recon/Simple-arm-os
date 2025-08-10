@@ -1,0 +1,15 @@
+# User profile configuration for test kernel
+export PATH=/bin:/usr/bin
+export HOME=/home/user
+export PS1='user@kernel:$ '
+export TERM=vt100
+
+# Welcome message
+echo "Welcome to the kernel development environment!"
+echo "Available commands in /bin and /usr/bin"
+echo "Your files are in $HOME"
+
+# Aliases for development
+alias ll='ls -la'
+alias la='ls -A'
+alias grep='grep --color=auto'

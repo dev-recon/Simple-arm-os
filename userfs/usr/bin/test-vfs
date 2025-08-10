@@ -1,0 +1,29 @@
+#!/bin/sh
+# VFS testing script
+echo "=== VFS Testing Script ==="
+echo "Testing basic filesystem operations..."
+
+echo "1. Current directory:"
+pwd
+
+echo "2. Directory listing:"
+ls -la
+
+echo "3. File reading test:"
+if [ -f "/etc/passwd" ]; then
+    echo "Reading /etc/passwd:"
+    cat /etc/passwd
+else
+    echo "Could not find /etc/passwd"
+fi
+
+echo "4. Write test:"
+echo "Test data from VFS script" > /tmp/test.txt
+if [ -f "/tmp/test.txt" ]; then
+    echo "Write successful, content:"
+    cat /tmp/test.txt
+else
+    echo "Write test failed"
+fi
+
+echo "=== VFS Test Complete ==="

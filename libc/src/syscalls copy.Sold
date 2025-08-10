@@ -1,0 +1,173 @@
+/* ========================================
+ * System Calls Interface - User Space
+ * Interface pour appeler le kernel depuis userspace
+ * ARM 32-bit AAPCS
+ * ======================================== */
+
+.text
+.align 4
+
+/* ========================================
+ * Macro pour définir un syscall
+ * ======================================== */
+
+.macro SYSCALL name, number
+.global \name
+.type \name, %function
+\name:
+    push {r7, lr}           /* Sauvegarder r7 et lr */
+    mov r7, #\number        /* Numéro de syscall dans r7 */
+    swi #0                  /* Software interrupt */
+    pop {r7, lr}            /* Restaurer r7 et lr */
+    bx lr                   /* Retour */
+.endm
+
+/* ========================================
+ * Syscalls de base
+ * ======================================== */
+
+/* Gestion de processus */
+SYSCALL sys_exit, 1
+SYSCALL sys_fork, 2  
+SYSCALL sys_execve, 2  
+SYSCALL sys_getpid, 20
+SYSCALL sys_getppid, 64
+
+/* I/O */
+SYSCALL sys_read, 3
+SYSCALL sys_write, 4
+
+/* Gestion mémoire */
+SYSCALL sys_brk, 45
+
+/* Attente de processus */
+SYSCALL sys_wait4, 114
+
+/* ========================================
+ * Syscall générique avec paramètres
+ * syscall(number, arg1, arg2, arg3, arg4, arg5)
+ * ======================================== */
+
+.global syscall
+.type syscall, %function
+syscall:
+    push {r4-r7, lr}        /* Sauvegarder les registres */
+    
+    mov r7, r0              /* r0 (number) -> r7 */
+    mov r0, r1              /* r1 (arg1) -> r0 */
+    mov r1, r2              /* r2 (arg2) -> r1 */
+    mov r2, r3              /* r3 (arg3) -> r2 */
+    
+    /* Arguments 4 et 5 sont sur la pile */
+    ldr r3, [sp, #20]       /* arg4 depuis la pile */
+    ldr r4, [sp, #24]       /* arg5 depuis la pile */
+    
+    swi #0                  /* Appel système */
+    
+    pop {r4-r7, lr}         /* Restaurer les registres */
+    bx lr
+
+/* ========================================
+ * Wrappers C-compatibles avec gestion d'erreur
+ * ======================================== */
+
+.global write
+.type write, %function  
+write:
+    push {r7, lr}
+    mov r7, #4              /* SYS_WRITE */
+    swi #0
+    
+    /* Vérifier si erreur (retour négatif) */
+    cmp r0, #0
+    bge write_success
+    
+    /* Gestion d'erreur : mettre errno et retourner -1 */
+    rsb r0, r0, #0          /* r0 = -r0 (rendre positif) */
+    bl __set_errno          /* Appeler __set_errno(r0) */
+    mov r0, #-1             /* Retourner -1 */
+    
+write_success:
+    pop {r7, lr}
+    bx lr
+
+.global read
+.type read, %function
+read:
+    push {r7, lr}
+    mov r7, #3              /* SYS_READ */
+    swi #0
+    
+    cmp r0, #0
+    bge read_success
+    
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+read_success:
+    pop {r7, lr}
+    bx lr
+
+.global exit
+.type exit, %function
+exit:
+    mov r7, #1              /* SYS_EXIT */
+    swi #0
+    /* Ne retourne jamais */
+    b .
+
+.global getpid
+.type getpid, %function
+getpid:
+    push {r7, lr}
+    mov r7, #20             /* SYS_GETPID */
+    swi #0
+    pop {r7, lr}
+    bx lr
+
+.global getppid  
+.type getppid, %function
+getppid:
+    push {r7, lr}
+    mov r7, #64             /* SYS_GETPPID */
+    swi #0
+    pop {r7, lr}
+    bx lr
+
+.global fork
+.type fork, %function
+fork:
+    push {r7, lr}
+    mov r7, #2              /* SYS_FORK */
+    swi #0
+    
+    /* fork retourne 0 pour l'enfant, PID pour le parent, -1 pour erreur */
+    cmp r0, #0
+    bge fork_success
+    
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+fork_success:
+    pop {r7, lr}
+    bx lr
+
+/* ========================================
+ * Gestion d'errno (simple)
+ * ======================================== */
+
+.data
+.global errno
+errno:
+    .word 0
+
+.text
+.global __set_errno
+.type __set_errno, %function
+__set_errno:
+    ldr r1, =errno
+    str r0, [r1]
+    bx lr
+    

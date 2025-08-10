@@ -1,0 +1,7 @@
+#!/bin/sh
+# Simple hello world script for testing
+echo "Hello from UserFS!"
+echo "This script is running in your kernel environment."
+echo "Current directory: $(pwd)"
+echo "Available files:"
+ls -la

@@ -1,0 +1,5 @@
+# Filesystem table for test kernel
+# <device>     <mount>    <type>   <options>
+/dev/ramfs0    /          ramfs    rw,defaults
+/dev/virtio0   /mnt/disk  fat32    rw,defaults
+tmpfs          /tmp       tmpfs    rw,size=10M

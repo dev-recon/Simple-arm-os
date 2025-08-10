@@ -1,0 +1,33 @@
+Kernel Development TODO
+=======================
+
+VFS Testing:
+[ ] Test file creation
+[ ] Test directory navigation  
+[ ] Test file reading/writing
+[ ] Test permission system
+[ ] Test symlinks
+
+Process Management:
+[ ] Test process creation
+[ ] Test process scheduling
+[ ] Test IPC mechanisms
+[ ] Test signal handling
+
+Memory Management:
+[ ] Test heap allocation
+[ ] Test memory mapping
+[ ] Test memory protection
+[ ] Test swap functionality
+
+Device Drivers:
+[ ] Test keyboard input
+[ ] Test display output
+[ ] Test storage devices
+[ ] Test network interface
+
+System Calls:
+[ ] Implement open/close/read/write
+[ ] Implement fork/exec/wait
+[ ] Implement memory syscalls
+[ ] Implement time syscalls
