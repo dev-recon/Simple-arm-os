@@ -16,37 +16,38 @@
 .type __task_switch_to_user, %function
 
  __task_switch_to_user:
-    /* Sauvegarder le registre lr */
-    push {lr}
+    /* Pas de sauvegarde - cette fonction ne retourne JAMAIS */
+    //push {r0-r3, lr}
+    //bl debug_print_sp
+    //pop {r0-r3, lr}
+
+    /* Pas de sauvegarde - cette fonction ne retourne JAMAIS */
+    push {r4}                   @ Juste pour sauver un registre de travail
     
     /* Charger les valeurs du contexte */
     ldr r1, [r0, #60]           @ PC utilisateur (0x8000)
     ldr r2, [r0, #52]           @ SP utilisateur (0x3EFFFFFC)
     ldr r3, [r0, #64]           @ CPSR utilisateur (0x10)
+    ldr r4, [r0, #0]            @ Premier argument (r0)
     
     /* ÉTAPE 1: Configurer SPSR pour le mode utilisateur */
     msr spsr_cxsf, r3           @ SPSR = mode user + flags
     
     /* ÉTAPE 2: Configurer le SP utilisateur */
-    /* On doit passer temporairement en mode System pour modifier sp_usr */
-    mrs r4, cpsr                @ Sauver le mode actuel (SVC)
-    
-    bic r5, r4, #0x1F           @ Effacer les bits de mode
-    orr r5, r5, #0x1F           @ Mode System (0x1F)
-    msr cpsr_c, r5              @ Passer en mode System
-    
+    cps #0x1f                   @ Mode System
     mov sp, r2                  @ Configurer SP utilisateur
+    cps #0x13                   @ Retour en mode SVC
     
-    msr cpsr_c, r4              @ Retour en mode SVC
+    /* ÉTAPE 3: Barrière pour s'assurer que la MMU est synchronisée */
+    dsb sy                      @ Attendre que toutes les écritures soient terminées
+    isb                         @ Synchroniser le pipeline dinstructions
     
-    /* ÉTAPE 3: Charger le registre r0 (argument) */
-    ldr r0, [r0, #0]            @ Premier argument
-    
-    /* ÉTAPE 4: Saut vers l'espace utilisateur */
+    /* ÉTAPE 4: Charger le registre r0 (argument) et sauter */
+    mov r0, r4                  @ Premier argument 
     movs pc, r1                 @ CRITIQUE: movs change de mode selon SPSR
     
     /* Ne devrait jamais arriver ici */
-    pop {lr}
+    pop {r4}
     bx lr
 
 .size __task_switch_to_user, . - __task_switch_to_user

@@ -98,6 +98,10 @@
 // TTBR1 pointe sur kernel_page_dir[1024], donc on doit ajouter 1024
 #define KERNEL_L1_INDEX(addr)   (1024 + (((addr) - TTBR_SPLIT_BOUNDARY) >> 20))
 
+#define L2_INDEX(addr)          (((addr) >> 12) & 0xFF)
+#define OFFSET(addr)            ((addr) & 0xFFF)
+
+
 /* MMU functions avec support split TTBR et ASID */
 void invalidate_tlb_all(void);
 void invalidate_tlb_page(uint32_t vaddr);

@@ -36,7 +36,7 @@ bool is_valid_user_ptr(const void* ptr)
 
 void unmap_user_page(uint32_t* pgdir, uint32_t vaddr)
 {
-    uint32_t pd_index = vaddr >> 20;
+    uint32_t pd_index = get_L1_index(vaddr);
     
     /* Simplified implementation - just clear the page directory entry */
     if (pd_index < 4096) {

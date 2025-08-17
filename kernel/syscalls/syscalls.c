@@ -7,6 +7,7 @@
 #include <kernel/elf32.h>
 #include <kernel/userspace.h>
 #include <asm/mmu.h>
+#include <asm/arm.h>
 
 /* Syscall table */
 typedef int (*syscall_func_t)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
@@ -63,6 +64,58 @@ static bool setup_mock_user_space(void) {
     map_kernel_page(virt_addr, (uint32_t)mock_user_space);
     
     return true;
+}
+
+
+void check_instruction(uint32_t test_vaddr, uint32_t phys_addr, uint32_t instruction)
+{
+    uint32_t l1_index = get_L1_index(test_vaddr);  // 0 
+    uint32_t l2_index = L2_INDEX(test_vaddr);  // 8 
+
+    KDEBUG("  Testing user mapping 0x%08X:\n", test_vaddr);
+
+        KDEBUG("    L1 index: %u, L2 index: %u\n", l1_index, l2_index);
+
+
+    /* Lire depuis le pgdir actuel (maintenant 0x41538000) */
+    uint32_t current_ttbr0;
+    asm volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(current_ttbr0));
+    uint32_t* active_pgdir = (uint32_t*)(current_ttbr0 & ~0x7F);
+
+    uint32_t l1_entry = active_pgdir[l1_index];
+    KDEBUG("Current TTBR0 = 0x%08X\n", active_pgdir);
+    //for (int i = 0 ; i < 16 ; i++) {
+    //    uint32_t entry = active_pgdir[i];
+    //    KDEBUG("    L1[%u] = 0x%08X\n", i, entry);
+    //}
+
+    if (l1_entry & 0x1) {  // Page table entry
+        KDEBUG("    User area properly mapped via page table\n");
+    } else {
+        KERROR("    User area not mapped!\n");
+    }
+
+    KDEBUG("=== FINAL INSTRUCTION CHECK ===\n"); 
+
+    uint32_t first_instruction; 
+    uint32_t paddr = phys_addr;
+    uint32_t* phys_code = (uint32_t*)paddr;
+    first_instruction = *phys_code;
+
+    KDEBUG("  First instruction at 0x8000: user code (phys 0x%08X): 0x%08X\n",
+        paddr, first_instruction);
+    KDEBUG("  Expected: 0x%08X\n", instruction);
+
+    if (first_instruction == instruction) {
+        KDEBUG("  Instruction correct, ready for execution\n");
+    } else {
+        KERROR("  Instruction mismatch!\n");
+    }  
+
+    /* Lire l'instruction à l'adresse virtuelle 0x8000 */
+    uint32_t vaddr = test_vaddr;
+    uint32_t* user_code = (uint32_t*)vaddr;
+    KDEBUG("=== USER CODE OK === user code 0x%08X \n", *user_code); 
 }
 
 
@@ -210,7 +263,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     old_vm = proc->process->vm;
     
     /* Creer un nouvel espace memoire */
-    new_vm = create_vm_space();
+    new_vm = create_vm_space(false);
     if (!new_vm) {
         KERROR("sys_execve: Failed to create new VM space\n");
         put_inode(exe_inode);
@@ -230,7 +283,6 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     }
 
     //KDEBUG("Charger les segments ELF: size %u\n", exe_inode->size);
-
     
     /* Configurer la pile utilisateur avec arguments */
     if (setup_user_stack(new_vm, kernel_argv, kernel_envp) < 0) {
@@ -255,148 +307,19 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     proc->context.sp = new_vm->stack_start;             /* Stack pointer */
     proc->context.cpsr = 0x10;                          /* Mode utilisateur */
     proc->context.is_first_run = 1;                     /* Pas la premiere fois */
+    proc->context.ttbr0 = (uint32_t)new_vm->pgdir;
+    proc->context.asid = new_vm->asid;
     
     /* Fermer tous les fichiers CLOEXEC - ACCeS CORRECT */
     close_cloexec_files(proc);
     
     /* Changer l'espace d'adressage */
-    //switch_address_space(new_vm->pgdir);
-
-    uint32_t next_pc;
-    __asm__ volatile("add %0, pc, #16" : "=r"(next_pc));
-    extern void dump_l1( uint32_t va);
-
-    uint32_t next_index = USER_L1_INDEX(next_pc);
-    extern uint32_t *kernel_pgdir;
-    uint32_t next_entry = kernel_pgdir[next_index];
-    dump_l1(next_pc);
-
-    if ((next_entry & 0x3) != 0x2) {
-        KDEBUG("CRITICAL: Next PC not mapped as section!\n");
-        while (1);
-    }
-
     switch_to_vm_space(new_vm);
-
-    //invalidate_tlb_all();
     
     /* Nettoyer les ressources temporaires */
     put_inode(exe_inode);
     cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
 
-#if(0)
-    int result = check_page_permissions(new_vm->pgdir, elf_header.e_entry);
-
-
-    KDEBUG("After check_page_permissions : rrsult = %d  ......\n", result);
-
-    /* Vérifier que l'adresse d'entrée est mappée et exécutable */
-     if (result < 0) {
-        KERROR("Entry point 0x%08X is not properly mapped/executable\n", elf_header.e_entry);
-        destroy_vm_space(new_vm);
-        put_inode(exe_inode);
-        cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
-        return -ENOEXEC;
-    }
-#endif
-    
-     KINFO("sys_execve: Exec completed successfully for PID=%u, entry=0x%08X\n", 
-          proc->process->pid, elf_header.e_entry);
-    
-    KINFO("=== FINAL CONTEXT SWITCH DEBUG ===\n");
-    KINFO("About to switch to user program:\n");
-    KINFO("  PC = 0x%08X (entry point)\n", proc->context.pc);
-    KINFO("  SP = 0x%08X (stack)\n", proc->context.sp);
-    KINFO("  CPSR = 0x%08X (user mode)\n", proc->context.cpsr); 
-
-    /* Vérifier l'espace d'adressage actuel */
-    uint32_t current_ttbr0;
-    asm volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(current_ttbr0));
-    KINFO("  Current TTBR0 = 0x%08X\n", current_ttbr0);
-    KINFO("  Expected TTBR0 = 0x%08X\n", (uint32_t)new_vm->pgdir);
-    KINFO("  Current proc PC = 0x%08X\n", (uint32_t)proc->context.pc);
-
-    if (current_ttbr0 != (uint32_t)new_vm->pgdir) {
-        KERROR("ADDRESS SPACE MISMATCH!\n");
-        return -EFAULT;
-    }
-
-    /* Test de traduction finale */
-    //uint32_t get_physical_address(uint32_t* pgdir, uint32_t vaddr);
-    //uint32_t test_translation = get_physical_address(new_vm->pgdir, proc->context.pc);
-    //KINFO("  Final translation test: 0x%08X -> 0x%08X\n",proc->context.pc, test_translation);
-
-    //if (test_translation == 0) {
-    //    KERROR("TRANSLATION FAILED!\n");
-    //    return -EFAULT;
-    //}
-
-    /* Test de lecture de l'instruction */
-  /*  uint32_t* instr_check = get_page_entry_arm(new_vm->pgdir, 0x8000);
-    if (instr_check) {
-        KINFO("  Page entry check: 0x%08X\n", *instr_check);
-    } else {
-        KERROR("CANNOT GET PAGE ENTRY!\n");
-        return -EFAULT;
-    }*/
-
-    //KINFO("All checks passed - jumping to user space!\n");
-    //KINFO("=== CALLING __task_first_switch_v2 ===\n");
-    /* Utilisez */
-    //KINFO("sys_execve: Switching to new program at 0x%08X\n", elf_header.e_entry);
-
-    //KDEBUG("=== FINAL USER MAPPING CHECK ===\n");
-
-    /* Vous êtes maintenant dans le bon espace d'adressage */
-    /* Vérifier que 0x8000 traduit bien vers votre page de code */
-/*     uint32_t test_vaddr = 0x8000;
-    uint32_t l1_index = test_vaddr >> 20;  // 0 
-    uint32_t l2_index = (test_vaddr >> 12) & 0xFF;  // 8 
-
-    KDEBUG("  Testing user mapping 0x%08X:\n", test_vaddr);
-    KDEBUG("    L1 index: %u, L2 index: %u\n", l1_index, l2_index); */
-
-    /* Lire depuis le pgdir actuel (maintenant 0x41538000) */
-    //uint32_t current_ttbr0;
-/*     asm volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(current_ttbr0));
-    uint32_t* active_pgdir = (uint32_t*)(current_ttbr0 & ~0x3FFF);
-
-    uint32_t l1_entry = active_pgdir[l1_index];
-    KDEBUG("    L1[%u] = 0x%08X\n", l1_index, l1_entry);
-
-    if (l1_entry & 0x1) {  // Page table entry
-        KDEBUG("    User area properly mapped via page table\n");
-    } else {
-        KERROR("    User area not mapped!\n");
-    }
-
-    KDEBUG("=== FINAL INSTRUCTION CHECK ===\n"); */
-
-    /* Lire l'instruction à l'adresse virtuelle 0x8000 */
-/*     uint32_t* user_code = (uint32_t*)0x8000;
-    uint32_t first_instruction; */
-
-    /* ATTENTION : Cette lecture peut causer une exception si mal mappé */
-    /* Utiliser un handler temporaire ou vérifier via traduction physique */
-
-    //uint32_t phys_addr = 0x4153D000;  /* De votre log de traduction */
-/*     uint32_t* phys_code = (uint32_t*)phys_addr;
-    first_instruction = *phys_code;
-
-    KDEBUG("  First instruction at 0x8000: user code 0x%08X (phys 0x%08X): 0x%08X\n", *user_code,
-        phys_addr, first_instruction);
-    KDEBUG("  Expected: 0xEB000006\n");
-
-    if (first_instruction == 0xEB000006) {
-        KDEBUG("  Instruction correct, ready for execution\n");
-    } else {
-        KERROR("  Instruction mismatch!\n");
-    }  */
-
-/*     KDEBUG("  proc->process->files[STDIN_FILENO]->name = %s\n", proc->process->files[STDIN_FILENO]->name );
-    int res = proc->process->files[STDOUT_FILENO]->f_op->write(NULL,"Coucou\n",strlen("Coucou\n"));
-   KDEBUG("  proc->process->files[STDOUT_FILENO]->name = %s - res = %d\n", proc->process->files[STDOUT_FILENO]->name, res );
- */
     __task_switch_to_user(&proc->context);
 
     /* Cette fonction ne retourne JAMAIS */
@@ -421,6 +344,8 @@ int sys_fork(void)
         KERROR("sys_fork: Current task is not a process\n");
         return -EINVAL;
     }
+
+    kernel_context_save_t save = switch_to_kernel_context();
     
     /* Creer le processus enfant en copiant le parent */
     child = task_create_copy(parent);
@@ -470,6 +395,8 @@ int sys_fork(void)
     child->context.is_first_run = 1;
     child->context.pc = return_address;       /* Après sys_fork() dans C */
     child->context.lr = return_address;       /* LR cohérent */
+
+    restore_from_kernel_context(save);
     
     /* Ajouter l'enfant a la liste des taches pretes */
     add_to_ready_queue(child);

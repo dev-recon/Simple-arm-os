@@ -13,9 +13,9 @@ swi_handler:
     /*sub lr, lr, #4 */             /* Ajuster LR pour SWI */
     
     /* Debug entree dans syscall */
-    push {r0-r3, lr}
-    bl debug_print_sp3
-    pop {r0-r3, lr}
+    //push {r0-r3, lr}
+    //bl debug_print_sp3
+    //pop {r0-r3, lr}
 
     stmfd sp!, {r0-r12, lr}     /* Sauvegarder registres + LR */
     mrs r12, spsr               /* Recuperer SPSR */
@@ -64,9 +64,9 @@ syscall_return:
     ldmfd sp!, {r1-r12, lr}     /* Restaurer r1-r12, lr (r0 intact) */
 
     /* Debug sortie de syscall */
-    push {r0-r3, lr}
-    bl debug_print_sp3
-    pop {r0-r3, lr}
+    //push {r0-r3, lr}
+    //bl debug_print_sp3
+    //pop {r0-r3, lr}
     
     /* Retourner en mode utilisateur */
     movs pc, lr

@@ -138,6 +138,8 @@ typedef struct task_context {
     uint32_t cpsr;          /* Current Program Status Register */
     
     uint32_t is_first_run;  /* NOUVEAU: Flag pour premiere execution */
+    uint32_t ttbr0;
+    uint32_t asid;
 } __attribute__((aligned(8))) task_context_t;
 
 

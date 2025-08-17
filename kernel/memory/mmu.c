@@ -26,9 +26,11 @@
 
 /* Page directories séparés avec adresses fixes alignées 16KB */
 static uint32_t kernel_page_dir[4096] __attribute__((section(".data"), aligned(16384)));  /* TTBR1 */
+static uint32_t *kernel_ttbr0 = NULL; /* TTBR0 */
 
 /* Pointeurs globaux */
 uint32_t* kernel_pgdir = kernel_page_dir;   /* TTBR1 - Espace noyau */
+uint32_t* ttbr0_pgdir = NULL;   /* TTBR0 - Espace noyau */
 
 /* Gestion ASID */
 static uint32_t current_asid = 1;  /* ASID 0 réservé au noyau */
@@ -47,10 +49,125 @@ static void setup_user_template(void);
 
 
 
+void setup_kernel_asid_context(void)
+{    
+    KDEBUG("Setting up ASID 0 kernel context...\n");
+    
+    /*
+     * IMPORTANT : Avec QEMU virt, toute la RAM physique est >= 0x40000000
+     * Il n'y a PAS de RAM physique < 0x40000000
+     * 
+     * Pour TTBR0, nous devons :
+     * 1. Allouer une page physique dans la RAM réelle (>= 0x40000000)
+     * 2. L'utiliser comme table de pages pour l'espace virtuel TTBR0 (< 0x40000000)
+     */
+    
+    /* Allouer une page physique réelle pour la table TTBR0 */
+    void* ttbr0_phys_page = allocate_kernel_pages(2);  // Retourne adresse physique >= 0x40000000
+    if (!ttbr0_phys_page) {
+        panic("Cannot allocate physical page for TTBR0 table");
+    }
+    
+    uint32_t ttbr0_phys_addr = (uint32_t)ttbr0_phys_page;
+    
+    KDEBUG("TTBR0 table physical address: 0x%08X\n", ttbr0_phys_addr);
+    
+    /* Vérifier l'alignement 4KB requis pour les tables de pages ARM */
+    if (ttbr0_phys_addr & 0xFFF) {
+         /* Forcer l'alignement si nécessaire */
+        uint32_t aligned_addr = (ttbr0_phys_addr + 0xFFF) & ~0xFFF;
+        //uint32_t aligned_addr = (ttbr0_phys_addr + 0x3FFF) & ~0x3FFF;
+
+        KDEBUG("  Forced alignment: 0x%08X -> 0x%08X\n", ttbr0_phys_addr, aligned_addr);
+        
+        /* Vérifier que l'adresse alignée est dans la zone allouée */
+        if (aligned_addr >= ttbr0_phys_addr && aligned_addr < ttbr0_phys_addr + (2 * PAGE_SIZE)) {
+            ttbr0_phys_addr = aligned_addr;
+            KINFO("create_vm_space: Using aligned address 0x%08X\n", aligned_addr);
+        }
+        else{
+            panic("Cannot align 4KB physical page for TTBR0 table");
+        }
+    }
+    
+    /* 
+     * Stocker l'adresse physique pour configurer le registre TTBR0
+     * Le processeur utilisera cette adresse physique directement
+     */
+    kernel_ttbr0 = (uint32_t*)ttbr0_phys_addr;  // Adresse physique de la table
+    ttbr0_pgdir = kernel_ttbr0;
+    
+    KDEBUG("kernel_ttbr0 (physical) set to: 0x%08X\n", (uint32_t)kernel_ttbr0);
+    
+    /*
+     * Pour initialiser la table, nous devons y accéder via un mapping temporaire
+     * car nous sommes en mode kernel (TTBR1) et la table est en RAM physique
+     */
+    //uint32_t ttbr0_virt = map_temp_page(ttbr0_phys_addr);
+    uint32_t* ttbr0_table = ttbr0_pgdir;
+    
+    KDEBUG("TTBR0 table temporarily mapped at virtual: 0x%08X\n", ttbr0_table);
+    
+    /* Initialiser la table (16KB = 4096 entrées de 32-bit) */
+    //memset(ttbr0_table, 0, 16 * 1024);  // Vider toute la table
+
+#if(0)
+    /*
+     * Mapper quelques sections critiques dans l'espace TTBR0 (< 0x40000000)
+     * Ces mappings pointent vers la RAM physique (>= 0x40000000)
+     */
+    int mapped_sections = 0;
+    
+    /* Exemple : mapper 16MB d'espace user (0x01000000-0x01FFFFFF) 
+     * vers de la RAM physique libre */
+    void* user_ram = allocate_user_pages(16);  // 16 pages = 64KB pour commencer
+    if (user_ram) {
+        uint32_t user_phys_base = (uint32_t)user_ram;
+        
+        /* Mapper section 0x01000000 vers la RAM user allouée */
+        uint32_t virt_section = 0x01000000;  // 16MB dans l'espace TTBR0
+        uint32_t phys_section = user_phys_base & 0xFFF00000;  // Aligner sur 1MB
+        uint32_t section_index = virt_section >> 20;  // Index dans la table
+        
+        /* Créer l'entrée de section : physique | permissions */
+        ttbr0_table[section_index] = phys_section | 
+                                    0x00000002 |  // Section entry
+                                    0x00000C00 |  // AP[2:1] = 11 (full access)
+                                    0x00000010 |  // User accessible
+                                    0x00001000;   // Cacheable
+        
+        mapped_sections++;
+        KDEBUG("User RAM at 0x%08X\n", user_ram);
+        KDEBUG("Mapped TTBR0 section 0x%08X -> 0x%08X\n", virt_section, phys_section);
+    }
+    
+    /* Mapper les périphériques critiques (UART par exemple) pour debug userspace */
+    uint32_t uart_virt = 0x09000000;  // Même adresse virtuelle que physique
+    uint32_t uart_phys = 0x09000000;  // UART physique
+    uint32_t uart_index = uart_virt >> 20;
+    
+    ttbr0_table[uart_index] = uart_phys | 
+                             0x00000002 |  // Section entry
+                             0x00000C00 |  // AP[2:1] = 11
+                             0x00000010 |  // User accessible  
+                             0x00000004;   // Device memory (non-cacheable)
+    
+    mapped_sections++;
+    KDEBUG("Mapped UART for userspace: 0x%08X -> 0x%08X\n", uart_virt, uart_phys);
+#endif
+    /* Libérer le mapping temporaire */
+    //unmap_temp_page((void*)ttbr0_virt);
+    
+    KDEBUG("Kernel ASID 0 context configured:\n");
+    KDEBUG("  TTBR0 physical table: 0x%08X\n", ttbr0_phys_addr);
+    //KDEBUG("  Sections mapped: %d\n", mapped_sections);
+    KDEBUG("  Ready to handle userspace virtual addresses < 0x40000000\n");
+}
+
 void dump_l1( uint32_t va) {
     //uint32_t N = 2; // tu l'as déjà
-    uint32_t split = 0x40000000;
-    uint32_t idx = (va >= split) ? ((va >> 20) - (split >> 20)) : (va >> 20);
+    //uint32_t split = get_split_boundary();
+    uint32_t idx = get_L1_index(va);
     uint32_t entry = kernel_page_dir[idx];
     kprintf("[%s] VA=0x%08X idx=%u entry=0x%08X nG=%u AP=%u S=%u TEXCB=%u\n",
         "TAG", va, idx, entry,
@@ -171,18 +288,56 @@ bool setup_mmu(void)
 {
     check_endianness();
 
+    setup_kernel_asid_context();
+
     setup_kernel_space();
 
     //preallocate_temp_mapping_system();  // Pendant qu'on a l'identity mapping
     //create_l2_access_zone();            // Idem
 
+        // 3. Configurer TTBR0 (userspace)
+    uint32_t ttbr0_value = (uint32_t)ttbr0_pgdir |
+                          TTBR_RGN_OUTER_WBWA |  // Outer write-back write-allocate
+                          TTBR_SHAREABLE |       // Shareable
+                          TTBR_CACHEABLE;        // Cacheable
+    
+    // 4. Configurer TTBR1 (kernel)  
+    uint32_t ttbr1_value = (uint32_t)kernel_page_dir |
+                          TTBR_RGN_OUTER_WBWA |  // Outer write-back write-allocate
+                          TTBR_SHAREABLE |       // Shareable
+                          TTBR_CACHEABLE;        // Cacheable
+    
+    // 5. Configurer TTBCR avec IRGN
+    uint32_t ttbcr_value = 2 |                    // N=2 (split à 0x40000000)
+                          TTBCR_IRGN0_WBWA |     // Inner cacheable TTBR0
+                          TTBCR_IRGN1_WBWA;      // Inner cacheable TTBR1
+
+    ttbr0_value = (uint32_t)ttbr0_pgdir;
+    ttbr1_value = (uint32_t)kernel_page_dir;
+    
     // Écriture des TTBR
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 0" :: "r"((uint32_t)kernel_page_dir));  // TTBR0
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 1" :: "r"((uint32_t)&kernel_page_dir[1024]));  // TTBR1
+    __asm__ volatile("mcr p15, 0, %0, c2, c0, 0" :: "r"(ttbr0_value));  // TTBR0
+    __asm__ volatile("mcr p15, 0, %0, c2, c0, 1" :: "r"(ttbr1_value));  // TTBR1
 
     // TTBCR : N = 2 (split à 0x40000000), EAE = 0 (format court)
-    uint32_t ttbcr = 0x2;
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 2" :: "r"(ttbcr));
+    uint32_t ttbcr = 0x2; //0x2;
+    ttbcr_value = ttbcr;
+    __asm__ volatile("mcr p15, 0, %0, c2, c0, 2" :: "r"(ttbcr_value));
+
+    __asm__ volatile("dsb");
+__asm__ volatile("isb");
+
+// Vérifier immédiatement
+uint32_t ttbcr_check;
+__asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr_check));
+KDEBUG("TTBCR written: 0x%08X, read back: 0x%08X\n", ttbcr_value, ttbcr_check);
+
+if (ttbcr_check != ttbcr_value) {
+    KERROR("TTBCR write failed!\n");
+    KERROR("  Written: 0x%08X\n", ttbcr_value);
+    KERROR("  Read:    0x%08X\n", ttbcr_check);
+    while(1);
+}
 
     // Synchronisation
     __asm__ volatile("dsb");
@@ -214,13 +369,47 @@ bool setup_mmu(void)
     uint32_t next_pc;
     __asm__ volatile("add %0, pc, #16" : "=r"(next_pc));
 
-    uint32_t next_index = KERNEL_L1_INDEX(next_pc);
+    debug_print_hex("MMU: Next PC = ", next_pc);
+
+    uint32_t next_index = get_L1_index(next_pc);
+
+    KDEBUG("MMU: Next Index = %d\n", next_index);
     uint32_t next_entry = kernel_page_dir[next_index];
+    KDEBUG("MMU: Next Entry = 0x%08X\n", next_entry);
 
     if ((next_entry & 0x3) != 0x2) {
         simple_kprintf("CRITICAL: Next PC not mapped as section!\n");
         while (1);
     }
+
+    // 2. Vérifier les registres TTBR
+uint32_t check_ttbr0, check_ttbr1, check_ttbcr;
+__asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(check_ttbr0));
+__asm__ volatile("mrc p15, 0, %0, c2, c0, 1" : "=r"(check_ttbr1));
+__asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(check_ttbcr));
+
+KDEBUG("TTBR0 reg: 0x%08X (expected: 0x%08X)\n", check_ttbr0, ttbr0_value);
+KDEBUG("TTBR1 reg: 0x%08X (expected: 0x%08X)\n", check_ttbr1, ttbr1_value);
+KDEBUG("TTBCR reg: 0x%08X (expected: 0x%08X)\n", check_ttbcr, ttbcr_value);
+
+// 3. Vérifier l'alignement des tables
+if ((uint32_t)ttbr0_pgdir & 0xFFF) {
+    KERROR("TTBR0 table not 4KB aligned: 0x%08X\n", (uint32_t)ttbr0_pgdir);
+    while(1);
+}
+
+if ((uint32_t)kernel_page_dir & 0x3FFF) {
+    KERROR("TTBR1 table not 16KB aligned: 0x%08X\n", (uint32_t)kernel_page_dir);
+    while(1);
+}
+
+// 4. Vérifier quelques entrées critiques
+KDEBUG("TTBR0 entry [0]: 0x%08X\n", ttbr0_pgdir[0]);  // 0x00000000
+KDEBUG("TTBR0 entry [1]: 0x%08X\n", ttbr0_pgdir[1]);  // 0x00100000
+KDEBUG("Kernel entry [0]: 0x%08X\n", kernel_page_dir[0]);  // 0x40000000
+KDEBUG("Kernel entry [1]: 0x%08X\n", kernel_page_dir[1]);  // 0x40100000
+
+KDEBUG("All checks passed, proceeding with MMU activation...\n");
 
     /* === Activer la MMU === */
     __asm__ volatile("mcr p15, 0, %0, c1, c0, 0" :: "r"(sctlr));
@@ -272,8 +461,10 @@ static void setup_kernel_space(void)
     uint32_t initial_ram_size = 1024 * 1024 * 1024;
     uint32_t ram_end = VIRT_RAM_START + initial_ram_size;  // 0x80000000
     uint32_t mapped_sections = 0;
+    uint32_t mapped_low = 0;
     
     kprintf("MMU: Setting up kernel space (TTBR1) from 0x%08X...\n", split_boundary);
+    kprintf("MMU: (TTBR0) from 0x%08X...\n", (uint32_t)ttbr0_pgdir);
 
     kprintf("MMU: Mapping range 0x%08X - 0x%08X\n", split_boundary, ram_end);
     kprintf("MMU: Max index will be %u (limit: 3072)\n", 
@@ -283,30 +474,59 @@ static void setup_kernel_space(void)
     memset(kernel_page_dir, 0, sizeof(kernel_page_dir));
 
     // 1. Mapper TOUTE la zone basse (0-1GB) en identity mapping dans TTBR0
-    for (uint32_t addr = 0; addr < 0x40000000; addr += 0x100000) {
-        uint32_t index = addr >> 20;  // Index 0-1023
-        kernel_page_dir[index] = addr | 0xC0E;
+     for (uint32_t addr = 0; addr < split_boundary; addr += 0x100000) {
+        uint32_t index = get_L1_index(addr);  // Index 0-1023
+        //kernel_page_dir[index] = addr | 0xC0E;
+        ttbr0_pgdir[index] = addr | 0xC0E;
+        mapped_low++;
     }
-    kprintf("Mapped low memory (TTBR0): 0x0 - 0x40000000\n");
+
+    /* Map device space */
+    for (uint32_t addr = DEVICE_START; addr < DEVICE_END; addr += 0x100000) {
+
+        uint32_t index = get_L1_index(addr);
+        
+        // Devices: non-cacheable, non-bufferable
+        ttbr0_pgdir[index] = addr | 
+                0x00000002 |  // Section descriptor
+                0x00000C00 |  // AP[2:1] = 11 (full access)
+                0x00000004 |  // TEX[0], C, B = 001 (device memory)
+                0x00000000 |  // Domain 0
+                0x00000000 |  // nG = 0 (global)
+                0x00000000;   // S = 0 (non-shared, OK pour device)
+
+        kernel_page_dir[index] = addr | 
+                0x00000002 |  // Section descriptor
+                0x00000C00 |  // AP[2:1] = 11 (full access)
+                0x00000004 |  // TEX[0], C, B = 001 (device memory)
+                0x00000000 |  // Domain 0
+                0x00000000 |  // nG = 0 (global)
+                0x00000000;   // S = 0 (non-shared, OK pour device)
+
+                            //0x00000002 |  // Section entry
+                            //0x00000C00 |  // AP[2:1] = 11
+                            //0x00000010 |  // User accessible  
+                            //0x00000004;   // Device memory (non-cacheable)
+        mapped_sections++;
+        
+    }
+
+    kprintf("Mapped low memory (TTBR0): 0x0 - 0x40000000 - %u sections\n", mapped_low);
     
     /* Map kernel/RAM space - seulement les sections >= split_boundary pour TTBR1 */
     for (uint32_t addr = split_boundary; addr < ram_end; addr += 0x100000) {
 
-        //uint32_t index = addr >> 20;
-        //uint32_t index = (addr >> 20) - (split_boundary >> 20);  // Index relatif à TTBR1
                 // TTBR1 pointe sur &kernel_page_dir[1024], donc :
         // - Index 0 de TTBR1 = kernel_page_dir[1024] = adresse 0x40000000
         // - Index 1 de TTBR1 = kernel_page_dir[1025] = adresse 0x40100000
-        uint32_t ttbr1_index = (addr - split_boundary) >> 20;  // 0, 1, 2...
-        uint32_t array_index = 1024 + ttbr1_index;             // 1024, 1025, 1026...
+        uint32_t ttbr1_index = get_L1_index(addr);
 
-        
         /* Skip la zone réservée aux mappings temporaires */
         //if (addr >= TEMP_MAPPING_START && addr < TEMP_MAPPING_END) {
         //    continue;
         //}
         
-        kernel_page_dir[array_index] = addr |           
+        kernel_page_dir[ttbr1_index] = addr |           
                         0x00000002 |      /* Section bit */
                         0x00000C00 |      /* AP[11:10] = 11 (Kernel RW) */
                         0x00000004 |      /* C - Cacheable */
@@ -325,10 +545,9 @@ static void setup_kernel_space(void)
     
     /* 4. Map le reste de l'espace kernel après la zone temp */
     for (uint32_t addr = TEMP_MAPPING_END; addr < ram_end; addr += 0x100000) {
-        uint32_t ttbr1_index = (addr - split_boundary) >> 20;
-        uint32_t array_index = 1024 + ttbr1_index;
+        uint32_t ttbr1_index = get_L1_index(addr);
         
-        kernel_page_dir[array_index] = addr |           
+        kernel_page_dir[ttbr1_index] = addr |           
                         0x00000002 |      /* Section bit */
                         0x00000C00 |      /* AP[11:10] = 11 (Kernel RW) */
                         0x00000004 |      /* C - Cacheable */
@@ -336,19 +555,6 @@ static void setup_kernel_space(void)
         mapped_sections++;
     }
     
-    /* Map device space */
-    for (uint32_t addr = DEVICE_START; addr < DEVICE_END; addr += 0x100000) {
-        if (addr >= split_boundary) {
-            uint32_t ttbr1_index = (addr - split_boundary) >> 20;
-            uint32_t array_index = 1024 + ttbr1_index;
-            
-            // Devices: non-cacheable, non-bufferable
-            kernel_page_dir[array_index] = addr | 
-                        0x00000002 |      /* Section */
-                        0x00000C00;       /* AP = 11 (RW), pas de cache/buffer */
-            mapped_sections++;
-        }
-    }
     
     kprintf("MMU: Total sections mapped in TTBR1: %u\n", mapped_sections);
 }
@@ -411,9 +617,9 @@ static uint32_t allocate_asid(void)
     memset(asid_map, false, sizeof(asid_map));
     asid_map[0] = true;  /* ASID 0 reste réservé */
     
-    asid_map[1] = true;
+    //asid_map[1] = true;
 
-    asid_map[255] = true;
+    //asid_map[255] = true;
     return 1;
 }
 
@@ -440,10 +646,46 @@ void set_current_asid(uint32_t asid)
     /* Mettre à jour seulement les bits ASID (bits 7:0) */
     contextidr = (contextidr & ~CONTEXTIDR_ASID_MASK) | (asid & CONTEXTIDR_ASID_MASK);
     KDEBUG("Setting up contextidr = 0x%08X\n", contextidr);
+
+    /* NOUVEAU: Vérification de cohérence avant écriture */
+    uint32_t test_value = contextidr;
+    if (test_value != contextidr) {
+        KERROR("CONTEXTIDR value corruption detected!\n");
+        return;
+    }
+
+    debug_mmu_state();
+    
+    /* NOUVEAU: Barrières avant l'écriture critique */
+    data_sync_barrier();
+    instruction_sync_barrier();
+    
+    /* Écriture sécurisée avec gestion d'erreur */
+    KDEBUG("About to write CONTEXTIDR = 0x%08X\n", contextidr);
    
-    /* Ecrire le nouveau CONTEXTIDR */
-    __asm__ volatile("mcr p15, 0, %0, c13, c0, 1" : : "r"(contextidr));
-    __asm__ volatile("isb");
+    __asm__ volatile(
+        "mcr p15, 0, %0, c13, c0, 1 \n"
+        "nop                        \n"
+        "nop                        \n"
+        "nop                        \n"
+        "nop                        \n"
+        "isb                        \n"
+        :
+        : "r"(contextidr)
+        : "memory"
+    );
+
+    KDEBUG("Wrote CONTEXTIDR = 0x%08X\n", contextidr);
+    
+    /* Vérification post-écriture */
+    uint32_t verify_contextidr;
+    __asm__ volatile("mrc p15, 0, %0, c13, c0, 1" : "=r"(verify_contextidr));
+    
+    if ((verify_contextidr & 0xFF) != asid) {
+        KERROR("ASID write failed! Expected %u, got %u\n", asid, verify_contextidr & 0xFF);
+        return;
+    }
+    
     
     KDEBUG("Setting up ASID %d SUCCESSFUL\n", asid);
 
@@ -591,7 +833,7 @@ void map_user_stack(void)
             break;
         }
         
-        uint32_t index = addr >> 20;
+        uint32_t index = get_L1_index(addr);
         
         /* Calculer l'adresse physique dans la RAM basse */
         uint32_t phys_addr = VIRT_RAM_START + 0x10000000 + (addr - USER_STACK_BOTTOM);
@@ -616,8 +858,8 @@ void map_user_stack(void)
 
 int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags)
 {
-    KDEBUG("map_user_page: vaddr=0x%08X, paddr=0x%08X, flags=0x%08X\n", 
-           vaddr, phys_addr, vma_flags);
+    //KDEBUG("map_user_page: pgdir=0x%08X, vaddr=0x%08X, paddr=0x%08X, flags=0x%08X\n", pgdir,
+    //       vaddr, phys_addr, vma_flags);
     
     if (!pgdir || !is_valid_vaddr(vaddr)) {
         KERROR("Invalid pgdir or vaddr\n");
@@ -643,28 +885,28 @@ int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t 
 
     uint32_t existing_paddr = get_physical_address(pgdir, vaddr);
     if (existing_paddr == phys_addr) {
-        KDEBUG("map_user_page: Page already mapped correctly, skipping\n");
+        //KDEBUG("map_user_page: Page already mapped correctly, skipping\n");
         return 0;
     } else if (existing_paddr != 0) {
-        KERROR("map_user_page: Page mapped to different physical address!\n");
-        KERROR("  vaddr=0x%08X, existing=0x%08X, requested=0x%08X\n", 
-               vaddr, existing_paddr, phys_addr);
+        //KERROR("map_user_page: Page mapped to different physical address!\n");
+        //KERROR("  vaddr=0x%08X, existing=0x%08X, requested=0x%08X\n", 
+        //       vaddr, existing_paddr, phys_addr);
         return -1;
     }
 
-    KDEBUG("map_user_page: pgdir=0x%08X, vaddr=0x%08X, paddr=0x%08X, flags=0x%08X\n", 
-           pgdir, vaddr, phys_addr, vma_flags);
+    //KDEBUG("map_user_page: pgdir=0x%08X, vaddr=0x%08X, paddr=0x%08X, flags=0x%08X\n", 
+    //       pgdir, vaddr, phys_addr, vma_flags);
     
-    KDEBUG("VMA flags: R%s W%s X%s\n",
-           (vma_flags & VMA_READ) ? "+" : "-",
-           (vma_flags & VMA_WRITE) ? "+" : "-",
-           (vma_flags & VMA_EXEC) ? "+" : "-");
+    //KDEBUG("VMA flags: R%s W%s X%s\n",
+    //       (vma_flags & VMA_READ) ? "+" : "-",
+    //       (vma_flags & VMA_WRITE) ? "+" : "-",
+    //       (vma_flags & VMA_EXEC) ? "+" : "-");
     
     // Utiliser des pages de 4KB
-    uint32_t l1_index = vaddr >> 20;        // Bits 31-20
-    uint32_t l2_index = (vaddr >> 12) & 0xFF; // Bits 19-12
+    uint32_t l1_index = get_L1_index(vaddr);        // Bits 31-20
+    uint32_t l2_index = L2_INDEX(vaddr); // Bits 19-12
     
-    KDEBUG("L1 index: %u, L2 index: %u\n", l1_index, l2_index);
+    //KDEBUG("L1 index: %u, L2 index: %u\n", l1_index, l2_index);
     
     // Vérifier/créer la table L2
     uint32_t* l1_entry = &pgdir[l1_index];
@@ -677,7 +919,7 @@ int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t 
             KERROR("Failed to allocate L2 table\n");
             return -1;
         }
-        KDEBUG("L2 creation: Allocate Physical Page OK\n");
+        //KDEBUG("L2 creation: Allocate Physical Page OK\n");
         
         uint32_t l2_phys = (uint32_t)l2_page;
         
@@ -690,7 +932,7 @@ int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t 
             return -1;
         }
 
-        KDEBUG("L2 creation: Map Temp Page OK l2_temp 0x%08X\n", l2_temp);
+        //KDEBUG("L2 creation: Map Temp Page OK l2_temp 0x%08X\n", l2_temp);
         
         // Zéroiser la table L2
         memset((void*)l2_temp, 0, PAGE_SIZE);
@@ -699,7 +941,8 @@ int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t 
         // Configurer l'entrée L1 style Cortex-A15
         *l1_entry = (l2_phys & 0xFFFFFC00) | 0x01;  // Coarse page table
         
-        KDEBUG("Created L2 table at phys 0x%08X\n", l2_phys);
+        //KDEBUG("Created L2 table at phys 0x%08X\n", l2_phys);
+        //KDEBUG("L1 Entry=0x%08X\n", *l1_entry);
     }
 
     //KDEBUG("L1 test: !(*l1_entry & 0x1) failed\n");
@@ -717,6 +960,9 @@ int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t 
     
     // Déterminer les permissions ARM
     uint32_t page_flags = 0x02;  // Small page type
+
+    // TOUJOURS mettre AP[2] = 1 pour accès user (bit [9])
+    //page_flags |= 0x200;  // AP[2] = 1 (bit [9])
     
     // Permissions d'accès
     if (vma_flags & VMA_WRITE) {
@@ -735,12 +981,12 @@ int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t 
         page_flags |= 0x0C;  // Cacheable + Bufferable
     }
     
-    KDEBUG("ARM page flags: 0x%08X\n", page_flags);
+    //KDEBUG("ARM page flags: 0x%08X\n", page_flags);
     
     // Configurer l'entrée L2
     l2_table[l2_index] = (phys_addr & 0xFFFFF000) | page_flags;
     
-    KDEBUG("L2[%u] = 0x%08X\n", l2_index, l2_table[l2_index]);
+    //KDEBUG("L2[%u] = 0x%08X\n", l2_index, l2_table[l2_index]);
     
     // Unmap la table L2
     unmap_temp_page((void*)l2_temp);
@@ -750,7 +996,7 @@ int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t 
     data_sync_barrier();
     instruction_sync_barrier();
     
-    KINFO("Successfully mapped page 0x%08X -> 0x%08X\n", vaddr, phys_addr);
+    //KINFO("Successfully mapped page 0x%08X -> 0x%08X\n", vaddr, phys_addr);
     return 0;
 }
 
@@ -775,7 +1021,7 @@ void map_kernel_page(uint32_t vaddr, uint32_t phys_addr)
     }
     
     // Pour le kernel, utiliser des sections de 1MB
-    uint32_t section_index = (vaddr >> 20) - 0x800; // Ajuster pour TTBR1
+    uint32_t section_index = get_L1_index(vaddr) - 0x800; // Ajuster pour TTBR1
     uint32_t section_base = phys_addr & PDE_SECTION_BASE;
     
     // Vérifier l'index TTBR1
@@ -812,28 +1058,32 @@ void map_kernel_page(uint32_t vaddr, uint32_t phys_addr)
     asm volatile("isb" ::: "memory");
 }
 
+uint32_t get_L1_index(uint32_t vaddr){
+    return vaddr >= get_split_boundary() ? KERNEL_L1_INDEX(vaddr) : vaddr >> 20 ; 
+}
+
 uint32_t get_physical_address(uint32_t* pgdir, uint32_t vaddr) {
-    uint32_t l1_index = vaddr >> 20;
+    uint32_t l1_index = get_L1_index(vaddr);
     uint32_t l1_entry = pgdir[l1_index];
 
-    KDEBUG("[get_physical_address] : Getting physical for VA = 0x%08X (L1 index = %u)\n", vaddr, l1_index);
-    KDEBUG("[get_physical_address] : L1 entry = 0x%08X\n", l1_entry);
+    //KDEBUG("[get_physical_address] : Getting physical for VA = 0x%08X (L1 index = %u)\n", vaddr, l1_index);
+    //KDEBUG("[get_physical_address] : L1 entry = 0x%08X\n", l1_entry);
 
     uint32_t type = l1_entry & 0x3;
 
     if (type == 0) {
-        KDEBUG("[get_physical_address] : Fault entry\n");
+        //KDEBUG("[get_physical_address] : Fault entry\n");
         return 0;
     } else if (type == 2) {
         // Section mapping (1MB)
         uint32_t section_base = l1_entry & 0xFFF00000;
         uint32_t offset = vaddr & 0x000FFFFF;
         uint32_t phys = section_base + offset;
-        KDEBUG("[get_physical_address] : Section -> PA = 0x%08X\n", phys);
+        //KDEBUG("[get_physical_address] : Section -> PA = 0x%08X\n", phys);
         return phys;
     } else if (type == 1) {
         // Coarse page table
-        uint32_t l2_index = (vaddr >> 12) & 0xFF;
+        uint32_t l2_index = L2_INDEX(vaddr);
         uint32_t l2_table_phys = l1_entry & 0xFFFFFC00;
         uint32_t l2_mapped_virt = map_temp_page(l2_table_phys);
         uint32_t* l2_table = (uint32_t*)l2_mapped_virt;
@@ -842,69 +1092,21 @@ uint32_t get_physical_address(uint32_t* pgdir, uint32_t vaddr) {
 
         uint32_t l2_type = l2_entry & 0x3;
         if (l2_type != 2) {
-            KDEBUG("[get_physical_address] : Invalid small page type (0x%X)\n", l2_type);
+            //KDEBUG("[get_physical_address] : Invalid small page type (0x%X)\n", l2_type);
             return 0;
         }
 
         uint32_t small_page_base = l2_entry & 0xFFFFF000;
-        uint32_t offset = vaddr & 0xFFF;
+        uint32_t offset = OFFSET(vaddr);
         uint32_t phys = small_page_base + offset;
-        KDEBUG("[get_physical_address] : Small page -> PA = 0x%08X\n", phys);
+        //KDEBUG("[get_physical_address] : Small page -> PA = 0x%08X\n", phys);
         return phys;
     } else {
-        KDEBUG("[get_physical_address] : Unsupported L1 entry type: %u\n", type);
+        //KDEBUG("[get_physical_address] : Unsupported L1 entry type: %u\n", type);
         return 0;
     }
 }
 
-
-uint32_t get_physical_address2(uint32_t* pgdir, uint32_t vaddr) {
-    uint32_t l1_index = vaddr >> 20;
-    uint32_t l2_index = (vaddr >> 12) & 0xFF;
-    
-    KDEBUG("[get_physical_address] : getting physical for address = 0x%08X in pgdir 0x%08X\n", vaddr, (uint32_t)pgdir);
-    KDEBUG("[get_physical_address] : L1 index = %d, L2 index = %d\n", l1_index, l2_index);
-    
-    uint32_t l1_entry = pgdir[l1_index];
-    KDEBUG("[get_physical_address] : L1[%d] = 0x%08X\n", l1_index, l1_entry);
-    
-    uint32_t pde_type = l1_entry & 0x3;
-    KDEBUG("[get_physical_address] : PDE_TYPE = %d\n", pde_type);
-    
-    if (pde_type != 1) {  // Pas une coarse page table
-        KDEBUG("[get_physical_address] : Not a coarse page table, returning 0\n");
-        return 0;
-    }
-    
-    // Obtenir la table L2 physique
-    uint32_t l2_table_phys = l1_entry & 0xFFFFFC00;
-    KDEBUG("[get_physical_address] : L2 table phys = 0x%08X\n", l2_table_phys);
-    
-    // Mapper temporairement la table L2
-    uint32_t l2_mapped_virt = map_temp_page(l2_table_phys);
-    uint32_t* l2_table = (uint32_t*)l2_mapped_virt;
-    
-    uint32_t l2_entry = l2_table[l2_index];
-    KDEBUG("[get_physical_address] : L2[%d] = 0x%08X\n", l2_index, l2_entry);
-
-    uint32_t pte_type = l2_entry & 0x3;
-    KDEBUG("[get_physical_address] : PTE_TYPE = %d\n", pte_type);
-    
-    if (pte_type != 2) {  // Small page ARM = type 2
-        KDEBUG("[get_physical_address] : Not a small page (type=%d)\n", pte_type);
-        unmap_temp_page((void*)l2_mapped_virt);
-        return 0;
-    }
-    
-    unmap_temp_page((void*)l2_mapped_virt);
-    
-    uint32_t phys_base = l2_entry & 0xFFFFF000;
-    uint32_t offset = vaddr & 0xFFF;
-    uint32_t result = phys_base + offset;
-    
-    KDEBUG("[get_physical_address] : Final result = 0x%08X\n", result);
-    return result;
-}
 
 void invalidate_tlb_all(void)
 {
@@ -960,8 +1162,17 @@ void invalidate_tlb_asid(uint32_t asid)
     
     asm volatile(
         "dsb                            \n"
+        "nop                            \n"  // Délai après TLB invalidation
+        "nop                            \n"
+        "nop                            \n"  // Cortex-A15 recommande 3+ cycles
         "mcr p15, 0, %0, c8, c7, 2      \n"  // TLBIASID - invalidate by ASID
+        "nop                            \n"  // Délai après TLB invalidation
+        "nop                            \n"
+        "nop                            \n"  // Cortex-A15 recommande 3+ cycles
         "dsb                            \n"
+        "nop                            \n"  // Délai après TLB invalidation
+        "nop                            \n"
+        "nop                            \n"  // Cortex-A15 recommande 3+ cycles
         "isb                            \n"
         :
         : "r"(asid & ASID_MASK)
@@ -987,6 +1198,11 @@ void set_ttbr0(uint32_t ttbr0)
 uint32_t* get_kernel_pgdir(void)
 {
     return kernel_pgdir;
+}
+
+uint32_t* get_kernel_ttbr0(void)
+{
+    return ttbr0_pgdir;
 }
 
 #if(0)
@@ -1049,10 +1265,13 @@ void debug_mmu_state(void)
 {
     uint32_t ttbr0 = get_ttbr0();
     uint32_t ttbr1 = get_ttbr1();
-    uint32_t ttbcr, contextidr;
+    uint32_t ttbcr = get_ttbcr();
+    uint32_t contextidr = get_contextidr() ;
+    uint32_t sctlr = get_sctlr();
+    uint32_t dacr = get_dacr();
     
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr));
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 1" : "=r"(contextidr));
+    //__asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr));
+    //__asm__ volatile("mrc p15, 0, %0, c13, c0, 1" : "=r"(contextidr));
     
     KDEBUG("=== MMU SPLIT TTBR STATE DEBUG ===\n");
     KDEBUG("kernel_page_dir:      %p\n", kernel_page_dir);
@@ -1061,7 +1280,9 @@ void debug_mmu_state(void)
     KDEBUG("TTBCR register:       0x%08X (N=%d)\n", ttbcr, ttbcr & 0x7);
     KDEBUG("CONTEXTIDR:           0x%08X (ASID=%d)\n", contextidr, contextidr & ASID_MASK);
     KDEBUG("Current ASID:         %u\n", current_asid);
-    
+    KDEBUG("SCTLR Register:       0x%08X\n", sctlr);
+    KDEBUG("DACR Register:        0x%08X\n", dacr);
+     
     /* Vérifications de cohérence */
     if (kernel_pgdir == kernel_page_dir) {
         KDEBUG("OK kernel_pgdir correctly points to kernel_page_dir\n");
@@ -1075,9 +1296,9 @@ void debug_mmu_state(void)
         KERROR("KO TTBR1 != kernel_page_dir address\n");
     }
     
-    uint32_t split_size = 4096 >> (ttbcr & 0x7);  // En MB
-    KDEBUG("Memory split: 0--%uMB (TTBR0), %uMB--4GB (TTBR1)\n", 
-           split_size * 1024, split_size * 1024);
+    //uint32_t split_size = 4096 >> (ttbcr & 0x7);  // En MB
+    //KDEBUG("Memory split: 0--%uMB (TTBR0), %uMB--4GB (TTBR1)\n", 
+    //       split_size * 1024, split_size * 1024);
     
     KDEBUG("=== END MMU SPLIT DEBUG ===\n");
 }

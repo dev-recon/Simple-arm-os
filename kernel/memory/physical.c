@@ -3,15 +3,8 @@
 #include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 
-typedef struct {
-    uint32_t* bitmap;
-    uint32_t total_pages;
-    uint32_t free_pages;
-    uint32_t start_addr;
-    uint32_t bitmap_pages;  /* Nombre de pages utilisees par le bitmap */
-} __attribute__((aligned(4))) physical_allocator_t;
 
-static physical_allocator_t phys_alloc;
+physical_allocator_t phys_alloc;
 
 /* Forward declarations des fonctions statiques */
 static int set_page_used(uint32_t page_index);
@@ -25,6 +18,10 @@ bool init_memory(void)
 {
     uint32_t mem_start = VIRT_RAM_START;
     uint32_t mem_size = detect_memory();
+    //uint32_t mem_start = 0x00000000;        // ← Commencer à 0 au lieu de 0x40000000
+    //uint32_t mem_size = 3 * 1024 * 1024 * 1024u;  // 2GB total (0-2GB)
+
+
     uint32_t bitmap_size_words;
     uint32_t bitmap_size_bytes;
     uint32_t i;
@@ -53,8 +50,10 @@ bool init_memory(void)
     kprintf("[MEM] Initializing physical memory allocator...\n");
     kprintf("[MEM] RAM: 0x%08X - 0x%08X (%u MB)\n", 
             mem_start, mem_start + mem_size, mem_size / (1024*1024));
+
+    uint32_t bitmap_start = mem_start;
     
-    phys_alloc.start_addr = mem_start;
+    phys_alloc.start_addr = bitmap_start + (phys_alloc.bitmap_pages * PAGE_SIZE);;
     phys_alloc.total_pages = mem_size / PAGE_SIZE;
     
     /* Bitmap: 1 bit per page */
@@ -63,8 +62,8 @@ bool init_memory(void)
     phys_alloc.bitmap_pages = (bitmap_size_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
     
     /* Placer le bitmap APReS le kernel et heap, pas a la fin de la RAM */
-    extern uint32_t __free_memory_start;
-    uint32_t bitmap_start = ALIGN_UP((uint32_t)&__free_memory_start, PAGE_SIZE);
+    //extern uint32_t __free_memory_start;
+
     phys_alloc.bitmap = (uint32_t*)bitmap_start;
     
     kprintf("[MEM] Bitmap configuration:\n");
@@ -90,6 +89,7 @@ bool init_memory(void)
     kprintf("[MEM] Initial state: %u pages (%u MB) free\n", 
             phys_alloc.free_pages, 
             (phys_alloc.free_pages * PAGE_SIZE) / (1024*1024));
+
     
     /* Reserve kernel pages */
     reserve_kernel_pages();
@@ -100,7 +100,7 @@ bool init_memory(void)
     kprintf("[MEM] Final state: %u pages (%u MB) free\n", 
             phys_alloc.free_pages, 
             (phys_alloc.free_pages * PAGE_SIZE) / (1024*1024));
-
+    
     init_kernel_heap();
 
     reserve_heap_pages();
@@ -282,8 +282,10 @@ static bool is_page_free(uint32_t page_index)
 {
     uint32_t word_index = page_index / 32;
     uint32_t bit_index = page_index % 32;
+    //kprintf("[MEM] INFO: is page free index %d\n",page_index);
     return !(phys_alloc.bitmap[word_index] & (1 << bit_index));
 }
+
 
 void* allocate_physical_page(void)
 {
@@ -329,15 +331,45 @@ void free_physical_page(void* page_addr)
     set_page_free(page_index);
 }
 
-void* allocate_contiguous_pages(uint32_t num_pages)
+/*
+ * Fonctions helper pour allocation simplifiée
+ */
+void* allocate_kernel_pages(uint32_t num_pages)
+{
+    return allocate_contiguous_pages(num_pages, true);
+}
+
+void* allocate_user_pages(uint32_t num_pages) 
+{
+    return allocate_contiguous_pages(num_pages, false);
+}
+
+/*
+ * Pour l'allocation de pages individuelles
+ */
+void* allocate_kernel_page(void)
+{
+    return allocate_kernel_pages(1);
+}
+
+void* allocate_user_page(void)
+{
+    return allocate_user_pages(1);
+}
+
+
+void* allocate_contiguous_pages2(uint32_t num_pages, bool kernel_space)
 {
     uint32_t consecutive = 0;
     uint32_t start_page = 0;
     uint32_t i;
     uint32_t j;
     uint32_t phys_addr;
+    uint32_t search_start = 0;
+    uint32_t search_end = phys_alloc.total_pages;
 
-    //kprintf("[MEM] Allocating %u contiguous pages...\n", num_pages);
+    KDEBUG("[MEM] Allocating %u contiguous pages (kernel_space=%s)...\n", 
+           num_pages, kernel_space ? "true" : "false");
 
     if (phys_alloc.free_pages < num_pages) {
         KERROR("[MEM] ERROR: Not enough free pages (%u available, %u requested)\n", 
@@ -345,12 +377,190 @@ void* allocate_contiguous_pages(uint32_t num_pages)
         return NULL;
     }
 
+    /*
+     * IMPORTANT: Avec QEMU virt, TOUTE la RAM physique commence à 0x40000000
+     * Il n'y a PAS de RAM physique < 0x40000000
+     * 
+     * La distinction kernel/user se fait au niveau VIRTUEL :
+     * - Kernel virtual : 0x40000000+ (TTBR1) → RAM physique 0x40000000+
+     * - User virtual   : 0x00000000+ (TTBR0) → RAM physique 0x40000000+ (même RAM!)
+     * 
+     * L'allocateur physique alloue dans la même RAM pour les deux cas.
+     * La différence est dans le mapping virtuel fait par la MMU.
+     */
+
+    /* 
+     * Stratégie d'allocation dans la RAM physique unique (0x40000000+) :
+     * - Kernel : préfère les adresses hautes (moins de fragmentation)
+     * - User   : préfère les adresses basses (pour éviter les conflits kernel)
+     */
+    
+    if (kernel_space) {
+        /*
+         * Allocation kernel : recherche depuis la fin vers le début
+         * Cela évite de fragmenter l'espace user en bas de la RAM
+         */
+        KDEBUG("[MEM] Kernel allocation: searching from high addresses\n");
+        
+        /* Recherche en ordre inverse pour le kernel */
+        for (i = search_end; i > 0; i--) {
+            uint32_t page_idx = i - 1;
+            
+            if (is_page_free(page_idx)) {
+                if (consecutive == 0) {
+                    start_page = page_idx;
+                }
+                consecutive++;
+                
+                if (consecutive == num_pages) {
+                    /* Ajuster start_page pour pointer vers le début du bloc */
+                    start_page = page_idx;
+                    
+                    /* Marquer les pages comme utilisées */
+                    for (j = start_page; j < start_page + num_pages; j++) {
+                        set_page_used(j);
+                    }
+                    
+                    phys_addr = phys_alloc.start_addr + (start_page * PAGE_SIZE);
+                    memset((void*)phys_addr, 0, num_pages * PAGE_SIZE);
+                    
+                    KDEBUG("[MEM] Allocated %u kernel pages at 0x%08X\n", 
+                           num_pages, phys_addr);
+                    return (void*)phys_addr;
+                }
+            } else {
+                consecutive = 0;
+            }
+        }
+        
+    } else {
+        /*
+         * Allocation user : recherche depuis le début
+         * Utilise les adresses basses de la RAM physique
+         */
+        KDEBUG("[MEM] User allocation: searching from low addresses\n");
+        
+        /* Éviter la zone kernel réservée (premiers X MB) */
+        extern uint32_t __end;
+        uint32_t kernel_end_addr = (uint32_t)&__end;
+        uint32_t kernel_reserved_pages = ((kernel_end_addr - phys_alloc.start_addr) / PAGE_SIZE) + 256; /* +1MB sécurité */
+        
+        if (kernel_reserved_pages < search_start) {
+            search_start = kernel_reserved_pages;
+        }
+        
+        KDEBUG("[MEM] User search starts after kernel zone at page %u (0x%08X)\n",
+               search_start, phys_alloc.start_addr + (search_start * PAGE_SIZE));
+
+        KDEBUG("[MEM] Free Pages %u\n",phys_alloc.free_pages);
+
+        
+        /* Recherche normale pour l'userspace */
+        for (i = search_start; i < search_end; i++) {
+            if (is_page_free(i)) {
+                if (consecutive == 0) {
+                    start_page = i;
+                }
+                consecutive++;
+                
+                if (consecutive == num_pages) {
+                    /* Marquer les pages comme utilisées */
+                    for (j = start_page; j < start_page + num_pages; j++) {
+                        set_page_used(j);
+                    }
+                    
+                    phys_addr = phys_alloc.start_addr + (start_page * PAGE_SIZE);
+                    memset((void*)phys_addr, 0, num_pages * PAGE_SIZE);
+                    
+                    KDEBUG("[MEM] Allocated %u user pages at 0x%08X\n", 
+                           num_pages, phys_addr);
+                    return (void*)phys_addr;
+                }
+            } else {
+                consecutive = 0;
+            }
+        }
+    }
+    
+    KERROR("[MEM] ERROR: Could not find %u contiguous pages for %s\n", 
+           num_pages, kernel_space ? "kernel" : "user");
+    return NULL;
+}
+
+void* do_physical_allocation(uint32_t num_pages, bool kernel_space)
+{
+    (void) kernel_space;
+    uint32_t consecutive = 0;
+    uint32_t start_page = 0;
+    uint32_t i;
+    uint32_t j;
+    uint32_t phys_addr;
+
+    kprintf("[MEM] Allocating %u contiguous pages...\n", num_pages);
+
+    if (phys_alloc.free_pages < num_pages) {
+        KERROR("[MEM] ERROR: Not enough free pages (%u available, %u requested)\n", 
+                phys_alloc.free_pages, num_pages);
+        return NULL;
+    }
+
+#if(0)
+    KDEBUG("=== FULL ALLOCATOR DEBUG ===\n");
+    
+    // 1. Adresses critiques
+    KDEBUG("Code location:\n");
+    KDEBUG("  allocate_contiguous_pages: 0x%08X\n", (uint32_t)allocate_contiguous_pages);
+    KDEBUG("  Current PC: ");
+    uint32_t pc;
+    __asm__ volatile("mov %0, pc" : "=r"(pc));
+    KDEBUG("0x%08X\n", pc);
+    
+    // 2. Structures de données
+    KDEBUG("Data structures:\n");
+    KDEBUG("  phys_alloc struct: 0x%08X\n", (uint32_t)&phys_alloc);
+    KDEBUG("  phys_alloc.bitmap: 0x%08X\n", (uint32_t)phys_alloc.bitmap);
+    
+    // 3. Pile actuelle
+    uint32_t sp;
+    __asm__ volatile("mov %0, sp" : "=r"(sp));
+    KDEBUG("  Current SP: 0x%08X\n", sp);
+    
+    // 4. Contexte MMU
+    uint32_t ttbr0, ttbr1, ttbcr;
+    __asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(ttbr0));
+    __asm__ volatile("mrc p15, 0, %0, c2, c0, 1" : "=r"(ttbr1));
+    __asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr));
+    
+    KDEBUG("MMU state:\n");
+    KDEBUG("  TTBR0: 0x%08X\n", ttbr0 & ~0x7F);
+    KDEBUG("  TTBR1: 0x%08X\n", ttbr1 & ~0x7F);
+    KDEBUG("  TTBCR: 0x%08X\n", ttbcr);
+    
+    // 5. Test d'accès aux données critiques
+    KDEBUG("Access tests:\n");
+    
+    __asm__ volatile("" ::: "memory");  // Barrier
+    uint32_t test1 = phys_alloc.total_pages;
+    KDEBUG("  phys_alloc.total_pages: %u\n", test1);
+    
+    __asm__ volatile("" ::: "memory");  // Barrier
+    uint32_t test2 = phys_alloc.bitmap[0];
+    KDEBUG("  phys_alloc.bitmap[0]: 0x%08X\n", test2);
+    
+    KDEBUG("=== END ALLOCATOR DEBUG ===\n");
+#endif
+
     for (i = 0; i < phys_alloc.total_pages; i++) {
-        if (is_page_free(i)) {
+        //KDEBUG("[MEM]: searching free page at i=%d\n",i);
+        bool page_free = is_page_free(i);
+        if (page_free) {
+            //KDEBUG("[MEM]: Found free page at i=%d\n",i);
             if (consecutive == 0) {
                 start_page = i;
             }
             consecutive++;
+
+            //KDEBUG("[MEM]: Found free page at 0x%08X\n", phys_alloc.start_addr + (start_page * PAGE_SIZE));
             
             if (consecutive == num_pages) {
                 for (j = start_page; j < start_page + num_pages; j++) {
@@ -372,7 +582,26 @@ void* allocate_contiguous_pages(uint32_t num_pages)
     return NULL;
 }
 
-void free_contiguous_pages(void* page_addr, uint32_t num_pages)
+
+void* allocate_contiguous_pages(uint32_t num_pages, bool kernel_space)
+{
+        // Sauvegarder le contexte MMU actuel
+    //uint32_t old_ttbr0 = get_ttbr0();
+    //__asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(old_ttbr0));
+    
+    // Temporairement utiliser TTBR0 du kernel pour l'allocation
+    //uint32_t kernel_ttbr0 = (uint32_t)get_kernel_ttbr0();
+    //set_ttbr0(kernel_ttbr0);
+
+    // Faire l'allocation avec accès complet aux structures kernel
+    void* result = do_physical_allocation(num_pages, kernel_space);
+
+    //set_ttbr0(old_ttbr0);
+    
+    return result;
+}
+
+void do_free_contiguous_pages(void* page_addr, uint32_t num_pages)
 {
     uint32_t addr = (uint32_t)page_addr;
     uint32_t start_page_index;
@@ -397,6 +626,24 @@ void free_contiguous_pages(void* page_addr, uint32_t num_pages)
             set_page_free(start_page_index + i);
         }
     }
+}
+
+void free_contiguous_pages(void* page_addr, uint32_t num_pages)
+{
+            // Sauvegarder le contexte MMU actuel
+    //uint32_t old_ttbr0 = get_ttbr0();
+    
+    // Temporairement utiliser TTBR0 du kernel pour l'allocation
+    //uint32_t kernel_ttbr0 = (uint32_t)get_kernel_ttbr0();
+    //set_ttbr0(kernel_ttbr0);
+
+    // Faire l'allocation avec accès complet aux structures kernel
+    do_free_contiguous_pages(page_addr, num_pages);
+
+    //set_ttbr0(old_ttbr0);
+
+    return;
+
 }
 
 uint32_t get_free_page_count(void)

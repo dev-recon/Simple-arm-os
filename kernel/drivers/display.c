@@ -24,7 +24,7 @@ void init_display(void)
     uint32_t pages_needed = (fb_size + PAGE_SIZE - 1) / PAGE_SIZE;
     kprintf("Pages needed: %u\n", pages_needed);
     
-    framebuffer_base = (uint8_t*)allocate_contiguous_pages(pages_needed);
+    framebuffer_base = (uint8_t*)allocate_contiguous_pages(pages_needed,true);
     if (!framebuffer_base) {
         kprintf("KO Failed to allocate framebuffer memory\n");
         return;
@@ -73,34 +73,6 @@ void init_display(void)
     }
 }
 
-
-void init_display2(void)
-{
-    display.width = FB_WIDTH;
-    display.height = FB_HEIGHT;
-    display.bpp = FB_BPP;
-    display.pitch = FB_WIDTH * (FB_BPP / 8);
-    display.framebuffer = (uint8_t*)FB_BASE;
-    
-    /* Map framebuffer pages */
-    uint32_t fb_size = display.height * display.pitch;
-    uint32_t offset;
-    for (offset = 0; offset < fb_size; offset += PAGE_SIZE) {
-        map_kernel_page(FB_BASE + offset, FB_BASE + offset);
-    }
-    
-    /* Console mode */
-    display.text_cols = display.width / 8;
-    display.text_rows = display.height / 16;
-    display.cursor_x = 0;
-    display.cursor_y = 0;
-    display.fg_color = 0xFFFFFF;
-    display.bg_color = 0x000000;
-    
-    clear_screen();
-    
-    KDEBUG("Display initialized: %d x %d\n", display.width, display.height);
-}
 
 void clear_screen(void)
 {

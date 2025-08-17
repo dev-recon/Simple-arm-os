@@ -5,7 +5,12 @@
 int main() {
     int version = 22 ;
     
-     int child_pid = fork();
+    printf("******************************************************\n");
+    printf("*************** HELLO FROM USER SPACE ****************\n");
+    printf("*************** This process is going to fork() ******\n");
+    printf("******************************************************\n");
+
+    int child_pid = fork();
     if (child_pid == 0) {
         printf("Child process running!\n");
         exit(42);

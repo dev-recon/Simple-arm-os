@@ -67,7 +67,8 @@ task_t* set_process_stack(task_t* parent, task_t* child)
     child->stack_size = KERNEL_TASK_STACK_SIZE;
     child->stack_top = (uint8_t*)child->stack_base + KERNEL_TASK_STACK_SIZE;
 
-    bool parent_is_user_process = (parent->context.sp < 0x40000000);  /* Espace user */
+    //bool parent_is_user_process = (parent->context.sp < 0x40000000);  /* Espace user */
+    bool parent_is_user_process = false;  /* FIX IT Espace user */
 
     KDEBUG("task_create_copy: parent_is_user_process=%s\n", 
        parent_is_user_process ? "YES" : "NO");
@@ -761,7 +762,13 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         task->process->state = (proc_state_t)PROC_READY;
         
         /* Creer l'espace memoire */
-        task->process->vm = create_vm_space();
+        if(task->process->pid == 1){
+            task->process->vm = create_vm_space(false); //INIT PROCESS IS KERNEL PROCESS
+        }
+        else{
+            task->process->vm = create_vm_space(false);
+        }
+
         if (!task->process->vm) {
             task_destroy(task);
             return NULL;

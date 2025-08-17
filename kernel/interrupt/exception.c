@@ -52,6 +52,11 @@ void data_abort_handler(void)
     // Pour data abort, l'instruction fautive est à LR-8
     uint32_t fault_pc = lr - 8;
     kprintf("[ERROR] Fault PC (LR-8): 0x%08X\n", fault_pc);
+
+    for(int i = 1 ; i < 16 ; i++ ){
+        uint32_t pc = lr - i;
+        kprintf("[ERROR] Fault PC (LR-%d): 0x%08X\n", i, pc);
+    }
     
     // Lire l'instruction fautive
     if (fault_pc >= 0x40010000 && fault_pc < 0x40050000) {

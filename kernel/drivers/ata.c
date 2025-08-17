@@ -432,7 +432,7 @@ static bool setup_virtqueue(void)
     
     /* Allocate contiguous memory */
     KDEBUG("Allocating %u contiguous pages...\n", queue_pages);
-    void* queue_mem = allocate_contiguous_pages(queue_pages);
+    void* queue_mem = allocate_contiguous_pages(queue_pages,true);
     if (!queue_mem) {
         KERROR("Failed to allocate pages\n");
         return false;
