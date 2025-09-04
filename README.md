@@ -20,10 +20,27 @@ Small kernel is in place with the following features:
     - getppid: these were the easy ones :)
 
 Code is still dirty and not well documented (need some help for this as well).
-I'm using Mac M4 to developp and cross-compile, not a big deal to adapt makefiles to make it compile and work in Linux.
+I'm using Mac M4 to developp and cross-compile, not a big deal to adapt makefiles to make it compile and run on Linux.
 
 I was developping in C long time ago, but have had hard time to get up to speed again.
 I will continue to developp it and and features for the sake of learning new stuff.
 I also think that this kernel can also be used by teachers and students that wants to learn bare metal programming and kernel development.
+
+Will publish a documentation on how to:
+    - setup environment,
+    - create and modify user programs,
+
+Roadmap for now id to develop the following features (to have a proper userland shell working):
+    - virtio mmio block device for having real disk image to read and store data (get rid of RAMFS).
+    - Files: open, create, read, write, lseek, dup.
+    - chdir, rmdir, ...
+    - proper signal management.
+    - display (ram based) and keyboard management: base is in place (need testing and debuging)
+    - tty (VT100)
+    - timer (using software timer for now for scheduling).
+    - user malloc() and free()
+    - .... so many things to do :)
+    - ideas very welcome as well.
+
 
 Contributors are very welcome :)
