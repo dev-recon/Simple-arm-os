@@ -1,4 +1,4 @@
-# arm-os
+# Simple arm-os
 Arm V7 simple kernel for cortex-a15 running on qemu virt
 
 This started as a joke... Is it possible to develop an ARM kernel, Linux like, from scratch by using AI support ?
