@@ -15,7 +15,7 @@ Small kernel is in place with the following features:
   - Syscalls:
     - fork: userland and kernel - I know Posix does not allow forks in kernel but this kernel does (and it's cool :)).
     - execve: userland and kernel
-    - write: for now used to output to uart - so printf works well from user programs.
+    - write: for now used to output to uart - so printf works well from user programs. The plan was not to use RAMFS rw, so will extend it to block files when virtio block files will be runing well.
     - getpid
     - getppid: these were the easy ones :)
 
