@@ -11,13 +11,22 @@
 
 int sys_brk(void* addr)
 {
-    process_t* proc = current_task->process ;
-    uint32_t new_brk = (uint32_t)addr;
+    task_t* task = current_task ;
+
+   uint32_t new_brk = (uint32_t)addr;
     uint32_t old_brk;
     uint32_t addr_to_unmap;
     vma_t* heap_vma;
     
-    if (!proc || !proc->vm) return -EINVAL;
+    if (!task ) {
+        return -EINVAL;
+    }
+
+    process_t* proc = task->process ;
+ 
+    if (!proc || !proc->vm) {
+        return -EINVAL;
+    }
     
     old_brk = proc->vm->heap_end;
     

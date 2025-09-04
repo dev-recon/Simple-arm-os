@@ -7,7 +7,7 @@ LD = $(ARCH)ld
 # Répertoires
 BUILD_DIR = ../../build
 USERLAND_DIR = ..
-CRT0_DIR = $(USERLAND_DIR)/src
+#CRT0_DIR = $(USERLAND_DIR)/src
 SRCDIR = src
 
 # Paths pour libc
@@ -22,7 +22,7 @@ CFLAGS += -O0  -Wall
 LDFLAGS = -nostdlib -L$(LIBC_LIB)
 
 # Fichiers
-CRT0_OBJ = crt0.o
+#CRT0_OBJ = crt0.o
 SOURCES = $(wildcard $(SRCDIR)/*.c)
 OBJECTS = $(SOURCES:$(SRCDIR)/%.c=%.o)
 
@@ -30,10 +30,10 @@ OBJECTS = $(SOURCES:$(SRCDIR)/%.c=%.o)
 all: $(PROGRAM)
 
 # Linkage avec CRT0 commun
-$(PROGRAM): $(CRT0_OBJ) $(OBJECTS)
-#$(PROGRAM):  $(OBJECTS)
+#$(PROGRAM): $(CRT0_OBJ) $(OBJECTS)
+$(PROGRAM):  $(OBJECTS)
 	@echo "Linking: $@"
-	$(LD) $(LDFLAGS) -o $@ $(CRT0_OBJ) $(OBJECTS) -lc
+	$(LD) $(LDFLAGS) -o $@ $(OBJECTS) -lc
 #	$(LD) $(LDFLAGS) -o $@ $(CRT0_OBJ) $(OBJECTS) -lc
 
 # Compilation des sources du programme
@@ -42,13 +42,13 @@ $(PROGRAM): $(CRT0_OBJ) $(OBJECTS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Compilation du CRT0 commun
-$(CRT0_OBJ): $(CRT0_DIR)/crt0.S
-	@echo "Compiling CRT0: $<"
-	$(CC) $(CFLAGS) -c $< -o $@
+#$(CRT0_OBJ): $(CRT0_DIR)/crt0.S
+#	@echo "Compiling CRT0: $<"
+#	$(CC) $(CFLAGS) -c $< -o $@
 
 # Nettoyage
 clean:
-	rm -f $(OBJECTS) $(CRT0_OBJ) $(PROGRAM)
+	rm -f $(OBJECTS) $(PROGRAM)
 #	rm -f $(OBJECTS) $(CRT0_OBJ) $(PROGRAM)
 
 

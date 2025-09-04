@@ -52,8 +52,8 @@
 #define CONTEXTIDR_ASID_MASK    ASID_MASK
 
 /* Alternative : juste après la RAM kernel */
-#define TEMP_MAPPING_START  0x80000000      /* Juste après la RAM kernel */
-#define TEMP_MAPPING_END    0x81000000      /* 16MB pour mappings temporaires */
+#define TEMP_MAPPING_START  0x7D000000      /* Juste après la RAM kernel */
+#define TEMP_MAPPING_END    0x7F000000      /* 16MB pour mappings temporaires */
 #define TEMP_MAP_VADDR      TEMP_MAPPING_START
 #define TEMP_MAP_SIZE       PAGE_SIZE       /* 4KB page size */
 

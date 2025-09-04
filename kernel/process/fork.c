@@ -30,6 +30,7 @@ void copy_process_files(task_t* parent, task_t* child)
     if (!parent || !child || !parent->process || !child->process ||
         parent->type != TASK_TYPE_PROCESS || 
         child->type != TASK_TYPE_PROCESS) {
+        KERROR("copy_process_files: NULL Proc\n");
         return;
     }
     
@@ -46,6 +47,7 @@ void close_all_process_files(task_t* proc) {
 
     if(!proc || !proc->process){
         KERROR("Wake up : no parent or no process structure\n");
+        KERROR("NULL PROC\n");
         return;
     }
 
@@ -66,6 +68,7 @@ void return_to_caller_with_value(int return_value)
     
     if (!proc || proc->type != TASK_TYPE_PROCESS) {
         KERROR("[WAITPID] Invalid process\n");
+        KERROR("NULL PROC\n");
         return;
     }
     
@@ -96,10 +99,11 @@ void waitpid_resume_point(void)
 {
     task_t* parent = current_task;
     
-    KDEBUG("[WAITPID] === REPRISE apres reveil ===\n");
+    //KDEBUG("[WAITPID] === REPRISE apres reveil ===\n");
     
-    if (!parent || parent->type != TASK_TYPE_PROCESS) {
+    if (!parent || parent->type != TASK_TYPE_PROCESS || !parent->process) {
         KERROR("[WAITPID] Processus parent invalid lors de la reprise\n");
+        KERROR("wait_pid_resume_point: NULL Proc\n");
         return;
     }
     
@@ -118,12 +122,12 @@ void waitpid_resume_point(void)
         pid_t child_pid = zombie->process->pid;
         int exit_code = zombie->process->exit_code;
         
-        KINFO("[WAITPID] OK Processus zombie trouve apres reveil: PID %u\n", child_pid);
+        //KINFO("[WAITPID] OK Processus zombie trouve apres reveil: PID %u\n", child_pid);
         
         /* Copier le statut avant le cleanup */
         if (status) {
-            KDEBUG("[WAITPID] Tentative copy_to_user vers %p, valeur %d\n", 
-                   status, exit_code);
+            //KDEBUG("[WAITPID] Tentative copy_to_user vers %p, valeur %d\n", 
+            //       status, exit_code);
             
             if (!is_valid_user_ptr(status)) {
                 if ((uint32_t)status >= KERNEL_BASE) {  /* KERNEL_BASE */
@@ -142,11 +146,11 @@ void waitpid_resume_point(void)
                 }
             }
             
-            KDEBUG("[WAITPID] Code de sortie copie: %d\n", exit_code);
+            //KDEBUG("[WAITPID] Code de sortie copie: %d\n", exit_code);
         }
         
         /* Retirer de la liste des enfants AVANT destroy_process */
-        KDEBUG("[WAITPID] Retrait securise de la liste des enfants...\n");
+        //KDEBUG("[WAITPID] Retrait securise de la liste des enfants...\n");
         remove_child_from_parent(parent, zombie);
         
         /* Marquer comme DEAD avant destruction */
@@ -154,7 +158,7 @@ void waitpid_resume_point(void)
         zombie->process->state = (proc_state_t)PROC_DEAD;
         
         /* Nettoyer le processus zombie */
-        KDEBUG("[WAITPID] Destruction securisee du processus zombie...\n");
+        //KDEBUG("[WAITPID] Destruction securisee du processus zombie...\n");
         destroy_process(zombie);
         
         KDEBUG("[WAITPID] === FIN reprise sys_waitpid - retour %d ===\n", child_pid);
@@ -201,7 +205,8 @@ void clean_children_list(task_t* parent)
     int count = 0;
     const int MAX_CHILDREN = 50;
     
-    if (!parent || parent->type != TASK_TYPE_PROCESS) {
+    if (!parent || parent->type != TASK_TYPE_PROCESS || !parent->process) {
+        KERROR("clean_children_list: NULL Proc\n");
         return;
     }
     
@@ -240,57 +245,37 @@ void clean_children_list(task_t* parent)
     }
 }
 
-/**
- * Trouver un enfant zombie - ADAPTe
- */
-task_t* find_zombie_child2(task_t* parent, pid_t pid)
-{
-    task_t* child;
-    int count = 0;
-    const int MAX_SEARCH = 20;
-    
-    if (!parent || parent->type != TASK_TYPE_PROCESS) {
-        return NULL;
-    }
-    
-    /* ACCeS CORRECT */
-    child = parent->process->children;
-    
-    while (child && count < MAX_SEARCH) {
-        /* ACCeS CORRECT */
-        if (child->state == TASK_ZOMBIE && child->process->state == (proc_state_t)PROC_ZOMBIE) {
-            if (pid == -1 || child->process->pid == pid) {
-                return child;
-            }
-        }
-        
-        /* Protection contre les boucles */
-        if (child->process->sibling_next == child) {
-            KERROR("[ZOMBIE] Boucle circulaire detectee\n");
-            child->process->sibling_next = NULL;
-            break;
-        }
-        
-        child = child->process->sibling_next;
-        count++;
-    }
-    
-    return NULL;
-}
 
 task_t* find_zombie_child(task_t* parent, pid_t pid)
 {
-    if (!parent || parent->type != TASK_TYPE_PROCESS) {
-        return false;
+    if (!parent) {
+        KERROR("find_zombie_child: NULL Parent\n");
+        return NULL;
     }
+
+    if (parent->type != TASK_TYPE_PROCESS) {
+        KERROR("find_zombie_child: Parent not Processs task\n");
+        KERROR("find_zombie_child: Parent name = %s\n", parent->name);
+        return NULL;
+    }
+
+    if (!parent->process) {
+        KERROR("find_zombie_child: NULL Proc\n");
+        return NULL;
+    }
+
 
     /* Chercher un processus zombie - ACCeS CORRECT */
     task_t* child = parent->process->children;
     //task_t* prev = NULL;
     task_t* zombie = NULL;
 
+            //KINFO("find_zombie_child: checking childs of PID %u for zombie PID %d \n", 
+            //      parent->process->pid, pid);
+
     while (child) {
         /* CORRIGER: Utiliser TASK_ZOMBIE au lieu de TASK_TERMINATED */
+
         if ((pid == -1 || child->process->pid == pid) && 
             child->state == TASK_ZOMBIE && child->process->state == (proc_state_t)PROC_ZOMBIE) {
             zombie = child;
@@ -303,46 +288,21 @@ task_t* find_zombie_child(task_t* parent, pid_t pid)
     return zombie;
 }
 
-/**
- * Verifier si le parent a des enfants - ADAPTe
- */
-bool has_children2(task_t* parent, pid_t pid)
-{
-
-    if (!parent || parent->type != TASK_TYPE_PROCESS) {
-        return false;
-    }
-
-    task_t* child;
-    int count = 0;
-    const int MAX_SEARCH = 20;
-
-    
-    /* ACCeS CORRECT */
-    child = parent->process->children;
-    
-    while (child && count < MAX_SEARCH) {
-        if (pid == -1 || child->process->pid == pid) {
-            return true;
-        }
-        
-        /* Protection contre les boucles */
-        if (child->process->sibling_next == child) {
-            KERROR("[CHILDREN] Boucle circulaire detectee\n");
-            child->process->sibling_next = NULL;
-            break;
-        }
-        
-        child = child->process->sibling_next;
-        count++;
-    }
-    
-    return false;
-}
 
 bool has_children(task_t* parent, pid_t pid)
 {
-    if (!parent || parent->type != TASK_TYPE_PROCESS) {
+    if (!parent) {
+        KERROR("has_children: NULL Parent\n");
+        return false;
+    }
+
+    if (parent->type != TASK_TYPE_PROCESS) {
+        KERROR("has_children: Parent not Process Task\n");
+        return false;
+    }
+
+    if (!parent->process) {
+        KERROR("has_children: NULL Proc\n");
         return false;
     }
 
@@ -368,7 +328,8 @@ void remove_child_from_parent(task_t* parent, task_t* child_to_remove)
 {
     if (!parent || !child_to_remove || 
         parent->type != TASK_TYPE_PROCESS || 
-        child_to_remove->type != TASK_TYPE_PROCESS) {
+        child_to_remove->type != TASK_TYPE_PROCESS || !parent->process || !child_to_remove->process) {
+        KERROR("remove_child_from_parent: NULL Proc\n");
         //KDEBUG("[REMOVE_CHILD] Parent ou enfant invalid\n");
         return;
     }
@@ -414,7 +375,8 @@ void orphan_children(task_t* proc)
     task_t* child;
     task_t* next;
     
-    if (!proc || proc->type != TASK_TYPE_PROCESS) {
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
+        KERROR("NULL PROC\n");
         return;
     }
     
@@ -453,19 +415,31 @@ void orphan_children(task_t* proc)
 void wakeup_parent(task_t *proc){
 
     if(!proc || !proc->process){
-        KERROR("Wake up : no parent or no process structure\n");
+        KERROR("Wake up : no proc or no process structure\n");
+        KERROR("NULL PROC\n");
         return;
     }
 
         /* Reveiller le parent s'il attend - ACCeS CORRECT */
     if (proc->process->parent) {
         task_t* parent = proc->process->parent;
+        if(!parent || !parent->process)
+        {
+            KERROR("Wake up : no parent or no parent process structure\n");
+            KERROR("wakeup_parent: NULL Proc\n");
+            return;
+        }
         
-        //KINFO("[EXIT] *** WAKING UP PARENT ***\n");
-        //KDEBUG("sys_exit: Parent PID=%u state=%d proc_state=%d\n", 
-        //       parent->process->pid, parent->state, parent->process->state);
-        //KDEBUG("sys_exit: Parent waiting for PID=%d\n", 
-        //       parent->process->waitpid_pid);
+/*         KINFO("[EXIT] *** WAKING UP PARENT ***\n");
+        KDEBUG("sys_exit: Parent PID=%d state=%s proc_state=%s\n", 
+               parent->process->pid, task_state_string(parent->state), proc_state_string(parent->process->state));
+        KDEBUG("sys_exit: Parent waiting for PID=%d\n", 
+               parent->process->waitpid_pid);
+        KDEBUG("sys_exit: Child exit code =%d\n", 
+               proc->process->exit_code);
+        KDEBUG("sys_exit: Child PID=%d state=%s proc_state=%s\n", 
+               proc->process->pid, task_state_string(proc->state), proc_state_string(proc->process->state));
+  */
         
         /* Verifier si le parent attend vraiment */
         if (parent->state == TASK_BLOCKED && 
@@ -478,6 +452,7 @@ void wakeup_parent(task_t *proc){
                 
                 parent->state = TASK_READY;
                 parent->process->state = (proc_state_t)PROC_READY;
+                *parent->process->waitpid_status = proc->process->exit_code;
                 
                 /* Ajouter le parent a la ready queue */
                 add_to_ready_queue(parent);

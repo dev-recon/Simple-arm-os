@@ -41,11 +41,11 @@ typedef struct vm_space {
 #define VMA_KERNEL  (1 << 3)
 
 /* ASID constants */
-#define ASID_KERNEL     244       /* ASID réservé pour le noyau */
+#define ASID_KERNEL     254       /* ASID réservé pour le noyau */
 #define ASID_MIN_USER   1       /* Premier ASID utilisateur */
 #define ASID_MAX        255     /* ASID maximum (8 bits) */
 
-#define MAX_TEMP_MAPPINGS 16
+#define MAX_TEMP_MAPPINGS 8
 
 /*
  * Configuration correcte des registres TTBR avec TTBCR.N=2
@@ -73,6 +73,7 @@ typedef struct vm_space {
 
 extern uint32_t* kernel_pgdir;  /* Page directory du kernel (TTBR1) */
 extern uint32_t* ttbr0_pgdir;   /* Page directory du kernel (TTBR0) */
+extern uint32_t kernel_memory_size;
 
 typedef struct kernel_context_save {
     uint32_t saved_ttbr0;
@@ -80,6 +81,21 @@ typedef struct kernel_context_save {
     bool context_switched;
 } kernel_context_save_t;
 
+#define MAX_ORDER 10  // max block size = 2^10 * PAGE_SIZE = 4 MB
+#define BUDDY_BASE 0x54010000  // base de l'arène mémoire du buddy allocator
+#define BUDDY_SIZE (1 << MAX_ORDER) * PAGE_SIZE
+
+typedef struct buddy_block {
+    struct buddy_block* next;
+} buddy_block_t;
+
+struct page_info {
+    uint8_t used     : 1;  // page allouée ou libre
+    size_t size        ;  // buddy order (si utilisé)
+    uint8_t reserved : 1;  // marquée réservée (ex: DTB)
+    uint8_t refcount;      // pour un ref counting basique
+    uint32_t start;
+}__attribute__((packed));
 
 kernel_context_save_t switch_to_kernel_context(void);
 void restore_from_kernel_context(kernel_context_save_t save);
@@ -92,10 +108,12 @@ void free_physical_page(void* page_addr);
 //void* allocate_contiguous_pages(uint32_t num_pages);
 void* allocate_contiguous_pages(uint32_t num_pages, bool kernel_space);
 void free_contiguous_pages(void* page_addr, uint32_t num_pages);
+uint32_t get_kernel_memory_size(void);
 
 void* allocate_kernel_pages(uint32_t num_pages);
 
 void* allocate_user_pages(uint32_t num_pages);
+
 
 /*
  * Pour l'allocation de pages individuelles
@@ -103,6 +121,7 @@ void* allocate_user_pages(uint32_t num_pages);
 void* allocate_kernel_page(void);
 
 void* allocate_user_page(void);
+
 
 /* Virtual memory avec support ASID */
 vm_space_t* create_vm_space(bool is_kernel_space);
@@ -121,7 +140,7 @@ void debug_asid_usage(void);
 bool setup_mmu(void);
 void switch_address_space(uint32_t* pgdir);                           /* TTBR0 seulement */
 void switch_address_space_with_asid(uint32_t* pgdir, uint32_t asid);   /* TTBR0 + ASID */
-int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags);
+int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid);
 void map_kernel_page(uint32_t vaddr, uint32_t phys_addr);
 uint32_t get_physical_address(uint32_t* pgdir, uint32_t vaddr);
 void debug_mmu_state(void);
@@ -131,6 +150,12 @@ uint32_t map_temp_pages_contiguous(uint32_t phys_addr, int num_pages);
 uint32_t* get_page_entry_arm(uint32_t* pgdir, uint32_t vaddr);
 int check_page_permissions(uint32_t* pgdir, uint32_t vaddr);
 uint32_t get_current_ttrb0(void);
+
+uint32_t map_user_to_kernel(uint32_t *pgdir, uint32_t vaddr);
+void unmap_temp_user_page(void);
+uint32_t get_phys_addr_from_pgdir(uint32_t* pgdir, uint32_t vaddr);
+
+uint32_t read_l2_entry(uint32_t *pgdir, uintptr_t vaddr);
 
 /* MMU helper functions - implémentées dans mmu.c */
 void invalidate_tlb_all(void);
@@ -192,5 +217,7 @@ void dump_kernel_stack(int depth);
 void debug_kernel_stack_integrity(const char* location);
 void check_memory_corruption(void);
 void setup_svc_stack(void);
+
+void hexdump(const void* addr, size_t n) ;
 
 #endif /* _KERNEL_MEMORY_H */

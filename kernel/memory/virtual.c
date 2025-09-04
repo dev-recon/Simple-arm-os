@@ -9,7 +9,7 @@ static void copy_kernel_mappings(uint32_t *new_pgdir);
 static void cow_copy_vma(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma);
 static void share_vma_pages(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma);
 static void make_page_readonly(uint32_t *pgdir, uint32_t vaddr);
-static void map_user_page_cow(uint32_t *pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags);
+static void map_user_page_cow(uint32_t *pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid);
 static void track_cow_page(uint32_t phys_addr);
 static uint32_t* allocate_user_pgdir(void);
 static uint32_t* allocate_pgdir(void);
@@ -19,9 +19,23 @@ extern uint32_t vm_allocate_asid(void);
 extern void vm_free_asid(uint32_t asid);
 extern uint32_t vm_get_current_asid(void);
 extern void switch_address_space_with_asid(uint32_t* pgdir, uint32_t asid);
+extern int copy_user_stack_pages(vm_space_t *parent_vm, vm_space_t *child_vm, 
+                          uint32_t stack_start, uint32_t stack_size);
 
 extern bool asid_map[];  /* Déclaré dans mmu.c */
 
+#define PGDIR_SIZE  7
+
+
+#define L1_SECT         0x2          // [1:0] = 10
+#define L1_SECT_B       (1u<<2)
+#define L1_SECT_C       (1u<<3)
+#define L1_SECT_DOMAIN(d) ((d)<<5)   // d=0 si tu utilises DACR=0x55555555
+#define L1_SECT_AP10    (1u<<10)     // AP[1:0] = 10 (ex RO user/RW priv) -> ajuste si besoin
+#define L1_SECT_TEX(x)  ((x)<<12)    // TEX
+#define L1_SECT_APX     (1u<<15)
+#define L1_SECT_S       (1u<<16)
+#define L1_SECT_nG      (1u<<17)
 
 void map_bitmap_kernel_rw_only(uint32_t *ttbr0_table) {
     extern physical_allocator_t phys_alloc;
@@ -37,7 +51,7 @@ void map_bitmap_kernel_rw_only(uint32_t *ttbr0_table) {
         0x00000008 |  // C = 1
         0x00000004;   // B = 1
         
-    KDEBUG("Mapped bitmap as kernel RW only: 0x%08x\n", bitmap_addr);
+    //KDEBUG("Mapped bitmap as kernel RW only: 0x%08x\n", bitmap_addr);
 }
 
 void map_kernel_readonly_in_user_space(uint32_t *ttbr0_table) {
@@ -50,8 +64,8 @@ void map_kernel_readonly_in_user_space(uint32_t *ttbr0_table) {
     uint32_t start_section = kernel_start & 0xFFF00000;
     uint32_t end_section = (kernel_end + 0xFFFFF) & 0xFFF00000;
     
-    KDEBUG("Mapping kernel RO: [kernel_start : kernel_end]= [0x%08x : 0x%08x] -------- [start_section : end_section]= [0x%08x : 0x%08x]\n", kernel_start, kernel_end, start_section, end_section);
-    KDEBUG("Mapping kernel RO: First kernel section index %u\n", get_L1_index(start_section));
+    //KDEBUG("Mapping kernel RO: [kernel_start : kernel_end]= [0x%08x : 0x%08x] -------- [start_section : end_section]= [0x%08x : 0x%08x]\n", kernel_start, kernel_end, start_section, end_section);
+    //KDEBUG("Mapping kernel RO: First kernel section index %u\n", get_L1_index(start_section));
    
     for (uint32_t vaddr = start_section; vaddr < end_section; vaddr += 0x100000) {
         uint32_t index = get_L1_index(vaddr); //[1024-4095]
@@ -70,6 +84,25 @@ void map_kernel_readonly_in_user_space(uint32_t *ttbr0_table) {
 
     map_bitmap_kernel_rw_only(ttbr0_table);
 
+    uint32_t split_boundary = get_split_boundary();
+    
+/*     uint32_t flag = L1_SECT
+               | L1_SECT_B | L1_SECT_C
+               | L1_SECT_TEX(1)      // selon ta politique (WBWA)
+               | L1_SECT_S
+               | L1_SECT_nG;   */
+
+    //for (uint32_t addr = 0x9000000; addr < split_boundary; addr += 0x100000) {
+    for (uint32_t addr = 0x0; addr < split_boundary; addr += 0x100000) {
+        uint32_t index = get_L1_index(addr);  // Index 0-1023
+        //kernel_page_dir[index] = addr | 0xC0E;
+        ttbr0_table[index] = (addr & 0xFFF00000)
+                            | 0xC0E
+                            | L1_SECT_DOMAIN(0)
+                            | L1_SECT_S
+                            | L1_SECT_nG ;
+    }
+
     // CRITIQUE: Vérifier que Domain 0 est accessible
     uint32_t dacr = get_dacr();
     if ((dacr & 0x3) == 0) {
@@ -84,7 +117,7 @@ vm_space_t *create_vm_space(bool is_kernel_space)
     vm_space_t *vm = kmalloc(sizeof(vm_space_t));
     if (!vm) return NULL;
 
-    KDEBUG("create_vm_space: allocating user page directory with ASID and %s\n", is_kernel_space ? "KERNEL" : "USER");
+    //KDEBUG("create_vm_space: allocating user page directory with ASID and %s\n", is_kernel_space ? "KERNEL" : "USER");
     
     /* Allouer un ASID unique pour ce processus */
     uint32_t asid = vm_allocate_asid();
@@ -95,14 +128,14 @@ vm_space_t *create_vm_space(bool is_kernel_space)
     }
 
         /* Verify configuration */
-    uint32_t ttbr0_check, ttbr1_check, ttbcr_check;
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(ttbr0_check));
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 1" : "=r"(ttbr1_check));
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr_check));
+    //uint32_t ttbr0_check, ttbr1_check, ttbcr_check;
+    //__asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(ttbr0_check));
+    //__asm__ volatile("mrc p15, 0, %0, c2, c0, 1" : "=r"(ttbr1_check));
+    //__asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr_check));
     
-    KDEBUG("MMU: TTBR0 = 0x%08X\n", ttbr0_check);
-    KDEBUG("MMU: TTBR1 = 0x%08X\n", ttbr1_check); 
-    KDEBUG("MMU: TTBCR = 0x%08X\n", ttbcr_check);
+    //KDEBUG("MMU: TTBR0 = 0x%08X\n", ttbr0_check);
+    //KDEBUG("MMU: TTBR1 = 0x%08X\n", ttbr1_check); 
+    //KDEBUG("MMU: TTBCR = 0x%08X\n", ttbcr_check);
     
     /* Allouer le page directory utilisateur (TTBR0 - 8KB pour 2GB) */
     if( is_kernel_space ){
@@ -118,38 +151,39 @@ vm_space_t *create_vm_space(bool is_kernel_space)
         return NULL;
     }
 
+
     /* Diagnostic d'alignement pour TTBR0 */
     uint32_t pgdir_addr = (uint32_t)vm->pgdir;
     uint32_t alignment_check = pgdir_addr & 0x3FFF;
     
-    KDEBUG("create_vm_space: user pgdir allocated at 0x%08X\n", pgdir_addr);
-    KDEBUG("  Alignment check (& 0x3FFF): 0x%08X\n", alignment_check);
+    //KDEBUG("create_vm_space: user pgdir allocated at 0x%08X\n", pgdir_addr);
+    //KDEBUG("  Alignment check (& 0x3FFF): 0x%08X\n", alignment_check);
     
     if (alignment_check != 0) {
-        KWARN("create_vm_space: user pgdir NOT 16KB aligned!\n");
+        //KWARN("create_vm_space: user pgdir NOT 16KB aligned!\n");
         
         /* Forcer l'alignement si nécessaire */
         uint32_t aligned_addr = (pgdir_addr + 0x3FFF) & ~0x3FFF;
         
-        KDEBUG("  Forced alignment: 0x%08X -> 0x%08X\n", pgdir_addr, aligned_addr);
+        //KDEBUG("  Forced alignment: 0x%08X -> 0x%08X\n", pgdir_addr, aligned_addr);
         
         /* Vérifier que l'adresse alignée est dans la zone allouée */
         if (aligned_addr >= pgdir_addr && aligned_addr < pgdir_addr + (4 * PAGE_SIZE)) {
             vm->pgdir = (uint32_t*)aligned_addr;
-            KINFO("create_vm_space: Using aligned address 0x%08X\n", aligned_addr);
+            //KINFO("create_vm_space: Using aligned address 0x%08X\n", aligned_addr);
         } else {
             KERROR("create_vm_space: Aligned address out of bounds!\n");
             vm_free_asid(asid);
-            free_contiguous_pages(vm->pgdir, 4);
+            free_contiguous_pages(vm->pgdir, PGDIR_SIZE);
             kfree(vm);
             return NULL;
         }
     } else {
-        KINFO("create_vm_space: user pgdir already 16KB aligned ✓\n");
+        //KINFO("create_vm_space: user pgdir already 16KB aligned ✓\n");
     }
     
     /* Zéroiser le pgdir utilisateur (seulement 8KB pour TTBR0) */
-    memset(vm->pgdir, 0, 4 * PAGE_SIZE);
+    memset(vm->pgdir, 0, PGDIR_SIZE);
 
     /* Les mappings noyau sont dans TTBR1, pas besoin de les copier */
     /* TTBR0 ne contiendra que les mappings utilisateur */
@@ -162,7 +196,7 @@ vm_space_t *create_vm_space(bool is_kernel_space)
 
     map_kernel_readonly_in_user_space(vm->pgdir);
 
-    KDEBUG("create_vm_space: Created VM space with ASID %u\n", asid);
+    //KDEBUG("create_vm_space: Created VM space with ASID %u\n", asid);
     return vm;
 }
 
@@ -170,7 +204,7 @@ vm_space_t *create_vm_space(bool is_kernel_space)
 static uint32_t* allocate_user_pgdir(void)
 {
     /* Allouer 2 pages contiguës pour TTBR0 (couvre 0-2GB = 2048 entrées * 4 octets = 8KB) */
-    uint32_t* pgdir = (uint32_t*)allocate_contiguous_pages(4, false);
+    uint32_t* pgdir = (uint32_t*)allocate_contiguous_pages(PGDIR_SIZE, true); // All pgdir allocated at high RAM
     if (!pgdir) {
         KERROR("allocate_user_pgdir: Failed to allocate pages\n");
         return NULL;
@@ -182,7 +216,7 @@ static uint32_t* allocate_user_pgdir(void)
 static uint32_t* allocate_pgdir(void)
 {
     /* Allouer 2 pages contiguës pour TTBR0 (couvre 0-2GB = 2048 entrées * 4 octets = 8KB) */
-    uint32_t* pgdir = (uint32_t*)allocate_contiguous_pages(4, true);
+    uint32_t* pgdir = (uint32_t*)allocate_contiguous_pages(PGDIR_SIZE, true);
     if (!pgdir) {
         KERROR("allocate_user_pgdir: Failed to allocate pages\n");
         return NULL;
@@ -215,7 +249,7 @@ void destroy_vm_space(vm_space_t *vm)
     if (!vm)
         return;
 
-    KDEBUG("destroy_vm_space: Destroying VM space with ASID %u\n", vm->asid);
+    //KDEBUG("destroy_vm_space: Destroying VM space with ASID %u\n", vm->asid);
 
     /* Free all VMAs */
     vma = vm->vma_list;
@@ -239,10 +273,10 @@ void destroy_vm_space(vm_space_t *vm)
 
     /* Libérer l'ASID avant de détruire le page directory */
     vm_free_asid(vm->asid);
-    KDEBUG("destroy_vm_space: Freed ASID %u\n", vm->asid);
+    //KDEBUG("destroy_vm_space: Freed ASID %u\n", vm->asid);
 
     /* Free user page directory (2 pages pour TTBR0) */
-    free_contiguous_pages(vm->pgdir, 2);
+    free_contiguous_pages(vm->pgdir, PGDIR_SIZE);
     kfree(vm);
 }
 
@@ -272,8 +306,10 @@ vma_t *create_vma(vm_space_t *vm, uint32_t start, uint32_t size, uint32_t flags)
     vma->flags = flags;
     vma->next = NULL;
 
-    KDEBUG("create_vma: Creating VMA 0x%08X-0x%08X (size=%u) in ASID %u\n", 
-           start, start + size, size, vm->asid);
+    //KDEBUG("create_vma: Creating VMA 0x%08X-0x%08X (size=%u) in ASID %u\n", 
+    //       start, start + size, size, vm->asid);
+
+    //debug_mmu_state();
 
     /* Insert into sorted list */
     if (!vm->vma_list || vma->start < vm->vma_list->start)
@@ -292,6 +328,8 @@ vma_t *create_vma(vm_space_t *vm, uint32_t start, uint32_t size, uint32_t flags)
         current->next = vma;
     }
 
+    //KDEBUG("create_vma: returning from VMA \n");
+
     return vma;
 }
 
@@ -304,11 +342,11 @@ vm_space_t *fork_vm_space(vm_space_t *parent_vm)
     if (!child_vm)
         return NULL;
 
-    KDEBUG("fork_vm_space: Forking from ASID %u to ASID %u\n", 
-           parent_vm->asid, child_vm->asid);
+    //KDEBUG("fork_vm_space: Forking from ASID %u to ASID %u\n", 
+    //       parent_vm->asid, child_vm->asid);
 
     /* Copy all VMAs */
-    KDEBUG("fork_vm_space: About to copy all VMAs\n");
+    //KDEBUG("fork_vm_space: About to copy all VMAs\n");
     parent_vma = parent_vm->vma_list;
     while (parent_vma)
     {
@@ -325,18 +363,18 @@ vm_space_t *fork_vm_space(vm_space_t *parent_vm)
         /* Copy pages with COW if writable */
         if (parent_vma->flags & VMA_WRITE)
         {
-            KDEBUG("fork_vm_space: COW VMA 0x%08X-0x%08X \n", 
-                   parent_vma->start, parent_vma->end);
+            //KDEBUG("fork_vm_space: COW VMA 0x%08X-0x%08X \n", 
+            //       parent_vma->start, parent_vma->end);
             cow_copy_vma(parent_vm, child_vm, parent_vma);
-            KDEBUG(" DONE\n");
+            //KDEBUG(" DONE\n");
         }
         else
         {
-            KDEBUG("fork_vm_space: SHARE VMA 0x%08X-0x%08X \n", 
-                   parent_vma->start, parent_vma->end);
-            share_vma_pages(parent_vm, child_vm, parent_vma);
-            //cow_copy_vma(parent_vm, child_vm, parent_vma);
-            KDEBUG(" DONE\n");
+            //KDEBUG("fork_vm_space: SHARE VMA 0x%08X-0x%08X \n", 
+            //       parent_vma->start, parent_vma->end);
+            //share_vma_pages(parent_vm, child_vm, parent_vma);
+            cow_copy_vma(parent_vm, child_vm, parent_vma);
+            //KDEBUG(" DONE\n");
         }
 
         parent_vma = parent_vma->next;
@@ -346,8 +384,11 @@ vm_space_t *fork_vm_space(vm_space_t *parent_vm)
     child_vm->heap_end = parent_vm->heap_end;
     child_vm->stack_start = parent_vm->stack_start;
 
-    KDEBUG("fork_vm_space: Fork completed - parent ASID %u, child ASID %u\n", 
-           parent_vm->asid, child_vm->asid);
+    copy_user_stack_pages(parent_vm, child_vm, (USER_STACK_TOP - PAGE_SIZE) & ~0xFFF , PAGE_SIZE);
+    
+
+    //KDEBUG("fork_vm_space: Fork completed - Child Heap Start 0x%08X, Child Heap End 0x%08X, Child Stack Start 0x%08X\n", 
+    //       child_vm->heap_start, child_vm->heap_end, child_vm->stack_start);
 
     return child_vm;
 }
@@ -355,80 +396,48 @@ vm_space_t *fork_vm_space(vm_space_t *parent_vm)
 static void cow_copy_vma(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma)
 {
     uint32_t vaddr;
+    //uint32_t stack_start = USER_STACK_TOP;
 
-    KDEBUG("cow_copy_vma: parent ASID %u (pgdir 0x%08X) to child ASID %u (pgdir 0x%08X), VMA 0x%08X-0x%08X\n", 
-           parent_vm->asid, parent_vm->pgdir, child_vm->asid, child_vm->pgdir, 
-           vma->start, vma->end);
+    //KDEBUG("cow_copy_vma: parent ASID %u (pgdir 0x%08X) to child ASID %u (pgdir 0x%08X), VMA 0x%08X-0x%08X\n", 
+    //       parent_vm->asid, parent_vm->pgdir, child_vm->asid, child_vm->pgdir, 
+    //       vma->start, vma->end);
 
     for (vaddr = vma->start; vaddr < vma->end; vaddr += PAGE_SIZE)
     {
-        uint32_t temp_ptr = map_temp_user_page(vaddr);
+        if(vaddr == USER_STACK_TOP - PAGE_SIZE) continue ;
+        uint32_t phys_addr = get_physical_address(parent_vm->pgdir, vaddr);
+        //uint32_t temp_ptr = map_temp_user_page(vaddr);
+        uint32_t temp_ptr = phys_addr;
         if (!temp_ptr) {
-            KERROR("cow_copy_vma: Failed to temp-map vaddr 0x%08X\n", vaddr);
+            //KERROR("cow_copy_vma: Failed to temp-map vaddr 0x%08X\n", vaddr);
             continue;
         }
 
-        uint32_t phys_addr = get_phys_from_temp_mapping(temp_ptr);
+       // uint32_t phys_addr = get_phys_from_temp_mapping(temp_ptr);
         //KDEBUG("cow_copy_vma: Copying vaddr 0x%08X to phys_addr 0x%08X\n", vaddr, phys_addr);
 
-        unmap_temp_user_page();
+        //unmap_temp_user_page();
 
-        make_page_readonly(parent_vm->pgdir, vaddr);
+        //make_page_readonly(parent_vm->pgdir, vaddr);
 
         uint32_t pte_flags = 0x02;
+        pte_flags |= 0x0C;
         if (vma->flags & VMA_EXEC)
             pte_flags |= (2 << 4); // AP=2
         else
             pte_flags |= (2 << 4) | 0x1; // AP=2 + XN=1
 
-        map_user_page_cow(child_vm->pgdir, vaddr, phys_addr, pte_flags);
 
-        track_cow_page(phys_addr);
+        map_user_page(child_vm->pgdir, vaddr, phys_addr, vma->flags, child_vm->asid);
+
+        //track_cow_page(phys_addr);
     }
+
+    //read_l2_entry(child_vm->pgdir, vma->start);
+    //uint32_t phys_addr = get_physical_address(child_vm->pgdir, vma->start);
+    //hexdump((void*)phys_addr, (size_t)0x800);
 }
 
-
-static void cow_copy_vma2(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma)
-{
-    uint32_t vaddr;
-    uint32_t phys_addr;
-
-    KDEBUG("cow_copy_vma: parent ASID %u (pgdir 0x%08X) to child ASID %u (pgdir 0x%08X), VMA 0x%08X-0x%08X\n", 
-           parent_vm->asid, parent_vm->pgdir, child_vm->asid, child_vm->pgdir, 
-           vma->start, vma->end);
-
-    for (vaddr = vma->start; vaddr < vma->end; vaddr += PAGE_SIZE)
-    {
-        phys_addr = get_physical_address(parent_vm->pgdir, vaddr);
-        KDEBUG("cow_copy_vma: Copying vaddr 0x%08X to phys_addr 0x%08X\n", vaddr, phys_addr);
-
-        if (phys_addr == 0)
-            continue;
-
-        /* Make page read-only in parent */
-        make_page_readonly(parent_vm->pgdir, vaddr);
-
-        uint32_t pte_flags = 0x02;  // Small page type
-    
-        if (vma->flags & VMA_EXEC) {
-            // Page exécutable : AP=2, pas de XN
-            pte_flags |= (2 << 4);  // AP = 2 dans bits [5:4]
-            // Pas de bit XN = exécution autorisée
-        } else {
-            // Page non-exécutable : AP=2, avec XN
-            pte_flags |= (2 << 4) | 0x1;  // AP=2 + XN=1
-        }
-
-        KDEBUG("map_user_page_cow: vaddr=0x%08X, paddr=0x%08X, pte_flags=0x%08X\n", 
-           vaddr, phys_addr, pte_flags);
-
-        /* Map read-only COW in child */
-        map_user_page_cow(child_vm->pgdir, vaddr, phys_addr, pte_flags);
-
-        /* Track COW page */
-        track_cow_page(phys_addr);
-    }
-}
 
 static inline void clean_dcache_line(void* addr) {
     asm volatile (
@@ -436,44 +445,20 @@ static inline void clean_dcache_line(void* addr) {
     );
 }
 
-// Exécuter le fork dans un contexte noyau neutre
-static void share_vma_pages3(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma)
-{
-    // Sauvegarder le contexte actuel
-    uint32_t current_ttbr0 = get_ttbr0();
-    uint32_t current_asid = vm_get_current_asid();
-    
-    // Switch vers un contexte noyau neutre
-    set_ttbr0(0);  // Désactiver TTBR0 temporairement
-    set_current_asid(ASID_KERNEL);
-    
-    // Maintenant on peut accéder aux deux pgdir via mappings temporaires
-    uint32_t vaddr;
-    for (vaddr = vma->start; vaddr < vma->end; vaddr += PAGE_SIZE) {
-        uint32_t phys_addr = get_physical_address(parent_vm->pgdir, vaddr);
-        if (phys_addr != 0) {
-            map_user_page(child_vm->pgdir, vaddr, phys_addr, vma->flags);
-        }
-    }
-    
-    // Restaurer le contexte original
-    set_ttbr0(current_ttbr0);
-    set_current_asid(current_asid);
-}
 
 static void share_vma_pages(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma)
 {
     uint32_t vaddr;
 
         // IMPORTANT: Obtenir l'ASID du parent depuis le contexte actuel
-    uint32_t parent_asid = vm_get_current_asid();
+    //uint32_t parent_asid = vm_get_current_asid();
     
-    KDEBUG("share_vma_pages: Parent ASID %u - Child ASID %u\n", 
-           parent_asid, child_vm->asid);
+    //KDEBUG("share_vma_pages: Parent ASID %u - Child ASID %u\n", 
+    //       parent_asid, child_vm->asid);
 
     //kernel_context_save_t save = switch_to_kernel_context();
     
-    KDEBUG("share_vma_pages: switched to kernel asid %u\n", vm_get_current_asid());
+    //KDEBUG("share_vma_pages: switched to kernel asid %u\n", vm_get_current_asid());
 
     for (vaddr = vma->start; vaddr < vma->end; vaddr += PAGE_SIZE)
     {
@@ -484,7 +469,7 @@ static void share_vma_pages(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *
             continue;
         }
 
-        KDEBUG("share_vma_pages: Sharing vaddr 0x%08X -> phys 0x%08X\n", vaddr, phys_addr);
+        //KDEBUG("share_vma_pages: Sharing vaddr 0x%08X -> phys 0x%08X\n", vaddr, phys_addr);
 
         // Index dans le L1 et L2
         uint32_t l1_index = get_L1_index(vaddr);
@@ -499,7 +484,7 @@ static void share_vma_pages(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *
 
         if (!(*l1_entry & 0x1)) {
             // Allouer une nouvelle table L2
-            void* l2_page = allocate_physical_page();
+            void* l2_page = allocate_user_page();
             if (!l2_page) {
                 KERROR("Failed to allocate L2 table for vaddr 0x%08X\n", vaddr);
                 continue;
@@ -513,210 +498,14 @@ static void share_vma_pages(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *
                 continue;
             }
 
-            l2_temp = map_temp_page(l2_phys);
+            //l2_temp = map_temp_page(l2_phys);
+            l2_temp = l2_phys;
             if (!l2_temp) {
                 KERROR("Failed to map temp L2 page\n");
                 free_physical_page(l2_page);
                 continue;
             }
-#if(0)
-            KDEBUG("share_vma_pages: Mapped L2_temp = 0x%08X from l2_phys = 0x%08X\n", l2_temp, l2_phys);
 
-                        // DIAGNOSTIC COMPLET : Lire tous les registres MMU
-            uint32_t ttbr0 = get_ttbr0();
-            uint32_t ttbr1 = get_ttbr1();
-            uint32_t contextidr = get_contextidr();
-            uint32_t ttbcr = get_ttbcr();
-            uint32_t current_asid = contextidr & 0xFF;
-
-            KDEBUG("=== MMU STATE BEFORE WRITE TEST ===\n");
-            KDEBUG("TTBR0:      0x%08X\n", ttbr0);
-            KDEBUG("TTBR1:      0x%08X\n", ttbr1);
-            KDEBUG("TTBCR:      0x%08X\n", ttbcr);
-            KDEBUG("CONTEXTIDR: 0x%08X\n", contextidr);
-            KDEBUG("Current ASID: %u\n", current_asid);
-            KDEBUG("Child ASID:   %u\n", child_vm->asid);
-            KDEBUG("Parent pgdir: 0x%08X\n", (uint32_t)child_vm->pgdir);
-            KDEBUG("Temp mapping: 0x%08X -> 0x%08X\n", l2_temp, l2_phys);
-
-            // Vérifier la table L1 kernel pour l'adresse temporaire
-            uint32_t* kernel_l1 = (uint32_t*)(ttbr1 & 0xFFFFC000);
-            uint32_t temp_l1_idx = get_L1_index(l2_temp);  // 0x80000000 >> 20 = 2048
-            uint32_t temp_l2_idx = L2_INDEX(l2_temp);  // Devrait être 0
-
-            KDEBUG("Kernel L1 table at phys: 0x%08X\n", (uint32_t)kernel_l1);
-            KDEBUG("Temp addr L1 index: %u (0x%03X)\n", temp_l1_idx, temp_l1_idx);
-            KDEBUG("Temp addr L2 index: %u\n", temp_l2_idx);
-
-            // ATTENTION : kernel_l1 est une adresse physique, on ne peut pas la déréférencer directement !
-            // Il faut mapper temporairement la table L1 kernel pour la lire
-
-            uint32_t kernel_l1_temp = map_temp_pages_contiguous((uint32_t)kernel_l1, 3);
-            //uint32_t section_base = (uint32_t)kernel_l1 & ~0xFFFFF;
-            //uint32_t kernel_l1_temp = section_base + ((uint32_t)kernel_l1 & 0xFFFFF);
-            if (kernel_l1_temp) {
-                uint32_t* kernel_l1_virt = (uint32_t*)kernel_l1_temp;
-                uint32_t l1_entry_for_temp = kernel_l1_virt[temp_l1_idx];
-                
-                KDEBUG("Kernel L1[%u] entry: 0x%08X\n", temp_l1_idx, l1_entry_for_temp);
-                
-                if (l1_entry_for_temp & 0x1) {
-                    // L1 entry existe, récupérer la table L2
-                    uint32_t temp_l2_phys = l1_entry_for_temp & 0xFFFFFC00;
-                    KDEBUG("L2 table for temp mapping at phys: 0x%08X\n", temp_l2_phys);
-                    
-                    // Mapper la table L2 pour vérifier l'entrée
-                    uint32_t temp_l2_temp = map_temp_pages_contiguous(temp_l2_phys, 1);
-                    if (temp_l2_temp) {
-                        uint32_t* temp_l2_virt = (uint32_t*)temp_l2_temp;
-                        uint32_t l2_entry_for_temp = temp_l2_virt[temp_l2_idx];
-                        
-                        KDEBUG("L2[%u] entry for temp mapping: 0x%08X\n", temp_l2_idx, l2_entry_for_temp);
-                        
-                        if (l2_entry_for_temp & 0x2) {
-                            uint32_t mapped_phys = l2_entry_for_temp & 0xFFFFF000;
-                            KDEBUG("Temp mapping points to phys: 0x%08X (expected: 0x%08X)\n", 
-                                mapped_phys, l2_phys);
-                                
-                            if (mapped_phys != l2_phys) {
-                                KERROR("MISMATCH: temp mapping points to wrong physical page!\n");
-                            }
-                        } else {
-                            KERROR("L2 entry for temp mapping is invalid: 0x%08X\n", l2_entry_for_temp);
-                        }
-                        
-                        unmap_temp_pages_contiguous(temp_l2_temp,1);
-                    } else {
-                        KERROR("Failed to map L2 table for temp mapping verification\n");
-                    }
-                } else {
-                    KERROR("No L1 entry for temp mapping address 0x%08X!\n", l2_temp);
-                }
-                
-                unmap_temp_pages_contiguous(kernel_l1_temp,3);
-            } else {
-                KERROR("Failed to map kernel L1 table for verification\n");
-            }
-
-            KDEBUG("=== END MMU DIAGNOSTIC ===\n");
-
-            KDEBUG("share_vma_pages: l2_temp points to: %p\n", (void*)l2_temp);
-
-            // AJOUTEZ CE DEBUG CRITIQUE :
-KDEBUG("=== CRITICAL SLOT 0 VERIFICATION ===\n");
-KDEBUG("About to read from 0x%08X\n", l2_temp);
-
-extern uint32_t* l2_table_addresses[MAX_TEMP_MAPPINGS];
-
-extern void debug_mmu_before_crash(uint32_t test_vaddr);
-extern void debug_crash_address(void);
-
-//debug_crash_address();
-//debug_mmu_before_crash(0x80000000);
-
-// Vérifiez la table L2 du slot 0 via la zone de contrôle
-if (l2_table_addresses[0]) {
-    uint32_t* slot0_l2_table = l2_table_addresses[0];
-    uint32_t slot0_l2_entry = slot0_l2_table[0];  // L2[0] pour 0x80000000
-    
-    KDEBUG("Slot 0 L2 virtual access: 0x%08X\n", (uint32_t)slot0_l2_table);
-    KDEBUG("Slot 0 L2[0] entry: 0x%08X\n", slot0_l2_entry);
-    
-    if (!(slot0_l2_entry & 0x2)) {
-        KERROR("SLOT 0 L2 ENTRY INVALID! (0x%08X)\n", slot0_l2_entry);
-        return;  // Ne pas tenter la lecture
-    }
-    
-    uint32_t mapped_phys = slot0_l2_entry & 0xFFFFF000;
-    KDEBUG("Slot 0 maps 0x80000000 -> 0x%08X\n", mapped_phys);
-    KDEBUG("Expected: 0x%08X\n", l2_phys);
-    
-    if (mapped_phys != l2_phys) {
-        KERROR("SLOT 0 PHYSICAL MISMATCH!\n");
-        //restore_from_kernel_context(save);
-        return;  // Ne pas tenter la lecture
-    }
-} else {
-    KERROR("SLOT 0 L2 ACCESS NOT CONFIGURED!\n");
-    //restore_from_kernel_context(save);
-    return;
-}
-
-KDEBUG("Slot 0 verification passed, attempting read...\n");
-
-// AJOUTEZ CES TESTS :
-KDEBUG("=== ADDITIONAL TLB/CACHE CHECKS ===\n");
-
-// Force TLB invalidation pour cette adresse spécifique
-//KDEBUG("Invalidating TLB for 0x80000000...\n");
-//invalidate_tlb_page(0x80000000);
-//data_sync_barrier();
-//instruction_sync_barrier();
-
-// Test d'accès avec barrières renforcées
-KDEBUG("Testing with reinforced barriers...\n");
-data_sync_barrier();
-instruction_sync_barrier();
-
-volatile uint32_t* safe_ptr = (volatile uint32_t*)l2_temp;
-KDEBUG("Pointer prepared, about to dereference...\n");
-
-KDEBUG("=== FINAL DIAGNOSTIC BEFORE CRASH ===\n");
-
-// 1. Vérifiez le contexte MMU actuel
-uint32_t current_ttbr0, current_ttbr1, current_contextidr;
-asm volatile("mrc p15, 0, %0, c2, c0, 0" : "=r" (current_ttbr0));
-asm volatile("mrc p15, 0, %0, c2, c0, 1" : "=r" (current_ttbr1));
-asm volatile("mrc p15, 0, %0, c13, c0, 1" : "=r" (current_contextidr));
-
-KDEBUG("Current TTBR0: 0x%08X\n", current_ttbr0);
-KDEBUG("Current TTBR1: 0x%08X\n", current_ttbr1);
-KDEBUG("Current CONTEXTIDR: 0x%08X (ASID=%u)\n", current_contextidr, current_contextidr & 0xFF);
-
-// 2. Nettoyage cache avant accès
-KDEBUG("Cleaning data cache...\n");
-//data_cache_clean_invalidate();
-// Invalidation TLB globale
-uint32_t cpsr = get_cpsr();
-unsigned int mode = cpsr & 0x1F; 
-
-KDEBUG("Processor Mode = %s...\n", (mode == 0x13) ? "SVC" : (mode == 0x10) ? "User" : "Unknown");
-data_sync_barrier();
-//asm volatile("mcr p15, 0, %0, c8, c7, 0" :: "r" (0));  // Invalidate entire TLB
-//KDEBUG("Invalidate entire TLB OK\n");
-asm volatile("mcr p15, 0, %0, c7, c5, 0" :: "r" (0));  // Invalidate I-cache
-KDEBUG("Invalidate I-cache OK\n");
-data_sync_barrier();
-instruction_sync_barrier();
-//data_sync_barrier();
-
-clean_dcache_line((void *)l2_phys);
-invalidate_tlb_page(0x80000000);
-data_sync_barrier();
-instruction_sync_barrier();
-
-// 3. Test avec une adresse différente dans le même slot
-uint32_t test_addr_offset = l2_temp + 4;  // +4 bytes dans la même page
-KDEBUG("Testing offset address 0x%08X first...\n", test_addr_offset);
-
-volatile uint32_t* offset_ptr = (volatile uint32_t*)test_addr_offset;
-uint32_t offset_value = *offset_ptr;  // ← Tente l'accès offset d'abord
-KDEBUG("Offset read successful: 0x%08X\n", offset_value);
-
-// 4. Si l'offset marche, tente l'adresse de base
-KDEBUG("Now testing base address 0x%08X...\n", l2_temp);
-safe_ptr = (volatile uint32_t*)l2_temp;
-uint32_t test_value = *safe_ptr;  // ← Test final
-KDEBUG("SUCCESS: Read value 0x%08X from 0x%08X\n", test_value, l2_temp);
-
-
-            KDEBUG("*l2_temp = 0x%08X\n", *((volatile uint32_t*)l2_temp));
-
-            KDEBUG("share_vma_pages: before memset\n");
-
-            data_sync_barrier();
-            instruction_sync_barrier();
-#endif
             memset((void*)l2_temp, 0, PAGE_SIZE);
 
             *l1_entry = (l2_phys & 0xFFFFFC00) | 0x01; // coarse page table
@@ -724,7 +513,8 @@ KDEBUG("SUCCESS: Read value 0x%08X from 0x%08X\n", test_value, l2_temp);
         else {
             // Accéder à la table L2 existante
             l2_phys = *l1_entry & 0xFFFFFC00;
-            l2_temp = map_temp_page(l2_phys);
+            //l2_temp = map_temp_page(l2_phys);
+            l2_temp = l2_phys;
             //l2_temp = map_temp_pages_contiguous(l2_phys, 1);
             if (!l2_temp) {
                 KERROR("Failed to map L2 page\n");
@@ -739,13 +529,18 @@ KDEBUG("SUCCESS: Read value 0x%08X from 0x%08X\n", test_value, l2_temp);
         // Calcul des flags ARM
         uint32_t page_flags = 0x02; // small page
 
+        page_flags |= 0x0C;
+
         if (vma->flags & VMA_WRITE)
             page_flags |= 0x30; // AP = 11 (user RW)
         else
             page_flags |= 0x20; // AP = 10 (user RO)
 
         if (!(vma->flags & VMA_EXEC))
-            page_flags |= 0x01; // XN = 1
+        {
+            page_flags |= 0x01;  // XN bit
+            sync_icache_for_exec();
+        }
 
         if (vaddr >= VIRT_RAM_START && vaddr < VIRT_RAM_END)
             page_flags |= 0x0C; // cacheable + bufferable
@@ -755,7 +550,7 @@ KDEBUG("SUCCESS: Read value 0x%08X from 0x%08X\n", test_value, l2_temp);
         //KDEBUG("share_vma_pages: Mapped child L2[%u] = 0x%08X\n", l2_index, l2_table[l2_index]);
 
         //unmap_temp_pages_contiguous(l2_temp,1);
-        unmap_temp_page((void *)l2_temp);
+        //unmap_temp_page((void *)l2_temp);
 
 
         // Invalider TLB dans le contexte du processus enfant
@@ -767,23 +562,6 @@ KDEBUG("SUCCESS: Read value 0x%08X from 0x%08X\n", test_value, l2_temp);
 }
 
 
-static void share_vma_pages2(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma)
-{
-    uint32_t vaddr;
-    uint32_t phys_addr;
-
-    for (vaddr = vma->start; vaddr < vma->end; vaddr += PAGE_SIZE)
-    {
-        phys_addr = get_physical_address(parent_vm->pgdir, vaddr);
-        if (phys_addr)
-        {
-            KDEBUG("share_vma_pages: Parent ASID %u mapped page 0x%08X to physical address 0x%08X\n", 
-                   parent_vm->asid, vaddr, phys_addr);
-            map_user_page(child_vm->pgdir, vaddr, phys_addr, vma->flags);
-        }
-    }
-}
-
 /* Fonctions helper (implementations basiques) */
 static void make_page_readonly(uint32_t *pgdir, uint32_t vaddr)
 {
@@ -793,10 +571,10 @@ static void make_page_readonly(uint32_t *pgdir, uint32_t vaddr)
     (void)vaddr;
 }
 
-static void map_user_page_cow(uint32_t *pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags)
+static void map_user_page_cow(uint32_t *pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid)
 {
     /* Pour l'instant, utiliser map_user_page normal */
-    map_user_page(pgdir, vaddr, phys_addr, vma_flags);
+    map_user_page(pgdir, vaddr, phys_addr, vma_flags, asid);
 }
 
 static void track_cow_page(uint32_t phys_addr)
@@ -814,8 +592,8 @@ void switch_to_vm_space(vm_space_t *vm)
         return;
     }
     
-    //KDEBUG("switch_to_vm_space: Switching from TTBR0=0x%08X to ASID %u, pgdir 0x%08X\n", get_ttbr0(),
-    //       vm->asid, (uint32_t)vm->pgdir);
+   // KDEBUG("switch_to_vm_space: Switching from TTBR0=0x%08X to ASID %u, pgdir 0x%08X\n", get_ttbr0(),
+   //        vm->asid, (uint32_t)vm->pgdir);
         /* Lire l'instruction à l'adresse virtuelle 0x8000 */
 
     /* Utiliser la nouvelle fonction avec ASID */

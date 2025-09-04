@@ -72,7 +72,16 @@ void init_process_system(void)
     //init_process->process.parent = NULL;
     //init_process->entry_point = init_process_main;
     //init_process->entry_arg = NULL;
-    
+
+    //init_process->context.sp = new_vm->stack_start;             /* Stack pointer */
+    init_process->context.is_first_run = 1;                     /* Pas la premiere fois */
+    init_process->context.ttbr0 = (uint32_t)ttbr0_pgdir;
+    init_process->context.asid = ASID_KERNEL;
+    init_process->context.returns_to_user = 0;
+
+    KDEBUG("[INIT] SCV STACK TOP = 0x%08X\n", init_process->context.svc_sp_top);
+    KDEBUG("[INIT] SCV STACK SP = 0x%08X\n", init_process->context.svc_sp);
+     
     /* Configurer le contexte d'init avec votre fonction existante */
     //setup_task_context(init_process);
 
@@ -83,6 +92,11 @@ void init_process_system(void)
     if (!idle_task) {
         panic("Failed to create idle task");
     }
+
+    idle_task->context.is_first_run = 1;                     /* Pas la premiere fois */
+    idle_task->context.ttbr0 = (uint32_t)ttbr0_pgdir;
+    idle_task->context.asid = ASID_KERNEL;
+    idle_task->context.returns_to_user = 0;
 
 
     /* Mettre init dans la liste des taches pretes */
@@ -112,26 +126,19 @@ void init_process_main(void* arg)
     KINFO("[INIT] Creating initial processes...\n");
     
     /* Creer le shell de demonstration */
-    task_t* shell_proc = create_process("shell");
-    if (shell_proc) {
-        shell_proc->entry_point = simple_shell_task;
-        shell_proc->entry_arg = NULL;
-
-        if(!shell_proc->process) panic("Shell Process missing init process structure");
-
-        //shell_proc->process.parent = init_process;
-        shell_proc->process->parent = NULL;
-        shell_proc->process->ppid = 0;
-        //shell_proc->process.sibling_next = init_process->process.children;
-        //init_process->process.children = shell_proc;
-
-        shell_proc->process->sibling_next = NULL;
-        init_process->process->children = NULL;
-
-        setup_task_context(shell_proc);
-        add_to_ready_queue(shell_proc);
-        KINFO("[INIT] Created shell process PID=%u\n", shell_proc->process->pid);
+    task_t* shell_proc  = task_create_process("shell", simple_shell_task, NULL, 10, TASK_TYPE_PROCESS);
+    //init_process = create_process("init");
+    if (!shell_proc) {
+        panic("Failed to create init process");
     }
+
+    shell_proc->context.is_first_run = 1;                    
+    shell_proc->context.returns_to_user = 0;
+
+    KDEBUG("[SHELL PROC] SCV STACK TOP = 0x%08X\n", shell_proc->context.svc_sp_top);
+    KDEBUG("[SHELL PROC] SCV STACK SP = 0x%08X\n", shell_proc->context.svc_sp);
+
+    add_to_ready_queue(shell_proc);
     
     KINFO("[INIT] System initialization complete\n");
     KINFO("[INIT] Init entering main reaper loop...\n");
@@ -191,6 +198,7 @@ task_t* create_process(const char* name)
 
     process = task_create_process(name, NULL, NULL, 10, TASK_TYPE_PROCESS);
     if (!process) {
+        KERROR("create_process: NULL PROC\n");
         return NULL;
     }
     
@@ -204,8 +212,9 @@ void destroy_process(task_t* process)
 {
     int i;
     
-    if (!process || process->type != TASK_TYPE_PROCESS) {
+    if (!process || process->type != TASK_TYPE_PROCESS || !process->process) {
         KERROR("destroy_process: Invalid process\n");
+        KERROR("destroy_process: NULL PROC\n");
         return;
     }
     

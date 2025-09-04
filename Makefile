@@ -16,11 +16,11 @@ MATH_FLAGS = -fno-builtin-div -fno-builtin-mod
 ARM_MATH_FLAGS = -mno-unaligned-access
 
 # Flags de compilation
-ASFLAGS = -g
+ASFLAGS = -g -Iinclude
 
 CFLAGS = -std=gnu99 $(ARCH_FLAGS) $(FPU_FLAGS) $(MATH_FLAGS) $(ARM_MATH_FLAGS) \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
-         -Wall -Wextra -Werror -g -O0 -fno-omit-frame-pointer \
+         -Wall -Wextra -Werror -g -O0 -fno-omit-frame-pointer -Wformat -Wformat-security \
          -fno-builtin -fstack-protector -Wno-error=unused-function \
          -fno-pic -fno-pie \
          -Iinclude \
@@ -176,16 +176,21 @@ userfs.bin: $(wildcard userfs/**/*)
 
 # Run avec userfs loader
 run-userfs: $(KERNEL_BIN) userfs.bin
-	qemu-system-arm -M virt,virtualization=off,gic-version=2 -cpu cortex-a15 \
-		-m 1G -smp 1 \
+	qemu-system-arm -M virt -cpu cortex-a15 \
+		-m 2G -smp 1 \
+		-drive file=disk.img,if=none,format=raw,id=hd0 \
+		-device virtio-blk-device,drive=hd0 \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
 		-device loader,file=userfs.bin,addr=0x50000000
+#,virtualization=off,gic-version=2
 #-device loader,file=userfs.bin,addr=0x41000000
 
 debug-run-userfs: $(KERNEL_BIN) userfs.bin
 	qemu-system-arm -M virt -cpu cortex-a15 \
-		-m 1G -smp 1 \
+		-m 2G -smp 1 \
+		-drive file=disk.img,if=none,format=raw,id=hd0 \
+		-device virtio-blk-device,drive=hd0 \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
 		-device loader,file=userfs.bin,addr=0x50000000 -s -S

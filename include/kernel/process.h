@@ -31,7 +31,7 @@ task_t* get_current_task(void);
 void add_to_ready_queue(task_t* task);
 
 /* Fonctions pour fork - utilisant task_t */
-task_t* task_create_copy(task_t* parent);
+task_t* task_create_copy(task_t* parent, bool from_user);
 vm_space_t* fork_vm_space(vm_space_t* parent_vm);
 
 /* Fonctions de fichiers - UTILISANT task_t */

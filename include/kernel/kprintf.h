@@ -14,7 +14,7 @@
  * Support du modificateur : %ld
  */
 /* Fonctions principales */
-int kprintf(const char *format, ...);
+int kprintf(const char *format, ...) __attribute__((format(printf, 1, 2)));
 int kvprintf(const char *format, va_list args);
 void set_debug(int enable);
 int get_debug(void);
@@ -23,10 +23,10 @@ void kprintf_test(void);
 /*
  * Fonctions de convenance avec prefixes
  */
-int kdebug(const char *format, ...);   /* [DEBUG] ... */
-int kinfo(const char *format, ...);    /* [INFO] ... */
-int kerror(const char *format, ...);   /* [ERROR] ... */
-int kwarn(const char *format, ...);    /* [WARN] ... */
+int kdebug(const char *format, ...) __attribute__((format(printf, 1, 2)));  /* [DEBUG] ... */
+int kinfo(const char *format, ...) __attribute__((format(printf, 1, 2)));    /* [INFO] ... */
+int kerror(const char *format, ...) __attribute__((format(printf, 1, 2)));;   /* [ERROR] ... */
+int kwarn(const char *format, ...) __attribute__((format(printf, 1, 2)));    /* [WARN] ... */
 
 /*
  * Macros utiles pour debug

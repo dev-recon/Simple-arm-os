@@ -2,6 +2,7 @@
 # qemu_loader_method.sh - Charger userfs via le device loader de QEMU
 
 USERFS_DIR="./userfs"
+USERLAND_DIR="./userland"
 USERFS_TAR="userfs.tar"
 USERFS_BIN="userfs.bin"
 
@@ -13,6 +14,15 @@ if [ ! -d "$USERFS_DIR" ]; then
     echo "Error: userfs directory not found!"
     exit 1
 fi
+
+if [ ! -d "$USERLAND_DIR" ]; then
+    echo "Error: userland directory not found!"
+    exit 1
+fi
+
+cp -f $USERLAND_DIR/hello/hello $USERFS_DIR/bin
+cp -f $USERLAND_DIR/hello2/hello2 $USERFS_DIR/bin
+cp -f $USERLAND_DIR/hello3/hello3 $USERFS_DIR/bin
 
 # Methode 1: Creer un archive TAR
 echo "1. Creating TAR archive..."

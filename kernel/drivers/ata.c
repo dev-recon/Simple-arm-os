@@ -260,6 +260,486 @@ void check_qemu_virtio_config(void)
     KINFO("  mkfs.fat -F 32 disk.img\n");
 }
 
+/* Implementations des fonctions statiques */
+static uint32_t detect_virtmmio_from_dtb(void)
+{
+    uint32_t *dtb_ptr = (uint32_t *)dtb_address;
+    
+    if (!dtb_ptr) {
+        kprintf("[WARN] No DTB provided\n");
+        return 0;
+    }
+
+    uint32_t *addr = dtb_ptr;
+    uint32_t content = *addr ;
+ 
+    kprintf("[INFO] Trying detection from DTB at %p - 0x%08X\n", dtb_ptr, content);
+
+    struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
+    
+    /* Verifier la signature DTB */
+    if (__builtin_bswap32(fdt->magic) != 0xd00dfeed) {
+        kprintf("[DEBUG] Invalid DTB magic: 0x%08x\n", fdt->magic);
+        return 0;
+    }
+    
+    kprintf("[INFO] Valid DTB found at %p\n", dtb_ptr);
+    kprintf("[INFO] DTB size: %ld bytes\n", __builtin_bswap32(fdt->totalsize));
+
+    void* node = fdt_find_node_by_name(dtb_ptr, "virtio_mmio");
+    if (node) {
+        uint32_t len;
+        uint32_t* reg = (uint32_t*)fdt_get_property(dtb_ptr, node, "reg", &len);
+        if (reg) {
+            uint64_t base64 = ((uint64_t)__builtin_bswap32(reg[0]) << 32) | __builtin_bswap32(reg[1]);
+            uint64_t size64 = ((uint64_t)__builtin_bswap32(reg[2]) << 32) | __builtin_bswap32(reg[3]);
+
+            if ((base64 >> 32) != 0 || (size64 >> 32) != 0) {
+                kprintf("[ERROR] 64-bit memory range not supported on ARMv7: base=0x%llx, size=0x%llx\n", base64, size64);
+                return -1;
+            }
+
+            uint32_t base = (uint32_t)(base64 & 0xFFFFFFFF);
+            uint32_t size = (uint32_t)(size64 & 0xFFFFFFFF);
+
+            kprintf("[INFO] Virtio MMIO regs : base=0x%08X, size=0x%08X\n", base, size);
+
+            return base;
+            
+        }
+
+        uint32_t* intr = (uint32_t*)fdt_get_property(dtb_ptr, node, "interrupts", &len);
+        if (intr) {
+            uint64_t base64 = ((uint64_t)__builtin_bswap32(intr[0]) << 32) | __builtin_bswap32(intr[1]);
+            uint64_t size64 = ((uint64_t)__builtin_bswap32(intr[2]) << 32) | __builtin_bswap32(intr[3]);
+
+            if ((base64 >> 32) != 0 || (size64 >> 32) != 0) {
+                kprintf("[ERROR] 64-bit memory range not supported on ARMv7: base=0x%llx, size=0x%llx\n", base64, size64);
+                return -1;
+            }
+
+            uint32_t base = (uint32_t)(base64 & 0xFFFFFFFF);
+            uint32_t size = (uint32_t)(size64 & 0xFFFFFFFF);
+
+            kprintf("[INFO] Virtio MMIO interupts : base=0x%08X, size=0x%08X\n", base, size);
+
+            return size;
+            
+        }
+
+    }
+    
+    /* Pour machine virt, utiliser la taille definie dans kernel.h */
+    /* TODO: Parser completement le DTB */
+    return 0xA000000; /* Defini dans kernel.h comme 4GB */
+}
+
+
+
+// Offsets EN OCTETS
+// Offsets EN OCTETS — VirtIO-MMIO legacy (Version == 1)
+#define VIRTIO_MMIO_MAGIC            0x000
+#define VIRTIO_MMIO_VERSION          0x004   // == 1 en legacy
+#define VIRTIO_MMIO_DEVICE_ID        0x008
+#define VIRTIO_MMIO_VENDOR_ID        0x00C
+
+#define VIRTIO_MMIO_DEVICE_FEATURES  0x010   // 32-bit, PAS de *_FEATURES_SEL en legacy
+#define VIRTIO_MMIO_DRIVER_FEATURES  0x020   // 32-bit, PAS de *_FEATURES_SEL en legacy
+
+#define VIRTIO_MMIO_QUEUE_SEL        0x030
+#define VIRTIO_MMIO_QUEUE_NUM_MAX    0x034
+#define VIRTIO_MMIO_QUEUE_NUM        0x038
+#define VIRTIO_MMIO_QUEUE_ALIGN_OFF  0x03C   // registre "QueueAlign" (offset)
+#define VIRTIO_MMIO_QUEUE_PFN        0x040   // PFN (page frame number) — legacy uniquement
+
+// PAS de QUEUE_READY en legacy (c’est QUEUE_PFN!=0 qui “arme” la queue)
+#define VIRTIO_MMIO_QUEUE_NOTIFY     0x050
+
+#define VIRTIO_MMIO_INTERRUPT_STATUS 0x060
+#define VIRTIO_MMIO_INTERRUPT_ACK    0x064
+
+#define VIRTIO_MMIO_STATUS           0x070
+#define VIRTIO_MMIO_CONFIG           0x100   // début de la config spécifique au device
+
+#define VQ_ALIGN     4096u   // Queue alignment typique en legacy
+#define VQ_SIZE      128u    // Nombre d’entrées (<= QueueNumMax)
+#define VIRTIO_MMIO_QUEUE_ALIGN 4096
+
+#define VIRTIO_MMIO_QUEUE_DESC_LOW  0x040
+#define VIRTIO_MMIO_QUEUE_DESC_HIGH 0x044
+#define VIRTIO_MMIO_QUEUE_AVAIL_LOW 0x048
+#define VIRTIO_MMIO_QUEUE_AVAIL_HIGH 0x04C
+#define VIRTIO_MMIO_QUEUE_USED_LOW  0x050
+#define VIRTIO_MMIO_QUEUE_USED_HIGH 0x054
+//#define VIRTIO_STATUS_ACK           0x01
+//#define VIRTIO_STATUS_DRIVER        0x02
+//#define VIRTIO_STATUS_FEATURES_OK   0x08
+//#define VIRTIO_STATUS_DRIVER_OK     0x04
+//#define VIRTIO_STATUS_FAILED        0x80
+
+/* Offsets dans virtio_blk_config pour MMIO */
+#define VBLK_CFG_CAPACITY_LO   (VIRTIO_MMIO_CONFIG + 0x00) // low 32
+#define VBLK_CFG_CAPACITY_HI   (VIRTIO_MMIO_CONFIG + 0x04) // high 32
+#define VBLK_CFG_SIZE_MAX      (VIRTIO_MMIO_CONFIG + 0x08) // u32
+#define VBLK_CFG_SEG_MAX       (VIRTIO_MMIO_CONFIG + 0x0C) // u32
+#define VBLK_CFG_GEOM_C        (VIRTIO_MMIO_CONFIG + 0x10) // u16
+#define VBLK_CFG_GEOM_H        (VIRTIO_MMIO_CONFIG + 0x12) // u8
+#define VBLK_CFG_GEOM_S        (VIRTIO_MMIO_CONFIG + 0x13) // u8
+#define VBLK_CFG_BLK_SIZE      (VIRTIO_MMIO_CONFIG + 0x1C) // u32 (si F_BLK_SIZE)
+
+
+static inline void mmio_write32(volatile uint32_t *base, uint32_t off, uint32_t val){
+    // Évite que des écritures mémoire précédentes passent après l’accès MMIO
+    asm volatile("dmb ish" ::: "memory");
+
+    *(volatile uint32_t *)((uintptr_t)base + off) = val;
+
+    // S’assure que l’écriture est poussée vers le périphérique
+    // et ne sera pas retardée avant des opérations suivantes (interruptions, etc.)
+    asm volatile("dsb ishst" ::: "memory");
+}
+
+
+static inline uint32_t mmio_read32(volatile uint32_t *base, uint32_t off){
+
+    volatile uint32_t *p = (volatile uint32_t *)((uintptr_t)base + off);
+    uint32_t v = *p;
+    asm volatile("dmb ish" ::: "memory");
+    return v;
+}
+
+void virtio_blk_read_capacity(volatile uint32_t *mmio_base,
+                              uint64_t *capacity_512b,
+                              uint32_t *sector_size)
+{
+    /* Recomposition 64-bit à partir de deux reads 32-bit */
+    uint32_t cap_lo = mmio_read32(mmio_base, VBLK_CFG_CAPACITY_LO);
+    uint32_t cap_hi = mmio_read32(mmio_base, VBLK_CFG_CAPACITY_HI);
+    *capacity_512b = ((uint64_t)cap_hi << 32) | cap_lo;
+
+    /* Taille logique du secteur : 512 par défaut.
+       Si tu as négocié VIRTIO_BLK_F_BLK_SIZE, lis VBLK_CFG_BLK_SIZE. */
+    uint32_t blk_sz = mmio_read32(mmio_base, VBLK_CFG_BLK_SIZE);
+    if (blk_sz == 0) blk_sz = 512;
+    *sector_size = blk_sz;
+}
+
+
+typedef struct {
+    // adresses physiques & virtuelles du bloc unique
+    uint32_t pa_base;
+    void    *va_base;
+
+    // zones découpées dans le bloc
+    uint32_t pa_desc;  void *va_desc;  uint32_t desc_size;
+    uint32_t pa_avail; void *va_avail; uint32_t avail_size;
+    uint32_t pa_used;  void *va_used;  uint32_t used_size;
+
+    uint16_t qsize;    // = VQ_SIZE
+} vq_legacy_t;
+
+
+vq_legacy_t global_vq = {0};
+
+
+// Alloue N pages contiguës physiquement et retourne VA=PA (si kernel mappe identitairement ≥0x40000000)
+static void *alloc_dma_pages(size_t npages, uint32_t *out_pa) {
+    uint32_t pa = (uint32_t)allocate_contiguous_pages(npages,true); // <- ta fonction
+    if (!pa) return NULL;
+    if (out_pa) *out_pa = pa;
+    // Sur ton kernel, TTBR1 mappe les sections 1:1 : VA == PA dans la RAM noyau
+    return (void*)pa;
+}
+
+
+static bool vq_alloc_legacy(vq_legacy_t *vq, uint16_t qsize /*ex: 128*/) {
+    // tailles des structures (virtio split ring legacy)
+    uint32_t desc_sz  = 16u * qsize;                   // struct virtq_desc[Q]
+    uint32_t avail_sz = ALIGN_UP(6u + 2u*qsize, 2u);   // virtq_avail header + ring
+    uint32_t used_sz  = ALIGN_UP(6u + 8u*qsize, VQ_ALIGN); // used doit être aligné à VQ_ALIGN
+
+    uint32_t total = ALIGN_UP(desc_sz, 16) + ALIGN_UP(avail_sz, 2) + ALIGN_UP(used_sz, VQ_ALIGN);
+
+    // nb pages
+    size_t npages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    uint32_t pa_base = 0;
+    void *va_base = alloc_dma_pages(npages, &pa_base);
+    if (!va_base) return false;
+
+    // layout : [desc][avail][used aligné VQ_ALIGN]
+    uint32_t off = 0;
+
+    vq->pa_base = pa_base;
+    vq->va_base = va_base;
+
+    vq->pa_desc = pa_base + off;
+    vq->va_desc = (uint8_t*)va_base + off;
+    vq->desc_size = desc_sz;
+    off = ALIGN_UP(off + desc_sz, 16);
+
+    vq->pa_avail = pa_base + off;
+    vq->va_avail = (uint8_t*)va_base + off;
+    vq->avail_size = avail_sz;
+    off = ALIGN_UP(off + avail_sz, 2);
+
+    off = ALIGN_UP(off, VQ_ALIGN);
+    vq->pa_used = pa_base + off;
+    vq->va_used = (uint8_t*)va_base + off;
+    vq->used_size = used_sz;
+
+    vq->qsize = qsize;
+
+    // Optionnel: zeroise
+    memset(vq->va_base, 0, npages * PAGE_SIZE);
+
+    // Maintenance cache avant de donner au device
+    clean_dcache_by_mva(vq->va_base, npages * PAGE_SIZE);
+    return true;
+}
+
+void virtio_mmio_dump32(uintptr_t base)
+{
+    kprintf("=== VIRTIO MMIO DUMP (32-bit) @ 0x%08X ===\n", (uint32_t)base);
+    // Registres legacy lisibles typiques
+    struct { const char* name; uint32_t off; } regs[] = {
+        {"MAGIC",          0x000},
+        {"VERSION",        0x004},
+        {"DEVICE_ID",      0x008},
+        {"VENDOR_ID",      0x00C},
+        {"DEVICE_FEATURES",0x010},   // lisible
+        {"QUEUE_NUM_MAX",  0x02C},   // lisible
+        {"QUEUE_NUM",      0x030},   // R/W
+        {"STATUS",         0x070},   // legacy: 0x070 (v1)
+        {"INT_STATUS",     0x060},   // legacy: 0x060
+        {"QUEUE_NOTIFY",   0x050},   // write-only normalement → lira 0
+    };
+    for (unsigned i = 0; i < sizeof(regs)/sizeof(regs[0]); i++) {
+        uint32_t v = mmio_read32((void*)base, regs[i].off);
+        kprintf("  %-16s @ +0x%03X = 0x%08X\n", regs[i].name, regs[i].off, v);
+    }
+}
+
+
+static bool virtio_blk_init_legacy(uint32_t base_addr)
+{
+    
+    volatile uint32_t *base = (volatile uint32_t *)base_addr;
+
+    virtio_mmio_dump32(base_addr);
+
+    uint32_t magic   = mmio_read32(base, VIRTIO_MMIO_MAGIC);
+    uint32_t version = mmio_read32(base, VIRTIO_MMIO_VERSION);
+    uint32_t devid   = mmio_read32(base, VIRTIO_MMIO_DEVICE_ID);
+
+    KDEBUG("virtio-mmio magic 0x%08X @0x%08X\n", magic, base_addr);
+
+    if (magic != 0x74726976) {
+        KERROR("virtio-mmio bad magic 0x%08X @0x%08X\n", magic, base_addr);
+        return false;
+    }
+
+    KDEBUG("VirtIO version = %u\n", version);
+
+    if (devid != 2) {
+        KWARN("VirtIO device ID=%u (expected 2=blk), continuing but likely wrong base/DT\n", devid);
+    }
+
+
+    // Reset
+    mmio_write32(base, VIRTIO_MMIO_STATUS, 0);
+
+    // ACK + DRIVER
+    mmio_write32(base, VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACK);
+    mmio_write32(base, VIRTIO_MMIO_STATUS, mmio_read32(base, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_DRIVER);
+
+
+    // FEATURES_OK
+    mmio_write32(base, VIRTIO_MMIO_STATUS, mmio_read32(base, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_FEATURES_OK);
+    if (!(mmio_read32(base, VIRTIO_MMIO_STATUS) & VIRTIO_STATUS_FEATURES_OK)) {
+        // Le device a rejeté nos features
+        mmio_write32(base, VIRTIO_MMIO_STATUS, VIRTIO_STATUS_FAILED);
+        return false;
+    }
+
+    // Queue 0
+    mmio_write32(base, VIRTIO_MMIO_QUEUE_SEL, 0);
+    uint32_t qmax = mmio_read32(base, VIRTIO_MMIO_QUEUE_NUM_MAX);
+    if (qmax == 0) return false;
+
+    uint16_t qsize = (VQ_SIZE <= qmax) ? VQ_SIZE : (uint16_t)qmax;
+    mmio_write32(base, VIRTIO_MMIO_QUEUE_NUM, qsize);
+    mmio_write32(base, VIRTIO_MMIO_QUEUE_ALIGN_OFF, VQ_ALIGN);
+
+        /* Setup virtqueue */
+    KDEBUG("Setting up virtqueue...\n");
+    if (!setup_virtqueue()) {
+        KERROR("Failed to setup virtqueue\n");
+        mmio_write32(base, VIRTIO_MMIO_STATUS,VIRTIO_STATUS_FAILED);
+        return false;
+    }
+
+    // Allouer le ring legacy
+    //vq_legacy_t vq = {0};
+    if (!vq_alloc_legacy(&global_vq, qsize)) return false;
+
+    // IMPORTANT: legacy → on programme la PFN (= base_phys >> 12)
+    mmio_write32(base, VIRTIO_MMIO_QUEUE_PFN, global_vq.pa_base >> 12);
+
+        /* Enable IRQ */
+    KDEBUG("Configuring VirtIO IRQs...\n");
+    enable_irq(VIRTIO_BLK_IRQ);
+    KINFO("VirtIO IRQ %d enabled\n", VIRTIO_BLK_IRQ);
+
+    // DRIVER_OK
+    mmio_write32(base, VIRTIO_MMIO_STATUS, mmio_read32(base, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_DRIVER_OK);
+
+    /* Read device capacity */
+    KDEBUG("Reading device capacity...\n");
+
+    uint64_t capacity;
+    uint32_t sector_size;
+
+    virtio_blk_read_capacity(base, &capacity, &sector_size);
+    ata_device.capacity = capacity;
+    ata_device.sector_size = sector_size;
+    
+    KINFO("Device capacity: %u sectors (%u MB)\n", 
+          (uint32_t)ata_device.capacity, 
+          (uint32_t)(ata_device.capacity * sector_size / (1024*1024)));
+    
+    /* Finalize initialization */
+    ata_device.initialized = true;
+    ata_device.next_request_id = 1;
+
+    return true;
+}
+
+#if(0)
+static bool init_virtio_block_device(uint32_t base_addr)
+{
+    volatile uint32_t *regs = (volatile uint32_t*)base_addr;
+
+    uint32_t magic   = mmio_read32(regs, VIRTIO_MMIO_MAGIC);
+    uint32_t version = mmio_read32(regs, VIRTIO_MMIO_VERSION);
+    uint32_t devid   = mmio_read32(regs, VIRTIO_MMIO_DEVICE_ID);
+    //uint32_t vendor  = mmio_read32(regs, VIRTIO_MMIO_VENDOR_ID);
+
+    if (magic != 0x74726976) {
+        KERROR("virtio-mmio bad magic 0x%08X @0x%08X\n", magic, base_addr);
+        return false;
+    }
+
+    KDEBUG("VirtIO version =%u\n", version);
+    if (devid != 2) {
+        KWARN("VirtIO device ID=%u (expected 2=blk), continuing but likely wrong base/DT\n", devid);
+    }
+
+    // reset
+    mmio_write32(regs, VIRTIO_MMIO_STATUS, 0);
+
+    // ACK + DRIVER
+    mmio_write32(regs, VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACK);
+    mmio_write32(regs, VIRTIO_MMIO_STATUS,
+                 mmio_read32(regs, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_DRIVER);
+
+    // --- Négociation des features ---
+    uint64_t dev_feats = 0;
+    uint64_t drv_feats = 0;
+
+    if (version >= 2) {
+        // modern: 64-bit via selectors
+        mmio_write32(regs, VIRTIO_MMIO_DEVICE_FEATS_SEL, 0);
+        uint32_t f0 = mmio_read32(regs, VIRTIO_MMIO_DEVICE_FEATS);
+        mmio_write32(regs, VIRTIO_MMIO_DEVICE_FEATS_SEL, 1);
+        uint32_t f1 = mmio_read32(regs, VIRTIO_MMIO_DEVICE_FEATS);
+        dev_feats = ((uint64_t)f1 << 32) | f0;
+
+        // choisis ce que tu veux garder; pour test, rien de spécial
+        drv_feats = 0;
+
+        mmio_write32(regs, VIRTIO_MMIO_DRIVER_FEATS_SEL, 0);
+        mmio_write32(regs, VIRTIO_MMIO_DRIVER_FEATS, (uint32_t)(drv_feats & 0xFFFFFFFF));
+        mmio_write32(regs, VIRTIO_MMIO_DRIVER_FEATS_SEL, 1);
+        mmio_write32(regs, VIRTIO_MMIO_DRIVER_FEATS, (uint32_t)(drv_feats >> 32));
+    } else {
+        // legacy: 32-bit
+        uint32_t f = mmio_read32(regs, VIRTIO_MMIO_DEVICE_FEATS);
+        dev_feats = f;
+        drv_feats = 0; // rien pour commencer
+        mmio_write32(regs, VIRTIO_MMIO_DRIVER_FEATS, (uint32_t)drv_feats);
+    }
+
+    // FEATURES_OK
+    mmio_write32(regs, VIRTIO_MMIO_STATUS,
+                 mmio_read32(regs, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_FEATURES_OK);
+
+    // re-lire pour voir si le device accepte
+    uint32_t st = mmio_read32(regs, VIRTIO_MMIO_STATUS);
+    if (!(st & VIRTIO_STATUS_FEATURES_OK)) {
+        KERROR("virtio: device rejected features (st=0x%02X, dev=0x%016llX, drv=0x%016llX)\n",
+               st, (unsigned long long)dev_feats, (unsigned long long)drv_feats);
+        mmio_write32(regs, VIRTIO_MMIO_STATUS, st | VIRTIO_STATUS_FAILED);
+        return false;
+    }
+
+    /* Setup virtqueue */
+    KDEBUG("Setting up virtqueue...\n");
+    if (!setup_virtqueue()) {
+        KERROR("Failed to setup virtqueue\n");
+        regs[VIRTIO_STATUS/4] = VIRTIO_STATUS_FAILED;
+        return false;
+    }
+    
+    /* Enable IRQ */
+    KDEBUG("Configuring VirtIO IRQs...\n");
+    enable_irq(VIRTIO_BLK_IRQ);
+    KINFO("VirtIO IRQ %d enabled\n", VIRTIO_BLK_IRQ);
+
+    #if(0)
+
+    // --- création de la queue 0 ---
+    mmio_write32(regs, VIRTIO_MMIO_QUEUE_SEL, 0);
+    uint32_t qmax = mmio_read32(regs, VIRTIO_MMIO_QUEUE_NUM_MAX);
+    if (qmax == 0) {
+        KERROR("virtio: queue0 unsupported\n");
+        return false;
+    }
+    uint32_t qsz = (qmax > 128) ? 128 : qmax;  // par ex.
+
+    mmio_write32(regs, VIRTIO_MMIO_QUEUE_NUM, qsz);
+
+    // allouer desc/avail/used (physiques, contigus) et programmer *LOW/HIGH
+    // (à adapter avec ton allocateur physique)
+    uint64_t desc_pa = /* ... */;
+    uint64_t avail_pa = /* ... */;
+    uint64_t used_pa  = /* ... */;
+
+    mmio_write32(regs, VIRTIO_MMIO_QUEUE_DESC_LOW,  (uint32_t)(desc_pa  & 0xFFFFFFFF));
+    mmio_write32(regs, VIRTIO_MMIO_QUEUE_DESC_HIGH, (uint32_t)(desc_pa  >> 32));
+    mmio_write32(regs, VIRTIO_MMIO_QUEUE_AVAIL_LOW, (uint32_t)(avail_pa & 0xFFFFFFFF));
+    mmio_write32(regs, VIRTIO_MMIO_QUEUE_AVAIL_HIGH,(uint32_t)(avail_pa >> 32));
+    mmio_write32(regs, VIRTIO_MMIO_QUEUE_USED_LOW,  (uint32_t)(used_pa  & 0xFFFFFFFF));
+    mmio_write32(regs, VIRTIO_MMIO_QUEUE_USED_HIGH, (uint32_t)(used_pa  >> 32));
+#endif
+
+    mmio_write32(regs, VIRTIO_MMIO_QUEUE_READY, 1);
+
+    // DRIVER_OK
+    mmio_write32(regs, VIRTIO_MMIO_STATUS,
+                 mmio_read32(regs, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_DRIVER_OK);
+
+    // Lire la capacité (config space)
+    volatile uint64_t *cfg_capacity = (volatile uint64_t*)(base_addr + 0x100);
+    ata_device.capacity    = *cfg_capacity;
+    ata_device.sector_size = 512;
+    ata_device.initialized = true;
+    ata_device.next_request_id = 1;
+
+    return true;
+}
+#endif
+
 bool init_ata(void)
 {
     KINFO("Initializing VirtIO block device...\n");
@@ -269,7 +749,9 @@ bool init_ata(void)
     init_spinlock(&ata_device.lock);
     
     /* Scan for VirtIO device (may not be properly typed) */
-    uint32_t virtio_addr = scan_virtio_devices();
+    //uint32_t virtio_addr = scan_virtio_devices();
+    uint32_t virtio_addr = 1;
+
     if (virtio_addr == 0) {
         KERROR("No VirtIO device found\n");
         KERROR("This usually means:\n");
@@ -294,6 +776,11 @@ bool init_ata(void)
         KWARN("OK ATA simulation mode initialized (no real disk I/O)\n");
         return true;
     }
+
+    virtio_addr = detect_virtmmio_from_dtb();
+
+    uint32_t addr = 0x0A003E00;
+    virtio_addr = addr;
     
     ata_device.regs = (volatile uint32_t*)virtio_addr;
     
@@ -308,8 +795,13 @@ bool init_ata(void)
     
     /* Try to initialize as VirtIO device regardless of ID */
     KINFO("- Attempting VirtIO initialization...\n");
-    if (init_virtio_block_device(virtio_addr)) {
+    //if (init_virtio_block_device(virtio_addr)) {
+    if (virtio_blk_init_legacy(virtio_addr)) {
         KINFO("OK VirtIO device initialized successfully!\n");
+        ata_set_real_mode(true);
+        extern bool test_ata_before_fat32(void);
+        test_ata_before_fat32();
+
         return true;
     } else {
         KERROR("KO VirtIO device initialization failed\n");
@@ -326,7 +818,7 @@ bool init_ata(void)
     }
 }
 
-static bool init_virtio_block_device(uint32_t base_addr)
+static bool init_virtio_block_device2(uint32_t base_addr)
 {
     KDEBUG("Initializing VirtIO block device at 0x%08X\n", base_addr);
     

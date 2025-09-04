@@ -32,29 +32,34 @@ int sys_read(int fd, void* buf, size_t count)
 int sys_write(int fd, const void* buf, size_t count)
 {
     file_t* file;
-    ssize_t result;
+    ssize_t result = 0;
 
-    /*char *loc_string = NULL;
+    char *loc_string = NULL;
     
-    if(buf)
-    {
-        KDEBUG("SYS_WRITE: buf is NOT NULL\n");
-        loc_string = (char *)kmalloc(11);
-        strncpy_from_user(loc_string, buf, 10);
-    }
+    if(!buf || count == 0) return -EINVAL;
 
-    KDEBUG("SYS_WRITE: Called with parameters: fd=%d, buf='%s', count=%d\n", count, loc_string, count );
-
-    if(loc_string) kfree(loc_string);*/
-    
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
     
     file = current_task->process->files[fd];
     if (!file) return -EBADF;
     
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
+
+    //KDEBUG("SYS_WRITE: buf is NOT NULL\n");
+    loc_string = (char *)kmalloc(count+1);
+    if(!loc_string) return -EINVAL;
+
+    strncpy_from_user(loc_string, buf, count+1);
+
+    //KDEBUG("SYS_WRITE: Called with parameters: fd=%d, buf='%s', count=%d\n", fd, loc_string, count );
+
+    //if(loc_string) kfree(loc_string);
     
-    result = file->f_op->write(file, buf, count);
+    result = file->f_op->write(file, loc_string, count);
+
+    //KDEBUG("SYS_WRITE: just after writing result = %d\n" , result);
+    kfree(loc_string);
+
     return (int)result;
 }
 

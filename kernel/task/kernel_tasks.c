@@ -436,199 +436,8 @@ void ultra_simple_func(void* arg)
     /* Terminaison immediate */
 }
 
-void test_robust_context_switch(void)
-{
-    KINFO("=== ROBUST CONTEXT SWITCH TEST ===\n");
-    
-    task_t* current = current_task;
-    KINFO("Current task: %s (is_first_run=%u)\n", 
-          current->name, current->context.is_first_run);
-    
-    /* Creer une tache de test */
-    task_t* test = task_create("robust_test", robust_test_func, (void*)456, 25);
-    
-    if (!test) {
-        KERROR("Failed to create robust test task\n");
-        return;
-    }
-    
-    KINFO("Test task created:\n");
-    KINFO("  is_first_run: %u (should be 1)\n", test->context.is_first_run);
-    KINFO("  PC: 0x%08X\n", test->context.pc);
-    KINFO("  LR: 0x%08X\n", test->context.lr);
-    
-    /* Utiliser la version robuste */
-    KINFO("Calling __task_switch_asm_robust...\n");
-    __task_switch_asm_debug(&current->context, &test->context);
-    
-    /* Si on arrive ici, c'est qu'on est revenu */
-    KINFO("Returned from robust context switch\n");
-    KINFO("Current task is_first_run: %u (should be 0 now)\n", 
-          current->context.is_first_run);
-}
-
-void robust_test_func(void* arg)
-{
-    int test_arg = (int)(uintptr_t)arg;
-    
-    KINFO("- ROBUST TEST FUNCTION STARTED!\n");
-    KINFO("- Argument received: %d (expected 456)\n", test_arg);
-    
-    if (test_arg == 456) {
-        KINFO("- OK Argument correct - context switch worked!\n");
-    } else {
-        KERROR("- KO Argument incorrect - context corruption!\n");
-    }
-    
-    /* Test de la stack */
-    uint32_t sp;
-    __asm__ volatile("mov %0, sp" : "=r"(sp));
-    KINFO("- Current SP: 0x%08X\n", sp);
-    
-    /* Test d'integrite */
-    volatile uint32_t test_array[4] = {0xDEADBEEF, 0xCAFEBABE, 0x12345678, 0x87654321};
-    
-    for (int i = 0; i < 4; i++) {
-        if (test_array[i] != (uint32_t[]){0xDEADBEEF, 0xCAFEBABE, 0x12345678, 0x87654321}[i]) {
-            KERROR("- KO Stack corruption at index %d!\n", i);
-            return;
-        }
-    }
-    
-    KINFO("- OK Stack integrity test passed\n");
-    
-    KINFO("- About to yield back...\n");
-    yield();  /* Retourner a la tache precedente */
-    
-    KINFO("- ROBUST TEST FUNCTION COMPLETED\n");
-}
 
 
-
-
-
-/* 2. VERSION CORRIGeE de test_robust_context_switch */
-void test_robust_context_switch_fixed(void)
-{
-    KINFO("=== ROBUST CONTEXT SWITCH TEST FIXED ===\n");
-    
-    /* Debug initial */
-    debug_current_task_detailed("INITIAL");
-    
-    task_t* original_current = current_task;
-    KINFO("Original current task: %s\n", original_current->name);
-    
-    /* Creer une tache de test */
-    task_t* test = task_create("robust_test_v2", robust_test_func_v2, (void*)789, 25);
-    
-    if (!test) {
-        KERROR("Failed to create test task\n");
-        return;
-    }
-    
-    KINFO("Test task created successfully\n");
-    debug_current_task_detailed("AFTER_CREATE");
-    
-    /* CORRECTION: Ne pas appeler __task_switch_asm_robust directement */
-    /* Utiliser schedule() qui gere current_task correctement */
-    KINFO("Calling schedule() instead of direct context switch...\n");
-    schedule();
-    
-    /* Si on arrive ici, c'est qu'on est de retour dans la tache originale */
-    KINFO("Returned from schedule - checking state...\n");
-    debug_current_task_detailed("AFTER_SCHEDULE");
-}
-
-/* 3. FONCTION DE TEST MODIFIeE */
-void robust_test_func_v2(void* arg)
-{
-    int test_arg = (int)(uintptr_t)arg;
-    
-    KINFO("- ROBUST TEST V2 STARTED!\n");
-    KINFO("- Argument: %d (expected 789)\n", test_arg);
-    
-    /* Debug detaille depuis la tache */
-    debug_current_task_detailed("IN_TEST_TASK");
-    
-    /* Verifier l'integrite */
-    if (test_arg == 789) {
-        KINFO("- OK Argument correct\n");
-    } else {
-        KERROR("- KO Argument incorrect\n");
-    }
-    
-    /* Test de stack simple */
-    volatile uint32_t stack_test = 0xABCDEF00;
-    if (stack_test == 0xABCDEF00) {
-        KINFO("- OK Stack test OK\n");
-    } else {
-        KERROR("- KO Stack corruption\n");
-    }
-    
-    KINFO("- Task will terminate cleanly (no yield)\n");
-    
-    /* MODIFICATION: Pas de yield pour eviter le probleme */
-    /* yield(); */
-    
-    KINFO("- ROBUST TEST V2 COMPLETED\n");
-    
-    /* La tache se termine naturellement */
-    /* task_destroy sera appele via LR */
-}
-
-
-/* 5. TEST ULTRA-SIMPLE pour isoler le probleme */
-void test_current_task_simple(void)
-{
-    KINFO("=== SIMPLE CURRENT_TASK TEST ===\n");
-    
-    /* Juste verifier l'etat sans rien faire */
-    debug_current_task_detailed("START");
-    
-    task_t* current = current_task;
-    if (current) {
-        KINFO("Current task: %s (ID=%u)\n", current->name, current->task_id);
-        KINFO("Current SP from current_task: 0x%08X\n", current->context.sp);
-        
-        /* Lire le SP reel du processeur */
-        uint32_t real_sp;
-        __asm__ volatile("mov %0, sp" : "=r"(real_sp));
-        KINFO("Real processor SP: 0x%08X\n", real_sp);
-        
-        /* Ils devraient etre differents mais dans des plages valides */
-        if (real_sp >= (uint32_t)current->stack_base && 
-            real_sp < (uint32_t)current->stack_top) {
-            KINFO("OK Real SP is in current task's stack\n");
-        } else {
-            KWARN("WARNING Real SP is NOT in current task's stack\n");
-        }
-    }
-    
-    KINFO("=== SIMPLE TEST COMPLETED ===\n");
-}
-
-/* 6. MAIN TEST FUNCTION */
-void main_current_task_debug(void)
-{
-    KINFO("\n=== MAIN CURRENT_TASK DEBUG ===\n");
-    
-    /* Test 1: etat simple */
-    test_current_task_simple();
-    
-    /* Test 2: Creation de tache sans commutation */
-    KINFO("\n--- Test 2: Task creation ---\n");
-    task_t* test = task_create("debug_task", robust_test_func_v2, NULL, 40);
-    if (test) {
-        KINFO("Task created successfully: %s\n", test->name);
-        debug_current_task_detailed("AFTER_TASK_CREATE");
-    }
-    
-    /* Test 3: Commutation securisee */
-    KINFO("\n--- Test 3: Safe context switch ---\n");
-    schedule();
-    
-    KINFO("\n=== MAIN DEBUG COMPLETED ===\n");
-}
 
 /**
  * Lister tous les processus - CORRIGe
@@ -650,12 +459,12 @@ void list_all_processes(void)
     do {
         if (task->type == TASK_TYPE_PROCESS) {
             /* ACCeS CORRECT */
-            KINFO("PID=%u PPID=%u %s (state=%s proc_state=%d)\n",
+            KINFO("PID=%u PPID=%u %s (state=%s proc_state=%s)\n",
                   task->process->pid,
                   task->process->ppid,
                   task->name,
                   task_state_string(task->state),
-                  task->process->state);
+                  proc_state_string(task->process->state));
         } else {
             KINFO("TID=%u %s (type=%d, state=%s)\n",
                   task->task_id,
@@ -719,14 +528,14 @@ void working_child(int level, int dummy) {
         /* L'enfant fait du travail */
         for (int i = 1; i <= 3; i++) {
             KINFO("[CHILD %d] Working... %d/3\n", fork_depth, i);
-            KINFO("[CHILD %d] Printing local variable ... %d\n", local_variable++);
+            KINFO("[CHILD %d] Printing local variable ... %d\n", fork_depth, local_variable++);
 
             task_sleep_ms(500);
             yield();
         }
 
         /* Condition pour fork imbriqué */
-        if (fork_depth < 15) {
+        if (fork_depth < 1) {
             working_child(fork_depth+1,dummy);
         }
         
@@ -747,8 +556,10 @@ void working_child(int level, int dummy) {
         pid_t waited_pid = kernel_waitpid(child_pid, &wait_status, 0);
         
         KINFO("[PARENT %d] *** PARENT WOKE UP ***\n", level);
-        KINFO("[PARENT %d] Child PID=%u exited with status=%d\n", level,
-                waited_pid, wait_status);
+        KINFO("[PARENT %d] Child PID=%d exited with status=%d (hex 0x%08X)\n", level,
+                waited_pid, wait_status, wait_status);
+
+        //debug_print_ctx( &current_task->context);
         
         if (level > 1) {
             sys_exit(55 + level);
@@ -766,59 +577,21 @@ void simple_shell_task(void* arg) {
     (void)arg;
 
     const char* path = "/bin/hello";
+    char* name = "hello";
 
-    task_sleep_ms(10000);
+    task_sleep_ms(10000); 
     yield();
 
     kprintf("Parent PID: %d about to exec\n", sys_getpid());
         
-    char* const argv[] = { "hello", NULL };
+    char* const argv[] = { name, NULL };
     char* const envp[] = { NULL };
-
-    extern void debug_root_directory_reading(void);
-    extern void ramfs_test(void);
-
-    //ramfs_test();
-    //debug_root_directory_reading();
-
-    //ls_read_directory("/bin");
         
     int result = sys_execve(path , argv, envp);
         
     // Si on arrive ici, exec a échoué
     kprintf("Child: exec failed with %d\n", result);
     sys_exit(-1);
-
-    
-/*     pid_t child = sys_fork();
-    
-    if (child == 0) {
-        // Processus enfant - faire l'exec
-        kprintf("Child PID: %d about to exec\n", sys_getpid());
-        
-        char* const argv[] = { "hello", NULL };
-        char* const envp[] = { NULL };
-        
-        int result = sys_execve("/bin/hello", argv, envp);
-        
-        // Si on arrive ici, exec a échoué
-        kprintf("Child: exec failed with %d\n", result);
-        sys_exit(-1);
-        
-    } else if (child > 0) {
-        // Processus parent - attendre l'enfant
-        kprintf("Parent: created child %d\n", child);
-        
-        int status;
-        pid_t waited = kernel_waitpid(child, &status, 0);
-        kprintf("Parent: child %d finished with status %d\n", waited, status);
-        
-    } else {
-        kprintf("Fork failed\n");
-        return;
-    } */
-    
-    //return;
 }
 
 
@@ -906,7 +679,7 @@ void simple_shell_task3(void* arg)
                 
             case 0:
                 KINFO("uptime\n");
-                KINFO("[SHELL] System uptime: %llu ticks\n", get_system_ticks());
+                KINFO("[SHELL] System uptime: %u ticks\n", get_system_ticks());
                 break;
         }
         

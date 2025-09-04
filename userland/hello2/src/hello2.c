@@ -3,20 +3,11 @@
 #include <unistd.h>
 
 int main() {
-    int version = 33 ;
+    int version = 22 ;
 
     printf("Hello from userspace version %d!\n", version);
     printf("My PID: %d\n", getpid());
+    printf("Exiting for now with the value %d\n", version);
 
-    //version = execve(path , argv, envp);
-    
-/*     int child_pid = fork();
-    if (child_pid == 0) {
-        printf("Child process running!\n");
-        exit(42);
-    } else {
-        printf("Parent created child PID %d\n", child_pid);
-    } */
-    
     exit(version);
 }

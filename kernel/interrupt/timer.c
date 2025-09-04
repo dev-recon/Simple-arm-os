@@ -167,7 +167,7 @@ void init_timer(void)
     kprintf("[TIMER] Enabling timer IRQ (30) in GIC...\n");
 
     /* 3. Activer l'IRQ du timer dans le GIC */
-    //gic_enable_irq_kernel(VIRT_TIMER_NS_EL1_IRQ);  // IRQ 30
+    gic_enable_irq_kernel(VIRT_TIMER_NS_EL1_IRQ);  // IRQ 30
     
     /* Programmer une interruption toutes les 10ms */
     uint32_t timeout = timer_freq / 100;  // 10ms

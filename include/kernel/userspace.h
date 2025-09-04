@@ -43,7 +43,7 @@ int copy_to_user_safe(void* to, const void* from, size_t n, size_t max_size);
 bool is_valid_user_ptr(const void* ptr);
 
 char* copy_string_from_user(const char* user_str);
-char** copy_argv_from_user(char* const user_argv[]);
+char** copy_argv_from_user(char* const user_argv[], uint32_t argc);
 void cleanup_exec_args(char* filename, char** argv, char** envp);
 
 int strnlen_user(const char* str, int maxlen);
@@ -55,5 +55,7 @@ void copy_string_array(char** src, char** dest, int count);
 void unmap_user_page(uint32_t* pgdir, uint32_t vaddr);
 
 int setup_user_stack(vm_space_t* vm, char** argv, char** envp);
+
+uint32_t map_user_to_kernel(uint32_t *pgdir, uint32_t vaddr);
 
 #endif   //  _KERNEL_USERSPACE_H_

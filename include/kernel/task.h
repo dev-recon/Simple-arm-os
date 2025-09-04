@@ -5,6 +5,7 @@
 #include <kernel/types.h>
 #include <kernel/memory.h>
 #include <kernel/spinlock.h>
+#include <kernel/kernel.h>
 
 struct signal_state_t;
 struct file;
@@ -112,8 +113,8 @@ typedef enum {
 } task_state_t;
 
 typedef enum {
+    PROC_READY ,
     PROC_RUNNING,
-    PROC_READY,
     PROC_BLOCKED,
     PROC_ZOMBIE,
     PROC_DEAD
@@ -132,14 +133,27 @@ typedef struct task_context {
     uint32_t r7, r8, r9, r10, r11, r12;
     
     /* Registres speciaux */
-    uint32_t sp;            /* Stack Pointer */
-    uint32_t lr;            /* Link Register */
-    uint32_t pc;            /* Program Counter */
-    uint32_t cpsr;          /* Current Program Status Register */
+    uint32_t sp;            // Stack Pointer 
+    uint32_t lr;            // Link Register 
+    uint32_t pc;            // Program Counter 
+    uint32_t cpsr;          // Current Program Status Register 
     
-    uint32_t is_first_run;  /* NOUVEAU: Flag pour premiere execution */
+    uint32_t is_first_run;  // NOUVEAU: Flag pour premiere execution 
     uint32_t ttbr0;
     uint32_t asid;
+
+    uint32_t spsr;             // SPSR_svc 
+    uint32_t returns_to_user;  // has to return to user mode 
+
+    uint32_t usr_r[13];   // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    uint32_t usr_sp;
+    uint32_t usr_lr;      // optionnel si tu l’utilises
+    uint32_t usr_pc;      // point de reprise user
+    uint32_t usr_cpsr;    // en général 0x10
+    uint32_t svc_sp_top;  // haut de pile noyau allouée pour ce task
+    uint32_t svc_sp;      // courant (si tu le tiens à jour)
+    uint32_t svc_lr_saved; // si tu en as besoin
+
 } __attribute__((aligned(8))) task_context_t;
 
 
@@ -281,6 +295,7 @@ uint32_t task_get_priority(task_t* task);
 void task_set_state(task_t* task, task_state_t state);
 task_state_t task_get_state(task_t* task);
 const char* task_state_string(task_state_t state);
+const char* proc_state_string(proc_state_t state);
 
 /* Utilitaires de debug */
 void task_dump_info(task_t* task);          /* Infos d'une tache */
@@ -290,6 +305,7 @@ void task_check_stack_integrity(void);      /* Verification integrite */
 void debug_current_task_detailed(const char* location);
 void task_dump_stacks_detailed(void);                /* Analyse des stacks */
 void debug_all_task_stacks(void);
+void debug_print_ctx(task_context_t *context);
 
 
 /* Statistiques */
@@ -299,7 +315,7 @@ void task_print_stats(void);                /* Statistiques globales */
 /* Fonctions internes de commutation (assembleur) */
 void __task_first_switch_v2(task_context_t* new_ctx);
 void __task_switch_asm(task_context_t* old_ctx, task_context_t* new_ctx);
-
+void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 
 extern task_t* current_task;
 extern task_t* task_list_head;
@@ -308,6 +324,17 @@ extern spinlock_t task_lock;
 extern task_t* idle_task;
 extern task_t* init_process;
 
+
 void add_task_to_list(task_t* task);
+
+extern void get_and_save_usr_context(task_t* t);
+/* ↑ Petite routine appelée à l’entrée SVC pour remplir :
+     t->context.usr_pc   = LR_svc (PC de retour user)
+     t->context.usr_cpsr = SPSR_svc (donc 0x10 typiquement)
+     t->context.usr_sp   = SP_usr   (via cps #SYS puis mov)
+     t->context.usr_r[i] = r0..r12 user (cf. wrapper SVC)
+*/
+
+#define TASK_CONTEXT_OFF = offsetof(task_t, context);
 
 #endif /* _KERNEL_TASK_H */

@@ -268,6 +268,7 @@ int allocate_fd(task_t* process)
     int i;
     
     if (!process || process->type != TASK_TYPE_PROCESS) {
+        KERROR("NULL PROC\n");
         return -EINVAL;
     }
     
@@ -284,6 +285,11 @@ int allocate_fd(task_t* process)
 
 void free_fd(task_t* proc, int fd)
 {
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
+        KERROR("NULL PROC\n");
+        return ;
+    }
+ 
     if (fd >= 0 && fd < MAX_FILES) {
         proc->process->files[fd] = NULL;
     }
@@ -301,6 +307,12 @@ inode_t* get_root_inode(void)
 void close_cloexec_files(task_t* proc)
 {
     int i;
+
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
+        KERROR("NULL PROC\n");
+        return ;
+    }
+
     
     for (i = 0; i < MAX_FILES; i++) {
         if (proc->process->files[i] && (proc->process->files[i]->flags & O_CLOEXEC)) {

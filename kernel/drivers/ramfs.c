@@ -484,7 +484,6 @@ bool init_ramfs(void)
     
     if (!userfs_backup) {
         KERROR("[FS] Failed to allocate backup buffer (%u bytes)\n", backup_size);
-        kheap_stats();  /* Debug heap */
         return false;
     }
     
@@ -501,13 +500,8 @@ bool init_ramfs(void)
 
     ramfs_device.initialized = true;
 
-    kheap_stats();  /* Debug heap */
-
     //load_userfs_from_memory(userfs_backup, userfs_size + 12, ramfs_device.memory_base);
     load_userfs_from_memory(userfs_backup, userfs_size + 12);
-
-
-    kheap_stats();  /* Debug heap */
 
 
     //create_fat32_filesystem_from_userfs();
@@ -623,6 +617,10 @@ static bool ramfs_allocate_memory(void)
     
     /* CORRECTION: Utiliser une adresse fixe s-re */
     ramfs_device.memory_base = (uint8_t*)RAMFS_BASE_ADDR;  /* 1.25GB */
+
+    /* Calculate number of pages needed */
+    uint32_t pages_needed = (RAMFS_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
+    KINFO("  Pages needed: %u (%u KB)\n", pages_needed, pages_needed * 4);
     
     KINFO("OK RAMFS memory at fixed safe address:\n");
     KINFO("  Base address: %p\n", ramfs_device.memory_base);
@@ -631,6 +629,7 @@ static bool ramfs_allocate_memory(void)
     
     /* Clear the memory */
     //memset(ramfs_device.memory_base, 0, RAMFS_SIZE);
+    debug_memory_layout_ramfs();
     
     return true;
 }

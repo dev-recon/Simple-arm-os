@@ -11,6 +11,8 @@
 #include <kernel/process.h>
 
 
+//const uint32_t TASK_CONTEXT_OFF = offsetof(task_t, context);
+
 /* Variables globales du scheduler */
 task_t* current_task = NULL;
 task_t* task_list_head = NULL;
@@ -47,50 +49,82 @@ void debug_context_switch_restore(void);
 void debug_null_old_ctx(void);
 void debug_null_new_ctx(void);
 void debug_context_registers(task_context_t* ctx, const char* moment);
+void debug_task_detailed(task_t *current_task);
+
+void debug_print_ctx(task_context_t *context);
+void debug_return_snapshot(task_context_t *ctx, uint32_t spsr, uint32_t usr_pc, uint32_t tracer);
 
 
 /* Fonctions assembleur externes */
 extern void __task_first_switch_v2(task_context_t* new_ctx);
 extern void __task_switch_asm_debug(task_context_t* old_ctx, task_context_t* new_ctx);
+extern void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 extern void print_system_stats(void);
 
-task_t* set_process_stack(task_t* parent, task_t* child)
+
+// Prototypes utiles
+static inline void *kstack_alloc(size_t sz) { void *p = kmalloc(sz); memset(p, 0, sz); return p; }
+
+// Construit une pile noyau "propre" pour un PROCESS (utile pour from_user=true)
+static void build_clean_kernel_stack(task_t *t)
+{
+    if(!t->stack_base)
+        t->stack_base = kstack_alloc(KERNEL_TASK_STACK_SIZE);
+    t->stack_size = KERNEL_TASK_STACK_SIZE;
+    t->stack_top  = (uint8_t*)t->stack_base + t->stack_size;
+
+    // SP noyau posé près du top (garde 512B pour sentinelles/debug si tu veux)
+    t->context.svc_sp_top = (uint32_t)t->stack_top;
+    t->context.svc_sp     = ((uint32_t)t->stack_top - 512) & ~7u;
+    t->context.sp         = t->context.svc_sp;  // sp = SP_svc dans ton design
+}
+
+
+task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
 {
         /* Allouer une nouvelle pile */
     child->stack_base = kmalloc(KERNEL_TASK_STACK_SIZE);
     if (!child->stack_base) {
         KERROR("task_create_copy: Failed to allocate child stack\n");
-        kfree(child);
+        //kfree(child);
         return NULL;
     }
     
     child->stack_size = KERNEL_TASK_STACK_SIZE;
     child->stack_top = (uint8_t*)child->stack_base + KERNEL_TASK_STACK_SIZE;
+    memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
 
     //bool parent_is_user_process = (parent->context.sp < 0x40000000);  /* Espace user */
-    bool parent_is_user_process = false;  /* FIX IT Espace user */
+    //bool parent_is_user_process = false;  /* FIX IT Espace user */
 
-    KDEBUG("task_create_copy: parent_is_user_process=%s\n", 
-       parent_is_user_process ? "YES" : "NO");
-    KDEBUG("  Parent SP: 0x%08X\n", parent->context.sp);
+    //KDEBUG("task_create_copy: parent_is_user_process=%s\n", 
+    //   from_user ? "YES" : "NO");
+    //KDEBUG("  Parent SP: 0x%08X\n", parent->context.sp);
+    //KDEBUG("  Parent Stack Base: 0x%08X\n", parent->stack_base);
+    //KDEBUG("  Parent Stack Top : 0x%08X\n", parent->stack_top);
 
 
-    if (parent_is_user_process) {
+    if (from_user) {
         /* Pour les processus utilisateur, ne pas copier la stack kernel */
         /* Créer une stack kernel propre pour l'enfant */
         
-        KDEBUG("Creating clean kernel stack for user process child\n");
+        //KDEBUG("Creating clean kernel stack for user process child\n");
         
         /* Stack kernel propre */
-        memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
-        child->context.sp = (uint32_t)child->stack_top - 512;
+        //memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
+        //child->context.sp = (uint32_t)child->stack_top - 512;
+
+        build_clean_kernel_stack(child);
+
+        // Marqueur pour le scheduler/retour en user
+        child->context.returns_to_user = 1;
         
         /* IMPORTANT : Copier l'espace mémoire utilisateur séparément */
         /* Ceci sera fait dans la partie VM space copy */
         
-        KDEBUG("  Child kernel stack: %p - %p\n", 
-            child->stack_base, child->stack_top);
-        KDEBUG("  Child kernel SP: 0x%08X\n", child->context.sp);
+        //KDEBUG("  Child kernel stack: %p - %p\n", 
+        //    child->stack_base, child->stack_top);
+        //KDEBUG("  Child kernel SP: 0x%08X\n", child->context.sp);
     
     } else {
         /*  COPIE DE PILE AVEC AJUSTEMENT SP */
@@ -99,10 +133,10 @@ task_t* set_process_stack(task_t* parent, task_t* child)
             uint32_t parent_stack_top = (uint32_t)parent->stack_base + parent->stack_size;
             uint32_t parent_sp_offset_from_top = parent_stack_top - parent->context.sp;
             
-            //KDEBUG("Parent stack analysis:\n");
-            //KDEBUG("  Parent stack: %p - %p\n", parent->stack_base, (uint8_t*)parent->stack_base + parent->stack_size);
-            //KDEBUG("  Parent SP: 0x%08X\n", parent->context.sp);
-            //KDEBUG("  Offset from top: %u bytes\n", parent_sp_offset_from_top);
+            KDEBUG("Parent stack analysis:\n");
+            KDEBUG("  Parent stack: %p - %p\n", parent->stack_base, (uint8_t*)parent->stack_base + parent->stack_size);
+            KDEBUG("  Parent SP: 0x%08X\n", parent->context.sp);
+            KDEBUG("  Offset from top: %u bytes\n", parent_sp_offset_from_top);
             
             /* Verifier que le SP parent est valide AVANT de copier */
             if (parent->context.sp < (uint32_t)parent->stack_base || 
@@ -149,12 +183,12 @@ task_t* set_process_stack(task_t* parent, task_t* child)
                     }
                 }
 
-                //KDEBUG("Stack address corrections: %u pointers fixed\n", corrections);
+                KDEBUG("Stack address corrections: %u pointers fixed\n", corrections);
                 
-                //KDEBUG("Child stack analysis:\n");
-                //KDEBUG("  Child stack: %p - %p\n", child->stack_base, child->stack_top);
-                //KDEBUG("  Child SP: 0x%08X\n", child->context.sp);
-                //KDEBUG("  Copied stack with SP offset %u from top\n", parent_sp_offset_from_top);
+                KDEBUG("Child stack analysis:\n");
+                KDEBUG("  Child stack: %p - %p\n", child->stack_base, child->stack_top);
+                KDEBUG("  Child SP: 0x%08X\n", child->context.sp);
+                KDEBUG("  Copied stack with SP offset %u from top\n", parent_sp_offset_from_top);
             }
         } else {
             /* Pile propre si parent invalide */
@@ -162,10 +196,17 @@ task_t* set_process_stack(task_t* parent, task_t* child)
             memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
             child->context.sp = (uint32_t)child->stack_top - 512;
         }
+
+        child->context.sp &= ~7; 
+        child->context.svc_sp_top = (uint32_t)child->stack_top;
+        child->context.svc_sp     = child->context.sp;
+        // Ce child reprendra en SVC (kthread), pas de retour user implicite
+        child->context.returns_to_user = 0;
     }
     
     /*  Alignement final */
     child->context.sp &= ~7;  /* Alignement 8-bytes */
+    child->context.svc_sp &= ~7u;
 
     return child;
 
@@ -174,13 +215,14 @@ task_t* set_process_stack(task_t* parent, task_t* child)
 /**
  * Creer une copie d'une tache pour fork()
  */
-task_t* task_create_copy(task_t* parent)
+task_t* task_create_copy(task_t* parent, bool from_user)
 {
     task_t* child;
     char *child_name = NULL;
     
-    if (!parent) {
+    if (!parent || !parent->process) {
         KERROR("task_create_copy: parent NULL\n");
+        KERROR("task_create_copy: Parent NULL Proc\n");
         return NULL;
     }
     
@@ -208,8 +250,15 @@ task_t* task_create_copy(task_t* parent)
     strncpy(child->name, child_name, TASK_NAME_MAX - 1);
     child->name[TASK_NAME_MAX - 1] = '\0';
     
-    set_process_stack(parent,child);
+    if(!set_process_stack(parent,child, from_user))
+        return NULL;
+
+    //KDEBUG("CHILD SP = 0x%08X\n", child->context.sp);
+    //KDEBUG("CHILD Stack Base = 0x%08X\n", child->stack_base);
+    //KDEBUG("CHILD Stack Top = 0x%08X\n", child->stack_top);
         
+    //KDEBUG("CHILD Stack Top = 0x%08X\n", child->stack_top);
+
     /* Copier le contenu de la pile parent */
     //memcpy(child->stack_base, parent->stack_base, KERNEL_TASK_STACK_SIZE);
     
@@ -548,6 +597,8 @@ void task_dump_stacks_detailed(void)
             uint32_t top = (uint32_t)task->stack_top;
             uint32_t sp = task->context.sp;
             uint32_t size = task->stack_size;
+
+            print_cpu_mode();
             
             KINFO("Task %u (%s):\n", task->task_id, task->name);
             KINFO("  Stack range: 0x%08X - 0x%08X (%u bytes)\n", base, top, size);
@@ -590,18 +641,20 @@ void task_dump_stacks_detailed(void)
             KINFO("  SP alignment: %s\n", (sp & 7) ? "KO Misaligned" : "OK Aligned");
             KINFO("  Task Type : %s\n", task_type_to_string(task->type) );
             KINFO("  Task State : %s\n", task_state_string(task->state) );
-            KINFO("  Task Context LR : %p\n", task->context.lr );
-            KINFO("  Task Context PC : %p\n", task->context.pc );
-            KINFO("  Task Context CPSR : %p\n", task->context.cpsr );
-            KINFO("  Task Context IS FIRST RUN : %d\n", task->context.is_first_run );
-            KINFO("  Task Context NEXT : %p\n", task->next );
-            KINFO("  Task Context PREVIOUS : %p\n", task->prev );
-            KINFO("  Task Context Process VM Stack Start : %p\n", task->process->vm->stack_start );
-            KINFO("  Task Context Process VM Heap Start : %p\n", task->process->vm->heap_start );
-            KINFO("  Task Context Process PID : %d\n", task->process->pid );
-            KINFO("  Task Context Process PPID : %d\n", task->process->ppid );
-            KINFO("  Task Context Process WAIT PID : %d\n", task->process->waitpid_pid );
-            KINFO("  Task Context Process WAIT PID CALLER LR : %p\n", task->process->waitpid_caller_lr );
+            KINFO("  Task Context LR : 0x%08X\n", task->context.lr );
+            KINFO("  Task Context PC : 0x%08X\n", task->context.pc );
+            KINFO("  Task Context CPSR : 0x%08X\n", task->context.cpsr );
+            KINFO("  Task Context IS FIRST RUN : %u\n", task->context.is_first_run );
+            KINFO("  Task Context NEXT : 0x%08X\n", (uint32_t)task->next );
+            KINFO("  Task Context PREVIOUS : 0x%08X\n", (uint32_t)task->prev );
+            if(task->process){
+                KINFO("  Task Context Process VM Stack Start : 0x%08X\n", task->process->vm->stack_start );
+                KINFO("  Task Context Process VM Heap Start : 0x%08X\n", task->process->vm->heap_start );
+                KINFO("  Task Context Process PID : %d\n", task->process->pid );
+                KINFO("  Task Context Process PPID : %d\n", task->process->ppid );
+                KINFO("  Task Context Process WAIT PID : %d\n", task->process->waitpid_pid );
+                KINFO("  Task Context Process WAIT PID CALLER LR : 0x%08X\n", task->process->waitpid_caller_lr );
+            }
 
             KINFO("\n");
         }
@@ -696,6 +749,11 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     /* === CONFIGURATION CORRIGeE DU CONTEXTE === */
     setup_task_context(task);
 
+    task->context.svc_sp_top = (uint32_t)task->stack_top;
+    task->context.svc_sp = ((uint32_t)task->stack_top - 512) & ~7u;
+    task->context.sp = task->context.svc_sp;
+
+
     //debug_context_registers(&task->context, "AFTER_setup_task_context");
     
     /* === VALIDATION CRITIQUE === */
@@ -709,8 +767,8 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     /* Ajouter a la liste des taches */
     add_task_to_list(task);
     
-    //KINFO("OK Created task '%s' (ID=%u, priority=%u) - Stack validated\n", 
-    //      task->name, task->task_id, task->priority);
+    KINFO("OK Created task '%s' (ID=%u, priority=%u) - Stack validated\n", 
+          task->name, task->task_id, task->priority);
     
     return task;
 }
@@ -773,11 +831,16 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
             task_destroy(task);
             return NULL;
         }
+
+        task->context.ttbr0 = (uint32_t)task->process->vm->pgdir;
+        task->context.asid = task->process->vm->asid;
         
         /* Initialiser les fichiers */
         memset(task->process->files, 0, sizeof(task->process->files));
 
         init_standard_files(task->process);
+
+
 
         /* Initialiser les champs waitpid */
         task->process->waitpid_pid = 0;
@@ -790,6 +853,10 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         init_process_signals(task);
         
         KINFO("Created process %s (PID=%u)\n", name, task->process->pid);
+        KDEBUG(" SCV STACK TOP = 0x%08X\n", task->context.svc_sp_top);
+        KDEBUG(" SCV STACK SP = 0x%08X\n", task->context.svc_sp);
+        KDEBUG(" TTBR0 = 0x%08X\n", task->context.ttbr0);
+        KDEBUG(" ASID = %u\n", task->context.asid);
     } else {
         // Mettre toute la structure process à zéro
         task->process = NULL; // KERNEL TASK
@@ -933,6 +1000,8 @@ void yield(void)
     //if (current_task && strstr(current_task->name, "child")) {
     //    KDEBUG("[CHILD] yield() called\n");
     //}
+
+    task_sleep_ms(100);  // Pause a bit to avoid race conditions.
     
     schedule();
     
@@ -1060,6 +1129,11 @@ void save_task_context_safe(task_t* task)
     
     /* Debug pour les enfants */
     if (strstr(task->name, "child")) {
+
+        if(task->type == TASK_TYPE_PROCESS){
+            if(task->context.cpsr == 0x10 )
+                return; // User Process forking from userspace
+        }
         uint32_t current_sp;
         __asm__ volatile("mov %0, sp" : "=r"(current_sp));
         //KDEBUG("SAVE child: Current SP=0x%08X, task SP=0x%08X\n", 
@@ -1090,7 +1164,11 @@ void save_task_context_safe(task_t* task)
             task->context.sp = current_sp;
             //KDEBUG("Saved valid SP for %s: 0x%08X\n", task->name, current_sp);
         } else {
-            KERROR("Task %s has invalid SP: 0x%08X\n", task->name, current_sp);
+
+            //task_dump_stacks_detailed();
+            KERROR("Task %s has invalid SP: 0x%08X - context SP = 0x%08X\n", task->name, current_sp, task->context.sp);
+            //panic("Stopping");
+            return;
         }
     }
 }
@@ -1170,7 +1248,7 @@ void schedule(void)
                 next_task->context.pc = (uint32_t)idle_task->entry_point;
         }
 
-        //KDEBUG("Next task: %s (ID=%u)\n", next_task->name, next_task->task_id);
+        //KDEBUG("Next task: %s (ID=%u) is doing is calling __task_first_switch_v2\n", next_task->name, next_task->task_id);
         //KDEBUG("Task stack_base: %p\n", next_task->stack_base);
         //KDEBUG("Task stack_top:  %p\n", next_task->stack_top);
         //KDEBUG("Task stack_size: %u bytes\n", next_task->stack_size);
@@ -1182,7 +1260,7 @@ void schedule(void)
         spin_unlock(&task_lock);
 
         // *** Commutation speciale : pas de sauvegarde pour zombie ***        
-        __task_first_switch_v2(&next_task->context);
+        __task_switch(NULL, &next_task->context);
 
         KERROR("\n\n======================================= NEVER COME BACK HERE ==================\n");
 
@@ -1295,7 +1373,17 @@ void schedule(void)
     
     if (next_task->context.sp < (uint32_t)next_task->stack_base || 
         next_task->context.sp >= (uint32_t)next_task->stack_top) {
-        KERROR("SCHED: next_task SP out of range!\n");
+        KERROR("SCHED: next_task %s SP out of range!\n", next_task->name);
+        KERROR("SCHED: next_task SP 0x%08X\n", next_task->context.sp);
+        KERROR("SCHED: next_task Stack Base 0x%08X\n", (uint32_t)next_task->stack_base);
+        KERROR("SCHED: next_task Stack Top 0x%08X\n", (uint32_t)next_task->stack_top);
+        KERROR("SCHED: old_task %s !\n", old_task->name);
+        KERROR("SCHED: old_task SP 0x%08X\n", old_task->context.sp);
+        KERROR("SCHED: old_task Stack Base 0x%08X\n", (uint32_t)old_task->stack_base);
+        KERROR("SCHED: old_task Stack Top 0x%08X\n", (uint32_t)old_task->stack_top);
+
+
+        debug_print_ctx(&next_task->context);
 
         restore_interrupts(irq_flags);
         return;
@@ -1308,14 +1396,34 @@ void schedule(void)
     next_task->state = TASK_RUNNING;
     next_task->switch_count++;
     current_task = next_task;
-    
-    //KDEBUG("SCHED: States updated, about to call __task_switch_asm R0= %p, R1= %p\n", &old_task->context,&next_task->context);
+
+    #if(0)
+    {
+        //KDEBUG("SCHED: States updated, about to call __task_switch R0= %p, R1= %p\n", &old_task->context,&next_task->context);
+        //KDEBUG("SCHED: States updated, Old task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",old_task->name, old_task->context.is_first_run, old_task->context.cpsr ,old_task->context.returns_to_user);
+        //KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
+        //KDEBUG("SCHED: States updated, New task %s svc_sp_top = 0x%08X, svc_sp = 0x%08X\n",next_task->name, next_task->context.svc_sp_top, next_task->context.svc_sp);
+        //KDEBUG("SCHED: States updated, New task %s TTBR = 0x%08X, ASID = %d\n",next_task->name, next_task->context.ttbr0, next_task->context.asid);
+ 
+        if(strstr(old_task->name,"shell")){
+            KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
+            debug_print_ctx(&old_task->context);
+        }
+        if(strstr(next_task->name,"shell")) {
+            KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
+            debug_print_ctx(&next_task->context);
+        }
+    }
+    #endif
+    //debug_task_detailed(old_task);
+    //debug_task_detailed(next_task);
 
     //debug_context_registers(&old_task->context, "BEFORE___task_switch_asm_debug__old_task->context");
     //debug_context_registers(&next_task->context, "BEFORE___task_switch_asm_debug__next_task->context");
     
     /* === POINT CRITIQUE === */
-    __task_switch_asm_debug(&old_task->context, &next_task->context);
+    __task_switch(&old_task->context, &next_task->context);
+    //__task_switch_asm_debug(&old_task->context, &next_task->context);
 
     //KDEBUG("TASK SWITCH SUCCESSFULLLLLLLL ============================================================\n");
     
@@ -1438,7 +1546,8 @@ void sched_start(void)
     
     /* Premiere commutation unique */
     //print_system_stats();
-    __task_first_switch_v2(&current_task->context);
+    //__task_first_switch_v2(&current_task->context);
+    __task_switch(NULL, &current_task->context);
     
     /* On ne devrait jamais arriver ici */
     KERROR("FATAL: Returned from sched_start!\n");
@@ -1719,6 +1828,19 @@ const char* task_state_string(task_state_t state)
         case TASK_BLOCKED: return "BLOCKED";
         case TASK_ZOMBIE: return "ZOMBIE";
         case TASK_TERMINATED: return "TERMINATED";
+        default: return "UNKNOWN";
+    }
+}
+
+
+const char* proc_state_string(proc_state_t state)
+{
+    switch (state) {
+        case PROC_READY: return "READY";
+        case PROC_RUNNING: return "RUNNING";
+        case PROC_BLOCKED: return "BLOCKED";
+        case PROC_ZOMBIE: return "ZOMBIE";
+        case PROC_DEAD: return "DEAD";
         default: return "UNKNOWN";
     }
 }
@@ -2011,6 +2133,72 @@ void debug_null_new_ctx(void)
     KERROR("ASM: NULL new_ctx - CRITICAL ERROR!\n");
 }
 
+
+
+/* 1. DIAGNOSTIC: Ajouter debug detaille */
+void debug_task_detailed(task_t *current_task)
+{
+    KDEBUG("  current_task pointer: %p\n", current_task);
+    
+    if (!current_task) {
+        KERROR("  KO current_task is NULL!\n");
+        return;
+    }
+    
+    /* Verifier que le pointeur est dans une zone valide */
+    if ((uint32_t)current_task < 0x40000000 || (uint32_t)current_task > 0x50000000) {
+        KERROR("  KO current_task pointer invalid: %p\n", current_task);
+        return;
+    }
+    
+    KDEBUG("  ***************************************************************\n");
+    KDEBUG("  Task name: %s\n", current_task->name);
+    KDEBUG("  Task ID: %u\n", current_task->task_id);
+    KDEBUG("  ***************************************************************\n");
+    KDEBUG("  KERNEL STACK ---\n");
+    KDEBUG("  Context SP: 0x%08X\n", current_task->context.sp);
+    KDEBUG("  Stack base: 0x%08X\n", (uint32_t)current_task->stack_base);
+    KDEBUG("  Stack top:  0x%08X\n", (uint32_t)current_task->stack_top);
+    KDEBUG("  is_first_run: %u\n", current_task->context.is_first_run);
+    KDEBUG("  --------------------------\n");
+    
+    /* Verification des limites de stack */
+    uint32_t sp = current_task->context.sp;
+    uint32_t base = (uint32_t)current_task->stack_base;
+    uint32_t top = (uint32_t)current_task->stack_top;
+    
+    if (sp >= base && sp < top) {
+        KDEBUG("  OK KERNEL SP in valid range\n");
+    } else {
+        KERROR("  KO KERNEL SP OUT OF RANGE! (SP=0x%08X, range=0x%08X-0x%08X)\n", 
+               sp, base, top);
+    }
+
+    if(current_task->process)
+    {
+        KDEBUG("  USER STACK ---\n");
+        KDEBUG("  User SP: 0x%08X\n", current_task->context.usr_sp);
+        KDEBUG("  User Stack base: 0x%08X\n", (uint32_t)current_task->process->vm->stack_start);
+        KDEBUG("  User Stack top:  0x%08X\n", (uint32_t)current_task->process->vm->stack_start + USER_STACK_SIZE);
+        KDEBUG("  --------------------------\n");
+        
+        /* Verification des limites de stack */
+        sp = current_task->context.usr_sp;
+        base = (uint32_t)current_task->process->vm->stack_start;
+        top = (uint32_t)current_task->process->vm->stack_start + USER_STACK_SIZE;
+        
+        if (sp >= base && sp < top) {
+            KDEBUG("  OK USER SP in valid range\n");
+        } else {
+            KERROR("  KO USER SP OUT OF RANGE! (SP=0x%08X, range=0x%08X-0x%08X)\n", 
+                sp, base, top);
+        }
+
+    }
+
+}
+
+
 /* 1. DIAGNOSTIC: Ajouter debug detaille */
 void debug_current_task_detailed(const char* location)
 {
@@ -2060,42 +2248,42 @@ void debug_context_registers(task_context_t* ctx, const char* moment)
     KDEBUG("  is_first: %u\n", ctx->is_first_run);
 }
 
+__attribute__((noinline))
 void debug_print_sp()
 {
     //uart_puts("\n\n[DEBUG_SP] =============================\n\n");
-    uint32_t r0_val, r1_val, sp_val, pc_val, lr_val;
+    uint32_t r0_val;
+    uint32_t r3_val;
     
-    __asm__ volatile(
-        /* Sauvegarder tous les registres dans les variables locales */
-        "mov %0, r0\n"          /* Sauvegarder r0 */
-        "mov %1, r1\n"          /* Sauvegarder r1 */
-        "mov %2, sp\n"          /* Sauvegarder sp */
-        "mov %3, pc\n"          /* Sauvegarder pc (approximatif) */
-        "mov %4, lr\n"          /* Sauvegarder lr */
-        : "=r"(r0_val), "=r"(r1_val), "=r"(sp_val), "=r"(pc_val), "=r"(lr_val)
+     __asm__ volatile(
+        // Sauvegarder tous les registres dans les variables locales 
+        "mov %0, r0\n"          // Charger r0 
+        "mov %1, r3\n"          // Charger r0 
+        : "=r"(r0_val), "=r"(r3_val)
         :
-        : /* Pas de registres clobbered car on les sauvegarde explicitement */
+        : "r3"          // on prévient le compilateur que r3 est touché par l'asm
+    ); 
+
+/*     __asm__ volatile(
+        // Sauvegarder tous les registres dans les variables locales 
+        "mov %0, r0\n"          // Charger r0 
+        : "=r"(r0_val)
+        :
+        : // Pas de registres clobbered car on les sauvegarde explicitement 
     );
+ */
+
+    debug_print_ctx((task_context_t *)r0_val);
     
     /* Maintenant afficher avec kprintf (les registres originaux sont intacts) */
     uart_puts("\n\nRegisters __task_switch_asm_debug:\n");
-    uart_puts("  r0: ");
+    uart_puts("  &next_task->context: ");
     uart_put_hex(r0_val);
-    uart_puts("\n  r1: ");
-    uart_put_hex(r1_val);
-    uart_puts("\n  sp: ");
-    uart_put_hex(sp_val);
-    uart_puts("\n  pc: ");
-    uart_put_hex(pc_val);
-    uart_puts("\n  lr: ");
-    uart_put_hex(lr_val);
-    uart_puts("\n\n");
+    uart_puts("\n");
+    uart_puts("  Traceur R3: ");
+    uart_put_hex(r3_val);
+    uart_puts("\n");
 
-   //kprintf("  r1: 0x%08X\n", r1_val);
-    //kprintf("  sp: 0x%08X\n", sp_val);
-    //kprintf("  pc: 0x%08X (approx)\n", pc_val);
-    //kprintf("  lr: 0x%08X\n", lr_val);
-    //uart_puts("\n\n");
 }
 
 void debug_print_sp2()
@@ -2174,6 +2362,218 @@ void debug_print_sp3()
     //uart_puts("\n\n");
 }
 
+void debug_print_ctx(task_context_t *context)
+{
+    if(!context)
+        KWARN("debug_print_ctx: Input task is NULL\n");
+
+    // r0.         0,
+    // r1          4,
+    // r2          8,
+    // r3          12
+    // r4          16
+    // r5          20
+    // r6          24
+    // r7          28
+    // r8          32
+    // r9          36
+    // r10         40
+    // r11         44
+    // r12         48
+    
+    /* Registres speciaux */
+    // sp          52       // Stack Pointer 
+    // lr          56       // Link Register 
+    // pc;         60       // Program Counter 
+    // cpsr;       64       // Current Program Status Register 
+    
+    // is_first_run; 68.     // NOUVEAU: Flag pour premiere execution 
+    // ttbr0;      72
+    // asid;       76
+
+    // spsr;       80        // SPSR_svc 
+    // returns_to_user;  84  // has to return to user mode 
+
+    // usr_r[0];     88      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[1];     92      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[2];     96      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[3];     100      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[4];     104      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[5];     108      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[6];     112      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[7];     116      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[8];     120      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[9];     124      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[10];    128      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[11];    132      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[12];    136      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_sp;       140
+    // usr_lr;       144         // optionnel si tu l’utilises
+    // usr_pc;       148         // point de reprise user
+    // usr_cpsr;     152        // en général 0x10
+    // svc_sp_top;   156        // haut de pile noyau allouée pour ce task
+    // svc_sp;       160        // courant (si tu le tiens à jour)
+    // svc_lr_saved; 164        // si tu en as besoin
+
+    
+    /* Maintenant afficher avec kprintf (les registres originaux sont intacts) */
+    kprintf("Current Task (0x%08X) saved Context:\n", (uint32_t)context);
+    kprintf("  r0: 0x%08X\n", context->r0);
+    kprintf("  r1: 0x%08X\n", context->r1);
+    kprintf("  r2: 0x%08X\n", context->r2);
+    kprintf("  r3: 0x%08X\n", context->r3);
+    kprintf("  r4: 0x%08X\n", context->r4);
+    kprintf("  r5: 0x%08X\n", context->r5);
+    kprintf("  r6: 0x%08X\n", context->r6);
+    kprintf("  r7: 0x%08X\n", context->r7);
+    kprintf("  r8: 0x%08X\n", context->r8);
+    kprintf("  r9: 0x%08X\n", context->r9);
+    kprintf("  r10: 0x%08X\n", context->r10);
+    kprintf("  r11: 0x%08X\n", context->r11);
+    kprintf("  r12: 0x%08X\n", context->r12);
+    kprintf("  SP: 0x%08X\n", context->sp);
+    kprintf("  LR: 0x%08X\n", context->lr);
+    kprintf("  PC: 0x%08X\n", context->pc);
+    kprintf("  CPSR: 0x%02X\n", context->cpsr /*& 0x1F*/);
+    kprintf("  IS FIRST RUN: 0x%01X\n", context->is_first_run);
+    kprintf("  TTBR0: 0x%08X\n", context->ttbr0);
+    kprintf("  ASID: 0x%03X\n", context->asid);
+    kprintf("  SPSR: 0x%02X\n", context->spsr & 0x1F);
+    kprintf("  RETURNS TO USER: 0x%01X\n", context->returns_to_user);
+
+    for(int i = 0 ; i < 13 ; i++)
+    {
+        kprintf("  usr_r[%d]: 0x%08X\n", i, context->usr_r[i]);
+    }
+
+    kprintf("  USR SP: 0x%08X\n", context->usr_sp);
+    kprintf("  USR LR: 0x%08X\n", context->usr_lr);
+    kprintf("  USR PC: 0x%08X\n", context->usr_pc);
+    kprintf("  USR CPSR: 0x%02X\n", context->usr_cpsr /*& 0x1F*/);
+
+    kprintf("  SVC SP TOP: 0x%08X\n", context->svc_sp_top);
+    kprintf("  SVC SP: 0x%08X\n", context->svc_sp);
+    kprintf("  SVC LR SAVED : 0x%08X\n", context->svc_lr_saved);
+}
+
+__attribute__((noinline))
+void debug_return_snapshot(task_context_t *ctx, uint32_t spsr, uint32_t usr_pc, uint32_t tracer) {
+    uart_puts("\n-- Return-to-user snapshot --\n");
+    uart_puts("ctx="); uart_put_hex((uint32_t)ctx);
+    uart_puts(" tracer="); uart_put_hex(tracer); uart_puts("\n");
+    uart_puts("SPSR="); uart_put_hex(spsr);
+    uart_puts(" (mode="); uart_put_hex(spsr & 0x1F);
+    uart_puts(" T="); uart_put_dec((spsr>>5)&1); uart_puts(")\n");
+    uart_puts("LR_svc(next) = "); uart_put_hex(usr_pc); uart_puts("\n");
+}
+
+
+void debug_print_task(task_t *task_in)
+{
+    task_t *task = NULL;
+    if(task_in)
+        task = task_in;
+    else
+        task = get_current_task();
+
+    if(!task)
+        KWARN("debug_print_ctx: Input task is NULL\n");
+
+    // r0.         0,
+    // r1          4,
+    // r2          8,
+    // r3          12
+    // r4          16
+    // r5          20
+    // r6          24
+    // r7          28
+    // r8          32
+    // r9          36
+    // r10         40
+    // r11         44
+    // r12         48
+    
+    /* Registres speciaux */
+    // sp          52       // Stack Pointer 
+    // lr          56       // Link Register 
+    // pc;         60       // Program Counter 
+    // cpsr;       64       // Current Program Status Register 
+    
+    // is_first_run; 68.     // NOUVEAU: Flag pour premiere execution 
+    // ttbr0;      72
+    // asid;       76
+
+    // spsr;       80        // SPSR_svc 
+    // returns_to_user;  84  // has to return to user mode 
+
+    // usr_r[0];     88      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[1];     92      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[2];     96      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[3];     100      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[4];     104      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[5];     108      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[6];     112      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[7];     116      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[8];     120      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[9];     124      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[10];    128      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[11];    132      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[12];    136      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_sp;       140
+    // usr_lr;       144         // optionnel si tu l’utilises
+    // usr_pc;       148         // point de reprise user
+    // usr_cpsr;     152        // en général 0x10
+    // svc_sp_top;   156        // haut de pile noyau allouée pour ce task
+    // svc_sp;       160        // courant (si tu le tiens à jour)
+    // svc_lr_saved; 164        // si tu en as besoin
+
+    
+    /* Maintenant afficher avec kprintf (les registres originaux sont intacts) */
+    kprintf("Current Task (%s) saved Context:\n", task->name);
+    kprintf("  r0: 0x%08X\n", task->context.r0);
+    kprintf("  r1: 0x%08X\n", task->context.r1);
+    kprintf("  r2: 0x%08X\n", task->context.r2);
+    kprintf("  r3: 0x%08X\n", task->context.r3);
+    kprintf("  r4: 0x%08X\n", task->context.r4);
+    kprintf("  r5: 0x%08X\n", task->context.r5);
+    kprintf("  r6: 0x%08X\n", task->context.r6);
+    kprintf("  r7: 0x%08X\n", task->context.r7);
+    kprintf("  r8: 0x%08X\n", task->context.r8);
+    kprintf("  r9: 0x%08X\n", task->context.r9);
+    kprintf("  r10: 0x%08X\n", task->context.r10);
+    kprintf("  r11: 0x%08X\n", task->context.r11);
+    kprintf("  r12: 0x%08X\n", task->context.r12);
+    kprintf("  SP: 0x%08X\n", task->context.sp);
+    kprintf("  LR: 0x%08X\n", task->context.lr);
+    kprintf("  PC: 0x%08X\n", task->context.pc);
+    kprintf("  CPSR: 0x%02X\n", task->context.cpsr & 0x1F);
+    kprintf("  IS FIRST RUN: 0x%01X\n", task->context.is_first_run);
+    kprintf("  TTBR0: 0x%08X\n", task->context.ttbr0);
+    kprintf("  ASID: 0x%03X\n", task->context.asid);
+    kprintf("  SPSR: 0x%02X\n", task->context.spsr & 0x1F);
+    kprintf("  RETURNS TO USER: 0x%01X\n", task->context.returns_to_user);
+
+    for(int i = 0 ; i < 13 ; i++)
+    {
+        kprintf("  usr_r[%d]: 0x%08X\n", i, task->context.usr_r[i]);
+    }
+
+    kprintf("  USR SP: 0x%08X\n", task->context.usr_sp);
+    kprintf("  USR LR: 0x%08X\n", task->context.usr_lr);
+    kprintf("  USR PC: 0x%08X\n", task->context.usr_pc);
+    kprintf("  USR CPSR: 0x%02X\n", task->context.usr_cpsr & 0x1F);
+
+    kprintf("  SVC SP TOP: 0x%08X\n", task->context.svc_sp_top);
+    kprintf("  SVC SP: 0x%08X\n", task->context.svc_sp);
+    kprintf("  SVC LR SAVED : 0x%08X\n", task->context.svc_lr_saved);
+ 
+   //kprintf("  r1: 0x%08X\n", r1_val);
+    //kprintf("  sp: 0x%08X\n", sp_val);
+    //kprintf("  pc: 0x%08X (approx)\n", pc_val);
+    //kprintf("  lr: 0x%08X\n", lr_val);
+    //uart_puts("\n\n");
+}
+
 /**
  * Ajouter un processus a la queue des prets - utilisant vos fonctions
  */
@@ -2243,7 +2643,7 @@ void remove_from_ready_queue(task_t* task)
  */
 void destroy_zombie_process(task_t* zombie)
 {
-    if (!zombie) {
+    if (!zombie || !zombie->process) {
         KERROR("destroy_zombie_process: NULL zombie\n");
         return;
     }

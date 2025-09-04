@@ -3,6 +3,8 @@
 #include <asm/mmu.h>
 #include <kernel/memory.h>
 #include <kernel/kprintf.h>
+#include <kernel/task.h>
+#include <kernel/process.h>
 
 
 
@@ -83,13 +85,32 @@ bool is_valid_user_range(const void* ptr, size_t size)
     }
     
     /* Verifier que toute la plage est dans l'espace utilisateur */
-    if (start < USER_SPACE_START || end > USER_SPACE_END) {
-        return false;
-    }
+    //if (start < USER_SPACE_START || end > USER_SPACE_END) {
+    //    return false;
+    //}
     
     return true;
 }
 
+uint32_t map_user_to_kernel(uint32_t *pgdir, uint32_t vaddr){
+
+    //uint32_t user_addr = vaddr;
+    //uint32_t user_page = user_addr & ~0xFFF;
+    //uint32_t offset = user_addr & 0xFFF;
+
+    //KDEBUG("map_user_to_kernel --------------------------\n");
+
+    uint32_t phys_addr = get_phys_addr_from_pgdir(pgdir, vaddr);
+
+    //KDEBUG("after get_phys_addr_from_pgdir ---- Physical Address 0x%08x ---- PGDIR = 0x%08X-------\n", phys_addr, pgdir);
+
+    uint32_t user_page = map_temp_page(phys_addr);
+
+    //KDEBUG("after map_temp_user_page ---- 0x%08x ----------------\n", user_page);
+
+
+    return user_page;
+}
 
 
 /* Helper functions */
@@ -118,19 +139,28 @@ int copy_to_user(void* to, const void* from, size_t n)
     if ((uint32_t)to + n < (uint32_t)to) {
         return -1;  /* Overflow */
     }
-    
+
     /* Copie securisee */
     memcpy(to, from, n);
+
+    //hexdump((void *)to, 32);
     return 0;
 }
 
+
 int copy_from_user(void* to, const void* from, size_t n)
 {
+    task_t* task = get_current_task();
+    uint32_t* pgdir = task->process->vm->pgdir;
+
+    //KDEBUG("copy_from_user: Starting to copy...\n");
+
+
     /* Verifications de securite de base */
-    if (!to || !from || n == 0) {
+    if (!to || !from || n == 0 || !pgdir) {
         return -1;  /* Pointeurs invalides */
     }
-    
+   
     /* Verifier que 'from' est dans l'espace utilisateur */
     if (!is_valid_user_range(from, n)) {
         KERROR("[COPY] ERROR: copy_from_user source 0x%08X+%u not in user space\n", 
@@ -149,9 +179,34 @@ int copy_from_user(void* to, const void* from, size_t n)
     if ((uint32_t)from + n < (uint32_t)from) {
         return -1;  /* Overflow */
     }
+
+    uint32_t offset = (uint32_t)from & 0xFFF;
+
+    //KDEBUG("copy_from_user: All controls OK mapping address to kernel...\n");
+    
+
+    uint32_t *temp_page = (uint32_t *)map_user_to_kernel(pgdir,(uint32_t)from);
+
+    //KDEBUG("current pgdir = 0x%08X\n", pgdir);
+    //KDEBUG("temp_page = 0x%08X\n", temp_page);
+    //KDEBUG("offset = 0x%08X\n", offset);
+
+    //hexdump( (void *)((uint32_t)temp_page + offset) , 32);
+
+    char *test_str = (char *)((uint32_t)temp_page + offset);
+
+    //KDEBUG("test_str = %s of len = %d\n", test_str, strlen(test_str));
     
     /* Copie securisee */
-    memcpy(to, from, n);
+    memcpy(to, (void *)test_str, strlen(test_str));
+    //memcpy(to, (void *)test_str, strlen(test_str));
+
+
+    //KDEBUG("TO = %s of len = %d\n", to, strlen(to));
+
+
+    unmap_temp_page(temp_page);
+
     return 0;
 }
 
@@ -207,28 +262,35 @@ char* copy_string_from_user(const char* user_str)
 {
     int len;
     char* kernel_str;
+
     
     if (!user_str || !is_valid_user_ptr(user_str)) return NULL;
     
-    //KDEBUG("JE SUIS ICI ===============================\n");
     /* Calculate length with limit */
-    len = strnlen_user(user_str, 4096);
+    //len = strnlen_user(user_str, 4096);
+    len = 256;
     if (len < 0) return NULL;
     
     kernel_str = kmalloc(len + 1);
     if (!kernel_str) return NULL;
+
+    //KDEBUG("copy_string_from_user: About to copy from user...\n");
     
-    if (copy_from_user(kernel_str, user_str, len + 1) < 0) {
+    if (copy_from_user(kernel_str, user_str, len ) < 0) {
         kfree(kernel_str);
         return NULL;
     }
+
+    kernel_str[len]='\0';
+
+    //KDEBUG("kernel_str = *%s*\n", kernel_str);
     
     return kernel_str;
 }
 
-char** copy_argv_from_user(char* const user_argv[])
+char** copy_argv_from_user(char* const user_argv[], uint32_t argc)
 {
-    int argc = 0;
+    //int argc = 0;
     char** kernel_argv;
     int i;
     int j;
@@ -236,22 +298,32 @@ char** copy_argv_from_user(char* const user_argv[])
     if (!user_argv) return NULL;
     
     /* Count arguments */
-    while (argc < 32 && user_argv[argc]) {
-        argc++;
-    }
-    
+    //while (argc < 32 && user_argv[argc]) {
+    //    argc++;
+    //}
+
     kernel_argv = kmalloc((argc + 1) * sizeof(char*));
     if (!kernel_argv) return NULL;
     
-    for (i = 0; i < argc; i++) {
-        kernel_argv[i] = copy_string_from_user(user_argv[i]);
-        if (!kernel_argv[i]) {
-            /* Cleanup on error */
-            for (j = 0; j < i; j++) {
-                kfree(kernel_argv[j]);
+    for (i = 0; i < (int)argc; i++) {
+        if(user_argv[i])
+        {
+            kernel_argv[i] = copy_string_from_user(user_argv[i]);
+            if (!kernel_argv[i]) {
+
+                break;
+                 // Cleanup on error 
+                for (j = 0; j < i; j++) {
+                    kfree(kernel_argv[j]);
+                }
+                kfree(kernel_argv);
+                return NULL; 
             }
-            kfree(kernel_argv);
-            return NULL;
+        }
+        else
+        {
+            kfree(kernel_argv[i]);
+            kernel_argv[i] = NULL;
         }
     }
     kernel_argv[argc] = NULL;
@@ -291,12 +363,32 @@ int count_strings(char** strings)
     return count;
 }
 
-char** setup_stack_strings(char** strings, char** stack_ptr)
+char** setup_stack_strings(char** strings, char** stack_ptr, int count)
 {
-    /* Stub implementation */
-    (void)strings;
-    (void)stack_ptr;
-    return NULL;
+    if (!strings) return NULL;
+    
+    if (count == 0) return NULL;
+    
+    // Allouer tableau pour les pointeurs
+    char** result = kmalloc(count * sizeof(char*));
+    if (!result) return NULL;
+    
+    // Copier chaque string sur la pile
+    for (int i = 0; i < count; i++) {
+        if (!strings[i]) {
+            result[i] = NULL;
+            continue;
+        }
+        
+        int len = strlen(strings[i]) + 1;
+        *stack_ptr -= len;  // Reculer stack_ptr
+        
+        // Copier la string
+        strcpy(*stack_ptr, strings[i]);
+        result[i] = *stack_ptr;  // Pointeur vers la string sur la pile
+    }
+    
+    return result;
 }
 
 void copy_string_array(char** src, char** dest, int count)
@@ -379,38 +471,59 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
     
     stack_vma = create_vma(vm, stack_start, stack_size, VMA_READ | VMA_WRITE);
     if (!stack_vma) return -1;
+
+    //KDEBUG("After create VMA USER STACK - Start = 0x%08X, Top = 0x%08X, Size = %u MB\n", stack_start, stack_start + stack_size, stack_size/1024/1024);
     
     /* Allocate page for top of stack */
-    stack_page = allocate_physical_page();
+    stack_page = allocate_user_page();
     if (!stack_page) return -1;
     
+    //KDEBUG("After allocate_physical_page\n");
+
     //stack_top_page = USER_STACK_TOP - PAGE_SIZE;
-    stack_top_page = USER_STACK_TOP & ~0xFFF; 
-    map_user_page(vm->pgdir, stack_top_page, (uint32_t)stack_page, VMA_READ | VMA_WRITE);
+    stack_top_page = (USER_STACK_TOP - PAGE_SIZE) & ~0xFFF; 
+    map_user_page(vm->pgdir, stack_top_page, (uint32_t)stack_page, VMA_READ | VMA_WRITE, vm->asid);
+
+    //KDEBUG("After map_user_page\n");
     
     /* Map temporarily for setup */
-    temp_stack = map_temp_page((uint32_t)stack_page);
+    //temp_stack = map_temp_page((uint32_t)stack_page);
+    temp_stack = (uint32_t)stack_page;
     stack_ptr = (char*)(temp_stack + PAGE_SIZE - 4);
+
+
+    //KDEBUG("After map_temp_page\n");
     
     /* Count arguments */
     argc = count_strings(argv);
     envc = count_strings(envp);
+
+    //KDEBUG("After count_strings\n");    
     
     /* Setup stack layout */
-    stack_argv = setup_stack_strings(argv, &stack_ptr);
-    stack_envp = setup_stack_strings(envp, &stack_ptr);
+    stack_argv = setup_stack_strings(argv, &stack_ptr, argc);
+    stack_envp = setup_stack_strings(envp, &stack_ptr, envc);
+
+    //KDEBUG("After setup_stack_strings\n");     
     
     /* Align stack */
     stack_ptr = (char*)((uint32_t)stack_ptr & ~7);
     
     /* Build arrays */
     stack_ptr -= (envc + 1) * sizeof(char*);
+    //KDEBUG("New Stack PTR = 0x%08X\n", stack_ptr);  
     envp_array = (char**)stack_ptr;
+    //KDEBUG("New envp_array PTR = 0x%08X, stack_envp=0x%08X, envc=%d\n", envp_array, stack_envp, envc); 
     copy_string_array(stack_envp, envp_array, envc);
+    //KDEBUG("After copy_string_array envp\n");  
     
     stack_ptr -= (argc + 1) * sizeof(char*);
+    //KDEBUG("New Stack PTR = 0x%08X\n", stack_ptr);     
     argv_array = (char**)stack_ptr;
+    //KDEBUG("New argv_array PTR = 0x%08X, stack_argv=0x%08X, argc=%d\n", argv_array, stack_argv, argc); 
     copy_string_array(stack_argv, argv_array, argc);
+    //KDEBUG("After copy_string_array argv\n");  
+
     
     /* argc */
     stack_ptr -= sizeof(int);
@@ -428,7 +541,7 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
 
     /* Vérifier que final_sp est dans la page mappée */
     if (final_sp >= stack_top_page && final_sp < stack_top_page + PAGE_SIZE) {
-        //KDEBUG("  Final SP is in mapped page ✓\n");
+        //KDEBUG("  Final SP is in mapped page \n");
     } else {
         KERROR("  Final SP is OUTSIDE mapped page!\n");
         KERROR("    final_sp: 0x%08X\n", final_sp);
@@ -439,6 +552,7 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
     //KDEBUG("  USER_STACK_TOP: 0x%08X\n", USER_STACK_TOP);
     //KDEBUG("  stack_top_page: 0x%08X\n", stack_top_page);
     //KDEBUG("  Page range: 0x%08X - 0x%08X\n", stack_top_page, stack_top_page + PAGE_SIZE - 1);
+    //KDEBUG("  Stack Pointer: 0x%08X \n", vm->stack_start);
 
     /* Vérifier les adresses critiques */
 /*     uint32_t test_addresses[] = {
@@ -456,7 +570,7 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
 
     KDEBUG("  Final SP: 0x%08X\n", final_sp); */
     
-    unmap_temp_page((void*)temp_stack);
+    //unmap_temp_page((void*)temp_stack);
     
     kfree(stack_argv);
     kfree(stack_envp);

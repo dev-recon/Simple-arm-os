@@ -7,6 +7,8 @@
 
 #define USE_RAMFS 1
 
+uint32_t get_kernel_memory_size(void);
+
 /* === INFORMATIONS DU LINKER SCRIPT === */
 
 /* Symboles exportes par le linker script pour machine virt */
@@ -25,6 +27,10 @@ extern uint32_t __data_start;      /* Debut section .data */
 extern uint32_t __data_end;        /* Fin section .data */
 extern uint32_t __bss_start;       /* Debut section .bss */
 extern uint32_t __bss_end;         /* Fin section .bss */
+
+//extern uint32_t __mmu_tables_start;
+//extern uint32_t __mmu_tables_end;
+//extern uint32_t __mmu_size;
 
 /* Pile et heap kernel */
 extern uint32_t __stack_bottom;    /* Debut de la pile kernel */
@@ -45,7 +51,7 @@ extern uint32_t __stack_svc_top;
  * CONSTANTES HARDWARE MACHINE VIRT
  * ======================================================================== */
 #define VIRT_RAM_START          0x40000000u                    /* Debut RAM physique */
-#define VIRT_RAM_SIZE           (1024*1024*1024u)        /* 4 GB */
+#define VIRT_RAM_SIZE           get_kernel_memory_size()        /* 4 GB */
 #define VIRT_RAM_END            (VIRT_RAM_START + VIRT_RAM_SIZE)
 
 /* Memory map machine virt */
@@ -240,6 +246,7 @@ extern uint32_t __stack_svc_top;
 #define USER_SPACE_START        0x00010000u                    /* Debut espace utilisateur */
 #define USER_STACK_TOP          0x3F000000u                    /* Pile utilisateur (avant kernel) */
 #define USER_STACK_SIZE         (8*1024*1024u)                 /* 8MB de pile */
+//#define USER_STACK_SIZE         (8*1024u)                       /* 8KB de pile */
 #define USER_STACK_BOTTOM       (USER_STACK_TOP - USER_STACK_SIZE)  /* 0x37000000 */
 #define USER_HEAP_START         0x08000000u                    /* Debut heap utilisateur */
 #define USER_HEAP_END           USER_STACK_BOTTOM             /* 0x37000000 */
@@ -301,6 +308,35 @@ extern unsigned int GET8(unsigned int);        /* Compatible avec mmio.h */
 extern void PUT16(unsigned int, unsigned int); /* Compatible avec mmio.h */
 extern unsigned int GET16(unsigned int);       /* Compatible avec mmio.h */
 
+
+/* DTB structures */
+struct fdt_header {
+    uint32_t magic;           /* 0xd00dfeed */
+    uint32_t totalsize;       
+    uint32_t off_dt_struct;   
+    uint32_t off_dt_strings;  
+    uint32_t off_mem_rsvmap;  
+    uint32_t version;         
+    uint32_t last_comp_version;
+    uint32_t boot_cpuid_phys;
+    uint32_t size_dt_strings;
+    uint32_t size_dt_struct;
+};
+
+typedef struct {
+    uint32_t cache_info;
+    uint32_t tlb_info;
+    uint32_t memory_model;
+    uint32_t debug_features;
+} cpu_memory_info_t;
+
+#define FDT_MAGIC         0xd00dfeed
+#define FDT_BEGIN_NODE    0x00000001
+#define FDT_END_NODE      0x00000002
+#define FDT_PROP          0x00000003
+#define FDT_NOP           0x00000004
+#define FDT_END           0x00000009
+
 /* === FONCTIONS KERNEL === */
 
 /* Panic et debug */
@@ -359,6 +395,15 @@ void virtio_init(void);
 /* Device Tree support */
 void* get_dtb_address(void);
 bool parse_device_tree(void);
+void print_cpu_mode(void);
+
+void* fdt_find_node_by_name(void* dtb_ptr, const char* node_name);
+bool fdt_node_matches(const char* node_name, const char* prefix);
+bool fdt_device_present(void* dtb_ptr, const char* partial_name);
+void* fdt_get_property(void* dtb_ptr, void* node_ptr, const char* property_name, uint32_t* out_len);
+
+
+
 
 /* === VeRIFICATIONS DE COMPATIBILITe === */
 
@@ -408,5 +453,155 @@ bool parse_device_tree(void);
 #define STDOUT_FILENO           1
 #define STDERR_FILENO           2
 
+
+static inline int sctlr_smp_enabled(void){
+    uint32_t v; asm volatile("mrc p15,0,%0,c1,c0,0":"=r"(v));
+    return (v >> 6) & 1;
+}
+
+static inline void sctlr_set_smp(void){
+    uint32_t v;
+    asm volatile("mrc p15,0,%0,c1,c0,0" : "=r"(v));
+    v |= (1u << 6);                 // SMP=1
+    asm volatile("mcr p15,0,%0,c1,c0,0" :: "r"(v) : "memory");
+    asm volatile("isb; dsb sy");
+}
+
+static inline void tlb_flush_all_debug(void){
+    asm volatile("dsb ish; mcr p15,0,%0,c8,c3,0; dsb ish; isb"::"r"(0):"memory"); // TLBIALlIS
+}
+
+static inline void dc_clean_mva(void *va) {
+    asm volatile("mcr p15,0,%0,c7,c10,1"::"r"(va):"memory"); // DCCMVAC
+}
+
+static inline void dcache_clean_by_va(void *va, size_t len) {
+    uintptr_t p   = (uintptr_t)va & ~63;
+    uintptr_t end = ((uintptr_t)va + len + 63) & ~63;
+    for (; p < end; p += 64)
+        asm volatile("mcr p15, 0, %0, c7, c10, 1" :: "r"(p) : "memory"); // DCCMVAC
+    asm volatile("dsb ish" ::: "memory");
+}
+
+static inline void sync_icache_for_exec(void) {
+    asm volatile("mcr p15, 0, %0, c7, c5, 0" :: "r"(0)); // ICIALLU
+    asm volatile("dsb ish; isb");
+}
+
+static inline int ats1cpr_probe(uint32_t va, uint32_t *pa_out, uint32_t *par_out){
+    asm volatile("mcr p15,0,%0,c7,c8,0"::"r"(va));          // ATS1CPR
+    uint32_t par; asm volatile("mrc p15,0,%0,c7,c4,0":"=r"(par));
+    if (par_out) *par_out = par;
+    if (par & 1) return 0;                                  // fault
+    if (pa_out) *pa_out = (par & 0xFFFFF000u) | (va & 0xFFFu);
+    return 1;
+}
+
+static inline uint32_t dcache_line_size_bytes(void) {
+    uint32_t ccsidr;
+
+    // Sélectionner L1 Data/Unified (Level=0, InD=0) dans CSSELR
+    asm volatile ("mcr p15, 2, %0, c0, c0, 0" :: "r"(0) : "memory"); // CSSELR
+    asm volatile ("isb");
+
+    // Lire CCSIDR
+    asm volatile ("mrc p15, 1, %0, c0, c0, 0" : "=r"(ccsidr));
+
+    uint32_t line_sz_enc = ccsidr & 0x7;                  // [2:0]
+    uint32_t line_bytes  = 1u << (line_sz_enc + 4u);      // 4 * 2^(enc+2) = 1<<(enc+4)
+
+    // Sécurité: sur A15 c’est 64, mais au cas où:
+    if (line_bytes == 0 || line_bytes > 256) line_bytes = 64;
+    return line_bytes;
+}
+
+// Clean D-cache by MVA to PoC sur une plage
+static inline void clean_dcache_by_mva(const void *addr, size_t size) {
+    if (size == 0) return;
+
+    uint32_t line = dcache_line_size_bytes();
+    uintptr_t start = ((uintptr_t)addr) & ~(uintptr_t)(line - 1u);
+    uintptr_t end   = ((uintptr_t)addr + size + line - 1u) & ~(uintptr_t)(line - 1u);
+
+    asm volatile("dsb ish" ::: "memory"); // s'assurer que toutes écritures précédentes sont visibles
+
+    for (uintptr_t p = start; p < end; p += line) {
+        asm volatile("mcr p15, 0, %0, c7, c10, 1" :: "r"(p) : "memory"); // DCCMVAC
+    }
+
+    asm volatile("dsb ish" ::: "memory"); // pousser les lignes nettoyées au PoC
+}
+
+// Invalidate D-cache by MVA sur une plage
+static inline void invalidate_dcache_by_mva(const void *addr, size_t size) {
+    if (size == 0) return;
+
+    uint32_t line = dcache_line_size_bytes();
+    uintptr_t start = ((uintptr_t)addr) & ~(uintptr_t)(line - 1u);
+    uintptr_t end   = ((uintptr_t)addr + size + line - 1u) & ~(uintptr_t)(line - 1u);
+
+    asm volatile("dsb ish" ::: "memory"); // finir les accès mémoire en cours
+
+    for (uintptr_t p = start; p < end; p += line) {
+        asm volatile("mcr p15, 0, %0, c7, c6, 1" :: "r"(p) : "memory"); // DCIMVAC
+    }
+
+    asm volatile("dsb ish" ::: "memory"); // garantir l’invalidation avant poursuite
+}
+
+// Optionnel: clean+invalidate en un seul passage (utile pour tests)
+static inline void clean_invalidate_dcache_by_mva(const void *addr, size_t size) {
+    if (size == 0) return;
+
+    uint32_t line = dcache_line_size_bytes();
+    uintptr_t start = ((uintptr_t)addr) & ~(uintptr_t)(line - 1u);
+    uintptr_t end   = ((uintptr_t)addr + size + line - 1u) & ~(uintptr_t)(line - 1u);
+
+    asm volatile("dsb ish" ::: "memory");
+
+    for (uintptr_t p = start; p < end; p += line) {
+        asm volatile("mcr p15, 0, %0, c7, c14, 1" :: "r"(p) : "memory"); // DCCIMVAC
+    }
+
+    asm volatile("dsb ish" ::: "memory");
+}
+
+
+static inline uint32_t read_sp_usr(void) {
+    uint32_t sp;
+    asm volatile(
+        "cps #0x1F\n"     // SYS = mêmes banques que USR, mais privilègié
+        "mov %0, sp\n"
+        "cps #0x13\n"     // retour SVC
+        : "=r"(sp) :: "memory","cc");
+    return sp;
+}
+
+static inline void write_sp_usr(uint32_t sp) {
+    asm volatile(
+        "cps #0x1F\n"
+        "mov sp, %0\n"
+        "cps #0x13\n"
+        :: "r"(sp) : "memory","cc");
+}
+
+static inline uint32_t read_spsr(void) { uint32_t v; asm volatile("mrs %0, spsr":"=r"(v)); return v; }
+static inline uint32_t read_cpsr(void) { uint32_t v; asm volatile("mrs %0, cpsr":"=r"(v)); return v; }
+
+
+static inline uint32_t read_spsr_svc(void) {
+  uint32_t v; __asm__ volatile("mrs %0, spsr" : "=r"(v)); return v;
+}
+static inline uint32_t read_lr_svc(void) {
+  uint32_t v; __asm__ volatile("mov %0, lr" : "=r"(v)); return v;
+}
+
+static inline uint32_t read_lr_usr(void) {
+  uint32_t v; __asm__ volatile("cps #0x1F \n\t mov %0, lr \n\t cps #0x13" : "=r"(v) :: "memory"); return v;
+}
+
+#define offsetof(type, member) ((size_t)&((type*)0)->member)
+
+//extern const uint32_t TASK_CONTEXT_OFF;
 
 #endif /* _KERNEL_H */

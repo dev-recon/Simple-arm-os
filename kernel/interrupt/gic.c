@@ -91,7 +91,7 @@ void init_gic(void)
     
     //KDEBUG("[GIC] Enabling important IRQs...\n");
     /* IRQs pour machine virt : UART=1, Timer=30, VirtIO=16-31 */
-#if 0
+#if 1
     uint32_t important_irqs[] = {1, 30, 16, 17, 18, 19};
     
     for (int i = 0; i < 6; i++) {

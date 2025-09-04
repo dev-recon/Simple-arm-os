@@ -92,17 +92,34 @@ static void demonstrate_cache_ops(void);
 void early_init(void); 
 void kernel_main(void);
 
+static inline void disable_branch_predictor(void) {
+    uint32_t sctlr;
+
+    // Lire SCTLR
+    asm volatile("mrc p15, 0, %0, c1, c0, 0" : "=r"(sctlr));
+
+    // Clear bit Z (bit 11)
+    sctlr &= ~(1 << 11);
+
+    // Écrire SCTLR modifié
+    asm volatile("mcr p15, 0, %0, c1, c0, 0" :: "r"(sctlr));
+
+    // Flush BPIALL (invalidate branch predictor state)
+    asm volatile("mcr p15, 0, %0, c7, c5, 6" :: "r"(0));
+    asm volatile("isb");
+}
+
 void early_init(void)
 {
     /* Phase 1: Hardware de base uniquement */
     uart_init();
     
     /* Phase 2: Detection memoire pour MMU */
-    uint32_t mem_size = detect_memory();
+    kernel_memory_size = detect_memory();
     
-    if (mem_size > 0 && mem_size < 2ULL*1024*1024*1024) {
-        kprintf("Memory detected (bytes): %d\n", mem_size);
-        kprintf("Memory detected (MB): %d\n", mem_size / (1024*1024));
+    if (kernel_memory_size > 0) {
+        kprintf("Memory detected (bytes): %u\n", kernel_memory_size);
+        kprintf("Memory detected (MB): %u\n", kernel_memory_size / (1024*1024));
 
         /* Phase 3: Setup MMU - AVANT tout allocateur */
         kprintf("Setting up MMU...\n");
@@ -113,8 +130,8 @@ void early_init(void)
             panic("MMU setup FAILED - cannot continue");
         }
     } else {
-        kprintf("Memory detected (bytes): %d\n", mem_size);
-        kprintf("Memory detected (MB): %d / %u\n", mem_size / (1024*1024), 2ULL*1024*1024*1024);
+        kprintf("Memory detected (bytes): %u\n", kernel_memory_size);
+        kprintf("Memory detected (MB): %u / %llu\n", kernel_memory_size / (1024*1024), 2ULL*1024*1024*1024);
 
         panic("Memory detection returned suspicious value");
     } 
@@ -163,6 +180,8 @@ void kernel_main(void)
     /* Phase 0: etats du processeur */
     __asm__ volatile ("cpsie aif");
 
+    sctlr_set_smp();
+
     uint32_t cpsr;
     __asm__ volatile ("mrs %0, cpsr" : "=r"(cpsr));
 
@@ -170,6 +189,7 @@ void kernel_main(void)
     kprintf(" IRQ: %s\n", (cpsr & (1 << 7)) ? "DISABLED" : "ENABLED");
     kprintf(" FIQ: %s\n", (cpsr & (1 << 6)) ? "DISABLED" : "ENABLED");
     kprintf(" ABT: %s\n", (cpsr & (1 << 8)) ? "DISABLED" : "ENABLED");
+    kprintf("ACTLR.SMP = %d\n", sctlr_smp_enabled());
     
     uint32_t vbar;
     __asm__ volatile ("mrc p15, 0, %0, c12, c0, 0" : "=r"(vbar));
@@ -181,6 +201,8 @@ void kernel_main(void)
     kprintf("[CHECK] irq_handler = %p\n", irq_handler);
 
     KDEBUG("=== STARTING KERNEL INITIALIZATION ===\n");
+
+    disable_branch_predictor();
     
     kprintf("Initialize physical memory allocator ... ");
     init_memory();  // <- Allocateur physique EN PREMIER
@@ -199,10 +221,6 @@ void kernel_main(void)
     setup_svc_stack();
     kprintf("OK\n");
 
-    dump_kernel_stack(16);
-    debug_kernel_stack_integrity("AFTER init_memory");
-    check_memory_corruption();
-
     /* Phase 3: Controleurs materiels de base */
     kprintf("Phase 3: Hardware controllers...\n");
     
@@ -217,7 +235,6 @@ void kernel_main(void)
 
     init_timer_software();
 
-    
     kprintf("=== STARTING MAIN LOOP ===\n");
 
     /* Banner de demarrage */
@@ -277,9 +294,6 @@ void kernel_main(void)
     kprintf("Phase 7: File systems...\n");
     
     // Decommente si necessaire
-    
-    kprintf("Initialize ATA ... ");
-    test_heap_health("BEFORE init_ata");
 
 #ifdef USE_RAMFS
 kprintf("Initialize RAMFS ... ");
@@ -309,31 +323,25 @@ if (init_ramfs()) {  //init_ramfs()
 } else {
     kprintf("----------------> FAILED\n");
 }
-#else
-/* Votre code ATA existant */
-kprintf("Initialize ATA ... ");
-    if (!init_ata()) {
-        kprintf("Warning: ATA initialization failed\n");
-    } else {
-        kprintf("OK\n");
-    }
-    test_heap_health("AFTER init_ata");
 
-// ...
 #endif
+
+    //kprintf("Initialize ATA ... ");
+    //if (!init_ata()) {
+    //    kprintf("Warning: ATA initialization failed\n");
+    //} else {
+    //    kprintf("OK\n");
+    //}
 
     //test_ramfs_cluster_content();
 
     kprintf("Initialize VFS ... ");
 
-    test_heap_health("BEFORE init_vfs");
     if (!init_vfs()) {
         kprintf("Warning: VFS initialization failed\n");
     } else {
         kprintf("OK\n");
-    }
-    test_heap_health("AFTER init_vfs");
-    
+    }    
 
     /* Finalisation */
     kprintf("ARM32 Kernel initialization complete\n");
@@ -389,9 +397,9 @@ kprintf("Initialize ATA ... ");
     //KINFO("Initializing task system...\n");
     //test_heap_health("BEFORE init_task_system");
 
-    dump_kernel_stack(16);
-    debug_kernel_stack_integrity("init_main");
-    check_memory_corruption();
+    //dump_kernel_stack(16);
+    //debug_kernel_stack_integrity("init_main");
+    //check_memory_corruption();
     
     init_main() ;
 

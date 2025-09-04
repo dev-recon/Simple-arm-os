@@ -106,15 +106,21 @@ int spin_trylock(spinlock_t* lock)
 void spin_lock_irqsave(spinlock_t* lock, unsigned long* flags)
 {
     if (!lock || !flags) return;
-    
+
+    const unsigned long IF_MASK = 0xC0UL; /* bits 7 (I) et 6 (F) */
+    unsigned long cpsr;
+
     /* Sauvegarder l'etat des interruptions et les desactiver */
     __asm__ volatile(
         "mrs %0, cpsr\n\t"          /* Lire CPSR */
         "cpsid i"                   /* Desactiver IRQ */
-        : "=r" (*flags)
+        : "=r" (cpsr)
         :
         : "memory"
     );
+
+    /* Conserver uniquement les bits I/F */
+    *flags = cpsr & IF_MASK;
     
     /* Acquerir le lock */
     spin_lock(lock);
@@ -129,12 +135,26 @@ void spin_unlock_irqrestore(spinlock_t* lock, unsigned long flags)
     
     /* Liberer le lock */
     spin_unlock(lock);
+
+    /* Restaurer uniquement les bits IRQ/FIQ du CPSR, laisser le reste tel quel */
+    unsigned long cpsr_now, to_write;
+
+    /* lire CPSR courant */
+    __asm__ volatile("mrs %0, cpsr" : "=r"(cpsr_now) );
+
+    /* Ne toucher qu'aux bits I(7) et F(6) :
+       - on garde tous les autres bits de cpsr_now,
+       - on remplace uniquement les bits I/F par ceux de flags */
+    const unsigned long IF_MASK = 0xC0UL; /* bits 7 (I) et 6 (F) */
+
+    to_write = (cpsr_now & ~IF_MASK) | (flags & IF_MASK);
+
     
     /* Restaurer l'etat des interruptions */
     __asm__ volatile(
         "msr cpsr_c, %0"
         :
-        : "r" (flags)
+        : "r" (to_write)
         : "memory"
     );
 }

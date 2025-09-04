@@ -24,7 +24,7 @@ _start:
     
     /* Sauvegarder le DTB address immediatement */
     ldr r3, =dtb_address
-    str r0, [r3]
+    str r2, [r3]
     
     /* Verifier qu'on est sur le CPU principal (Core 0) */
     mrc p15, 0, r0, c0, c0, 5   /* Lire MPIDR (Multiprocessor Affinity Register) */
@@ -278,11 +278,19 @@ prefetch_vector:
     b prefetch_abort_handler
 
 data_abort_vector:
-    sub lr, lr, #8               /* Corrige l'adresse de retour (ARM spec) */
-    stmfd sp!, {r0-r12, lr}      /* Sauvegarde des registres */
-    bl data_abort_handler        /* Appel du handler en C */
-    ldmfd sp!, {r0-r12, lr}      /* Restauration des registres */
-    subs pc, lr, #0              /* Retour de l'exception */
+    sub     sp, sp, #64          @ petit cadre local
+    stmdb   sp!, {r0-r3, r12, lr} @ sauver registres volatiles + LR_abt
+    mrs     r0, spsr             @ r0 = SPSR_abt
+    mrc     p15,0,r1,c6,c0,0     @ r1 = DFAR
+    mrc     p15,0,r2,c5,c0,0     @ r2 = DFSR
+    mov     r3, sp               @ r3 = ptr vers regs sauvés
+    bl      data_abort_handler
+1:  b       1b                   @ au cas où le C ne revient jamais
+//    sub lr, lr, #8               /* Corrige l'adresse de retour (ARM spec) */
+//    stmfd sp!, {r0-r12, lr}      /* Sauvegarde des registres */
+//    bl data_abort_handler        /* Appel du handler en C */
+//    ldmfd sp!, {r0-r12, lr}      /* Restauration des registres */
+//    subs pc, lr, #0              /* Retour de l'exception */
 
 irq_vector:
     /* Interruption normale */

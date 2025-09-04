@@ -126,8 +126,9 @@ void init_process_signals(task_t* proc)
     signal_state_t* sig;
     int i;
     
-    if (!proc || proc->type != TASK_TYPE_PROCESS) {
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         KERROR("[SIGNAL] Invalid process\n");
+        KERROR("[SIGNAL]: NULL PROC\n");
         return;
     }
     
@@ -163,26 +164,40 @@ void init_process_signals(task_t* proc)
     
     /* Allouer et mapper les pages physiques */
     uint32_t pages_needed = (proc->process->signal_stack_size + PAGE_SIZE - 1) / PAGE_SIZE;
+    KDEBUG("[SIGNAL] Pages needed %u for signal stack\n",pages_needed);
+
     
     for (uint32_t i = 0; i < pages_needed; i++) {
-        void* stack_page = allocate_physical_page();
+        void* stack_page = allocate_user_page();
         if (!stack_page) {
             KERROR("[SIGNAL] Failed to allocate physical page %u\n", i);
             proc->process->signal_stack_base = 0;
             proc->process->signal_stack_size = 0;
             return;
         }
-        
+
+        KDEBUG("[SIGNAL] Physical pages allocated at 0x%08X\n", (uint32_t)stack_page);
+
         uint32_t vaddr = proc->process->signal_stack_base + (i * PAGE_SIZE);
-        map_user_page(proc->process->vm->pgdir, vaddr, (uint32_t)stack_page, proc->process->vm->vma_list->flags );
+
+        uint32_t flags = VMA_READ | VMA_WRITE;
+
+        //KDEBUG("SIGNAL FLAGS = 0x%04X at 0x%08X\n", proc->process->vm->vma_list->flags, flags);
+        
+        //proc->process->vm->vma_list->flags = flags ;
+
+        //KDEBUG("SIGNAL NEW FLAGS = 0x%04X\n", proc->process->vm->vma_list->flags);
+
+
+        map_user_page(proc->process->vm->pgdir, vaddr, (uint32_t)stack_page, flags, proc->process->vm->asid);
     }
     
     /* ACCeS CORRECT */
-    //KINFO("[SIGNAL] Process %u signal stack: 0x%08X - 0x%08X (%u KB)\n",
-    //      proc->process->pid,
-    //      proc->process->signal_stack_base, 
-    //      proc->process->signal_stack_base + proc->process->signal_stack_size,
-    //      proc->process->signal_stack_size / 1024);
+    KINFO("[SIGNAL] Process %u signal stack: 0x%08X - 0x%08X (%u KB)\n",
+          proc->process->pid,
+          proc->process->signal_stack_base, 
+          proc->process->signal_stack_base + proc->process->signal_stack_size,
+          proc->process->signal_stack_size / 1024);
 }
 
 
@@ -191,7 +206,11 @@ void init_process_signals(task_t* proc)
  */
 void cleanup_process_signals(task_t* proc)
 {
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return;
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process )
+    {
+        KERROR("cleanup_process_signals: NULL PROC\n");
+        return;
+    }
     
     /* ACCeS CORRECT */
     if (proc->process->signal_stack_base == 0) return;
@@ -203,7 +222,7 @@ void cleanup_process_signals(task_t* proc)
         
         uint32_t phys_addr = get_physical_address(proc->process->vm->pgdir, vaddr);
         if (phys_addr != 0) {
-            map_user_page(proc->process->vm->pgdir, vaddr, 0,proc->process->vm->vma_list->flags);
+            map_user_page(proc->process->vm->pgdir, vaddr, 0,proc->process->vm->vma_list->flags,proc->process->vm->asid);
             free_physical_page((void*)phys_addr);
         }
     }
@@ -273,7 +292,10 @@ int send_signal(task_t* target, int sig)
  */
 void wake_up_process_for_signal(task_t* proc)
 {
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return;
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
+        KERROR("wake_up_process_for_signal: NULL PROC\n");
+        return;
+    }
     
     if (proc->state == TASK_BLOCKED) {
         KDEBUG("[SIGNAL] Waking up blocked process PID=%u for signal\n", proc->process->pid);
@@ -288,7 +310,10 @@ void wake_up_process_for_signal(task_t* proc)
  */
 bool has_pending_signals(task_t* proc)
 {
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return false;
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process){
+        KERROR("has_pending_signals: NULL PROC\n");
+         return false;
+    }
     
     /* ACCeS CORRECT */
     return (proc->process->signals.pending & ~proc->process->signals.blocked) != 0;
@@ -304,8 +329,11 @@ void deliver_signal(task_t* proc, int sig)
     signal_state_t* sig_state;
     sigaction_t* action;
     
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return;
-    
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process){
+        KERROR("deliver_signal: NULL PROC\n");
+         return ;
+    }
+
     sig_state = &proc->process->signals;
     action = &sig_state->actions[sig];
     
@@ -335,8 +363,11 @@ void deliver_signal(task_t* proc, int sig)
  */
 static void handle_default_signal_action(task_t* proc, int sig)
 {
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return;
-    
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
+        KERROR("handle_default_signal_action: NULL PROC\n");
+         return ;
+    }
+     
     KDEBUG("[SIGNAL] Default action for signal %d: %d\n", sig, default_signal_actions[sig]);
     
     switch (default_signal_actions[sig]) {
@@ -373,7 +404,10 @@ static void setup_signal_handler(task_t* proc, int sig, sigaction_t* action)
     uint32_t old_blocked;
     uint32_t signal_sp;
     
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return;
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)  {
+        KERROR("setup_signal_handler: NULL PROC\n");
+         return ;
+    }
     
     sig_state = &proc->process->signals;
     
@@ -418,8 +452,11 @@ static void setup_signal_frame(task_t* proc, int sig, uint32_t handler_addr,
     uint32_t final_sp;
     int i;
     
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return;
-    
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)  {
+        KERROR("setup_signal_frame: NULL PROC\n");
+         return ;
+    }
+
     /* Mapper temporairement la pile signal */
     page_addr = signal_sp & ~(PAGE_SIZE - 1);
     phys_addr = get_physical_address(proc->process->vm->pgdir, page_addr);
@@ -598,7 +635,7 @@ void sys_sigreturn(void)
     int sig;
     int i;
     
-    if (!proc || proc->type != TASK_TYPE_PROCESS) {
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         KERROR("[SIGNAL] sys_sigreturn: Invalid process\n");
         return;
     }
@@ -673,7 +710,7 @@ void check_pending_signals(void)
     uint32_t deliverable;
     int signal_num;
     
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return;
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
     
     sig = &proc->process->signals;
     
@@ -722,7 +759,7 @@ static int find_highest_priority_signal(uint32_t signal_mask)
  */
 static void terminate_process(task_t* proc, int sig)
 {
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return;
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
     
     KINFO("[SIGNAL] Terminating process PID=%u with signal %d\n", proc->process->pid, sig);
     
@@ -735,7 +772,7 @@ static void terminate_process(task_t* proc, int sig)
  */
 static void dump_core(task_t* proc)
 {
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return;
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
     
     KINFO("[SIGNAL] Core dump for process PID=%u (not implemented)\n", proc->process->pid);
     /* TODO: Implementer le core dump reel */
@@ -746,7 +783,7 @@ static void dump_core(task_t* proc)
  */
 static void stop_process(task_t* proc)
 {
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return;
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
     
     KINFO("[SIGNAL] Stopping process PID=%u\n", proc->process->pid);
     proc->state = TASK_BLOCKED;
@@ -758,7 +795,7 @@ static void stop_process(task_t* proc)
  */
 static void continue_process(task_t* proc)
 {
-    if (!proc || proc->type != TASK_TYPE_PROCESS) return;
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
     
     KINFO("[SIGNAL] Continuing process PID=%u\n", proc->process->pid);
     

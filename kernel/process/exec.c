@@ -29,9 +29,13 @@ int read_elf_header(inode_t* inode, elf32_ehdr_t* header)
     
     bytes_read = temp_file.f_op->read(&temp_file, header, sizeof(elf32_ehdr_t));
     if (bytes_read != (ssize_t)sizeof(elf32_ehdr_t)) {
-        return -1;
+        return -EINVAL;
     }
     
+    if(!validate_elf_header(header)){
+        return -EINVAL;
+    }
+
     return 0;
 }
 
@@ -116,6 +120,12 @@ int load_elf_segments(inode_t* inode, elf32_ehdr_t* elf_header, vm_space_t* vm)
     return 0;
 }
 
+static inline void flush_instructions(void){
+    asm volatile("dsb ish");          // données visibles
+    asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0)); // IC IALLU (ou IVAU par ligne)
+    asm volatile("dsb ish; isb");
+}
+
 int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
 {
     uint32_t vaddr_start = phdr->p_vaddr & ~(PAGE_SIZE - 1);  // Début aligné
@@ -123,6 +133,9 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
     uint32_t vma_flags = 0;
     vma_t* vma = NULL;
     file_t temp_file;
+    //uint32_t phys_addr = 0;
+
+    extern void check_address_content(uint32_t phys_addr, const char* step);
     
     //KDEBUG("Loading segment: vaddr=0x%08X-0x%08X (aligned: 0x%08X-0x%08X)\n",
     //       phdr->p_vaddr, phdr->p_vaddr + phdr->p_memsz, vaddr_start, vaddr_end);
@@ -132,14 +145,14 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
     if (phdr->p_flags & PF_R) vma_flags |= VMA_READ;
     if (phdr->p_flags & PF_W) vma_flags |= VMA_WRITE;
     if (phdr->p_flags & PF_X) vma_flags |= VMA_EXEC;
-
+ 
     /* Create VMA for this segment */
     vma = create_vma(vm, vaddr_start, vaddr_end - vaddr_start, vma_flags);
     if (!vma) {
         KERROR("Failed to create VMA\n");
         return -1;
     }
-    
+  
     /* Setup file for reading */
     temp_file.inode = inode;
     temp_file.flags = O_RDONLY;
@@ -148,24 +161,23 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
     /* Load page by page - BOUCLE CORRIGÉE */
     for (uint32_t page_vaddr = vaddr_start; page_vaddr < vaddr_end; page_vaddr += PAGE_SIZE) {
         /* Allocate physical page */
-        void* phys_page = allocate_physical_page();
+        void* phys_page = allocate_user_page();
         if (!phys_page) {
             KERROR("Failed to allocate physical page for 0x%08X\n", page_vaddr);
             return -1;
         }
-        
-        //KDEBUG("Processing page 0x%08X -> phys %p\n", page_vaddr, phys_page);
-        
+                
         /* Map temporarily in kernel space for loading */
-        uint32_t temp_vaddr = map_temp_page((uint32_t)phys_page);
+        //uint32_t temp_vaddr = map_temp_page((uint32_t)phys_page);
+        uint32_t temp_vaddr = (uint32_t)phys_page;
         if (temp_vaddr == 0) {
             KERROR("Failed to map temp page\n");
             free_physical_page(phys_page);
             return -1;
-        }
+        } 
         
         /* Clear the entire page first */
-        memset((void*)temp_vaddr, 0, PAGE_SIZE);
+        //memset((void*)temp_vaddr, 0, PAGE_SIZE);   //// FIX IT
         
         /* Calculate file data range for this page */
         uint32_t file_start_in_page = 0;
@@ -196,12 +208,29 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
             if (bytes_read != (ssize_t)(file_end_in_page - file_start_in_page)) {
                 KERROR("Read failed: expected %u bytes, got %d\n",
                        file_end_in_page - file_start_in_page, bytes_read);
-                unmap_temp_page((void*)temp_vaddr);
+                //unmap_temp_page((void*)temp_vaddr);
                 free_physical_page(phys_page);
                 return -1;
             }
             
             //KDEBUG("Successfully read %u bytes\n", bytes_read);
+
+            // juste après le read() réussi dans temp_vaddr
+            uintptr_t start = (temp_vaddr) & ~63u;
+            uintptr_t end   = (temp_vaddr + PAGE_SIZE + 63u) & ~63u;
+            for (uintptr_t p = start; p < end; p += 64) {
+                //asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(p) : "memory"); // DCCMVAC
+                asm volatile("mcr p15,0,%0,c7,c6,1" :: "r"(p) : "memory"); // DCIMVAC
+            }
+            asm volatile("dsb ish" ::: "memory");
+
+            dcache_clean_by_va((void*)temp_vaddr, PAGE_SIZE);
+
+            if (vma_flags & VMA_EXEC) {
+                sync_icache_for_exec();
+            }
+
+            clean_dcache_by_mva((void *)temp_vaddr, PAGE_SIZE); 
 
         /* Après la lecture réussie */
 
@@ -238,21 +267,61 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
         
         /* Debug: show first few bytes of the page */
         //uint32_t* debug_ptr = (uint32_t*)temp_vaddr;
-        //KDEBUG("Page content: 0x%08X 0x%08X 0x%08X 0x%08X\n",
+        //KDEBUG("Page 0x%08X content: 0x%08X 0x%08X 0x%08X 0x%08X\n", temp_vaddr,
         //       debug_ptr[0], debug_ptr[1], debug_ptr[2], debug_ptr[3]);
         
         /* Unmap temporary mapping */
-        unmap_temp_page((void*)temp_vaddr);
+        //unmap_temp_page((void*)temp_vaddr);
+
+
+
+        //phys_addr = get_physical_address(vm->pgdir, 0x00008000);
+        //KDEBUG("load_segment : Physical address returned = 0x%08X\n", phys_addr);
+        //if(phys_addr != 0)
+        //    check_address_content( phys_addr, "**************** INSIDE LOAD SEGEMNTS .....................................");
+    
+
+
+        //uint8_t* check = (uint8_t*)map_temp_page((uint32_t)phys_page);
+        //KDEBUG("Check page before map_user_page: %02X %02X %02X %02X\n", check[0], check[1], check[2], check[3]);
+        //hexdump(check,8);
+        //unmap_temp_page(check);
         
         /* Map page in user space with correct permissions */
         //KDEBUG("Mapping user page 0x%08X -> %p\n", page_vaddr, phys_page);
-        if (map_user_page(vm->pgdir, page_vaddr, (uint32_t)phys_page, vma_flags) < 0) {
+        if (map_user_page(vm->pgdir, page_vaddr, (uint32_t)phys_page, vma_flags, vm->asid) < 0) {
             KERROR("Failed to map user page 0x%08X\n", page_vaddr);
             free_physical_page(phys_page);
             return -1;
         }
+
+        //read_l2_entry(vm->pgdir, page_vaddr);
+        //uint32_t temp = get_physical_address(vm->pgdir, page_vaddr);
+        //hexdump((void*)temp, (size_t)0x800);
+
+        flush_instructions();
+
+        invalidate_dcache_by_mva((void *)page_vaddr, PAGE_SIZE); // DCIMVAC + DSB
+
+        if (vma_flags & VMA_EXEC) {
+            asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0)); // ICIALLU
+            asm volatile("dsb ish; isb");
+        }
+
+        //uint8_t* check2 = (uint8_t*)map_temp_page((uint32_t)phys_page);
+        //KDEBUG("Check N2 page after map_user_page: %02X %02X %02X %02X\n", check2[0], check2[1], check2[2], check2[3]);
+        //unmap_temp_page(check);
+
+
+        //uint32_t phys = get_physical_address(vm->pgdir, 0x00008000);
+        //uint8_t *data = (uint8_t *)map_temp_page((uint32_t)phys);
+        //KDEBUG("Post-mapping PA 0x%08X @ 0x00008000: %02X %02X %02X %02X\n", phys, data[0], data[1], data[2], data[3]);
+        //unmap_temp_page(data);
+
+        //hexdump((void *)vm->pgdir,32);
+        //hexdump((void *)0x7F001000, 32);
         
-        //KINFO("Successfully mapped page 0x%08X\n", page_vaddr);
+        //KINFO("Successfully mapped page 0x%08X to phys 0x%08X in pgdir 0x%08X\n", page_vaddr, phys_page, vm->pgdir);
     }
     
     //KINFO("Segment loaded successfully\n");

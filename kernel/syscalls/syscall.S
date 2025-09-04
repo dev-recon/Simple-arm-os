@@ -1,23 +1,69 @@
 /* kernel/syscalls/syscall.S - Version corrigee */
+#include <kernel/task.h>
 
 .section .text
 .align 2
 
 .global swi_handler
+.global current_task
+//.global TASK_CONTEXT_OFF   //via l’en-tete pre-traite
+.global save_user_bank
 .global signal_return_trampoline
 .equ __NR_rt_sigreturn, 173
 
+    /* Registres generaux r0-r12 */
+    // r0.         0,
+    // r1          4,
+    // r2          8,
+    // r3          12
+    // r4          16
+    // r5          20
+    // r6          24
+    // r7          28
+    // r8          32
+    // r9          36
+    // r10         40
+    // r11         44
+    // r12         48
+    
+    /* Registres speciaux */
+    // sp          52       // Stack Pointer 
+    // lr          56       // Link Register 
+    // pc;         60       // Program Counter 
+    // cpsr;       64       // Current Program Status Register 
+    
+    // is_first_run; 68.     // NOUVEAU: Flag pour premiere execution 
+    // ttbr0;      72
+    // asid;       76
+
+    // spsr;       80        // SPSR_svc 
+    // returns_to_user;  84  // has to return to user mode 
+
+    // usr_r[0];     88      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[1];     92      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[2];     96      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[3];     100      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[4];     104      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[5];     108      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[6];     112      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[7];     116      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[8];     120      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[9];     124      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[10];    128      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[11];    132      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[12];    136      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_sp;       140
+    // usr_lr;       144         // optionnel si tu l’utilises
+    // usr_pc;       148         // point de reprise user
+    // usr_cpsr;     152        // en général 0x10
+    // svc_sp_top;   156        // haut de pile noyau allouée pour ce task
+    // svc_sp;       160        // courant (si tu le tiens à jour)
+    // svc_lr_saved; 164        // si tu en as besoin
+
 /* ARM32 Software Interrupt Handler - Point d'entree principal */
 swi_handler:
-    /* Ajuster LR pour SWI et sauvegarder contexte */
-    /*sub lr, lr, #4 */             /* Ajuster LR pour SWI */
-    
-    /* Debug entree dans syscall */
-    //push {r0-r3, lr}
-    //bl debug_print_sp3
-    //pop {r0-r3, lr}
 
-    stmfd sp!, {r0-r12, lr}     /* Sauvegarder registres + LR */
+    stmfd sp!, {r4-r5, r7-r12, lr}     /* Sauvegarder registres + LR */
     mrs r12, spsr               /* Recuperer SPSR */
     stmfd sp!, {r12}            /* Sauvegarder SPSR */
     
@@ -28,46 +74,86 @@ swi_handler:
     
     /* Arguments pour syscall_handler */
     /* Prototype: syscall_handler(syscall_num, arg1, arg2, arg3, arg4, arg5) */
-    stmfd sp!, {r4, r5}         /* Placer arg4 et arg5 sur la pile */
 
-    /* CORRECTION : Sauvegarder r0-r3 AVANT de les écraser */
-    mov r6, r0                  /* r6 = arg0 original */
-    mov r8, r1                  /* r8 = arg1 original */
-    mov r9, r2                  /* r9 = arg2 original */
-    mov r10, r3                 /* r10 = arg3 original */
+    /* 1) FigER immédiatement les registres USER dont on a besoin */
+    /* On va les recopier dans le contexte, ainsi on peut clobber r0..r3 ensuite */
+    ldr     r12, =current_task
+    ldr     r12, [r12]               /* r12 = current_task */
+    add     r12, r12, #48          /* r12 = &current->context */ // FIX IT !!!
 
-    
-    /* Maintenant configurer les paramètres pour syscall_handler */
-    mov r0, r7                  /* r0 = numero syscall */
-    mov r1, r6                  /* r1 = arg0 (fd) */
-    mov r2, r8                  /* r2 = arg1 (buf) */
-    mov r3, r9                  /* r3 = arg2 (count) */
-    /* r4, r5 sur pile = arg3, arg4 */
-    
-    /* Verification stack overflow basique */
-    cmp sp, #0x40000000         /* Verifier limite minimum pile kernel */
-    blo stack_panic
-    
+    /* 1) Sauver IMMÉDIATEMENT les 4 args user AVANT toute modif */
+    mov   r8,  r0              /* a0 */
+    mov   r9,  r1              /* a1 */
+    mov   r10, r2              /* a2 */
+    mov   r6, r3              /* a3 (utilise r12 comme temp ici) */
+
+    /* Copier 9 arguments user dans ctx->usr_r[0..7] + ctx->usr_r[11] */
+    str     r0,  [r12, #(88 + 0)]
+    str     r1,  [r12, #(88 + 4)]
+    str     r2,  [r12, #(88 + 8)]
+    str     r3,  [r12, #(88 + 12)]
+    str     r4,  [r12, #(88 + 16)]   /* ATTENTION: r4/r5 = args4/5 du user ! */
+    str     r5,  [r12, #(88 + 20)]
+    str     r6,  [r12, #(88 + 24)]
+    str     r7,  [r12, #(88 + 24)]
+    str     r11,  [r12, #(88 + 44)]
+
+    /* 2) Sauvegardes “banquées” essentielles (sans BL, donc pas de clobber imprévu) */
+    mrs     r0, spsr
+    str     r0,  [r12, #152]           /* CPSR du user */
+    mov     r0,  lr
+    str     r0,  [r12, #148]          /* PC de retour user = LR_svc (ARM) */
+    str     r0,  [r12, #144]          /* PC de retour user = LR_svc (ARM) */
+
+    cps     #0x1F                            /* passer en SYS pour lire SP_user */
+    mov     r0,  sp
+    cps     #0x13                            /* revenir en SVC */
+    str     r0,  [r12, #140]
+
+    mov     r0,  #1
+    str     r0,  [r12, #84]         /* marquer retour vers USR */
+
+    /* Préparer les arguments sur la pile pour syscall_handler */
+    sub   sp, sp, #8           /* Allouer 8 octets pour 2 arguments sur pile */
+    str   r4, [sp, #0]        /* [sp+0] = a4 (5ème param de syscall_handler) */
+    str   r5, [sp, #4]         /* [sp+4] = a5 (6ème param de syscall_handler) */
+
+    /* Préparer les 4 premiers arguments dans les registres */
+    mov   r0, r7               /* r0 = num (1er param) */
+    mov   r1, r8               /* r1 = a1  (2ème param) */
+    mov   r2, r9               /* r2 = a2  (3ème param) */
+    mov   r3, r10              /* r3 = a3  (4ème param) */
+
     /* Appeler le handler C */
     bl syscall_handler
     
+syscall_return:
+    /* r0 contient la valeur de retour du syscall.
+       On la garde dans un temporaire pour restaurer proprement les registres. */
+    mov   r6, r0
     /* Nettoyer la pile (arg4, arg5) */
     add sp, sp, #8
 
-syscall_return:
-    /* Restaurer contexte sans ecraser r0 */
-    ldmfd sp!, {r12}            /* Restaurer SPSR */
-    msr spsr_cxsf, r12
-    
-    /* Preserver r0 (valeur de retour) et restaurer le reste */
-    ldmfd sp!, {r1}             /* Charger ancien r0 dans r1 (ignore) */
-    ldmfd sp!, {r1-r12, lr}     /* Restaurer r1-r12, lr (r0 intact) */
+    /* Récupérer SPSR sauvegardé juste après {r0-r12,lr} */
+    ldr     r12, [sp], #4       /* r12 = spsr_sauvé ; sp avance de 4 */
+    msr     spsr_cxsf, r12
+
+    /* Restaurer tous les registres du caller, y compris l'ancien r0 */
+    ldmfd  sp!, {r4-r5, r7-r12, lr}
+
+    //push {r0-r3, lr}
+    //mov r0, r12
+    //bl debug_print_sp
+    //pop {r0-r3, lr}
+
+    /* Remettre la valeur de retour dans r0 */
+    mov     r0, r6
 
     /* Debug sortie de syscall */
     //push {r0-r3, lr}
     //bl debug_print_sp3
     //pop {r0-r3, lr}
-    
+
     /* Retourner en mode utilisateur */
     movs pc, lr
 
@@ -226,3 +312,4 @@ read_cycle_counter:
     bx lr
 
 .end
+

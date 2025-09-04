@@ -391,7 +391,7 @@ void kprintf_test(void) {
     /* Test des formats longs */
     kprintf("Long: %ld\n", 1234567890L);
     kprintf("Long unsigned: %lu\n", 4000000000UL);
-    kprintf("Long hex: %lx\n", 0xDEADBEEF);
+    kprintf("Long hex: %x\n", 0xDEADBEEF);
     
     /* Test des largeurs */
     kprintf("Largeur 10: '%10d'\n", 42);
