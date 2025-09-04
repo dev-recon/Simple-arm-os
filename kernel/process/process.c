@@ -79,8 +79,8 @@ void init_process_system(void)
     init_process->context.asid = ASID_KERNEL;
     init_process->context.returns_to_user = 0;
 
-    KDEBUG("[INIT] SCV STACK TOP = 0x%08X\n", init_process->context.svc_sp_top);
-    KDEBUG("[INIT] SCV STACK SP = 0x%08X\n", init_process->context.svc_sp);
+    //KDEBUG("[INIT] SCV STACK TOP = 0x%08X\n", init_process->context.svc_sp_top);
+    //KDEBUG("[INIT] SCV STACK SP = 0x%08X\n", init_process->context.svc_sp);
      
     /* Configurer le contexte d'init avec votre fonction existante */
     //setup_task_context(init_process);
@@ -135,8 +135,8 @@ void init_process_main(void* arg)
     shell_proc->context.is_first_run = 1;                    
     shell_proc->context.returns_to_user = 0;
 
-    KDEBUG("[SHELL PROC] SCV STACK TOP = 0x%08X\n", shell_proc->context.svc_sp_top);
-    KDEBUG("[SHELL PROC] SCV STACK SP = 0x%08X\n", shell_proc->context.svc_sp);
+    //KDEBUG("[SHELL PROC] SCV STACK TOP = 0x%08X\n", shell_proc->context.svc_sp_top);
+    //KDEBUG("[SHELL PROC] SCV STACK SP = 0x%08X\n", shell_proc->context.svc_sp);
 
     add_to_ready_queue(shell_proc);
     

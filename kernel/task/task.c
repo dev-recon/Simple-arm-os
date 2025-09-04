@@ -852,16 +852,16 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         /* Initialiser les signaux */
         init_process_signals(task);
         
-        KINFO("Created process %s (PID=%u)\n", name, task->process->pid);
-        KDEBUG(" SCV STACK TOP = 0x%08X\n", task->context.svc_sp_top);
-        KDEBUG(" SCV STACK SP = 0x%08X\n", task->context.svc_sp);
-        KDEBUG(" TTBR0 = 0x%08X\n", task->context.ttbr0);
-        KDEBUG(" ASID = %u\n", task->context.asid);
+        //KINFO("Created process %s (PID=%u)\n", name, task->process->pid);
+        //KDEBUG(" SCV STACK TOP = 0x%08X\n", task->context.svc_sp_top);
+        //KDEBUG(" SCV STACK SP = 0x%08X\n", task->context.svc_sp);
+        //KDEBUG(" TTBR0 = 0x%08X\n", task->context.ttbr0);
+        //KDEBUG(" ASID = %u\n", task->context.asid);
     } else {
         // Mettre toute la structure process à zéro
         task->process = NULL; // KERNEL TASK
     
-        KINFO("Created kernel task %s (ID=%u)\n", name, task->task_id);
+        //KINFO("Created kernel task %s (ID=%u)\n", name, task->task_id);
     }
     
     return task;

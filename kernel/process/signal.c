@@ -164,7 +164,7 @@ void init_process_signals(task_t* proc)
     
     /* Allouer et mapper les pages physiques */
     uint32_t pages_needed = (proc->process->signal_stack_size + PAGE_SIZE - 1) / PAGE_SIZE;
-    KDEBUG("[SIGNAL] Pages needed %u for signal stack\n",pages_needed);
+    //KDEBUG("[SIGNAL] Pages needed %u for signal stack\n",pages_needed);
 
     
     for (uint32_t i = 0; i < pages_needed; i++) {
@@ -176,7 +176,7 @@ void init_process_signals(task_t* proc)
             return;
         }
 
-        KDEBUG("[SIGNAL] Physical pages allocated at 0x%08X\n", (uint32_t)stack_page);
+        //KDEBUG("[SIGNAL] Physical pages allocated at 0x%08X\n", (uint32_t)stack_page);
 
         uint32_t vaddr = proc->process->signal_stack_base + (i * PAGE_SIZE);
 
@@ -193,11 +193,11 @@ void init_process_signals(task_t* proc)
     }
     
     /* ACCeS CORRECT */
-    KINFO("[SIGNAL] Process %u signal stack: 0x%08X - 0x%08X (%u KB)\n",
-          proc->process->pid,
-          proc->process->signal_stack_base, 
-          proc->process->signal_stack_base + proc->process->signal_stack_size,
-          proc->process->signal_stack_size / 1024);
+    //KINFO("[SIGNAL] Process %u signal stack: 0x%08X - 0x%08X (%u KB)\n",
+    //      proc->process->pid,
+    //      proc->process->signal_stack_base, 
+    //      proc->process->signal_stack_base + proc->process->signal_stack_size,
+    //      proc->process->signal_stack_size / 1024);
 }
 
 

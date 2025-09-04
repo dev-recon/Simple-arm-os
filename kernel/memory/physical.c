@@ -269,12 +269,12 @@ void buddy_free2(void* ptr, size_t size)
 bool init_memory(void)
 {
     uint32_t mem_start = VIRT_RAM_START;
-    //uint32_t mem_size = detect_memory();    // UNCOMMENT FOR PROD
+    uint32_t mem_size = detect_memory();    // UNCOMMENT FOR PROD
 
     // GDB DEBUG BLOCK - COMMENT FOR PROD
-    dtb_address = 0x48000000;
-    uint32_t mem_size = 2 * 1024 * 1024 * 1024u;  // 2GB total (0-2GB)
-    kernel_memory_size = mem_size ;  // FIX IT - For use of GDB
+    //dtb_address = 0x48000000;
+    //uint32_t mem_size = 2 * 1024 * 1024 * 1024u;  // 2GB total (0-2GB)
+    //kernel_memory_size = mem_size ;  // FIX IT - For use of GDB
     // END GDB DEBUG BLOCK - COMMENT FOR PROD
 
     uint32_t bitmap_size_words;

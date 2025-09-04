@@ -212,7 +212,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         //KDEBUG("sys_execve: envpc loop = %d\n", envpc);
     }
     //KDEBUG("sys_execve: filename address %p - len is %d\n", filename, len);
-    KDEBUG("sys_execve: argc= %d, envpc= %d\n", argc, envpc);
+    //KDEBUG("sys_execve: argc= %d, envpc= %d\n", argc, envpc);
 
 
     //switch_to_kernel_context();
@@ -227,7 +227,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
 
    if(from_user){
 
-        KDEBUG("sys_execve: usermode detected 0x%08X - %s\n", (uint32_t)filename, filename); 
+        //KDEBUG("sys_execve: usermode detected 0x%08X - %s\n", (uint32_t)filename, filename); 
 
         //KDEBUG("sys_execve: filename address %p - len is %d\n", filename, len);
         //KDEBUG("sys_execve: argc= %d, envpc= %d\n", argc, envpc);
@@ -268,12 +268,12 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         kernel_argv[1] = argv[1];
         kernel_envp[0] = envp[0];
 
-        KDEBUG("sys_execve: filename copied successfully *%s*\n", kernel_filename);
-        KDEBUG("sys_execve: argv[0] *%s*\n", kernel_argv[0]);
+        //KDEBUG("sys_execve: filename copied successfully *%s*\n", kernel_filename);
+        //KDEBUG("sys_execve: argv[0] *%s*\n", kernel_argv[0]);
    }
    else{
 
-        KDEBUG("sys_execve: kernel mode detected 0x%08X - %s\n", (uint32_t)filename, filename); 
+        //KDEBUG("sys_execve: kernel mode detected 0x%08X - %s\n", (uint32_t)filename, filename); 
 
 
         kernel_filename = (char *)kmalloc(len+1);
@@ -336,7 +336,9 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
         return -ENOMEM;
     }
-            KDEBUG("sys_execve: argv[0] *%s*\n", kernel_argv[0]);
+    
+    //KDEBUG("sys_execve: argv[0] *%s*\n", kernel_argv[0]);
+    
     /* Configurer la pile utilisateur avec arguments */
     if (setup_user_stack(new_vm, kernel_argv, kernel_envp) < 0) {
         KERROR("sys_execve: Failed to setup user stack\n");
@@ -357,7 +359,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     }
     
     /* === POINT DE NON-RETOUR - EXEC ReUSSIT === */
-        KDEBUG("sys_execve: argv[0] *%s*\n", kernel_argv[0]);
+        //KDEBUG("sys_execve: argv[0] *%s*\n", kernel_argv[0]);
     
     /* Remplacer l'espace memoire - ACCeS CORRECT */
     destroy_vm_space(old_vm);
@@ -375,26 +377,26 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
 
 
 
-    /* Configuration KERNEL (pour les syscalls futurs) */
-proc->context.svc_sp_top = (uint32_t)proc->stack_top; /* Pile kernel pour cette tâche */
-proc->context.sp = proc->context.svc_sp_top - 512;             /* Stack pointer */
-proc->context.sp &= ~7;
+        /* Configuration KERNEL (pour les syscalls futurs) */
+    proc->context.svc_sp_top = (uint32_t)proc->stack_top; /* Pile kernel pour cette tâche */
+    proc->context.sp = proc->context.svc_sp_top - 512;             /* Stack pointer */
+    proc->context.sp &= ~7;
 
-/* Configuration USER - CORRECTION CRITIQUE */
-proc->context.usr_pc = elf_header.e_entry;         /* Point d'entrée USER */
-//proc->context.usr_sp = new_vm->stack_start + USER_STACK_SIZE - 512;        /* Stack USER */
-proc->context.usr_sp = new_vm->stack_start;        /* Stack USER */
-proc->context.usr_sp &= ~7;
-proc->context.usr_cpsr = 0x60000010;               /* MODE USER + IRQ enabled */
+    /* Configuration USER - CORRECTION CRITIQUE */
+    proc->context.usr_pc = elf_header.e_entry;         /* Point d'entrée USER */
+    //proc->context.usr_sp = new_vm->stack_start + USER_STACK_SIZE - 512;        /* Stack USER */
+    proc->context.usr_sp = new_vm->stack_start;        /* Stack USER */
+    proc->context.usr_sp &= ~7;
+    proc->context.usr_cpsr = 0x60000010;               /* MODE USER + IRQ enabled */
 
-/* Arguments initiaux (argc, argv, etc.) */
-proc->context.usr_r[0] = (uint32_t)kernel_filename;                     /* r0 = argc */
-proc->context.usr_r[1] = (uint32_t)kernel_argv;     /* r1 = argv */
-proc->context.usr_r[2] = (uint32_t)kernel_envp;     /* r2 = envp */
-proc->context.usr_r[3] = argc;     /* r2 = envp */
+    /* Arguments initiaux (argc, argv, etc.) */
+    proc->context.usr_r[0] = (uint32_t)kernel_filename;                     /* r0 = argc */
+    proc->context.usr_r[1] = (uint32_t)kernel_argv;     /* r1 = argv */
+    proc->context.usr_r[2] = (uint32_t)kernel_envp;     /* r2 = envp */
+    proc->context.usr_r[3] = argc;     /* r2 = envp */
 
 
-    KDEBUG("sys_execve: Process PID=%u executing\n", proc->process->pid);
+    //KDEBUG("sys_execve: Process PID=%u executing\n", proc->process->pid);
 
     
     /* Fermer tous les fichiers CLOEXEC - ACCeS CORRECT */
@@ -414,7 +416,7 @@ proc->context.usr_r[3] = argc;     /* r2 = envp */
     put_inode(exe_inode);
     cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
 
-    KDEBUG("JUMPING TO USER SPACE !!! process PGDIR = 0x%08X\n", (uint32_t)new_vm->pgdir);
+    //KDEBUG("JUMPING TO USER SPACE !!! process PGDIR = 0x%08X\n", (uint32_t)new_vm->pgdir);
 
     //__task_switch_to_user(&proc->context);
     __task_switch(NULL, &proc->context);

@@ -226,12 +226,7 @@ void kernel_main(void)
     
     kprintf("Initialize interrupt controller ... ");
 
-    //init_gic();
-
-    /* Désactiver toutes les interruptions */
-    //__asm__ volatile("cpsid if" ::: "memory");
-    
-    //kprintf("=== KERNEL SANS INTERRUPTIONS ===\n");
+    init_gic();
 
     init_timer_software();
 
@@ -254,11 +249,11 @@ void kernel_main(void)
     /* Phase 4: Peripheriques d'entree/sortie */
     kprintf("Phase 4: I/O devices...\n");
 
-    kprintf("Initialize keyboard ... ");
+    kprintf("Initialize keyboard ... \n");
     init_keyboard();
     kprintf("OK\n");
   
-    kprintf("Initialize display ... ");
+    kprintf("Initialize display ... \n");
     init_display();
     kprintf("OK\n");
       
@@ -277,48 +272,14 @@ void kernel_main(void)
     enable_interrupts();
     kprintf("OK\n");
 
-    // Configuration IRQ specifique machine virt
-    //enable_irq(30);   // ???
-    //enable_irq(12);   // ???
-    //enable_irq(15);   // ???
-    //enable_irq(16);   // VirtIO device 0 (network)
-    //enable_irq(17);   // VirtIO device 1 (block)
-    //enable_irq(18);   // VirtIO device 2 (console)
-    //enable_irq(40);   // ???
-    //enable_irq(41);   // ???
-    //enable_irq(42);   // ???
-    //enable_irq(43);   // ???
-    //enable_irq(44);   // ???
-
     /* Phase 7: Systemes de fichiers (OPTIONNEL) */
     kprintf("Phase 7: File systems...\n");
     
     // Decommente si necessaire
 
 #ifdef USE_RAMFS
-kprintf("Initialize RAMFS ... ");
-if (init_ramfs()) {  //init_ramfs() 
-    //ramfs_test();
-
-    extern void debug_root_directory_reading(void);
-    extern void ramfs_test(void);
-    extern void ls_read_directory(const char* path);
-
-    //ramfs_test();
-    //debug_root_directory_reading();
-
-    //ls_read_directory("/");
-
-    /* NOUVEAU: Charger userfs depuis la memoire */
-    /*kprintf("Loading UserFS from memory ... ");
-    if (load_userfs_from_memory()) {
-        kprintf("OK\n");
-        kprintf("OK UserFS loaded into RAMFS!\n");
-    } else {
-        kprintf("FAILED\n");
-        kprintf("WARNING Continuing with basic RAMFS only\n");
-    }*/
-
+    kprintf("Initialize RAMFS ... ");
+    if (init_ramfs()) { 
     kprintf("----------------> OK\n");
 } else {
     kprintf("----------------> FAILED\n");
@@ -326,14 +287,12 @@ if (init_ramfs()) {  //init_ramfs()
 
 #endif
 
-    //kprintf("Initialize ATA ... ");
-    //if (!init_ata()) {
-    //    kprintf("Warning: ATA initialization failed\n");
-    //} else {
-    //    kprintf("OK\n");
-    //}
-
-    //test_ramfs_cluster_content();
+    kprintf("Initialize ATA ... ");
+    if (!init_ata()) {
+        kprintf("Warning: ATA initialization failed\n");
+    } else {
+        kprintf("OK\n");
+    }
 
     kprintf("Initialize VFS ... ");
 
@@ -347,141 +306,20 @@ if (init_ramfs()) {  //init_ramfs()
     kprintf("ARM32 Kernel initialization complete\n");
     
     kprintf("\nTARGET Kernel ARMv7-A operationnel!\n");
-    kprintf("- Cross-compile depuis Mac M4\n");
+    kprintf("- Cross-compiled from Mac M4\n");
     kprintf("- Caches L1 et prediction actives\n\n");
     
-    kprintf("Kernel en fonctionnement...\n");
-    kprintf("Utilisez Ctrl+A puis X pour quitter QEMU\n");
+    kprintf("Kernel up and running ...\n");
+    kprintf("Use Ctrl+A and X to exit QEMU\n");
 
 
     //trigger_timer_interrupt();
     /* Phase 5: Gestion des processus (APReS allocateurs) */
     kprintf("Phase 5: Process management...\n");
     
-    //kprintf("Initialize processes ... ");
-    //init_processes();
-    //kprintf("OK\n");
-
-    /* Creer le processus init */
-    //create_init_process();
-    //uart_getc();
-    
-    /* Debug initial */
-    //debug_process_system();
-    //uart_getc();
-
-
-    //test_process_structure_offsets();
-    
-    //current_process = find_process_by_pid(1);
-    //current_process->state = PROC_RUNNING;
-
-    //test_process_system_with_ls();
-    //debug_memory_layout_ramfs();
-
-    //ls_process_main("/home/user");
-
-    //launch_first_process(current_process);
-    
-    //KINFO("Appel direct de init_main...\n");
-    //init_main();  // <- APPEL DIRECT
-
-    /* Demarrer le scheduling */
-    //KINFO("Demarrage du scheduler... Adresse init_main = %p\n", &init_main);
-    //schedule();
-
-
-    extern void test_basic_task_functions(void);
-
-    /* 3. NOUVEAU: Initialiser le systeme de taches */
-    //KINFO("Initializing task system...\n");
-    //test_heap_health("BEFORE init_task_system");
-
-    //dump_kernel_stack(16);
-    //debug_kernel_stack_integrity("init_main");
-    //check_memory_corruption();
-    
+    /* Main scheduler loop */
     init_main() ;
 
-    /* Initialiser le systeme unifie process/task */
-    //init_process_system();
-    
-    /* Demarrer le scheduler avec votre fonction existante */
-    //KINFO("Starting scheduler with unified system...\n");
-    //print_signal_stack_stats();
-
-    //init_task_system();
-    //test_heap_health("AFTER init_task_system");
-   
-    /* 4. Creer quelques taches de demonstration */
-    //KINFO("Creating demonstration tasks...\n");
-    
-    /* Tache de monitoring systeme */
-    //task_create("sysmon", system_monitor_task, NULL, 10);
-    
-    
-    //task_create_process("sysmon", system_monitor_task, NULL, 10, TASK_TYPE_KERNEL);
-    
-    /* Tache de test memoire */
-    //task_create("memtest", memory_test_task, NULL, 10);
-    
-    
-    //task_create_process("memtest", memory_test_task, NULL, 10, TASK_TYPE_PROCESS);
-    
-    /* Tache shell simple */
-    //task_create("shell", simple_shell_task, NULL, 10);
-    
-    
-    //task_create_process("shell", simple_shell_task, NULL, 10, TASK_TYPE_PROCESS);
-    
-    //KINFO("Tasks created successfully\n");
-    
-    /* 5. Tests du systeme de taches */
-    //test_basic_task_functions();
-    
-    /* 6. Affichage de l'etat final */
-    //KINFO("=== System Ready ===\n");
-    //task_list_all();
-
-    // Demarrer l'ordonnanceur (ne retourne jamais)
-    //sched_start();
-    
-    /* 7. Boucle principale du kernel */
-    //KINFO("Entering main kernel loop...\n");
-    //kernel_main_loop();
-    
-    // On ne devrait jamais arriver ici
-    //KDEBUG("ERREUR: Retour inattendu de sched_start!\n");
-    //while (1) __asm__ volatile("wfe");
-
-    /* Ne devrait jamais arriver ici */
-    //panic("Kernel main returned");
-
-    //dump_kernel_stack(16);
-    //debug_kernel_stack_integrity("BEFORE ULTRA SIMPLE TEST");
-    //check_memory_corruption();
-
-    //ultra_simple_test();
-    //test_robust_context_switch();
-    //main_current_task_debug();
-
-    /* Main scheduler loop */
-    int i=0;
-    static uint32_t last_uptime = 0;
-
-    while (1) {
-        //schedule();
-        update_timer_software();
-        for (volatile int i = 0; i < QEMU_TIMER_FREQ; i++);  /* Petite pause */
-        KINFO("Kernel Main loop alive: %d\n", i++);
-
-        uint32_t current_uptime = get_system_ticks() / 100;  /* Secondes */
-        if (current_uptime != last_uptime && current_uptime % 10 == 0) {
-            kprintf("[TIMER] Software uptime: %u seconds\n", current_uptime);
-            last_uptime = current_uptime;
-        }
-        //wait_for_interrupt();
-    }
 }
 
 
