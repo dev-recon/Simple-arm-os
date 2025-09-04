@@ -1001,7 +1001,7 @@ void yield(void)
     //    KDEBUG("[CHILD] yield() called\n");
     //}
 
-    task_sleep_ms(100);  // Pause a bit to avoid race conditions.
+    task_sleep_ms(1000);  // Pause a bit to avoid race conditions.
     
     schedule();
     
