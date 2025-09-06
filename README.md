@@ -30,11 +30,11 @@ I also think that this kernel can also be used by teachers and students that wan
 # Documentation
 
 Will publish a documentation on how to:
-    1. Setup environment.
-    2. Create and modify user programs.
+  1. Setup environment.
+  2. Create and modify user programs.
 
 Roadmap for now id to develop the following features (to have a proper userland shell working):
-    - virtio mmio block device for having real disk image to read and store data (get rid of RAMFS).
+  - virtio mmio block device for having real disk image to read and store data (get rid of RAMFS).
     - Files: create, write, lseek, dup.
     - chdir, rmdir, ...
     - proper signal management.
