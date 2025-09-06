@@ -30,21 +30,21 @@ I also think that this kernel can also be used by teachers and students that wan
 # Documentation
 
 Will publish a documentation on how to:
-  1. Setup environment.
-  2. Create and modify user programs.
+  1. Setup environment: check `INSTALLATION_macos.md`for mac users.
+  1. Create and modify user programs.
 
 Roadmap for now id to develop the following features (to have a proper userland shell working):
   - virtio mmio block device for having real disk image to read and store data (get rid of RAMFS).
-    - Files: create, write, lseek, dup.
-    - chdir, rmdir, ...
-    - proper signal management.
-    - display (ram based) and keyboard management: base is in place (need testing and debuging)
-    - tty (VT100)
-    - timer (using software timer for now for scheduling).
-    - user malloc() and free()
-    - .... so many things to do :)
-    - ideas very welcome as well.
-    - plan to port it to different Raspberry Pi platforms (Pi 2-4). So if anywone would like to help build abstractions, feel free.
+  - Files: create, write, lseek, dup.
+  - chdir, rmdir, ...
+  - proper signal management.
+  - display (ram based) and keyboard management: base is in place (need testing and debuging)
+  - tty (VT100)
+  - timer (using software timer for now for scheduling).
+  - user malloc() and free()
+  - .... so many things to do :)
+  - ideas very welcome as well.
+  - plan to port it to different Raspberry Pi platforms (Pi 2-4). So if anywone would like to help build abstractions, feel free.
 
 Contributors are very welcome :)
 
