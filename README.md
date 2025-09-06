@@ -44,6 +44,7 @@ Roadmap for now id to develop the following features (to have a proper userland 
     - user malloc() and free()
     - .... so many things to do :)
     - ideas very welcome as well.
+    - plan to port it to different Raspberry Pi platforms (Pi 2-4). So if anywone would like to help build abstractions, feel free.
 
 Contributors are very welcome :)
 
