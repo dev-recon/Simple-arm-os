@@ -75,8 +75,8 @@ void init_process_system(void)
 
     //init_process->context.sp = new_vm->stack_start;             /* Stack pointer */
     init_process->context.is_first_run = 1;                     /* Pas la premiere fois */
-    init_process->context.ttbr0 = (uint32_t)ttbr0_pgdir;
-    init_process->context.asid = ASID_KERNEL;
+    //init_process->context.ttbr0 = (uint32_t)ttbr0_pgdir;
+    //init_process->context.asid = ASID_KERNEL;
     init_process->context.returns_to_user = 0;
 
     //KDEBUG("[INIT] SCV STACK TOP = 0x%08X\n", init_process->context.svc_sp_top);

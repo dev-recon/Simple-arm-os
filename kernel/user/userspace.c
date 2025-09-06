@@ -180,12 +180,12 @@ int copy_from_user(void* to, const void* from, size_t n)
         return -1;  /* Overflow */
     }
 
-    uint32_t offset = (uint32_t)from & 0xFFF;
+    //uint32_t offset = (uint32_t)from & 0xFFF;
 
     //KDEBUG("copy_from_user: All controls OK mapping address to kernel...\n");
     
 
-    uint32_t *temp_page = (uint32_t *)map_user_to_kernel(pgdir,(uint32_t)from);
+    //uint32_t *temp_page = (uint32_t *)map_user_to_kernel(pgdir,(uint32_t)from);
 
     //KDEBUG("current pgdir = 0x%08X\n", pgdir);
     //KDEBUG("temp_page = 0x%08X\n", temp_page);
@@ -193,19 +193,19 @@ int copy_from_user(void* to, const void* from, size_t n)
 
     //hexdump( (void *)((uint32_t)temp_page + offset) , 32);
 
-    char *test_str = (char *)((uint32_t)temp_page + offset);
+    //char *test_str = (char *)((uint32_t)temp_page + offset);
 
     //KDEBUG("test_str = %s of len = %d\n", test_str, strlen(test_str));
     
     /* Copie securisee */
-    memcpy(to, (void *)test_str, strlen(test_str));
+    memcpy(to, (void *)from, strlen(from));
     //memcpy(to, (void *)test_str, strlen(test_str));
 
 
     //KDEBUG("TO = %s of len = %d\n", to, strlen(to));
 
 
-    unmap_temp_page(temp_page);
+    //unmap_temp_page(temp_page);
 
     return 0;
 }
@@ -268,11 +268,12 @@ char* copy_string_from_user(const char* user_str)
     
     /* Calculate length with limit */
     //len = strnlen_user(user_str, 4096);
-    len = 256;
+    len = strlen(user_str);
     if (len < 0) return NULL;
     
     kernel_str = kmalloc(len + 1);
     if (!kernel_str) return NULL;
+    memset(kernel_str, 0, len + 1);
 
     //KDEBUG("copy_string_from_user: About to copy from user...\n");
     

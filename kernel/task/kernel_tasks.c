@@ -8,6 +8,7 @@
 #include <kernel/syscalls.h>
 #include <kernel/process.h>
 #include <kernel/timer.h>
+#include <kernel/file.h>
 
 /* === VARIABLES STATIQUES === */
 static volatile bool system_shutdown = false;
@@ -535,7 +536,7 @@ void working_child(int level, int dummy) {
         }
 
         /* Condition pour fork imbriqué */
-        if (fork_depth < 1) {
+        if (fork_depth < 5) {
             working_child(fork_depth+1,dummy);
         }
         
@@ -571,13 +572,51 @@ void working_child(int level, int dummy) {
 }
 
 
+void mini_shell(const char* path) {
+    
+    int len = strlen(path);
+    char *kernel_path = (char *)kmalloc(len+1);
+    strncpy(kernel_path, path, len);
+    int fd = kernel_open(kernel_path, O_RDONLY , S_IRUSR);
+
+    KDEBUG("AFTER SYS_OPEN fd = %d for filepath = %s\n", fd, path);
+
+    if(fd>0)
+    {
+        uint8_t* buf = (uint8_t*)kmalloc(PAGE_SIZE);
+        if(sys_read(fd, buf, PAGE_SIZE ))
+        {
+            hexdump((void *)buf, 128);
+        }
+
+        sys_close(fd);
+    }
+
+}
+
+
+void simple_shell_task3(void* arg) {
+
+    (void)arg;
+
+    const char* path = "/readme.txt";
+
+    task_sleep_ms(10000); 
+    yield();
+
+    kprintf("Parent PID: %d about to run program\n", sys_getpid());
+        
+    mini_shell(path);
+
+    sys_exit(-1);
+}
 
 void simple_shell_task(void* arg) {
 
     (void)arg;
 
-    const char* path = "/bin/hello";
-    char* name = "hello";
+    const char* path = "/bin/readfile";
+    char* name = "read_file";
 
     task_sleep_ms(10000); 
     yield();
@@ -598,7 +637,7 @@ void simple_shell_task(void* arg) {
 /**
  * Fonction shell simple pour tester les syscalls - adaptee
  */
-void simple_shell_task3(void* arg)
+void simple_shell_task4(void* arg)
 {
     (void)arg;
     

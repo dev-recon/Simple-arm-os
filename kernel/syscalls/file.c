@@ -78,18 +78,14 @@ int sys_close(int fd)
     return 0;
 }
 
-int sys_open(const char* pathname, int flags, mode_t mode)
+int kernel_open(char* kernel_path, int flags, mode_t mode)
 {
-    char* kernel_path;
     inode_t* inode;
     file_t* file;
     int fd;
     
     /* Suppression du warning unused parameter */
     (void)mode;
-    
-    kernel_path = copy_string_from_user(pathname);
-    if (!kernel_path) return -EFAULT;
     
     /* Find inode */
     inode = path_lookup(kernel_path);
@@ -138,6 +134,29 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     }
     
     current_task->process->files[fd] = file;
+    return fd;
+}
+
+
+int sys_open(const char* pathname, int flags, mode_t mode)
+{
+    char* kernel_path;
+ 
+    int fd;
+    
+    /* Suppression du warning unused parameter */
+    (void)mode;
+    
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path) return -EFAULT;
+
+    KDEBUG("sys_open: opening file %s, kernel_path = %s\n", pathname, kernel_path);
+    
+    fd = kernel_open(kernel_path, flags, mode);
+
+    KDEBUG("sys_open: opened file fd = %d\n", fd);
+  
+
     return fd;
 }
 

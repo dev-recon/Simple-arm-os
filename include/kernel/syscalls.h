@@ -85,6 +85,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[]);
 void sys_exit(int status);
 int sys_waitpid(pid_t pid, int* status, int options);
 int kernel_waitpid(pid_t pid, int* status, int options);
+int kernel_open(char* kernel_path, int flags, mode_t mode);
 
 /* Process info syscalls */
 int sys_getpid(void);

@@ -11,6 +11,8 @@
 /* Syscalls de base */
 int write(int fd, const void* buf, size_t count);
 int read(int fd, void* buf, size_t count);
+int open(const char* path, int flags, mode_t mode);
+int close(int fd);
 void exit(int status) __attribute__((noreturn));
 
 /* Processus */

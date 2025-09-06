@@ -187,95 +187,25 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         return -EINVAL;
     }
 
-    //print_cpu_mode();
-
-    //kernel_context_save_t save = switch_to_kernel_context();
     len = strlen(filename);
-       // KDEBUG("sys_execve: filename address %s - len is %d\n", filename, len);
-       // KDEBUG("sys_execve: argc= %d, envpc= %d\n", argc, envpc);
-    //KDEBUG("sys_execve: argv= 0x%08X, envp= 0x%08X\n", argv, envp);
-
-    //hexdump(argv,1);
-    //hexdump(envp,1);
 
     if(argv )
     while (argc < 32 && argv[argc]) {
         argc++;
-        //KDEBUG("sys_execve: argc loop = %d\n", argc);
     }
-        //KDEBUG("sys_execve: filename address %p - len is %d\n", filename, len);
-        //KDEBUG("sys_execve: argc= %d, envpc= %d\n", argc, envpc);
 
     if(envp )
     while (envpc < 32 && envp[envpc]) {
         envpc++;
-        //KDEBUG("sys_execve: envpc loop = %d\n", envpc);
     }
-    //KDEBUG("sys_execve: filename address %p - len is %d\n", filename, len);
-    //KDEBUG("sys_execve: argc= %d, envpc= %d\n", argc, envpc);
 
-
-    //switch_to_kernel_context();
-
-    //bool user_mode = IS_USER_ADDR((uint32_t)filename);
     uint32_t spsr = read_spsr();
     uint32_t caller_mode = spsr & 0x1f;   // 0x10 = USR
 
     bool from_user = (caller_mode == ARM_MODE_USR);  // tu n’utilises pas SYS ici
- 
-   //setup_mock_user_space();
 
    if(from_user){
 
-        //KDEBUG("sys_execve: usermode detected 0x%08X - %s\n", (uint32_t)filename, filename); 
-
-        //KDEBUG("sys_execve: filename address %p - len is %d\n", filename, len);
-        //KDEBUG("sys_execve: argc= %d, envpc= %d\n", argc, envpc);
-
-        //print_cpu_mode();
-        //debug_mmu_state();
-
-/*         // Copier les arguments depuis l'espace utilisateur 
-        kernel_filename = copy_string_from_user(filename);
-        if (!kernel_filename) {
-            KERROR("sys_execve: Failed to copy filename %s\n", filename);
-            return -EFAULT;
-        }
-
-        KDEBUG("sys_execve: filename copied successfully *%s*\n", kernel_filename);
-
-        
-        kernel_argv = copy_argv_from_user(argv, 1);
-        kernel_envp = copy_argv_from_user(envp, 1); */
-
-        //unmap_user_page(kernel_pgdir, (uint32_t)filename);
-        //unmap_user_page(kernel_pgdir, (uint32_t)argv);
-        //unmap_user_page(kernel_pgdir, (uint32_t)envp);
-
-        kernel_filename = (char *)kmalloc(len+1);
-        kernel_argv = (char **)kmalloc(sizeof(char*) * 5);
-        kernel_envp = (char **)kmalloc(sizeof(char*) * 5);
-        for(int i=0; i < 5; i++){
-            if(kernel_argv)
-                kernel_argv[i] = (char *)kmalloc(256);
-            if(kernel_envp)
-                kernel_envp[i] = (char *)kmalloc(256);
-        }
-
-        strcpy(kernel_filename, filename);
-        strcpy(kernel_argv[0], argv[0]);
-
-        kernel_argv[1] = argv[1];
-        kernel_envp[0] = envp[0];
-
-        //KDEBUG("sys_execve: filename copied successfully *%s*\n", kernel_filename);
-        //KDEBUG("sys_execve: argv[0] *%s*\n", kernel_argv[0]);
-   }
-   else{
-
-        //KDEBUG("sys_execve: kernel mode detected 0x%08X - %s\n", (uint32_t)filename, filename); 
-
-
         kernel_filename = (char *)kmalloc(len+1);
         kernel_argv = (char **)kmalloc(sizeof(char*) * 5);
         kernel_envp = (char **)kmalloc(sizeof(char*) * 5);
@@ -292,14 +222,24 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         kernel_argv[1] = argv[1];
         kernel_envp[0] = envp[0];
    }
-    
-    //char* const argv[] = { "hello", NULL };
-    //char* const envp[] = { NULL };
+   else {
+        kernel_filename = (char *)kmalloc(len+1);
+        kernel_argv = (char **)kmalloc(sizeof(char*) * 5);
+        kernel_envp = (char **)kmalloc(sizeof(char*) * 5);
+        for(int i=0; i < 5; i++){
+            if(kernel_argv)
+                kernel_argv[i] = (char *)kmalloc(256);
+            if(kernel_envp)
+                kernel_envp[i] = (char *)kmalloc(256);
+        }
 
-    //KDEBUG("sys_execve: filename address 0x%08X\n", filename);
-    //KDEBUG("sys_execve: argv address 0x%08X\n", argv);
+        strcpy(kernel_filename, filename);
+        strcpy(kernel_argv[0], argv[0]);
 
-    
+        kernel_argv[1] = argv[1];
+        kernel_envp[0] = envp[0];
+   }
+
     /* Ouvrir le fichier executable */
     exe_inode = path_lookup(kernel_filename);
     if (!exe_inode) {
@@ -317,14 +257,6 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         return -ENOEXEC;
     }
     
-/*     if (!validate_elf_header(&elf_header)) {
-        KERROR("sys_execve: Invalid ELF header\n");
-        put_inode(exe_inode);
-        cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
-        return -ENOEXEC;
-    } */
-    
-    
     /* Sauvegarder l'ancien espace memoire pour rollback - ACCeS CORRECT */
     old_vm = proc->process->vm;
     
@@ -337,8 +269,6 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         return -ENOMEM;
     }
     
-    //KDEBUG("sys_execve: argv[0] *%s*\n", kernel_argv[0]);
-    
     /* Configurer la pile utilisateur avec arguments */
     if (setup_user_stack(new_vm, kernel_argv, kernel_envp) < 0) {
         KERROR("sys_execve: Failed to setup user stack\n");
@@ -348,7 +278,6 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         return -ENOMEM;
     }
 
-
     /* Charger les segments ELF */
     if (load_elf_segments(exe_inode, &elf_header, new_vm) < 0) {
         KERROR("sys_execve: Failed to load ELF segments\n");
@@ -357,9 +286,6 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
         return -ENOEXEC;
     }
-    
-    /* === POINT DE NON-RETOUR - EXEC ReUSSIT === */
-        //KDEBUG("sys_execve: argv[0] *%s*\n", kernel_argv[0]);
     
     /* Remplacer l'espace memoire - ACCeS CORRECT */
     destroy_vm_space(old_vm);
@@ -374,8 +300,6 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     proc->context.asid = new_vm->asid;
     proc->context.returns_to_user = 1;
     proc->context.cpsr = 0x60000010;                          /* Mode USER */
-
-
 
         /* Configuration KERNEL (pour les syscalls futurs) */
     proc->context.svc_sp_top = (uint32_t)proc->stack_top; /* Pile kernel pour cette tâche */
@@ -395,11 +319,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     proc->context.usr_r[2] = (uint32_t)kernel_envp;     /* r2 = envp */
     proc->context.usr_r[3] = argc;     /* r2 = envp */
 
-
-    //KDEBUG("sys_execve: Process PID=%u executing\n", proc->process->pid);
-
-    
-    /* Fermer tous les fichiers CLOEXEC - ACCeS CORRECT */
+   /* Fermer tous les fichiers CLOEXEC - ACCeS CORRECT */
     close_cloexec_files(proc);
 
     switch_to_vm_space(new_vm);
@@ -408,15 +328,9 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     data_memory_barrier();
     instruction_sync_barrier();
 
-//asm volatile("dsb ish" ::: "memory");
-//asm volatile("mcr p15,0,%0,c7,c14,0"::"r"(0)); // DCCISW : clean+invalidate D-cache par set/way (global)
-//asm volatile("dsb ish; isb" ::: "memory");
-    
     /* Nettoyer les ressources temporaires */
     put_inode(exe_inode);
     cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
-
-    //KDEBUG("JUMPING TO USER SPACE !!! process PGDIR = 0x%08X\n", (uint32_t)new_vm->pgdir);
 
     //__task_switch_to_user(&proc->context);
     __task_switch(NULL, &proc->context);
@@ -437,7 +351,6 @@ int sys_fork(void)
 
     uint32_t return_address;
     __asm__ volatile("mov %0, lr" : "=r"(return_address));
-    //KDEBUG("sys_fork: Return address in C code: 0x%08X\n", return_address);
 
     uint32_t spsr = read_spsr();
     uint32_t caller_mode = spsr & 0x1f;   // 0x10 = USR
@@ -449,8 +362,6 @@ int sys_fork(void)
         KERROR("sys_fork: NULL Parent\n");
         return -EINVAL;
     }
-
-    //kernel_context_save_t save = switch_to_kernel_context();
     
     /* Creer le processus enfant en copiant le parent */
     child = task_create_copy(parent, from_user);
@@ -469,18 +380,12 @@ int sys_fork(void)
         destroy_vm_space(child->process->vm);
     }
 
-    //KDEBUG("sys_fork: before fork_vm_space - Parent PID=%u, Child PID=%u -- IS COMING FROM USER %s\n", 
-    //      parent->process->pid, child->process->pid, from_user ? "YES" : "NO");
-
     child->process->vm = fork_vm_space(parent->process->vm);
     if (!child->process->vm) {
         KERROR("sys_fork: Failed to copy VM space\n");
         destroy_process(child);
         return -ENOMEM;
     }
-
-    //KDEBUG("sys_fork: after fork_vm_space - Parent PID=%u, Child PID=%u\n", 
-    //      parent->process->pid, child->process->pid);
     
     /* Copier les descripteurs de fichiers - ACCeS CORRECT */
     for (i = 0; i < MAX_FILES; i++) {
@@ -493,7 +398,6 @@ int sys_fork(void)
     parent->context.usr_lr = return_address ;    /* Adresse après SWI */
     child->context.ttbr0 = (uint32_t)child->process->vm->pgdir;
     child->context.asid = child->process->vm->asid;
-
 
     if( from_user )
     {
@@ -523,18 +427,6 @@ int sys_fork(void)
 
         child->context.spsr = read_spsr_svc();
 
-        //child->context.ttbr0 = parent->context.ttbr0;
-        //child->context.asid = parent->context.asid;
-        //child->process->vm->asid = parent->process->vm->asid;
-        //child->process->vm->pgdir = parent->process->vm->pgdir;
-
-        //KDEBUG("*************************************************************************\n");
-        //KDEBUG("*************************************************************************\n");
-        //KDEBUG("*************************************************************************\n");
-        //KDEBUG("* Task %s : is first run = %u\n", child->name, child->context.is_first_run);
-
-        //KDEBUG("*************************************************************************\n");
-
     }
     else{
         /* L'enfant retourne 0 dans r0 */
@@ -550,39 +442,7 @@ int sys_fork(void)
         child->context.usr_r[0] = 0;            /*  Enfant retourne 0 */
     }
 
-    //KDEBUG("* Task 0x%08X : context = 0x%08X \n", parent, parent->context);
-    //debug_print_ctx(&parent->context);
-    //debug_print_ctx(&child->context);
-    
-    /* Copier le contexte CPU complet du parent */
-    //uint32_t child_sp = child->context.sp;  // Sauvegarder
-    //memcpy(&child->context, &parent->context, sizeof(task_context_t));
-    //child->context.sp = child_sp;  // Restaurer
-    
-
-
-    //KDEBUG("CHILD SP = 0x%08X\n", child->context.sp);
-    //KDEBUG("CHILD Stack Base = 0x%08X\n", child->stack_base);
-    //KDEBUG("CHILD Stack Top = 0x%08X\n", child->stack_top);
-
-    //KDEBUG("Child return address = 0x%08X\n", child->context.pc);
-    //KDEBUG("Parent CPSR = 0x%02X\n", parent->context.cpsr & 0x1F);
-    //KDEBUG("Child CPSR = 0x%02X\n", child->context.cpsr & 0x1F);
-  
-    /* Ajouter l'enfant a la liste des taches pretes */
-
-        //KDEBUG("*************************************************************************\n");
-        //KDEBUG("* Task %s : is first run = %u - TTBR0 = 0x%08X\n", child->name, child->context.is_first_run, child->context.ttbr0);
-
-        //KDEBUG("*************************************************************************\n");
-
     add_to_ready_queue(child);
-
-    //restore_from_kernel_context(save);
-    
-    /* ACCeS CORRECT */
-    //KINFO("sys_fork: Success - Parent PID=%u, Child PID=%u\n", 
-    //      parent->process->pid, child->process->pid);
     
     return child->process->pid;
 }
@@ -608,20 +468,6 @@ void sys_exit(int status)
         task_destroy(proc);
         return;
     }
-
-    //KINFO("[EXIT] *** PROCESS EXITING ***\n");
-    //KINFO("[EXIT] PID=%u exiting with code %d\n", 
-    //      proc ? proc->process->pid : 0, status);
-
-
-/*     if (proc->process->parent) {
-        KINFO("[EXIT] Parent PID=%u state=%s\n", 
-              proc->process->parent->process->pid,
-              task_state_string(proc->process->parent->state));
-    } */
-    
-    //KINFO("sys_exit: Process PID=%u (%s) exiting with status %d\n", 
-    //      proc->process->pid, proc->name, status);
     
     /* CORRECTION: États cohérents avec sys_waitpid */
     proc->process->exit_code = status;
@@ -641,9 +487,6 @@ void sys_exit(int status)
     remove_from_ready_queue(proc);
     
     /* Declencher une commutation de contexte */
-    //KDEBUG("sys_exit: Process PID=%u now zombie, scheduling next task\n", 
-    //       proc->process->pid);
-
     schedule();
     
     /* Cette ligne ne devrait jamais s'executer */
@@ -662,8 +505,6 @@ int kernel_waitpid(pid_t pid, int* status, int options)
 {
     task_t* parent = current_task;
     task_t* zombie = NULL;
-    //task_t* child = NULL;
-    //task_t* prev;
     
     (void)options;
     
@@ -672,30 +513,16 @@ int kernel_waitpid(pid_t pid, int* status, int options)
         return -EINVAL;
     }
     
-    /* DEBUG AU DÉBUT */
-    //KDEBUG("kernel_waitpid: Called by PID=%u\n", parent->process->pid);
-    //KDEBUG("kernel_waitpid: Called by %s\n", parent->name);
-
-    //if (current_task && strstr(current_task->name, "child")) {
-    //    KERROR("BUG: Child PID=%u is calling kernel_waitpid()!\n", parent->process->pid);
-    //}
-    
-    //KDEBUG("kernel_waitpid: Parent PID=%u waiting for PID=%d\n", 
-    //       parent->process->pid, pid);
-
-    bool from_user = parent->context.returns_to_user ? true : false;
-    if(from_user){
-        parent->context.returns_to_user = 0 ;  // FIX IT
+    //bool from_user = parent->context.returns_to_user ? true : false;
+    //if(from_user){
+    //    parent->context.returns_to_user = 0 ;  // FIX IT
         //KDEBUG("kernel_waitpid: Blocking parent PID %d -> Forcing return to kernel\n", parent->process->pid);
-        yield();
+    //    yield();
         // Parent is temporarily restoring to kernel to not resuming to user too early
-    }
+    //}
     
     while (1) {
         /* Chercher un processus zombie - ACCeS CORRECT */
-        //child = parent->process->children;
-        //KDEBUG("PARENT = 0x%08X\n", (uint32_t)parent);
-        //KDEBUG("PARENT NAME = %s\n", parent->name);
 
         //task_sleep_ms(1000);
 
@@ -705,14 +532,6 @@ int kernel_waitpid(pid_t pid, int* status, int options)
             /* Zombie trouve - ACCeS CORRECT */
             pid_t child_pid = zombie->process->pid;
             int exit_code = zombie->process->exit_code;
-            
-            //KINFO("kernel_waitpid: Found zombie PID %u with exit code %d \n", 
-            //      child_pid, exit_code);
-            //KDEBUG("ZOMBIE CHILD = 0x%08X\n", (uint32_t)parent);
-            //KDEBUG("ZOMBIE CHILD NAME = %s\n", zombie->name);
-
-            //debug_print_ctx(&parent->context);
-
             
             /* Copier le statut de sortie */
             if (status) {
@@ -727,16 +546,6 @@ int kernel_waitpid(pid_t pid, int* status, int options)
             zombie->process->state = (proc_state_t)PROC_DEAD;
             destroy_process(zombie);
             
-            /* DEBUG QUAND ON RETOURNE */
-            //KDEBUG("kernel_waitpid: Parent PID=%u returning child_pid=%u\n", 
-            //       parent->process->pid, child_pid);
-
-            if(from_user){
-                //parent->context.returns_to_user = 1 ;  // FIX IT
-                //yield();
-                // Parent is temporarily restoring to kernel to not resuming to user too early
-            }
-
             return child_pid;
         }
         
@@ -753,21 +562,10 @@ int kernel_waitpid(pid_t pid, int* status, int options)
         parent->process->waitpid_iteration++;
         
         /* Bloquer le parent en attente - ACCeS CORRECT */
-        //KDEBUG("kernel_waitpid: Blocking parent PID %u\n", parent->process->pid);
         parent->state = TASK_BLOCKED;
         parent->process->state = (proc_state_t)PROC_BLOCKED;
 
-        if (current_task && strstr(current_task->name, "child")) {
-            //KDEBUG("[CHILD] kernel_waitpid() - about to yield()\n");
-        }
-        
-        //debug_print_ctx(&parent->context);
-
         yield();
-
-        if (current_task && strstr(current_task->name, "child")) {
-            //KDEBUG("[CHILD] kernel_waitpid() - returned from yield()\n");
-        }
         
         //KDEBUG("kernel_waitpid: Parent PID %u resumed\n", parent->process->pid);
     }
@@ -783,45 +581,26 @@ int sys_waitpid(pid_t pid, int* status, int options)
     //KDEBUG("sys_waitpid: called by = %d - &status = 0x%08X\n", pid, (uint32_t)status);
 
     task_t *parent = current_task;
-    //uint32_t usr_fp = parent->context.usr_r[11];
-    //uint32_t usr_r0 = parent->context.usr_r[0];
-    //uint32_t usr_r1 = parent->context.usr_r[1];
-    //uint32_t usr_r2 = parent->context.usr_r[2];
-    //uint32_t usr_r3 = parent->context.usr_r[3];
 
     bool from_user = parent->context.returns_to_user ? true : false;
     if(from_user){
         parent->context.returns_to_user = 0 ;  // FIX IT
-        //KDEBUG("sys_waitpid: Blocking parent PID %d -> Forcing return to kernel\n", parent->process->pid);
         // Parent is temporarily restoring to kernel to not resuming to user too early
     }
 
     int exit_code;
     pid_t result = kernel_waitpid(pid, &exit_code, options);
 
-    //debug_print_ctx(&parent->context);
-
     if (result > 0 && status) {
         /* copy_to_user pour les appels depuis l'espace utilisateur */
         if (copy_to_user(status, &exit_code, sizeof(int)) < 0) {
             return -EFAULT;
         }
-        //KDEBUG("AFTER COPY\n");
     }
 
-    //KDEBUG("sys_waitpid: result = %u - exit_code = %u\n", result, exit_code);
     if(from_user){
 
         parent->context.returns_to_user = 1 ;  // FIX IT
-        //parent->context.usr_r[11] = usr_fp;
-        //parent->context.usr_r[0] = usr_r0;
-        //parent->context.usr_r[1] = usr_r1;
-        //parent->context.usr_r[2] = usr_r2;
-        //parent->context.usr_r[3] = usr_r3;
-        //KDEBUG("sys_waitpid: parent PID %d -> returning with child status = %d\n", parent->process->pid, *status);
-        //debug_print_ctx(&current_task->context);
-        //data_memory_barrier();
-        //instruction_sync_barrier();
 
         yield();
         // Parent is temporarily restoring to kernel to not resuming to user too early

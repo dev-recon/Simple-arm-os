@@ -22,7 +22,7 @@ fi
 
 cp -f $USERLAND_DIR/hello/hello $USERFS_DIR/bin
 cp -f $USERLAND_DIR/hello2/hello2 $USERFS_DIR/bin
-cp -f $USERLAND_DIR/hello3/hello3 $USERFS_DIR/bin
+cp -f $USERLAND_DIR/readfile/readfile $USERFS_DIR/bin
 
 # Methode 1: Creer un archive TAR
 echo "1. Creating TAR archive..."

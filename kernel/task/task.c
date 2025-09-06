@@ -133,17 +133,17 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
             uint32_t parent_stack_top = (uint32_t)parent->stack_base + parent->stack_size;
             uint32_t parent_sp_offset_from_top = parent_stack_top - parent->context.sp;
             
-            KDEBUG("Parent stack analysis:\n");
-            KDEBUG("  Parent stack: %p - %p\n", parent->stack_base, (uint8_t*)parent->stack_base + parent->stack_size);
-            KDEBUG("  Parent SP: 0x%08X\n", parent->context.sp);
-            KDEBUG("  Offset from top: %u bytes\n", parent_sp_offset_from_top);
+            //KDEBUG("Parent stack analysis:\n");
+            //KDEBUG("  Parent stack: %p - %p\n", parent->stack_base, (uint8_t*)parent->stack_base + parent->stack_size);
+            //KDEBUG("  Parent SP: 0x%08X\n", parent->context.sp);
+            //KDEBUG("  Offset from top: %u bytes\n", parent_sp_offset_from_top);
             
             /* Verifier que le SP parent est valide AVANT de copier */
             if (parent->context.sp < (uint32_t)parent->stack_base || 
                 parent->context.sp >= parent_stack_top) {
-                KERROR("task_create_copy: Parent SP invalid! Cannot copy stack\n");
-                KERROR("  Parent SP: 0x%08X, Range: %p - 0x%08X\n", 
-                    parent->context.sp, parent->stack_base, parent_stack_top);
+                //KERROR("task_create_copy: Parent SP invalid! Cannot copy stack\n");
+                //KERROR("  Parent SP: 0x%08X, Range: %p - 0x%08X\n", 
+                //    parent->context.sp, parent->stack_base, parent_stack_top);
                 
                 /* Utiliser pile propre au lieu d'echouer */
                 memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
@@ -183,12 +183,12 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
                     }
                 }
 
-                KDEBUG("Stack address corrections: %u pointers fixed\n", corrections);
+                //KDEBUG("Stack address corrections: %u pointers fixed\n", corrections);
                 
-                KDEBUG("Child stack analysis:\n");
-                KDEBUG("  Child stack: %p - %p\n", child->stack_base, child->stack_top);
-                KDEBUG("  Child SP: 0x%08X\n", child->context.sp);
-                KDEBUG("  Copied stack with SP offset %u from top\n", parent_sp_offset_from_top);
+                //KDEBUG("Child stack analysis:\n");
+                //KDEBUG("  Child stack: %p - %p\n", child->stack_base, child->stack_top);
+                //KDEBUG("  Child SP: 0x%08X\n", child->context.sp);
+                //KDEBUG("  Copied stack with SP offset %u from top\n", parent_sp_offset_from_top);
             }
         } else {
             /* Pile propre si parent invalide */
@@ -840,8 +840,6 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
 
         init_standard_files(task->process);
 
-
-
         /* Initialiser les champs waitpid */
         task->process->waitpid_pid = 0;
         task->process->waitpid_status = NULL;
@@ -1001,7 +999,7 @@ void yield(void)
     //    KDEBUG("[CHILD] yield() called\n");
     //}
 
-    task_sleep_ms(1000);  // Pause a bit to avoid race conditions.
+    task_sleep_ms(100);  // Pause a bit to avoid race conditions.
     
     schedule();
     
@@ -1162,6 +1160,7 @@ void save_task_context_safe(task_t* task)
         /* Pour les autres tâches, comportement normal */
         if (is_on_task_stack(task, current_sp)) {
             task->context.sp = current_sp;
+            task->context.svc_sp = current_sp;
             //KDEBUG("Saved valid SP for %s: 0x%08X\n", task->name, current_sp);
         } else {
 
@@ -1389,9 +1388,9 @@ void schedule(void)
         return;
     }
 
-        //KDEBUG("ROBUST: %s->%s (old_first=%u, new_first=%u)\n", 
-        //   old_task->name, next_task->name,
-        //   old_task->context.is_first_run, next_task->context.is_first_run);
+    //KDEBUG("ROBUST: %s->%s (old_first=%u, new_first=%u)\n", 
+    //       old_task->name, next_task->name,
+    //       old_task->context.is_first_run, next_task->context.is_first_run);
     
     next_task->state = TASK_RUNNING;
     next_task->switch_count++;

@@ -242,11 +242,6 @@ static int fat32_dir_readdir(file_t* file, dirent_t* dirent)
                 fat32_83_to_name((char*)entry->name, dirent->d_name);
                 dirent->d_reclen = sizeof(dirent_t);
                 
-                //KDEBUG("[READDIR] Found entry %u: '%s' (type: %s, cluster: %u)\n",
-                //       entry_count, dirent->d_name,
-                //       (dirent->d_type == DT_DIR) ? "DIR" : "FILE",
-                //       (uint32_t)dirent->d_ino);
-                
                 /* Incrementer l'offset pour la prochaine lecture */
                 file->offset++;
                 

@@ -27,6 +27,7 @@ typedef enum {
 
 /* Size type - pour malloc, strlen, etc. */
 typedef unsigned int size_t;
+typedef unsigned int mode_t;
 
 /* Signed size type - pour différences, retours d'erreur */
 typedef int ssize_t;
