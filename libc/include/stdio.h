@@ -181,4 +181,17 @@ char* tmpnam(char* str);
 int remove(const char* pathname);
 int rename(const char* oldpath, const char* newpath);
 
+/* ========================================
+ * Gestion mémoire
+ * ======================================== */
+
+/* Allocation/libération mémoire */
+void *malloc(size_t size);
+void free(void *ptr);
+void *calloc(size_t count, size_t size);
+void *realloc(void *ptr, size_t size);
+
+/* Allocation alignée */
+void* aligned_alloc(size_t alignment, size_t size);
+
 #endif /* _STDIO_H */

@@ -168,7 +168,7 @@ void init_process_signals(task_t* proc)
 
     
     for (uint32_t i = 0; i < pages_needed; i++) {
-        void* stack_page = allocate_user_page();
+        void* stack_page = allocate_page();
         if (!stack_page) {
             KERROR("[SIGNAL] Failed to allocate physical page %u\n", i);
             proc->process->signal_stack_base = 0;
@@ -223,7 +223,7 @@ void cleanup_process_signals(task_t* proc)
         uint32_t phys_addr = get_physical_address(proc->process->vm->pgdir, vaddr);
         if (phys_addr != 0) {
             map_user_page(proc->process->vm->pgdir, vaddr, 0,proc->process->vm->vma_list->flags,proc->process->vm->asid);
-            free_physical_page((void*)phys_addr);
+            free_page((void*)phys_addr);
         }
     }
     

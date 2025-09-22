@@ -178,6 +178,17 @@ void* kcalloc(size_t nmemb, size_t size)
     return ptr;
 }
 
+void* kzalloc(size_t size)
+{
+    void* ptr = kmalloc(size);
+    
+    if (ptr) {
+        memset(ptr, 0, size);
+    }
+    
+    return ptr;
+}
+
 void* krealloc(void* ptr, size_t size)
 {
     void* new_ptr;

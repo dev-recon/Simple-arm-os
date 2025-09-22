@@ -24,7 +24,7 @@ void init_display(void)
     uint32_t pages_needed = (fb_size + PAGE_SIZE - 1) / PAGE_SIZE;
     kprintf("Pages needed: %u\n", pages_needed);
     
-    framebuffer_base = (uint8_t*)allocate_contiguous_pages(pages_needed,true);
+    framebuffer_base = (uint8_t*)allocate_pages(pages_needed);
     if (!framebuffer_base) {
         kprintf("KO Failed to allocate framebuffer memory\n");
         return;
@@ -68,7 +68,7 @@ void init_display(void)
         kprintf("   Written: 0x12345678, Read: 0x%08X\n", read_back);
         
         /* Liberer la memoire en cas d'echec */
-        free_contiguous_pages(framebuffer_base, pages_needed);
+        free_pages(framebuffer_base, pages_needed);
         framebuffer_base = NULL;
     }
 }

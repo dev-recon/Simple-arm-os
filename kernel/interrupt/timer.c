@@ -16,6 +16,21 @@ static uint64_t last_timer_count = 0;
 static uint32_t software_system_ticks = 0;
 static bool timer_software_initialized = false;
 
+static bool in_critical_section = false;
+
+
+void set_critical_section(void){
+    in_critical_section = true;
+}
+
+void unset_critical_section(void){
+    in_critical_section = false;
+}
+
+bool get_critical_section(void)
+{
+    return in_critical_section;
+}
 
 void init_timer_software(void)
 {
@@ -50,6 +65,7 @@ void init_timer_software(void)
 /* Fonction à appeler périodiquement pour mettre à jour les ticks */
 void update_timer_software(void)
 {
+    
     if (!timer_software_initialized) {
         return;
     }
@@ -81,7 +97,7 @@ void update_timer_software(void)
         last_timer_count += ticks_elapsed * tick_interval;
         
         /* Scheduling si nécessaire */
-        if (process_system_ready && ticks_elapsed > 0) {
+        if (process_system_ready && ticks_elapsed > 0 && !in_critical_section) {
             /* Faire du scheduling pour chaque tick écoulé */
             for (uint32_t i = 0; i < ticks_elapsed; i++) {
                 if (software_system_ticks % 10 == 0) {  /* Tous les 100ms */
@@ -205,10 +221,10 @@ void timer_irq_handler(void)
     
     /* 5. RÉDUIRE drastiquement les messages */
     if (system_ticks % 1000 == 0) {  /* Toutes les 10 secondes seulement */
-        //uart_puts("[TIMER] System uptime: ");
-        //uart_put_dec(system_ticks / 100);
-        //uart_puts(" seconds\n");
-        //kprintf("[TIMER] System uptime: %u seconds\n", system_ticks / 100);
+        uart_puts("[TIMER] System uptime: ");
+        uart_put_dec(system_ticks / 100);
+        uart_puts(" seconds\n");
+        kprintf("[TIMER] System uptime: %u seconds\n", system_ticks / 100);
     }
     
     /* 6. Scheduling sans messages debug */
@@ -221,7 +237,7 @@ void timer_irq_handler(void)
             if (current_task->quantum_left == 0) {
                 current_task->quantum_left = 8;
                 current_task->state = TASK_READY;
-                schedule();
+                yield();
             }
         }
     }
@@ -335,7 +351,7 @@ uint32_t get_system_ticks(void)
 /* Fonction pour obtenir le temps en millisecondes */
 uint32_t get_time_ms(void)
 {
-    return (system_ticks * 1000) / TIMER_FREQ;
+    return (get_system_ticks() * 1000) / TIMER_FREQ;
 }
 
 /* Fonction de debug pour verifier l'etat du timer */
@@ -376,4 +392,52 @@ void wake_up_sleeping_processes(void)
 }
 
 
+
+/* Convertir timestamp Unix en structure datetime */
+void unix_to_datetime(uint32_t unix_time, datetime_t* dt) {
+    /* Nombre de secondes par jour */
+    const uint32_t SECONDS_PER_DAY = 86400;
+    
+    /* Epoch Unix commence le 1er janvier 1970 */
+    uint32_t days_since_epoch = unix_time / SECONDS_PER_DAY;
+    uint32_t seconds_today = unix_time % SECONDS_PER_DAY;
+    
+    /* Calculer l'heure, minute, seconde */
+    dt->hour = seconds_today / 3600;
+    dt->minute = (seconds_today % 3600) / 60;
+    dt->second = seconds_today % 60;
+    
+    /* Calculer l'année */
+    int year = 1970;
+    uint32_t days_remaining = days_since_epoch;
+    
+    while (days_remaining >= (is_leap_year(year) ? 366 : 365)) {
+        if (is_leap_year(year)) {
+            days_remaining -= 366;
+        } else {
+            days_remaining -= 365;
+        }
+        year++;
+    }
+    dt->year = year;
+    
+    /* Calculer le mois et le jour */
+    int month = 1;
+    while (days_remaining >= (uint32_t)get_days_in_month(month, year)) {
+        days_remaining -= get_days_in_month(month, year);
+        month++;
+    }
+    dt->month = month;
+    dt->day = days_remaining + 1;  /* +1 car les jours commencent à 1 */
+}
+
+
+/* Si vous avez un RTC sur votre board */
+uint32_t get_current_time(void) {
+    /* Pour QEMU virt, utiliser le PL031 RTC à 0x09010000 */
+    volatile uint32_t* rtc_base = (uint32_t*)0x09010000;
+    
+    /* Le PL031 donne directement un timestamp Unix */
+    return rtc_base[0];  /* RTC Data Register */
+}
 

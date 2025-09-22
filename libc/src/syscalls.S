@@ -40,6 +40,8 @@ SYSCALL sys_getppid, 119    /* __NR_getppid */
 SYSCALL sys_getuid, 24      /* __NR_getuid */
 SYSCALL sys_getgid, 47      /* __NR_getgid */
 SYSCALL sys_waitpid, 7      /* __NR_waitpid */
+SYSCALL sys_brk, 45         /* __NR_brk */
+
 
 /* I/O et fichiers */
 SYSCALL sys_read, 3         /* __NR_read */
@@ -85,6 +87,7 @@ syscall:
  * Wrappers C-compatibles avec gestion d'erreur
  * ======================================== */
 
+//   READ -> SYS_WRITE
 .global write
 .type write, %function  
 write:
@@ -105,6 +108,7 @@ write_success:
     pop {r7, lr}
     bx lr
 
+//   READ -> SYS_READ
 .global read
 .type read, %function
 read:
@@ -123,6 +127,7 @@ read_success:
     pop {r7, lr}
     bx lr
 
+//   OPEN -> SYS_OPEN
 .global open
 .type open, %function
 open:
@@ -141,6 +146,8 @@ open_success:
     pop {r7, lr}
     bx lr
 
+//   CLOSE -> SYS_CLOSE
+.global open
 .global close
 .type close, %function
 close:
@@ -159,6 +166,7 @@ close_success:
     pop {r7, lr}
     bx lr
 
+//   EXIT -> SYS_EXIT
 .global exit
 .type exit, %function
 exit:
@@ -174,6 +182,7 @@ _exit:
     swi #0
     b .
 
+//   GETPID -> SYS_GETPID
 .global getpid
 .type getpid, %function
 getpid:
@@ -183,6 +192,7 @@ getpid:
     pop {r7, lr}
     bx lr
 
+//   GETPPID -> SYS_GETPPID
 .global getppid  
 .type getppid, %function
 getppid:
@@ -192,6 +202,7 @@ getppid:
     pop {r7, lr}
     bx lr
 
+//   GETUID -> SYS_GETUID
 .global getuid
 .type getuid, %function
 getuid:
@@ -201,6 +212,7 @@ getuid:
     pop {r7, lr}
     bx lr
 
+//   GETGID -> SYS_GETGID
 .global getgid
 .type getgid, %function
 getgid:
@@ -210,6 +222,7 @@ getgid:
     pop {r7, lr}
     bx lr
 
+//   FORK -> SYS_FORK
 .global fork
 .type fork, %function
 fork:
@@ -229,6 +242,7 @@ fork_success:
     pop {r7, lr}
     bx lr
 
+//   EXECVE -> SYS_EXECVE
 .global execve
 .type execve, %function
 execve:
@@ -244,6 +258,7 @@ execve:
     pop {r7, lr}
     bx lr
 
+//   WAITPID -> SYS_WAITPID
 .global waitpid
 .type waitpid, %function
 waitpid:
@@ -262,6 +277,7 @@ waitpid_success:
     pop {r7, lr}
     bx lr
 
+//   KILL -> SYS_KILL
 .global kill
 .type kill, %function
 kill:
@@ -280,6 +296,7 @@ kill_success:
     pop {r7, lr}
     bx lr
 
+//   SIGNAL -> SYS_SIGNAL
 .global signal
 .type signal, %function
 signal:
@@ -289,6 +306,7 @@ signal:
     pop {r7, lr}
     bx lr
 
+//   SIGACTION -> SYS_SIGACTION
 .global sigaction
 .type sigaction, %function
 sigaction:
@@ -307,6 +325,7 @@ sigaction_success:
     pop {r7, lr}
     bx lr
 
+//   LSEEK -> SYS_LSEEK
 .global lseek
 .type lseek, %function
 lseek:
@@ -325,6 +344,7 @@ lseek_success:
     pop {r7, lr}
     bx lr
 
+//   PRINT -> SYS_PRINT
 /* Syscall spécial de votre kernel */
 .global print
 .type print, %function
@@ -334,6 +354,85 @@ print:
     swi #0
     pop {r7, lr}
     bx lr
+
+
+/* Dans la section des wrappers C-compatibles */
+//   BRK -> SYS_BRK
+.global brk
+.type brk, %function
+brk:
+    push {r7, lr}
+    mov r7, #45             /* SYS_BRK */
+    swi #0
+    
+    cmp r0, #0
+    bge brk_success
+    
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+brk_success:
+    pop {r7, lr}
+    bx lr
+
+//   SBRK -> utilise BRK
+.global sbrk
+.type sbrk, %function
+sbrk:
+    push {r4-r7, lr}
+    
+    /* Sauvegarder l'incrément */
+    //mov r4, r0
+    
+    /* Obtenir le brk actuel */
+    //mov r0, #0
+    //mov r7, #45             /* SYS_BRK */
+    //swi #0
+    
+    /* Sauvegarder l'ancien brk */
+    //mov r5, r0              /* r5 = ancien brk */
+    
+    /* Si increment == 0, retourner le brk actuel */
+    //cmp r4, #0
+    //moveq r0, r5
+    //beq sbrk_end
+    
+    /* Calculer nouveau brk */
+    //add r6, r5, r4          /* nouveau_brk = ancien + increment */
+    
+    /* Appeler sys_brk avec le nouveau brk */
+    mov r7, #45
+    swi #0
+    
+    /* Vérifier le succès */
+    //mov r6, #-1
+    //cmp r0, r6
+    //addne r0, r5, r4        /* Si succès, retourner nouveau brk */
+    //moveq r0, r5            /* Si succès, retourner ancien brk */
+    //bne sbrk_error
+    
+    /* Succès : retourner l'ancien brk */
+    //mov r0, r6
+    //b sbrk_end
+
+    cmp r0, #0
+    bge sbrk_success
+    
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+    
+sbrk_error:
+    mov r0, #12             /* ENOMEM */
+    bl __set_errno
+    mov r0, #-1
+    
+sbrk_success:
+    pop {r4-r7, lr}
+    bx lr
+
 
 /* ========================================
  * Gestion d'errno (simple)

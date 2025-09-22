@@ -90,6 +90,8 @@ bool is_valid_user_ptr(const void* ptr);
 file_t* create_file(void);
 void close_file(file_t* file);
 
+uint32_t get_next_inode_number(void);
+
 /* Helper functions */
 
 

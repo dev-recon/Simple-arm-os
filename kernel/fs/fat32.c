@@ -9,10 +9,18 @@
 #include <kernel/ramfs.h>
 #endif
 
+extern int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer);
+extern int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer);
+extern int blk_read_sector(uint64_t lba, void* buffer);
+extern int blk_write_sector(uint64_t lba, void* buffer);
+
+bool blk_is_initialized(void);
+
+
 #ifdef USE_RAMFS
-    #define storage_read_sectors(lba, count, buffer) ramfs_read_sectors(lba, count, buffer)
-    #define storage_write_sectors(lba, count, buffer) ramfs_write_sectors(lba, count, buffer)
-    #define storage_is_initialized() ramfs_is_initialized()
+    #define storage_read_sectors(lba, count, buffer) blk_read_sectors(lba, count, buffer)
+    #define storage_write_sectors(lba, count, buffer) blk_write_sectors(lba, count, buffer)
+    #define storage_is_initialized() blk_is_initialized()
 #else
     #define storage_read_sectors(lba, count, buffer) ata_read_sectors(lba, count, buffer)
     #define storage_write_sectors(lba, count, buffer) ata_write_sectors(lba, count, buffer)
@@ -24,6 +32,11 @@ bool test_ata_before_fat32(void) ;
 int ata_read_sectors_debug(uint64_t lba, uint32_t count, void* buffer);
 void fat32_parse_boot_sector_ultra_safe(fat32_boot_sector_t* dst, const fat32_raw_sector_t* raw);
 void run_pointer_arithmetic_test(const fat32_raw_sector_t* raw) ;
+
+extern bool is_fat_dirty(void);
+extern bool is_dirty_inodes(void);
+extern void sync_fat_to_disk(void);
+extern void sync_dirty_inodes(void);
 
 /* Utiliser un buffer aligne pour etre s-r */
 //static uint8_t boot_buffer[516] __attribute__((aligned(8)));
@@ -147,16 +160,21 @@ int ata_read_sectors_debug(uint64_t lba, uint32_t count, void* buffer)
     return result;
 }
 
+extern int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer);
+extern int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer);
+
 bool fat32_mount(){
 
-    KDEBUG("Mounting FAT32 from RAMFS...\n");
+    KDEBUG("Mounting FAT32 from VIRTIO MMIO BLK DEVICE...\n");
     
     /* Verifier que RAMFS est initialise */
-    if (!ramfs_is_initialized()) {
+/*     if (!ramfs_is_initialized()) {
         KERROR("FAT32: RAMFS not initialized\n");
         return false;
-    }
-    
+    } */
+    extern uint32_t ata_sector_size;
+    if( ata_sector_size == 0) return false;
+
     /* Allouer les structures */
     fat32_boot_sector_t *bs = kmalloc(sizeof(fat32_boot_sector_t));
     if (!bs) {
@@ -173,7 +191,7 @@ bool fat32_mount(){
     
     /* Lire le boot sector depuis RAMFS */
     KDEBUG("Reading boot sector from RAMFS sector 0...\n");
-    if (ramfs_read_sectors(0, 1, raw->data) < 0) {
+    if (blk_read_sectors(0, 1, raw->data) < 0) {
         KERROR("Failed to read boot sector from RAMFS\n");
         kfree(bs);
         kfree(raw);
@@ -181,17 +199,20 @@ bool fat32_mount(){
     }
     
     /* Parser le boot sector */
-    fat32_parse_boot_sector(bs, raw);
+    //fat32_parse_boot_sector(bs, raw);
+
+    fat32_parse_boot_sector(&fat32_fs.boot_sector, raw);
+
     
     /* CORRECTION: Verifier que c'est bien du FAT32 */
-    if (bs->boot_signature_55aa != 0xAA55) {
-        KERROR("Invalid boot signature: 0x%04X\n", bs->boot_signature_55aa);
+    if (fat32_fs.boot_sector.boot_signature_55aa != 0xAA55) {
+        KERROR("Invalid boot signature: 0x%04X\n", fat32_fs.boot_sector.boot_signature_55aa);
         kfree(bs);
         kfree(raw);
         return false;
     }
     
-    if (bs->fat_size_32 == 0) {
+    if (fat32_fs.boot_sector.fat_size_32 == 0) {
         KERROR("Not a FAT32 filesystem (fat_size_32 = 0)\n");
         kfree(bs);
         kfree(raw);
@@ -199,19 +220,19 @@ bool fat32_mount(){
     }
     
     KINFO("FAT32 boot sector valid:\n");
-    KINFO("  OEM: '%.8s'\n", bs->oem_name);
-    KINFO("  Bytes/sector: %u\n", bs->bytes_per_sector);
-    KINFO("  Sectors/cluster: %u\n", bs->sectors_per_cluster);
-    KINFO("  Reserved sectors: %u\n", bs->reserved_sectors);
-    KINFO("  FAT size: %u sectors\n", bs->fat_size_32);
-    KINFO("  Root cluster: %u\n", bs->root_cluster);
+    KINFO("  OEM: '%.8s'\n", fat32_fs.boot_sector.oem_name);
+    KINFO("  Bytes/sector: %u\n", fat32_fs.boot_sector.bytes_per_sector);
+    KINFO("  Sectors/cluster: %u\n", fat32_fs.boot_sector.sectors_per_cluster);
+    KINFO("  Reserved sectors: %u\n", fat32_fs.boot_sector.reserved_sectors);
+    KINFO("  FAT size: %u sectors\n", fat32_fs.boot_sector.fat_size_32);
+    KINFO("  Root cluster: %u\n", fat32_fs.boot_sector.root_cluster);
     
     /* CORRECTION: Calculer correctement les offsets */
-    fat32_fs.fat_start_sector = bs->reserved_sectors;
-    fat32_fs.data_start_sector = bs->reserved_sectors + (bs->num_fats * bs->fat_size_32);
-    fat32_fs.root_dir_cluster = bs->root_cluster;
-    fat32_fs.sectors_per_cluster = bs->sectors_per_cluster;
-    fat32_fs.bytes_per_cluster = bs->sectors_per_cluster * bs->bytes_per_sector;
+    fat32_fs.fat_start_sector = fat32_fs.boot_sector.reserved_sectors;
+    fat32_fs.data_start_sector = fat32_fs.boot_sector.reserved_sectors + (fat32_fs.boot_sector.num_fats * fat32_fs.boot_sector.fat_size_32);
+    fat32_fs.root_dir_cluster = fat32_fs.boot_sector.root_cluster;
+    fat32_fs.sectors_per_cluster = fat32_fs.boot_sector.sectors_per_cluster;
+    fat32_fs.bytes_per_cluster = fat32_fs.boot_sector.sectors_per_cluster * fat32_fs.boot_sector.bytes_per_sector;
     
     KINFO("FAT32 layout calculated:\n");
     KINFO("  FAT start: sector %u\n", fat32_fs.fat_start_sector);
@@ -220,7 +241,7 @@ bool fat32_mount(){
     KINFO("  Cluster size: %u bytes\n", fat32_fs.bytes_per_cluster);
     
     /* Charger la table FAT */
-    uint32_t fat_size_bytes = bs->fat_size_32 * 512;
+    uint32_t fat_size_bytes = fat32_fs.boot_sector.fat_size_32 * 512;
     fat32_fs.fat_table = kmalloc(fat_size_bytes);
     if (!fat32_fs.fat_table) {
         KERROR("Failed to allocate FAT table (%u bytes)\n", fat_size_bytes);
@@ -230,9 +251,9 @@ bool fat32_mount(){
     }
     
     KDEBUG("Reading FAT table from sector %u (%u sectors)...\n", 
-           fat32_fs.fat_start_sector, bs->fat_size_32);
+           fat32_fs.fat_start_sector, fat32_fs.boot_sector.fat_size_32);
     
-    if (ramfs_read_sectors(fat32_fs.fat_start_sector, bs->fat_size_32, fat32_fs.fat_table) < 0) {
+    if (blk_read_sectors(fat32_fs.fat_start_sector, fat32_fs.boot_sector.fat_size_32, fat32_fs.fat_table) < 0) {
         KERROR("Failed to read FAT table\n");
         kfree(fat32_fs.fat_table);
         kfree(bs);
@@ -246,7 +267,7 @@ bool fat32_mount(){
           fat32_fs.root_dir_cluster, root_sector);
     
     uint8_t test_buffer[512];
-    if (ramfs_read_sectors(root_sector, 1, test_buffer) < 0) {
+    if (blk_read_sectors(root_sector, 1, test_buffer) < 0) {
         KERROR("Cannot read root directory sector\n");
         kfree(fat32_fs.fat_table);
         kfree(bs);
@@ -301,6 +322,9 @@ bool test_ata_before_fat32(void)
     KINFO("\n\n********************************\n");
     
     KDEBUG("Reading sector 0 for test...\n");
+    extern void read_sector0_and_print(void);
+    read_sector0_and_print();
+
     if (ata_read_sectors_debug(0, 1, test_buffer) < 0) {
         KERROR("Failed to read test sector\n");
         return false;
@@ -338,7 +362,7 @@ uint32_t cluster_to_sector(uint32_t cluster)
     return fat32_fs.data_start_sector + (cluster - 2) * fat32_fs.sectors_per_cluster;
 }
 
-uint32_t get_next_cluster(uint32_t cluster)
+uint32_t fat32_get_next_cluster(uint32_t cluster)
 {
     uint32_t next;
     
@@ -358,6 +382,7 @@ int fat32_read_cluster(uint32_t cluster, void* buffer)
     return storage_read_sectors(sector, fat32_fs.sectors_per_cluster, buffer);
 }
 
+
 int fat32_read_file(uint32_t first_cluster, uint32_t file_size, void* buffer)
 {
     uint32_t cluster = first_cluster;
@@ -365,6 +390,15 @@ int fat32_read_file(uint32_t first_cluster, uint32_t file_size, void* buffer)
     char* buf = (char*)buffer;
     void* cluster_buf;
     uint32_t bytes_to_copy;
+
+    if( is_dirty_inodes() ){
+        sync_dirty_inodes();
+    }
+
+    if( is_fat_dirty() )
+    {
+        sync_fat_to_disk();
+    }
     
     while (cluster && cluster < 0x0FFFFFF8 && bytes_read < file_size) {
         cluster_buf = kmalloc(fat32_fs.bytes_per_cluster);
@@ -380,11 +414,12 @@ int fat32_read_file(uint32_t first_cluster, uint32_t file_size, void* buffer)
         bytes_read += bytes_to_copy;
         
         kfree(cluster_buf);
-        cluster = get_next_cluster(cluster);
+        cluster = fat32_get_next_cluster(cluster);
     }
     
     return bytes_read;
 }
+
 
 fat32_dir_entry_t* fat32_find_file(uint32_t dir_cluster, const char* filename)
 {
@@ -396,6 +431,16 @@ fat32_dir_entry_t* fat32_find_file(uint32_t dir_cluster, const char* filename)
     fat32_dir_entry_t* entry;
     char entry_name[13];
     fat32_dir_entry_t* result;
+
+
+    if( is_dirty_inodes() ){
+        sync_dirty_inodes();
+    }
+    
+    if( is_fat_dirty() )
+    {
+        sync_fat_to_disk();
+    }
     
     while (cluster && cluster < 0x0FFFFFF8) {
         cluster_buf = kmalloc(fat32_fs.bytes_per_cluster);
@@ -438,7 +483,7 @@ fat32_dir_entry_t* fat32_find_file(uint32_t dir_cluster, const char* filename)
         }
         
         kfree(cluster_buf);
-        cluster = get_next_cluster(cluster);
+        cluster = fat32_get_next_cluster(cluster);
     }
     
     return NULL;
@@ -604,128 +649,7 @@ bool validate_src_pointer(const fat32_raw_sector_t* raw)
     return true;
 }
 
-/* === VERSION ULTRA-SeCURISeE DU PARSING === */
-#if(0)
-void fat32_parse_boot_sector_ultra_safe(fat32_boot_sector_t* dst, const fat32_raw_sector_t* raw)
-{
-    extern int kprintf(const char *format, ...);
-    
-    kprintf("=== ULTRA-SAFE FAT32 PARSING ===\n");
-    
-    /* Validation complete avant toute operation */
-    if (!validate_src_pointer(raw)) {
-        kprintf("KO src pointer validation failed\n");
-        return;
-    }
-    
-    const uint8_t* src = raw->data;
-    kprintf("OK src validated: 0x%08X\n", (uint32_t)src);
-    
-    /* Parse avec acces par index uniquement (pas d'arithmetique) */
-    kprintf("Parsing header...\n");
-    dst->jump[0] = src[0];
-    dst->jump[1] = src[1];
-    dst->jump[2] = src[2];
-    kprintf("Jump: %02X %02X %02X\n", dst->jump[0], dst->jump[1], dst->jump[2]);
-    
-    /* OEM name */
-    for (int i = 0; i < 8; i++) {
-        dst->oem_name[i] = src[3 + i];
-    }
-    dst->oem_name[8] = '\0';
-    kprintf("OEM: '%s'\n", dst->oem_name);
-    
-    /* bytes_per_sector avec acces par index */
-    kprintf("Reading bytes_per_sector...\n");
-    uint8_t bps_lsb = src[0x0B];  /* Premier test critique */
-    kprintf("BPS LSB = 0x%02X\n", bps_lsb);
-    
-    uint8_t bps_msb = src[0x0C];  /* Deuxieme test critique */
-    kprintf("BPS MSB = 0x%02X\n", bps_msb);
-    
-    kprintf("ICI\n");
-    uint16_t var1 = (uint16_t)bps_lsb | ((uint16_t)bps_msb << 8);
-    kprintf("(uint16_t)bps_lsb | ((uint16_t)bps_msb << 8) = %u\n", var1) ;
-    kprintf("Adresse de dst->bytes_per_sector %p \n", &(dst->bytes_per_sector));
-    kprintf("Affectation directe de 512 a dst->bytes_per_sector\n");
-    dst->bytes_per_sector = 512 ;
-    kprintf("Apres affectation directe dst->bytes_per_sector = %d\n", dst->bytes_per_sector);
-    kprintf("tout va bien ici\n") ;
 
-    kprintf("bytes_per_sector = %u\n", dst->bytes_per_sector);
-
-    
-    /* Continue with other fields using index access only */
-    dst->sectors_per_cluster = src[0x0D];
-    kprintf("sectors_per_cluster = %u\n", dst->sectors_per_cluster);
-    
-    /* reserved_sectors */
-    dst->reserved_sectors = (uint16_t)src[0x0E] | ((uint16_t)src[0x0F] << 8);
-    kprintf("reserved_sectors = %u\n", dst->reserved_sectors);
-    
-    /* Continue with all other fields... */
-    dst->num_fats = src[0x10];
-    dst->root_entries = (uint16_t)src[0x11] | ((uint16_t)src[0x12] << 8);
-    dst->total_sectors_16 = (uint16_t)src[0x13] | ((uint16_t)src[0x14] << 8);
-    dst->media_type = src[0x15];
-    dst->fat_size_16 = (uint16_t)src[0x16] | ((uint16_t)src[0x17] << 8);
-    dst->sectors_per_track = (uint16_t)src[0x18] | ((uint16_t)src[0x19] << 8);
-    dst->num_heads = (uint16_t)src[0x1A] | ((uint16_t)src[0x1B] << 8);
-    
-    /* hidden_sectors (32-bit) */
-    dst->hidden_sectors = (uint32_t)src[0x1C] | ((uint32_t)src[0x1D] << 8) |
-                         ((uint32_t)src[0x1E] << 16) | ((uint32_t)src[0x1F] << 24);
-    
-    /* total_sectors_32 */
-    dst->total_sectors_32 = (uint32_t)src[0x20] | ((uint32_t)src[0x21] << 8) |
-                           ((uint32_t)src[0x22] << 16) | ((uint32_t)src[0x23] << 24);
-    
-    /* FAT32 extended fields */
-    dst->fat_size_32 = (uint32_t)src[0x24] | ((uint32_t)src[0x25] << 8) |
-                      ((uint32_t)src[0x26] << 16) | ((uint32_t)src[0x27] << 24);
-    kprintf("fat_size_32 = %u\n", dst->fat_size_32);
-    
-    dst->ext_flags = (uint16_t)src[0x28] | ((uint16_t)src[0x29] << 8);
-    dst->fs_version = (uint16_t)src[0x2A] | ((uint16_t)src[0x2B] << 8);
-    
-    dst->root_cluster = (uint32_t)src[0x2C] | ((uint32_t)src[0x2D] << 8) |
-                       ((uint32_t)src[0x2E] << 16) | ((uint32_t)src[0x2F] << 24);
-    kprintf("root_cluster = %u\n", dst->root_cluster);
-    
-    dst->fs_info = (uint16_t)src[0x30] | ((uint16_t)src[0x31] << 8);
-    dst->backup_boot = (uint16_t)src[0x32] | ((uint16_t)src[0x33] << 8);
-    
-    /* Reserved area */
-    for (int i = 0; i < 12; i++) {
-        dst->reserved[i] = src[0x34 + i];
-    }
-    
-    /* Extended fields */
-    dst->drive_number = src[0x40];
-    dst->reserved1 = src[0x41];
-    dst->boot_signature = src[0x42];
-    
-    dst->volume_id = (uint32_t)src[0x43] | ((uint32_t)src[0x44] << 8) |
-                    ((uint32_t)src[0x45] << 16) | ((uint32_t)src[0x46] << 24);
-    
-    /* Volume label and fs type */
-    for (int i = 0; i < 11; i++) {
-        dst->volume_label[i] = src[0x47 + i];
-    }
-    dst->volume_label[11] = '\0';
-    
-    for (int i = 0; i < 8; i++) {
-        dst->fs_type[i] = src[0x52 + i];
-    }
-    dst->fs_type[8] = '\0';
-    
-    /* Boot signature */
-    dst->boot_signature_55aa = (uint16_t)src[0x1FE] | ((uint16_t)src[0x1FF] << 8);
-    
-    kprintf("OK Ultra-safe parsing completed successfully\n");
-    kprintf("Volume: '%.11s', FS: '%.8s'\n", dst->volume_label, dst->fs_type);
-}
-#endif
 /* === TEST DE DIAGNOSTIC === */
 
 void run_pointer_arithmetic_test(const fat32_raw_sector_t* raw)
@@ -783,7 +707,7 @@ int mount_fat32_filesystem(void)
     //}
 
     /* Test spécifique du root cluster */
-    //uint32_t root_next = get_next_cluster(fat32_fs.root_dir_cluster);
+    //uint32_t root_next = fat32_get_next_cluster(fat32_fs.root_dir_cluster);
     //KDEBUG("Root cluster %u -> next cluster %u\n", fat32_fs.root_dir_cluster, root_next);
 
     //KDEBUG("=== END FAT TABLE TEST ===\n");

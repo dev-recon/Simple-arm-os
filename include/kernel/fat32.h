@@ -95,6 +95,25 @@ typedef struct {
 #define FAT32_BAD_CLUSTER   0x0FFFFFF7
 #define FAT32_FREE_CLUSTER  0x00000000
 
+/* Caractères spéciaux dans les noms */
+#define FAT32_DELETED_ENTRY     0xE5    /* Entrée supprimée */
+#define FAT32_END_OF_ENTRIES    0x00    /* Fin des entrées */
+
+/* Masques utiles */
+#define FAT32_ATTR_LONG_NAME_MASK   0x0F
+#define FAT32_ATTR_ALL             0x3F
+
+#define FAT32_ATTR_LONG_NAME FAT_ATTR_LFN
+
+
+/* Permissions pour inode_permission */
+#define MAY_EXEC    1
+#define MAY_WRITE   2
+#define MAY_READ    4
+
+/* Macro pour détecter les entrées Long File Name (LFN) */
+#define IS_LONG_NAME(attr)      (((attr) & FAT32_ATTR_LONG_NAME_MASK) == FAT32_ATTR_LONG_NAME)
+
 /* Structure principale du filesystem - ALIGNeE */
 typedef struct {
     //fat32_boot_sector_t boot_sector __attribute__((aligned(4)));
@@ -121,12 +140,14 @@ int mount_fat32_filesystem(void);
 bool fat32_mount(void);
 uint32_t get_fat32_root_cluster(void);
 uint32_t cluster_to_sector(uint32_t cluster);
-uint32_t get_next_cluster(uint32_t cluster);
+uint32_t fat32_get_next_cluster(uint32_t cluster);
 int fat32_read_cluster(uint32_t cluster, void* buffer);
 int fat32_read_file(uint32_t first_cluster, uint32_t file_size, void* buffer);
 fat32_dir_entry_t* fat32_find_file(uint32_t dir_cluster, const char* filename);
 void fat32_83_to_name(const char* fat_name, char* output);
 uint32_t fat32_date_to_unix(uint16_t fat_date, uint16_t fat_time);
+//int fat32_file_exists_in_dir(inode_t* dir_inode, const char* filename);
+//inode_t* fat32_create_file(const char* parent_path, const char* filename, mode_t mode);
 
 /* Nouvelles fonctions pour acceder aux informations du filesystem */
 uint32_t get_fat32_bytes_per_cluster(void);

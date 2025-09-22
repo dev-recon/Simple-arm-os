@@ -262,6 +262,8 @@ typedef struct task {
 } __attribute__((aligned(8))) task_t;
 
 /* Interface publique */
+uid_t current_uid(void);
+uid_t current_gid(void);
 
 /* Initialisation du systeme */
 void init_task_system(void);
@@ -305,7 +307,7 @@ void task_check_stack_integrity(void);      /* Verification integrite */
 void debug_current_task_detailed(const char* location);
 void task_dump_stacks_detailed(void);                /* Analyse des stacks */
 void debug_all_task_stacks(void);
-void debug_print_ctx(task_context_t *context);
+void debug_print_ctx(task_context_t *context, const char* caller);
 
 
 /* Statistiques */
@@ -316,6 +318,7 @@ void task_print_stats(void);                /* Statistiques globales */
 void __task_first_switch_v2(task_context_t* new_ctx);
 void __task_switch_asm(task_context_t* old_ctx, task_context_t* new_ctx);
 void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
+void switch_to_idle(void);
 
 extern task_t* current_task;
 extern task_t* task_list_head;
@@ -336,5 +339,29 @@ extern void get_and_save_usr_context(task_t* t);
 */
 
 #define TASK_CONTEXT_OFF = offsetof(task_t, context);
+
+/* Ajout des fonctions de gestion des interruptions ARM */
+static inline uint32_t disable_interrupts_save(void)
+{
+    uint32_t cpsr;
+    __asm__ volatile(
+        "mrs %0, cpsr\n"      /* Lire CPSR actuel */
+        "cpsid if"            /* Desactiver IRQ et FIQ */
+        : "=r" (cpsr)
+        :
+        : "memory"
+    );
+    return cpsr;
+}
+
+static inline void restore_interrupts(uint32_t cpsr)
+{
+    __asm__ volatile(
+        "msr cpsr_c, %0"      /* Restaurer seulement les bits de controle */
+        :
+        : "r" (cpsr)
+        : "memory"
+    );
+}
 
 #endif /* _KERNEL_TASK_H */

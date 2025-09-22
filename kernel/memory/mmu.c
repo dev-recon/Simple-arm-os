@@ -65,7 +65,7 @@ void setup_kernel_asid_context(void)
      */
     
     /* Allouer une page physique réelle pour la table TTBR0 */
-    //void* ttbr0_phys_page = allocate_kernel_pages(2);  // Retourne adresse physique >= 0x40000000
+    //void* ttbr0_phys_page = allocate_pages(2);  // Retourne adresse physique >= 0x40000000
     //if (!ttbr0_phys_page) {
     //    panic("Cannot allocate physical page for TTBR0 table");
    // }
@@ -122,7 +122,7 @@ void setup_kernel_asid_context(void)
     
     /* Exemple : mapper 16MB d'espace user (0x01000000-0x01FFFFFF) 
      * vers de la RAM physique libre */
-    void* user_ram = allocate_user_pages(16);  // 16 pages = 64KB pour commencer
+    void* user_ram = allocate_pages(16);  // 16 pages = 64KB pour commencer
     if (user_ram) {
         uint32_t user_phys_base = (uint32_t)user_ram;
         
@@ -870,9 +870,9 @@ uint32_t allocate_l2_page(bool is_kernel) {
     void* l2_page = NULL ;
     
     if(is_kernel)
-        l2_page = allocate_kernel_page();
+        l2_page = allocate_page();
     else
-        l2_page = allocate_user_page();
+        l2_page = allocate_page();
 
     if (!l2_page) {
         KERROR("map_user_page: Failed to allocate L2 table\n");
@@ -887,7 +887,7 @@ uint32_t allocate_l2_page(bool is_kernel) {
     //uint32_t l2_temp = (uint32_t)l2_page;
     if (l2_temp == 0) {
         KERROR("map_user_page: Failed to map L2 table temporarily\n");
-        free_physical_page(l2_page);
+        free_page(l2_page);
         return -1;
     }
 
@@ -975,7 +975,7 @@ int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t 
 
         //check_address_content(phys_addr, "Before allocate_l2_page");
         // Allouer une nouvelle table L2
-        uint32_t l2_page = (uint32_t)allocate_user_page() ;
+        uint32_t l2_page = (uint32_t)allocate_page() ;
         //check_address_content(phys_addr, "After allocate_l2_page");
         
         // Configurer l'entrée L1 style Cortex-A15

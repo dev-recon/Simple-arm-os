@@ -13,7 +13,7 @@
 
 static inode_t* inode_table[MAX_INODES] = {0};
 static inode_t* root_inode = NULL;
-static uint32_t next_ino = 1;
+static uint32_t next_inode_number = 1;
 static spinlock_t vfs_lock;
 
 /* File operations for FAT32 */
@@ -38,6 +38,10 @@ extern inode_operations_t fat32_inode_ops;
         KINFO("[TEST]   - %s (type: %d)\n", entries[i].d_name, entries[i].d_type);
     }
 }*/
+
+uint32_t get_next_inode_number(void){
+    return next_inode_number++; 
+}
 
 bool init_vfs(void)
 {
@@ -145,7 +149,7 @@ inode_t* create_inode(void)
     memset(inode, 0, sizeof(inode_t));
     
     spin_lock(&vfs_lock);
-    inode->ino = next_ino++;
+    inode->ino = get_next_inode_number();
     spin_unlock(&vfs_lock);
     
     inode->ref_count = 1;

@@ -132,6 +132,10 @@ void* buddy_alloc(size_t num_block) {
 }
 
 void buddy_free(void* ptr) {
+
+    uint32_t caller;
+    __asm__ volatile("mov %0, lr" : "=r"(caller));
+
     uint32_t addr = (uint32_t)ptr;
     size_t index = (addr - buddy_base) / PAGE_SIZE;
     uint32_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
@@ -144,7 +148,7 @@ void buddy_free(void* ptr) {
 
     size_t block_size = page_infos[index].size;
     if (block_size == 0 || block_size > max_pages) {
-        kprintf("[ERROR] buddy_free: Invalid size=%d at index %u\n", block_size, index);
+        //kprintf("[ERROR] buddy_free: Invalid size=%d at index %u\n --> caller &=0x%08X\n", block_size, index, caller);
         return;
     }
 
@@ -165,106 +169,6 @@ void buddy_free(void* ptr) {
     page_infos[index].size = 0;  
 }
 
-#if(0)
-void* buddy_alloc2(size_t size)
-{
-    int order = get_order(size);
-    int current = order;
-
-    while (current <= MAX_ORDER && !free_lists[current]) {
-        current++;
-    }
-
-    if (current > MAX_ORDER)
-        return NULL;
-
-    // Split until desired order
-    while (current > order) {
-        buddy_block_t* block = free_lists[current];
-        free_lists[current] = block->next;
-
-        current--;
-        uintptr_t buddy_addr = (uintptr_t)block + (1 << (current + 12));
-        buddy_block_t* buddy = (buddy_block_t*)buddy_addr;
-        buddy->next = NULL;
-
-        block->next = NULL;
-        free_lists[current] = block;
-        free_lists[current]->next = buddy;
-    }
-
-    buddy_block_t* block = free_lists[order];
-    free_lists[order] = block->next;
-
-    uint32_t index = ((uint32_t)block - buddy_base) >> 12;
-
-    for (int i = 0; i < (1 << order); i++) {
-        page_infos[index + i].used = 1;
-
-        if (i == 0) {
-            page_infos[index + i].order = order;  // Premier du bloc
-        } else {
-            page_infos[index + i].order = -1;     // Marqueur = bloc secondaire
-        }
-    }
-
-    return (void*)block;
-}
-
-
-void buddy_free2(void* ptr, size_t size)
-{
-    int order = get_order(size);
-    uintptr_t addr = (uintptr_t)ptr;
-
-    while (order < MAX_ORDER) {
-        uintptr_t buddy_addr = buddy_of(addr, order);
-        buddy_block_t* prev = NULL;
-        buddy_block_t* curr = free_lists[order];
-
-        // Recherche du buddy
-        while (curr) {
-            if ((uintptr_t)curr == buddy_addr)
-                break;
-            prev = curr;
-            curr = curr->next;
-        }
-
-        if (!curr)
-            break;
-
-        // Fusion
-        if (prev)
-            prev->next = curr->next;
-        else
-            free_lists[order] = curr->next;
-
-        addr = addr < buddy_addr ? addr : buddy_addr;
-        order++;
-    }
-
-    buddy_block_t* block = (buddy_block_t*)addr;
-    block->next = free_lists[order];
-    free_lists[order] = block;
-    uint32_t index = ((uint32_t)block - buddy_base) >> 12;
-
-    int order2 = page_infos[index].order;
-
-    if (order2 < 0 || !page_infos[index].used) {
-        panic("Invalid free()");
-    }
-
-    if (order2 != order) {
-        panic("Invalid free() - Order mismatch");
-    }
-
-    // On libère toutes les pages du bloc
-    for (int i = 0; i < (1 << order); i++) {
-        page_infos[index + i].used = 0;
-        page_infos[index + i].order = 0;
-    }
-}
-#endif
 
 bool init_memory(void)
 {
@@ -513,74 +417,6 @@ static void reserve_dtb_pages(void)
     kprintf("[MEM] DTB pages reserved: %u/%u\n", pages_reserved, pages_to_reserve);
 }
 
-#if(0)
-static void reserve_mmu_pages(void)
-{
-    kprintf("[MEM] Reserving mmu pages...\n");
-    
-    /* Utiliser les symboles du linker script */
-    extern uint32_t __mmu_tables_start;
-    extern uint32_t __mmu_tables_end;
-    extern uint32_t __mmu_size;
-
-    uint32_t mmu_start = (uint32_t)&__mmu_tables_start;
-    uint32_t mmu_end = (uint32_t)&__mmu_tables_end;
-    uint32_t mmu_size = (uint32_t)&__mmu_size;
-    
-    kprintf("[MEM] MMU Tables layout from linker:\n");
-    kprintf("[MEM]   MMU start:  0x%08X\n", mmu_start);
-    kprintf("[MEM]   MMU end:    0x%08X\n", mmu_end);
-    kprintf("[MEM]   MMU size:   %u bytes (%u KB)\n", mmu_size, mmu_size / 1024);
-    
-    /* Afficher les sections detaillees */
-    
-    /* Verifications de securite */
-    if (mmu_start < phys_alloc.start_addr) {
-        kprintf("[MEM] ERROR: MMU Tables starts before RAM!\n");
-        kprintf("[MEM]   MMU Tables start: 0x%08X, RAM: 0x%08X\n", mmu_start, phys_alloc.start_addr);
-        return;
-    }
-    
-    uint32_t ram_end = phys_alloc.start_addr + phys_alloc.total_pages * PAGE_SIZE;
-    if (mmu_end > ram_end) {
-        kprintf("[MEM] ERROR: MMU Tables  extends beyond RAM!\n");
-        kprintf("[MEM]   MMU Tables end: 0x%08X, RAM end: 0x%08X\n", mmu_end, ram_end);
-        return;
-    }
-    
-    /* Reserver depuis le debut de la RAM jusqu'a la fin du kernel */
-    uint32_t mmu_start_page = mmu_start;  /* Debut de la RAM */
-    uint32_t mmu_end_page = ALIGN_UP(mmu_end, PAGE_SIZE);
-    
-    kprintf("[MEM] Reserving MMU TABLES PAGES:\n");
-    kprintf("[MEM]   Start page: 0x%08X\n", mmu_start_page);
-    kprintf("[MEM]   End page:   0x%08X\n", mmu_end_page);
-    
-    /* Calculer le nombre de pages */
-    uint32_t pages_to_reserve = (mmu_end_page - mmu_start_page) / PAGE_SIZE;
-    kprintf("[MEM]   Pages to reserve: %u\n", pages_to_reserve);
-    
-    /* Reserver les pages */
-    uint32_t pages_reserved = 0;
-    uint32_t addr;
-    
-    for (addr = mmu_start_page; addr < mmu_end_page; addr += PAGE_SIZE) {
-        uint32_t page_index = (addr - phys_alloc.start_addr) / PAGE_SIZE;
-        
-        if (page_index >= phys_alloc.total_pages) {
-            kprintf("[MEM] ERROR: Page index %u out of range!\n", page_index);
-            break;
-        }
-        
-        if (set_page_used(page_index)) {
-            pages_reserved++;
-        }
-    }
-    
-    kprintf("[MEM] MMU Tables pages reserved: %u/%u\n", pages_reserved, pages_to_reserve);
-}
-
-#endif
 
 static void reserve_bitmap_pages(void)
 {
@@ -682,70 +518,30 @@ static bool is_page_free(uint32_t page_index)
 }
 
 
-void* allocate_physical_page(void)
+void* allocate_page(void)
 {
     return buddy_alloc(1);
 }
 
-void free_physical_page(void* page_addr)
+void free_page(void* page_addr)
 {
-    buddy_free(page_addr);
-}
+    uint32_t caller;
+    __asm__ volatile("mov %0, lr" : "=r"(caller));
 
-void free_physical_page2(void* page_addr)
-{
-    uint32_t addr = (uint32_t)page_addr;
-    uint32_t page_index;
-    
-    if (addr % PAGE_SIZE != 0) {
-        KWARN("[MEM] WARNING: free_physical_page with unaligned address 0x%08X\n", addr);
-        return;
-    }
-    
-    if (addr < phys_alloc.start_addr || addr >= phys_alloc.start_addr + (phys_alloc.total_pages * PAGE_SIZE)) {
-        KWARN("[MEM] WARNING: free_physical_page with invalid address 0x%08X\n", addr);
-        return;
-    }
-    
-    page_index = (addr - phys_alloc.start_addr) / PAGE_SIZE;
-    set_page_free(page_index);
+    //KDEBUG("free_page: caller &=0x%08X\n", caller);
+    buddy_free(page_addr);
 }
 
 /*
  * Fonctions helper pour allocation simplifiée
  */
-void* allocate_kernel_pages(uint32_t num_pages)
+void* allocate_pages(uint32_t num_pages)
 {
-    return allocate_contiguous_pages(num_pages, true);
-}
-
-void* allocate_user_pages(uint32_t num_pages) 
-{
-    return allocate_contiguous_pages(num_pages, false);
-}
-
-/*
- * Pour l'allocation de pages individuelles
- */
-void* allocate_kernel_page(void)
-{
-    return allocate_kernel_pages(1);
-}
-
-void* allocate_user_page(void)
-{
-    return allocate_user_pages(1);
-}
-
-void* allocate_contiguous_pages(uint32_t num_pages, bool kernel_space)
-{
-    (void) kernel_space;
-    //uint32_t order = get_order(num_pages);
     return buddy_alloc(num_pages);
 }
 
 
-void free_contiguous_pages(void* page_addr, uint32_t num_pages)
+void free_pages(void* page_addr, uint32_t num_pages)
 {
     (void) num_pages;
 

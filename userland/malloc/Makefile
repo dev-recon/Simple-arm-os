@@ -1,5 +1,5 @@
 # Configuration
-PROGRAM = hello2
+PROGRAM = malloc
 ARCH = arm-none-eabi-
 CC = $(ARCH)gcc
 LD = $(ARCH)ld

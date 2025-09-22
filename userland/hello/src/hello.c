@@ -14,7 +14,21 @@ int main() {
     if (child_pid == 0) {
         printf("                 ************ Child process running!\n");
         printf("                 ************ Will be exiting with value %d!\n", version);
+
+        const char* path = "/bin/hello2";
+        char* name = "hello2";
+
+        printf("                 ************ Process PID: %d about to exec\n", getpid());
+            
+        char* const argv[] = { name, NULL };
+        char* const envp[] = { NULL };
+            
+        int result = execve(path , argv, envp);
+            
+        // Si on arrive ici, exec a échoué
+        printf("                 ************ Child: exec failed with %d\n", result);
         exit(version);
+        
     } else {
 
         int status = 0;

@@ -532,7 +532,7 @@ void working_child(int level, int dummy) {
             KINFO("[CHILD %d] Printing local variable ... %d\n", fork_depth, local_variable++);
 
             task_sleep_ms(500);
-            yield();
+            //yield();
         }
 
         /* Condition pour fork imbriqué */
@@ -554,7 +554,7 @@ void working_child(int level, int dummy) {
         
         /* Attendre l'enfant */
         int wait_status;
-        pid_t waited_pid = kernel_waitpid(child_pid, &wait_status, 0);
+        pid_t waited_pid = kernel_waitpid(child_pid, &wait_status, 0, current_task);
         
         KINFO("[PARENT %d] *** PARENT WOKE UP ***\n", level);
         KINFO("[PARENT %d] Child PID=%d exited with status=%d (hex 0x%08X)\n", level,
@@ -572,11 +572,11 @@ void working_child(int level, int dummy) {
 }
 
 
-void mini_shell(const char* path) {
+void mini_shell_READ(const char* path) {
     
     int len = strlen(path);
     char *kernel_path = (char *)kmalloc(len+1);
-    strncpy(kernel_path, path, len);
+    strcpy(kernel_path, path);
     int fd = kernel_open(kernel_path, O_RDONLY , S_IRUSR);
 
     KDEBUG("AFTER SYS_OPEN fd = %d for filepath = %s\n", fd, path);
@@ -594,32 +594,71 @@ void mini_shell(const char* path) {
 
 }
 
+void mini_shell_CREATE(const char* path) {
+    
+    int len = strlen(path);
+    char *kernel_path = (char *)kmalloc(len+1);
+    strcpy(kernel_path, path);
+    int fd = kernel_open(kernel_path, O_CREAT , S_IRUSR);
 
-void simple_shell_task3(void* arg) {
+    const char* text = "Ceci est un petit texte de demonstration ...\n# Commentaires !!!\n";
 
-    (void)arg;
+    KDEBUG("AFTER SYS_OPEN fd = %d for filepath = %s\n", fd, path);
 
-    const char* path = "/readme.txt";
+    if(fd>0)
+    {
+        sys_write(fd, (void*)text, strlen(text) );
 
-    task_sleep_ms(10000); 
-    yield();
+        sys_close(fd);
 
-    kprintf("Parent PID: %d about to run program\n", sys_getpid());
-        
-    mini_shell(path);
+        KDEBUG("AFTER sys_write fd = %d for filepath = %s\n", fd, path);
 
-    sys_exit(-1);
+    }
+
 }
+
+
 
 void simple_shell_task(void* arg) {
 
     (void)arg;
 
-    const char* path = "/bin/readfile";
-    char* name = "read_file";
+    //const char* path = "/readme.txt";
+    const char* path2 = "/test.txt";
 
     task_sleep_ms(10000); 
     yield();
+
+    kprintf("Parent PID: %d about to run program\n", sys_getpid());
+
+    //mini_shell_CREATE(path2);
+        
+    //mini_shell_READ(path);
+
+    //mini_shell_READ("/makefile");
+
+    //mini_shell_READ("/home/user/profile.txt");
+
+    //mini_shell_READ(path);
+
+
+
+    //mini_shell_CREATE(path2);
+
+    mini_shell_READ(path2);
+
+    sys_exit(-1);
+}
+
+void simple_shell_task3(void* arg) {
+
+    (void)arg;
+
+    const char* path = "/bin/malloc";
+    char* name = "malloc";
+
+    //task_sleep_ms(10000); 
+    //yield();
 
     kprintf("Parent PID: %d about to exec\n", sys_getpid());
         

@@ -67,6 +67,11 @@ swi_handler:
     mrs r12, spsr               /* Recuperer SPSR */
     stmfd sp!, {r12}            /* Sauvegarder SPSR */
     
+    /* Debug sortie de syscall */
+    //push {r0-r3, lr}
+    //bl debug_print_sp3
+    //pop {r0-r3, lr}
+
     /* Validation du numero de syscall */
     cmp r7, #256                /* Verifier limite syscall */
     movhs r0, #-38              /* Si invalide: r0 = -ENOSYS */

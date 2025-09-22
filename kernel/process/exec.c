@@ -161,7 +161,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
     /* Load page by page - BOUCLE CORRIGÉE */
     for (uint32_t page_vaddr = vaddr_start; page_vaddr < vaddr_end; page_vaddr += PAGE_SIZE) {
         /* Allocate physical page */
-        void* phys_page = allocate_user_page();
+        void* phys_page = allocate_page();
         if (!phys_page) {
             KERROR("Failed to allocate physical page for 0x%08X\n", page_vaddr);
             return -1;
@@ -172,7 +172,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
         uint32_t temp_vaddr = (uint32_t)phys_page;
         if (temp_vaddr == 0) {
             KERROR("Failed to map temp page\n");
-            free_physical_page(phys_page);
+            free_page(phys_page);
             return -1;
         } 
         
@@ -209,7 +209,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
                 KERROR("Read failed: expected %u bytes, got %d\n",
                        file_end_in_page - file_start_in_page, bytes_read);
                 //unmap_temp_page((void*)temp_vaddr);
-                free_physical_page(phys_page);
+                free_page(phys_page);
                 return -1;
             }
             
@@ -291,7 +291,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
         //KDEBUG("Mapping user page 0x%08X -> %p\n", page_vaddr, phys_page);
         if (map_user_page(vm->pgdir, page_vaddr, (uint32_t)phys_page, vma_flags, vm->asid) < 0) {
             KERROR("Failed to map user page 0x%08X\n", page_vaddr);
-            free_physical_page(phys_page);
+            free_page(phys_page);
             return -1;
         }
 

@@ -367,7 +367,7 @@ static uint32_t* get_zero_page_phys(void)
 {
     if (!multi_temp_state.zero_page_phys) {
         /* Allouer une page pour les zéros */
-        multi_temp_state.zero_page_phys = (uint32_t*)allocate_kernel_page();
+        multi_temp_state.zero_page_phys = (uint32_t*)allocate_page();
         if (multi_temp_state.zero_page_phys) {
             /* L'initialiser à zéro (pendant le boot avec identity mapping) */
             memset(multi_temp_state.zero_page_phys, 0, PAGE_SIZE);
@@ -396,7 +396,7 @@ static void setup_l2_access_zone(void)
     uint32_t array_index = ttbr1_index;
     
     /* Allouer la table L2 pour la zone de contrôle */
-    uint32_t* control_l2 = (uint32_t*)allocate_kernel_page();
+    uint32_t* control_l2 = (uint32_t*)allocate_page();
     if (!control_l2) {
         panic("Cannot allocate L2 control table");
     }
@@ -409,7 +409,7 @@ static void setup_l2_access_zone(void)
     //kprintf("L2 control zone: L1[%u]=0x%08X\n", array_index, kernel_pgdir[array_index]);
     
     /* Allouer la page contenant les adresses des tables L2 */
-    uint32_t* control_page = (uint32_t*)allocate_kernel_page();
+    uint32_t* control_page = (uint32_t*)allocate_page();
     if (!control_page) {
         panic("Cannot allocate L2 control page");
     }
@@ -458,7 +458,7 @@ void setup_temp_mapping_slots(void)
     }
     
     /* 1. Allouer la zero page */
-    uint32_t* zero_page = (uint32_t*)allocate_kernel_page();
+    uint32_t* zero_page = (uint32_t*)allocate_page();
     if (!zero_page) {
         panic("Cannot allocate zero page for temp mappings");
     }
@@ -477,7 +477,7 @@ void setup_temp_mapping_slots(void)
         //       i, vaddr, ttbr1_index, ttbr1_index);
         
         /* Allouer la table L2 */
-        uint32_t* l2_phys = (uint32_t*)allocate_kernel_page();
+        uint32_t* l2_phys = (uint32_t*)allocate_page();
         if (!l2_phys) {
             panic("Cannot allocate L2 table for temp slot");
         }
@@ -570,7 +570,7 @@ void preallocate_temp_mapping_system(void)
                i, vaddr, l1_index, l2_index);
         
         /* 1. Allouer la table L2 */
-        uint32_t* l2_phys = (uint32_t*)allocate_kernel_page();
+        uint32_t* l2_phys = (uint32_t*)allocate_page();
         if (!l2_phys) {
             panic("Cannot allocate L2 table for temp mappings");
         }
@@ -652,7 +652,7 @@ static void init_multi_temp_mapping_state(void)
 void create_l2_access_zone(void)
 {
     /* Allouer une page pour stocker les adresses des tables L2 */
-    uint32_t* control_page = (uint32_t*)allocate_kernel_page();
+    uint32_t* control_page = (uint32_t*)allocate_page();
     if (!control_page) {
         panic("Cannot allocate L2 control page");
     }
@@ -666,7 +666,7 @@ void create_l2_access_zone(void)
     uint32_t control_l1_index = get_L1_index(L2_CONTROL_VADDR);
     
     /* Créer une table L2 pour la zone de contrôle */
-    uint32_t* control_l2 = (uint32_t*)allocate_kernel_page();
+    uint32_t* control_l2 = (uint32_t*)allocate_page();
     memset(control_l2, 0, PAGE_SIZE);
     
     /* Configurer L1 pour la zone de contrôle */
@@ -1467,7 +1467,7 @@ void zero_fill_bss(vm_space_t* vm, uint32_t vaddr, uint32_t size)
         
         if (phys_addr == 0) {
             /* Page not mapped, allocate and map it */
-            phys_page = allocate_kernel_page();
+            phys_page = allocate_page();
             if (!phys_page) {
                 uart_puts("zero_fill_bss: Failed to allocate page\n");
                 break;
@@ -1557,7 +1557,7 @@ static uint32_t* get_temp_page_table(void)
     /* Check if page table exists */
     if (!(kernel_pgdir[pgd_index] & PDE_PRESENT)) {
         /* Allocate new page table */
-        page_table = (uint32_t*)allocate_kernel_page();
+        page_table = (uint32_t*)allocate_page();
         if (!page_table) {
             return NULL;
         }
@@ -2010,7 +2010,7 @@ bool test_temp_mapping(void)
     KDEBUG("test_temp_mapping: Starting temp mapping test...\n");
     
     /* Allouer une page de test */
-    test_page = allocate_physical_page();
+    test_page = allocate_page();
     if (!test_page) {
         KERROR("test_temp_mapping: Failed to allocate test page\n");
         return false;
@@ -2022,7 +2022,7 @@ bool test_temp_mapping(void)
     temp_vaddr = map_temp_page((uint32_t)test_page);
     if (temp_vaddr == 0) {
         KERROR("test_temp_mapping: Failed to map temp page\n");
-        free_physical_page(test_page);
+        free_page(test_page);
         return false;
     }
     
@@ -2049,7 +2049,7 @@ bool test_temp_mapping(void)
     unmap_temp_page((void*)temp_vaddr);
     
     /* Libérer la page */
-    free_physical_page(test_page);
+    free_page(test_page);
     
     if (success) {
         KDEBUG("test_temp_mapping: Test passed ✓\n");
@@ -2254,7 +2254,7 @@ int copy_user_stack_pages(vm_space_t *parent_vm, vm_space_t *child_vm,
         //hexdump((void*)temp_parent , (size_t) 4096 );
 
         // 2. Allouer une page physique pour l'enfant
-        void *child_phys_page = allocate_user_page();
+        void *child_phys_page = allocate_page();
         if (!child_phys_page) {
             return -ENOMEM;
         }
@@ -2263,7 +2263,7 @@ int copy_user_stack_pages(vm_space_t *parent_vm, vm_space_t *child_vm,
         //uint32_t temp_child = map_temp_page((uint32_t)child_phys_page);
         uint32_t temp_child = (uint32_t)child_phys_page;
         if (!temp_child) {
-            free_physical_page(child_phys_page);
+            free_page(child_phys_page);
             return -ENOMEM;
         }
         

@@ -36,18 +36,7 @@
 #endif
 #endif
 
-/* ========================================
- * Gestion mémoire
- * ======================================== */
 
-/* Allocation/libération mémoire */
-void* malloc(size_t size);
-void* calloc(size_t nmemb, size_t size);
-void* realloc(void* ptr, size_t size);
-void free(void* ptr);
-
-/* Allocation alignée */
-void* aligned_alloc(size_t alignment, size_t size);
 
 /* ========================================
  * Contrôle de programme
@@ -139,5 +128,6 @@ int unsetenv(const char* name);
  * ======================================== */
 
 int system(const char* command);
+
 
 #endif /* _STDLIB_H */

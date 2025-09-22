@@ -26,4 +26,8 @@ int waitpid(int pid, int* status, int options);
 /* Syscall générique */
 long syscall(long number, ...);
 
+/* Gestion mémoire */
+void *brk(void *addr);
+void *sbrk(void *addr);
+
 #endif

@@ -6,7 +6,7 @@
 #include <kernel/task.h>
 
 /* VirtIO Block Device - CORRECTION ADRESSE */
-#define VIRTIO_BLK_IRQ      17  /* IRQ 17 pour machine virt */
+//#define VIRTIO_BLK_IRQ      17  /* IRQ 17 pour machine virt */
 
 /* VirtIO registers - CORRECTIONS */
 #define VIRTIO_MAGIC        0x000
@@ -25,24 +25,17 @@
 #define VIRTIO_STATUS       0x070
 
 /* Status bits */
-#define VIRTIO_STATUS_ACK       1
-#define VIRTIO_STATUS_DRIVER    2
-#define VIRTIO_STATUS_DRIVER_OK 4
-#define VIRTIO_STATUS_FEATURES_OK  8
-#define VIRTIO_STATUS_FAILED    128
+//#define VIRTIO_STATUS_ACK       1
+//#define VIRTIO_STATUS_DRIVER    2
+//#define VIRTIO_STATUS_DRIVER_OK 4
+//#define VIRTIO_STATUS_FEATURES_OK  8
+//#define VIRTIO_STATUS_FAILED    128
 
 /* Block operations */
 #define VIRTIO_BLK_T_IN     0
 #define VIRTIO_BLK_T_OUT    1
 #define VIRTIO_BLK_S_OK     0
 #define VIRTIO_BLK_S_IOERR  1
-
-/* VirtIO Block Request structure */
-struct virtio_blk_req {
-    uint32_t type;      /* VIRTIO_BLK_T_* */
-    uint32_t reserved;  /* Must be 0 */
-    uint64_t sector;    /* LBA sector number */
-} __attribute__((packed));
 
 /* VirtQ descriptor flags */
 #define VIRTQ_DESC_F_NEXT     1

@@ -64,6 +64,7 @@ KERNEL_OBJS = \
 	kernel/drivers/ide.o \
 	kernel/drivers/ramfs.o \
 	kernel/drivers/tar_parser_ramfs.o \
+	kernel/drivers/virtio_block.o \
 	kernel/interrupt/exception.o \
 	kernel/interrupt/interrupt.o \
 	kernel/interrupt/gic.o \
@@ -81,6 +82,7 @@ ALL_OBJS = $(KERNEL_OBJS) $(LIB_OBJ) $(TASK_OBJS)
 DISK_IMG = disk.img
 DISK_SIZE_MB = 64
 USERFS_DIR = userfs
+USERLAND_DIR = userland
 
 # Cibles
 TARGET = kernel
@@ -107,7 +109,11 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 # Creation du disque avec FAT32 (version macOS)
 $(DISK_IMG): $(USERFS_DIR)
 	@echo "Creating disk image $(DISK_IMG) ($(DISK_SIZE_MB)MB) on macOS..."
-	
+	cp -f $(USERLAND_DIR)/hello/hello $(USERFS_DIR)/bin
+	cp -f $(USERLAND_DIR)/hello2/hello2 $(USERFS_DIR)/bin
+	cp -f $(USERLAND_DIR)/readfile/readfile $(USERFS_DIR)/bin
+	cp -f $(USERLAND_DIR)/malloc/malloc $(USERFS_DIR)/bin
+
 	# Creer un fichier image vide
 	dd if=/dev/zero of=$(DISK_IMG) bs=1m count=$(DISK_SIZE_MB) 2>/dev/null
 	
@@ -175,14 +181,15 @@ userfs.bin: $(wildcard userfs/**/*)
 	./qemu_loader_method.sh
 
 # Run avec userfs loader
-run-userfs: $(KERNEL_BIN) userfs.bin
+run-userfs: $(KERNEL_BIN)
 	qemu-system-arm -M virt -cpu cortex-a15 \
 		-m 2G -smp 1 \
 		-drive file=disk.img,if=none,format=raw,id=hd0 \
 		-device virtio-blk-device,drive=hd0 \
 		-kernel $(KERNEL_BIN) \
-		-nographic \
-		-device loader,file=userfs.bin,addr=0x50000000
+		-nographic
+
+#-device loader,file=userfs.bin,addr=0x50000000
 #,virtualization=off,gic-version=2
 #-device loader,file=userfs.bin,addr=0x41000000
 

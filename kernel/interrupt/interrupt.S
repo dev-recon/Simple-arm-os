@@ -6,20 +6,54 @@
 .global irq_handler
 .global swi_handler
 
-/* IRQ Handler pour machine virt avec GICv2 */
 irq_handler:
+    /* Ajuster LR pour retour d'exception */
+    sub     lr, lr, #4
+
+    /* Sauvegarder r0-r12 et lr sur la pile IRQ (banked SP) */
+    stmfd   sp!, {r0-r12, lr}    /* 14 regs => 56 bytes (pile reste alignée) */
+
+    /* Sauvegarder SPSR */
+    mrs     r0, spsr
+    stmfd   sp!, {r0}            /* +4 bytes => maintenant pile désalignée */
+
+    /* Padding 4 octets pour aligner la pile à 8 avant appel C */
+    sub     sp, sp, #4           /* maintenant (56+4+4)=64 bytes => alignée 8 */
+
+    /* Passer l'adresse du contexte à la C handler (r0 = &saved_spsr/pile) */
+    mov     r0, sp               /* r0 pointe sur la zone pad (utilisable en C pour index) */
+    bl      irq_c_handler
+
+    /* Retirer le padding (on retourne à l'adresse de SPSR) */
+    add     sp, sp, #4
+
+    /* Restaurer SPSR */
+    ldmfd   sp!, {r0}            /* pop saved_spsr */
+    msr     spsr_cxsf, r0
+
+    /* Restaurer r0-r12 et revenir en utilisant '^' pour restaurer CPSR depuis SPSR */
+    ldmfd   sp!, {r0-r12, pc}^
+
+/* IRQ Handler pour machine virt avec GICv2 */
+irq_handler2:
     /* Save context sur la pile IRQ */
     sub lr, lr, #4              /* Ajuster LR pour IRQ */
     stmfd sp!, {r0-r12, lr}     /* Sauvegarder registres */
     mrs r0, spsr                /* Recuperer SPSR */
     stmfd sp!, {r0}             /* Sauvegarder SPSR */
-    
+
+    /* Padding 4 octets pour aligner la pile à 8 avant appel C */
+    sub     sp, sp, #4           /* maintenant (56+4+4)=64 bytes => alignée 8 */
+
     /* Desactiver les interruptions pendant le traitement */
     cpsid i
     
     /* Appeler le handler C avec context */
     bl irq_c_handler
     
+    /* Retirer le padding (on retourne à l'adresse de SPSR) */
+    add     sp, sp, #4
+
     /* Restaurer le contexte */
     ldmfd sp!, {r0}             /* Restaurer SPSR */
     msr spsr_cxsf, r0
@@ -37,9 +71,15 @@ fiq_handler:
     mrs r0, spsr
     stmfd sp!, {r0}
     
+    /* Padding 4 octets pour aligner la pile à 8 avant appel C */
+    sub     sp, sp, #4           /* maintenant (56+4+4)=64 bytes => alignée 8 */
+
     /* Appeler le handler C rapide */
     bl fiq_c_handler
     
+    /* Retirer le padding (on retourne à l'adresse de SPSR) */
+    add     sp, sp, #4
+
     /* Restaurer */
     ldmfd sp!, {r0}
     msr spsr_cxsf, r0

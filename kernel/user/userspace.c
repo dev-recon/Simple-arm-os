@@ -476,10 +476,10 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
     //KDEBUG("After create VMA USER STACK - Start = 0x%08X, Top = 0x%08X, Size = %u MB\n", stack_start, stack_start + stack_size, stack_size/1024/1024);
     
     /* Allocate page for top of stack */
-    stack_page = allocate_user_page();
+    stack_page = allocate_page();
     if (!stack_page) return -1;
     
-    //KDEBUG("After allocate_physical_page\n");
+    //KDEBUG("After allocate_page\n");
 
     //stack_top_page = USER_STACK_TOP - PAGE_SIZE;
     stack_top_page = (USER_STACK_TOP - PAGE_SIZE) & ~0xFFF; 

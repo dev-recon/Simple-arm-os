@@ -92,108 +92,7 @@ void return_to_caller_with_value(int return_value)
     }
 }
 
-/**
- * Point de reprise pour waitpid - ADAPTe
- */
-void waitpid_resume_point(void)
-{
-    task_t* parent = current_task;
-    
-    //KDEBUG("[WAITPID] === REPRISE apres reveil ===\n");
-    
-    if (!parent || parent->type != TASK_TYPE_PROCESS || !parent->process) {
-        KERROR("[WAITPID] Processus parent invalid lors de la reprise\n");
-        KERROR("wait_pid_resume_point: NULL Proc\n");
-        return;
-    }
-    
-    /* Recuperer les arguments depuis les champs dedies - ACCeS CORRECT */
-    pid_t pid = parent->process->waitpid_pid;
-    int* status = parent->process->waitpid_status;
-    int options = parent->process->waitpid_options;
-    int iteration = parent->process->waitpid_iteration;
-    
-    KDEBUG("[WAITPID] Reprise avec pid=%d, status=%p, options=%d, iteration=%d\n", 
-           pid, status, options, iteration);
-    
-    /* Chercher le zombie maintenant que nous sommes reveilles */
-    task_t* zombie = find_zombie_child(parent, pid);
-    if (zombie) {
-        pid_t child_pid = zombie->process->pid;
-        int exit_code = zombie->process->exit_code;
-        
-        //KINFO("[WAITPID] OK Processus zombie trouve apres reveil: PID %u\n", child_pid);
-        
-        /* Copier le statut avant le cleanup */
-        if (status) {
-            //KDEBUG("[WAITPID] Tentative copy_to_user vers %p, valeur %d\n", 
-            //       status, exit_code);
-            
-            if (!is_valid_user_ptr(status)) {
-                if ((uint32_t)status >= KERNEL_BASE) {  /* KERNEL_BASE */
-                    KDEBUG("[WAITPID] Adresse kernel detectee - copie directe\n");
-                    *status = exit_code;
-                } else {
-                    KERROR("[WAITPID] Adresse status invalide: %p\n", status);
-                    return_to_caller_with_value(-EFAULT);
-                    return;
-                }
-            } else {
-                if (copy_to_user(status, &exit_code, sizeof(int)) < 0) {
-                    KERROR("[WAITPID] echec copy_to_user lors de la reprise\n");
-                    return_to_caller_with_value(-EFAULT);
-                    return;
-                }
-            }
-            
-            //KDEBUG("[WAITPID] Code de sortie copie: %d\n", exit_code);
-        }
-        
-        /* Retirer de la liste des enfants AVANT destroy_process */
-        //KDEBUG("[WAITPID] Retrait securise de la liste des enfants...\n");
-        remove_child_from_parent(parent, zombie);
-        
-        /* Marquer comme DEAD avant destruction */
-        zombie->state = TASK_TERMINATED;
-        zombie->process->state = (proc_state_t)PROC_DEAD;
-        
-        /* Nettoyer le processus zombie */
-        //KDEBUG("[WAITPID] Destruction securisee du processus zombie...\n");
-        destroy_process(zombie);
-        
-        KDEBUG("[WAITPID] === FIN reprise sys_waitpid - retour %d ===\n", child_pid);
-        
-        /* Retourner au code appelant avec le PID */
-        return_to_caller_with_value(child_pid);
-        return;
-        
-    } else {
-        /* Cas d'erreur : pas de zombie trouve */
-        KDEBUG("[WAITPID] Aucun zombie trouve lors de la reprise\n");
-        
-        if (!has_children(parent, pid)) {
-            KDEBUG("[WAITPID] Aucun enfant - retour ECHILD\n");
-            return_to_caller_with_value(-ECHILD);
-            return;
-        }
-        
-        /* Continuer l'attente */
-        KDEBUG("[WAITPID] Enfants encore vivants - continuer l'attente\n");
-        
-        /* Incrementer l'iteration et verifier la limite */
-        parent->process->waitpid_iteration = iteration + 1;
-        if (parent->process->waitpid_iteration >= 50) {
-            KERROR("[WAITPID] Limite d'iterations atteinte\n");
-            return_to_caller_with_value(-1);
-            return;
-        }
-        
-        /* Re-bloquer le processus */
-        parent->state = TASK_BLOCKED;
-        parent->process->state = (proc_state_t)PROC_BLOCKED;
-        schedule();
-    }
-}
+
 
 /**
  * Nettoyer la liste des enfants - ADAPTe
@@ -400,8 +299,10 @@ void orphan_children(task_t* proc)
         
         /* Reveiller init si l'enfant est zombie */
         if (child->state == TASK_ZOMBIE && init_proc->state == TASK_BLOCKED) {
+            spin_lock(&task_lock); 
             init_proc->state = TASK_READY;
             init_proc->process->state = (proc_state_t)PROC_READY;
+            spin_unlock(&task_lock); 
             add_to_ready_queue(init_proc);
         }
         
@@ -430,7 +331,7 @@ void wakeup_parent(task_t *proc){
             return;
         }
         
-/*         KINFO("[EXIT] *** WAKING UP PARENT ***\n");
+/*          KINFO("[EXIT] *** WAKING UP PARENT ***\n");
         KDEBUG("sys_exit: Parent PID=%d state=%s proc_state=%s\n", 
                parent->process->pid, task_state_string(parent->state), proc_state_string(parent->process->state));
         KDEBUG("sys_exit: Parent waiting for PID=%d\n", 
@@ -439,7 +340,7 @@ void wakeup_parent(task_t *proc){
                proc->process->exit_code);
         KDEBUG("sys_exit: Child PID=%d state=%s proc_state=%s\n", 
                proc->process->pid, task_state_string(proc->state), proc_state_string(proc->process->state));
-  */
+   */
         
         /* Verifier si le parent attend vraiment */
         if (parent->state == TASK_BLOCKED && 
@@ -450,9 +351,11 @@ void wakeup_parent(task_t *proc){
             if (wait_pid == -1 || wait_pid == proc->process->pid) {
                 //KINFO("sys_exit: Waking up parent PID=%u\n", parent->process->pid);
                 
+                spin_lock(&task_lock); 
                 parent->state = TASK_READY;
                 parent->process->state = (proc_state_t)PROC_READY;
                 *parent->process->waitpid_status = proc->process->exit_code;
+                spin_unlock(&task_lock); 
                 
                 /* Ajouter le parent a la ready queue */
                 add_to_ready_queue(parent);
@@ -464,8 +367,8 @@ void wakeup_parent(task_t *proc){
                        wait_pid, proc->process->pid);
             }
         } else {
-            KINFO("sys_exit: Parent not blocked (state=%d proc_state=%d)\n", 
-                   parent->state, parent->process->state);
+            KINFO("sys_exit: Parent not blocked (state=%s proc_state=%s)\n", 
+                  task_state_string(parent->state), proc_state_string(parent->process->state));
         }
     } else {
         KWARN("sys_exit: No parent found\n");

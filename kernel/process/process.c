@@ -150,12 +150,12 @@ void init_process_main(void* arg)
         /* Verifier les signaux */
         check_pending_signals();
 
-        bool has_children = (current_task->process->children != NULL);
+        bool has_children = (init_process->process->children != NULL);
         
         if (has_children) {
             /* Attendre n'importe quel enfant */
             int status;
-            pid_t child_pid = kernel_waitpid(-1, &status, 0);
+            pid_t child_pid = kernel_waitpid(-1, &status, 0, init_process);
             
             if (child_pid > 0) {
                 reaped_count++;
@@ -218,13 +218,12 @@ void destroy_process(task_t* process)
         return;
     }
     
-    //KDEBUG("destroy_process: Destroying process %s (PID=%u)\n", 
-    //       process->name, process->process.pid);
+    //KDEBUG("destroy_process: Destroying process %s (PID=%u)\n", process->name, process->process->pid);
     
     /* Fermer tous les fichiers - ACCeS CORRECT */
     for (i = 0; i < MAX_FILES; i++) {
         if (process->process->files[i]) {
-            close_file(process->process->files[i]);
+            close_file(process->process->files[i]); 
             process->process->files[i] = NULL;
         }
     }

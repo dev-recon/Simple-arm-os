@@ -295,9 +295,9 @@ data_abort_vector:
 irq_vector:
     /* Interruption normale */
     /* TODO: Sauvegarder contexte et appeler handler C */
-    ldr r0, =0xCAFEDEAD
-    ldr r1, =0x09000000          /* UART virt address */
-    str r0, [r1]
+    //ldr r0, =0xCAFEDEAD
+    //ldr r1, =0x09000000          /* UART virt address */
+    //str r0, [r1]
     b irq_handler
 
 fiq_vector:

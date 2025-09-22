@@ -28,9 +28,10 @@ typedef struct vm_space {
     vma_t* vma_list;       /* 4 bytes */
     uint32_t heap_start;   /* 4 bytes */
     uint32_t heap_end;     /* 4 bytes */
+    uint32_t brk;          /* 4 bytes */
     uint32_t stack_start;  /* 4 bytes */
     uint32_t asid;         /* 4 bytes - NOUVEAU: ASID du processus */
-    uint32_t padding[2];   /* 8 bytes pour aligner sur 8 */
+    uint32_t padding;      /* 4 bytes pour aligner sur 8 */
 } __attribute__((aligned(8))) vm_space_t;
 /* Taille: 32 bytes - alignée sur 8 OK */
 
@@ -103,28 +104,15 @@ void restore_user_context(uint32_t saved_asid);
 
 /* Memory management */
 bool init_memory(void);
-void* allocate_physical_page(void);
-void free_physical_page(void* page_addr);
-//void* allocate_contiguous_pages(uint32_t num_pages);
-void* allocate_contiguous_pages(uint32_t num_pages, bool kernel_space);
-void free_contiguous_pages(void* page_addr, uint32_t num_pages);
+void* allocate_page(void);
+void free_page(void* page_addr);
+void* allocate_pages(uint32_t num_pages);
+void free_pages(void* page_addr, uint32_t num_pages);
 uint32_t get_kernel_memory_size(void);
-
-void* allocate_kernel_pages(uint32_t num_pages);
-
-void* allocate_user_pages(uint32_t num_pages);
-
-
-/*
- * Pour l'allocation de pages individuelles
- */
-void* allocate_kernel_page(void);
-
-void* allocate_user_page(void);
 
 
 /* Virtual memory avec support ASID */
-vm_space_t* create_vm_space(bool is_kernel_space);
+vm_space_t* create_vm_space(void);
 void destroy_vm_space(vm_space_t* vm);
 vm_space_t* fork_vm_space(vm_space_t* parent_vm);
 vma_t* create_vma(vm_space_t* vm, uint32_t start, uint32_t size, uint32_t flags);
@@ -197,6 +185,9 @@ uint32_t map_temp_page_large(uint32_t phys_addr, uint32_t size);
 void init_kernel_heap(void);
 void* kmalloc(size_t size);
 void kfree(void* ptr);
+void* kcalloc(size_t nmemb, size_t size);
+void* krealloc(void* ptr, size_t size);
+void* kzalloc(size_t size);
 
 /* Memory info */
 uint32_t get_free_page_count(void);

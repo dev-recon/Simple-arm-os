@@ -643,7 +643,7 @@ static bool ramfs_allocate_memory2(void)
     KINFO("  Pages needed: %u (%u KB)\n", pages_needed, pages_needed * 4);
     
     /* Allocate contiguous pages */
-    void* memory = allocate_contiguous_pages(pages_needed,true);
+    void* memory = allocate_pages(pages_needed);
     if (!memory) {
         KERROR("Failed to allocate %u contiguous pages for RAMFS\n", pages_needed);
         return false;

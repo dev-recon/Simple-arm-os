@@ -13,22 +13,22 @@ int main() {
     int fd = open(path , 0, 0);
     if(fd>0)
     {
-        char buf[300] ;
-        char line[21] ;
+        char buf[520] ;
+        char line[51] ;
             
         printf("Got file descriptor FD = %d\n", fd);
 
-        if(read(fd, buf, 300 ))
+        if(read(fd, buf, 512 ))
         {
             printf("managed to read buffer from file %c\n", buf[0] );
             for(int i = 0; i < 10 ; i++)
             {
-                for( int j = 0 ; j < 20 ; j++)
+                for( int j = 0 ; j < 50 ; j++)
                 {
-                    line[j] = buf[j + 20*i];
+                    line[j] = buf[j + 50*i];
                     //printf("%c", line[j] );
                 }
-                line[20] = '\0';
+                line[50] = '\0';
                 printf("%s\n", line);
             }
         }

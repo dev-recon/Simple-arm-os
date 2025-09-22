@@ -8,6 +8,7 @@
 #include <kernel/userspace.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
+#include <kernel/timer.h>
 
 /* Syscall table */
 typedef int (*syscall_func_t)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
@@ -34,6 +35,7 @@ static syscall_func_t syscall_table[256] = {
     [__NR_sigaction] = (syscall_func_t)sys_sigaction,
     [__NR_print] = (syscall_func_t)sys_print,
     [__NR_rt_sigreturn] = (syscall_func_t)sys_sigreturn,
+    [__NR_brk] = (syscall_func_t)sys_brk,
 };
 
 #pragma GCC diagnostic pop
@@ -58,20 +60,6 @@ extern void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 extern int copy_user_stack_pages(vm_space_t *parent_vm, vm_space_t *child_vm, 
                           uint32_t stack_start, uint32_t stack_size);
 
-//static char mock_user_space[4096] __attribute__((aligned(4096)));
-
-
-#if(0)
-static bool setup_mock_user_space(void) {
-    // Marquer cette zone comme "espace utilisateur" pour les tests
-    // Mapper mock_user_space dans l'espace utilisateur virtuel
-    
-    uint32_t virt_addr = USER_SPACE_START;  // Ex: 0x00400000
-    map_kernel_page(virt_addr, (uint32_t)mock_user_space);
-    
-    return true;
-}
-#endif
 
 void print_cpu_mode(void){
      uint32_t cpsr = get_cpsr();
@@ -261,7 +249,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     old_vm = proc->process->vm;
     
     /* Creer un nouvel espace memoire */
-    new_vm = create_vm_space(false);
+    new_vm = create_vm_space();
     if (!new_vm) {
         KERROR("sys_execve: Failed to create new VM space\n");
         put_inode(exe_inode);
@@ -468,27 +456,42 @@ void sys_exit(int status)
         task_destroy(proc);
         return;
     }
-    
+
+    int irq_flags = disable_interrupts_save();
+    set_critical_section();
+    //KDEBUG("EXITING TASK %s, with state = %s\n", proc->name, task_state_string(proc->state));
+
+    spin_lock(&task_lock);    
     /* CORRECTION: États cohérents avec sys_waitpid */
     proc->process->exit_code = status;
+    //task_set_state(proc, TASK_ZOMBIE);
     proc->state = TASK_ZOMBIE;           /* Pas TASK_TERMINATED ! */
     proc->process->state = (proc_state_t)PROC_ZOMBIE;
-    
+    spin_unlock(&task_lock);
+
+    /* Reveiller le parent s'il attend - ACCeS CORRECT */
+    wakeup_parent(proc);
+
     /* Fermer tous les fichiers ouverts - ACCeS CORRECT */
     close_all_process_files(proc);
     
-    /* Reveiller le parent s'il attend - ACCeS CORRECT */
-    wakeup_parent(proc);
-    
+    /* Retirer le processus zombie de la ready queue */
+    remove_from_ready_queue(proc);
+
     /* Orpheliner tous les enfants vers init (PID 1) - ACCeS CORRECT */
     orphan_children(proc);
 
-    /* Retirer le processus zombie de la ready queue */
-    remove_from_ready_queue(proc);
-    
+    //KDEBUG("EXITING TASK %s, with state = %s-----\n", proc->name, task_state_string(proc->state));
+
+    unset_critical_section();
+    restore_interrupts(irq_flags);
     /* Declencher une commutation de contexte */
-    schedule();
+    switch_to_idle();
+    //schedule();
+
     
+    //KDEBUG("EXITING TASK %s, with state = %s\n", proc->name, task_state_string(proc->state));
+
     /* Cette ligne ne devrait jamais s'executer */
     KERROR("sys_exit: FATAL - Zombie process PID=%u was rescheduled!\n", 
            proc->process->pid);
@@ -501,9 +504,8 @@ void sys_exit(int status)
 
 
 
-int kernel_waitpid(pid_t pid, int* status, int options)
+int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
 {
-    task_t* parent = current_task;
     task_t* zombie = NULL;
     
     (void)options;
@@ -512,20 +514,9 @@ int kernel_waitpid(pid_t pid, int* status, int options)
         KERROR("kernel_waitpid: NULL Proc\n");
         return -EINVAL;
     }
-    
-    //bool from_user = parent->context.returns_to_user ? true : false;
-    //if(from_user){
-    //    parent->context.returns_to_user = 0 ;  // FIX IT
-        //KDEBUG("kernel_waitpid: Blocking parent PID %d -> Forcing return to kernel\n", parent->process->pid);
-    //    yield();
-        // Parent is temporarily restoring to kernel to not resuming to user too early
-    //}
-    
+        
     while (1) {
         /* Chercher un processus zombie - ACCeS CORRECT */
-
-        //task_sleep_ms(1000);
-
         zombie = find_zombie_child(parent, pid);
         
         if (zombie) {
@@ -542,6 +533,7 @@ int kernel_waitpid(pid_t pid, int* status, int options)
             remove_child_from_parent(parent, zombie);
             
             /* Nettoyer le processus zombie */
+            //task_set_state(zombie, TASK_TERMINATED);
             zombie->state = TASK_TERMINATED;
             zombie->process->state = (proc_state_t)PROC_DEAD;
             destroy_process(zombie);
@@ -562,8 +554,11 @@ int kernel_waitpid(pid_t pid, int* status, int options)
         parent->process->waitpid_iteration++;
         
         /* Bloquer le parent en attente - ACCeS CORRECT */
+        //task_set_state(parent, TASK_BLOCKED);
         parent->state = TASK_BLOCKED;
         parent->process->state = (proc_state_t)PROC_BLOCKED;
+
+        remove_from_ready_queue(parent);
 
         yield();
         
@@ -578,18 +573,20 @@ int kernel_waitpid(pid_t pid, int* status, int options)
 
 int sys_waitpid(pid_t pid, int* status, int options)
 {
-    //KDEBUG("sys_waitpid: called by = %d - &status = 0x%08X\n", pid, (uint32_t)status);
+    //KDEBUG("sys_waitpid: called for = %d - &status = 0x%08X\n", pid, (uint32_t)status);
 
     task_t *parent = current_task;
+
+    //debug_print_ctx(&parent->context, "--->>> SYS_WAITPID START");
 
     bool from_user = parent->context.returns_to_user ? true : false;
     if(from_user){
         parent->context.returns_to_user = 0 ;  // FIX IT
-        // Parent is temporarily restoring to kernel to not resuming to user too early
+        // Parent is temporarily restoring to kernel to not resuming too early to user 
     }
 
     int exit_code;
-    pid_t result = kernel_waitpid(pid, &exit_code, options);
+    pid_t result = kernel_waitpid(pid, &exit_code, options, parent);
 
     if (result > 0 && status) {
         /* copy_to_user pour les appels depuis l'espace utilisateur */
@@ -598,19 +595,21 @@ int sys_waitpid(pid_t pid, int* status, int options)
         }
     }
 
+    //debug_print_ctx(&parent->context, "---->>> SYS_WAITPID AFTER KERNEL_WAITPID");
+
     if(from_user){
-
         parent->context.returns_to_user = 1 ;  // FIX IT
-
         yield();
         // Parent is temporarily restoring to kernel to not resuming to user too early
     }
+
+    KDEBUG("sys_waitpid: returning to callee  = %d\n", sys_getppid());
 
     
     return result;
 }
 
-static inline void save_usr_regs(uint32_t usr_r[13]) {
+static inline void get_usr_regs(uint32_t usr_r[13]) {
     __asm__ volatile(
         "stmia %0, {r0-r12}"
         : //"=m" (*usr_r)   // sortie : écrit dans usr_r[0..12]
@@ -630,6 +629,23 @@ static inline void read_user_sp_lr(uint32_t *usp, uint32_t *ulr)
         :
         : "memory","cc"
     );
+}
+
+void store_usr_regs(task_context_t *ctx, uint32_t usr_r[13]) {
+
+    ctx->r0 = usr_r[0];
+    ctx->r1 = usr_r[1];
+    ctx->r2 = usr_r[2];
+    ctx->r3 = usr_r[3];
+    ctx->r4 = usr_r[4];
+    ctx->r5 = usr_r[5];
+    ctx->r6 = usr_r[6];
+    ctx->r7 = usr_r[7];
+    ctx->r8 = usr_r[8];
+    ctx->r9 = usr_r[9];
+    ctx->r10 = usr_r[10];
+    ctx->r11 = usr_r[11];
+    ctx->r12 = usr_r[12];
 }
 
 
@@ -706,60 +722,31 @@ void print_context_offsets(void) {
 int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2, 
                    uint32_t arg3, uint32_t arg4, uint32_t arg5)
 {
+    //KDEBUG("====== SYSCALL HANDLER ===========\n");
+    //KDEBUG(" SYSCALL NUM == %u ==\n", syscall_num);
+
     if (syscall_num >= 256 || !syscall_table[syscall_num]) {
         return -ENOSYS;
     }
 
     task_t *proc = current_task;
 
-    //uint32_t usr_fp = proc->context.usr_r[11];
-    //uint32_t usr_r0 = proc->context.usr_r[0];
-    //uint32_t usr_r1 = proc->context.usr_r[1];
-    //uint32_t usr_r2 = proc->context.usr_r[2];
-    //uint32_t usr_r3 = proc->context.usr_r[3];
-
-
     if(proc && proc->context.returns_to_user)
     {
-        uint32_t usr_r[13];
-        save_usr_regs(usr_r);
-        //proc->context.r0 = usr_r[0]; 
-        //proc->context.r1 = usr_r[1]; 
-        //proc->context.r2 = usr_r[2]; 
-        //proc->context.r3 = usr_r[3]; 
-        //proc->context.r11 = usr_r[11]; 
-        //proc->context.r12 = usr_r[12]; 
         proc->context.svc_sp = proc->context.sp;
-        //proc->context.r11 = proc->context.usr_r[11];   // FRAME POINTER
-        //read_user_sp_lr(&proc->context.usr_sp, &proc->context.usr_lr);
-
-        //if( syscall_num == 7)
-        //    debug_print_ctx(&proc->context);
     }
 
 //print_task_offsets();
 // print_context_offsets();
 
-    //KDEBUG("=== SYSCALL HANDLER ===\n");
-    //KDEBUG("  syscall_num: %u\n", syscall_num);
-    //KDEBUG("  arg1: %u (0x%08X)\n", arg1, arg1);
-    //KDEBUG("  arg2: %u (0x%08X)\n", arg2, arg2);
-    //KDEBUG("  arg3: %u (0x%08X)\n", arg3, arg3);
-    //KDEBUG("  arg4: %u (0x%08X)\n", arg4, arg4);
-    //KDEBUG("  arg5: %u (0x%08X)\n", arg5, arg5);
-    
-    //KDEBUG("=== SYSCALL HANDLER ===\n");
-    //KDEBUG("  syscall_num: %u\n", syscall_num);
-    //KDEBUG("  Task: %s\n", current_task->name);
-    //KDEBUG("  SP: 0x%08X\n", current_task->context.sp);
-    //KDEBUG("  SVC SP: 0x%08X\n", current_task->context.svc_sp);
-    //KDEBUG("  SVC SP TOP: 0x%08X\n", current_task->context.svc_sp_top);
-    //KDEBUG("  USER SP: 0x%08X\n", current_task->context.usr_sp);
-    //KDEBUG("  USER SP START: 0x%08X\n", current_task->process->vm->stack_start);
-//debug_print_ctx(&proc->context);
-
     /* Check pending signals before syscall */
     check_pending_signals();
+
+    uint32_t usr_r[13];
+    get_usr_regs(usr_r);
+    //store_usr_regs(&proc->context, usr_r);
+
+    //debug_print_ctx(&proc->context, "----->>>>>> ENTER SYSCALL HANDLER");
     
     /* Call syscall */
     int result = syscall_table[syscall_num](arg1, arg2, arg3, arg4, arg5);
@@ -767,18 +754,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
     /* Check pending signals after syscall */
     check_pending_signals();
 
-    //proc->context.usr_r[11] = usr_fp;
-    //proc->context.usr_r[0]  = usr_r0;
-    //proc->context.usr_r[1]  = usr_r1;
-    //proc->context.usr_r[2]  = usr_r2;
-    //proc->context.usr_r[3]  = usr_r3;
-
-    if( syscall_num == 7)
-    {
-        int *val = (int *)arg2;
-        KDEBUG("SYSCALL HANDLER: result = %u, &arg2 = 0x%08X, arg2 = %d\n", result, arg2, *val);
-        //debug_print_ctx(&proc->context);
-    }
+    //KDEBUG(" SYSCALL %d RESULT == 0x%08X ==\n", syscall_num, result);
 
     return result;
 }
@@ -809,12 +785,23 @@ int sys_getppid(void)
 int sys_getuid(void)
 {
     /* Simple implementation - always return 0 (root) */
+    task_t *proc = current_task;
+
+    if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
+        return proc->process->uid;
+    }
+
     return 0;
 }
 
 int sys_getgid(void)
 {
     /* Simple implementation - always return 0 (root) */
+    task_t *proc = current_task;
+
+    if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
+        return proc->process->gid;
+    }
     return 0;
 }
 

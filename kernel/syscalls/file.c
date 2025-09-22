@@ -7,11 +7,13 @@
 #include <kernel/string.h>
 #include <kernel/userspace.h>
 #include <kernel/kprintf.h>
+#include <kernel/fat32.h>
 
 
 /* Forward declarations de toutes les fonctions statiques */
 static bool check_file_permission(inode_t* inode, int flags);
-
+extern int fat32_file_exists_in_dir(inode_t* dir_inode, const char* filename);
+extern inode_t* fat32_create_file(const char* parent_path, const char* filename, mode_t mode);
 
 int sys_read(int fd, void* buf, size_t count)
 {
@@ -46,19 +48,26 @@ int sys_write(int fd, const void* buf, size_t count)
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
 
     //KDEBUG("SYS_WRITE: buf is NOT NULL\n");
+
     loc_string = (char *)kmalloc(count+1);
     if(!loc_string) return -EINVAL;
 
-    strncpy_from_user(loc_string, buf, count+1);
+    if(strncpy_from_user(loc_string, buf, count+1)>0)
+    {
+        KDEBUG("SYS_WRITE USER: Called with parameters: fd=%d, buf='%s', count=%d\n", fd, loc_string, count );
 
-    //KDEBUG("SYS_WRITE: Called with parameters: fd=%d, buf='%s', count=%d\n", fd, loc_string, count );
+        //if(loc_string) kfree(loc_string);
+        
+        result = file->f_op->write(file, loc_string, count);
 
-    //if(loc_string) kfree(loc_string);
-    
-    result = file->f_op->write(file, loc_string, count);
+        kfree(loc_string);
+    }
+    else {
+        KDEBUG("SYS_WRITE KERNEL: Called with parameters: fd=%d, buf='%s', count=%d\n", fd, (char *)buf, count );
+        result = file->f_op->write(file, buf, count);
+    }
 
-    //KDEBUG("SYS_WRITE: just after writing result = %d\n" , result);
-    kfree(loc_string);
+    KDEBUG("SYS_WRITE: just after writing result = %d\n" , result);
 
     return (int)result;
 }
@@ -78,26 +87,118 @@ int sys_close(int fd)
     return 0;
 }
 
+/**
+ * Séparer un chemin en répertoire parent et nom de fichier
+ */
+int split_path(const char* full_path, char** parent_path, char** filename) {
+    int len = strlen(full_path);
+    int i;
+    
+    /* Trouver le dernier '/' */
+    for (i = len - 1; i >= 0; i--) {
+        if (full_path[i] == '/') break;
+    }
+    
+    if (i < 0) {
+        /* Pas de '/', fichier dans le répertoire courant */
+        *parent_path = strdup(".");
+        *filename = strdup(full_path);
+    } else if (i == 0) {
+        /* Fichier dans la racine */
+        *parent_path = strdup("/");
+        *filename = strdup(full_path + 1);
+    } else {
+        /* Fichier dans un sous-répertoire */
+        *parent_path = kmalloc(i + 1);
+        if (!*parent_path) return -ENOMEM;
+        
+        strncpy(*parent_path, full_path, i);
+        (*parent_path)[i] = '\0';
+        
+        *filename = strdup(full_path + i + 1);
+    }
+    
+    if (!*filename) {
+        kfree(*parent_path);
+        return -ENOMEM;
+    }
+    
+    return 0;
+}
+
+
+
 int kernel_open(char* kernel_path, int flags, mode_t mode)
 {
     inode_t* inode;
     file_t* file;
     int fd;
+    char* filename = NULL;
+    bool new_file = false;
     
     /* Suppression du warning unused parameter */
     (void)mode;
     
     /* Find inode */
     inode = path_lookup(kernel_path);
-    kfree(kernel_path);
+    //kfree(kernel_path);
     
-    if (!inode) {
+/*     if (!inode) {
         if (flags & O_CREAT) {
-            /* TODO: Create file */
+            // TODO: Create file 
             return -ENOSYS;
         }
         return -ENOENT;
+    } */
+
+    if (!inode) {
+        KDEBUG("kernel_open: INODE IS NULL for %s\n", kernel_path);
+        if (flags & O_CREAT) {
+            char* parent_path;
+            
+            /* Séparer le chemin */
+            if (split_path(kernel_path, &parent_path, &filename) != 0) {
+                kfree(kernel_path);
+                return -ENOMEM;
+            }
+            
+            /* Vérifier que le fichier n'existe pas déjà */
+            inode_t* parent = path_lookup(parent_path);
+            if (parent && fat32_file_exists_in_dir(parent, filename)) {
+                if (flags & O_EXCL) {
+                    /* O_CREAT | O_EXCL = échec si existe */
+                    put_inode(parent);
+                    kfree(parent_path);
+                    kfree(filename);
+                    kfree(kernel_path);
+                    return -EEXIST;
+                }
+                
+                /* Fichier existe, l'ouvrir normalement */
+                char* full_path_again = kernel_path; 
+                inode = path_lookup(full_path_again);
+                put_inode(parent);
+                kfree(parent_path);
+                kfree(filename);
+            } else {
+                /* Créer le nouveau fichier */
+                inode = fat32_create_file(parent_path, filename, mode);
+                if (parent) put_inode(parent);
+                kfree(parent_path);
+                new_file = true;
+                
+                if (!inode) {
+                    kfree(kernel_path);
+                    return -EIO;  /* Échec création */
+                }
+            }
+        } else {
+            kfree(kernel_path);
+            return -ENOENT;
+        }
     }
+    
+    kfree(kernel_path);
     
     /* Check permissions */
     if (!check_file_permission(inode, flags)) {
@@ -123,6 +224,13 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     file->flags = flags;
     file->offset = 0;
     file->f_op = inode->f_op;
+
+    if(new_file)
+    {
+        strcpy(file->name, filename);
+        KDEBUG("kernel_open: File creation detected: file->name=%s\n", file->name);
+        kfree(filename);
+    }
     
     /* Open file */
     if (file->f_op && file->f_op->open) {

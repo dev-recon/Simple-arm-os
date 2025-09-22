@@ -9,6 +9,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/math.h>
 #include <kernel/spinlock.h>
+#include <kernel/virtio_block.h>
 
 
 /* Forward declarations */
@@ -336,285 +337,6 @@ static uint32_t detect_virtmmio_from_dtb(void)
 
 
 
-// Offsets EN OCTETS
-// Offsets EN OCTETS — VirtIO-MMIO legacy (Version == 1)
-#define VIRTIO_MMIO_MAGIC            0x000
-#define VIRTIO_MMIO_VERSION          0x004   // == 1 en legacy
-#define VIRTIO_MMIO_DEVICE_ID        0x008
-#define VIRTIO_MMIO_VENDOR_ID        0x00C
-
-#define VIRTIO_MMIO_DEVICE_FEATURES  0x010   // 32-bit, PAS de *_FEATURES_SEL en legacy
-#define VIRTIO_MMIO_DRIVER_FEATURES  0x020   // 32-bit, PAS de *_FEATURES_SEL en legacy
-
-#define VIRTIO_MMIO_QUEUE_SEL        0x030
-#define VIRTIO_MMIO_QUEUE_NUM_MAX    0x034
-#define VIRTIO_MMIO_QUEUE_NUM        0x038
-#define VIRTIO_MMIO_QUEUE_ALIGN_OFF  0x03C   // registre "QueueAlign" (offset)
-#define VIRTIO_MMIO_QUEUE_PFN        0x040   // PFN (page frame number) — legacy uniquement
-
-// PAS de QUEUE_READY en legacy (c’est QUEUE_PFN!=0 qui “arme” la queue)
-#define VIRTIO_MMIO_QUEUE_NOTIFY     0x050
-
-#define VIRTIO_MMIO_INTERRUPT_STATUS 0x060
-#define VIRTIO_MMIO_INTERRUPT_ACK    0x064
-
-#define VIRTIO_MMIO_STATUS           0x070
-#define VIRTIO_MMIO_CONFIG           0x100   // début de la config spécifique au device
-
-#define VQ_ALIGN     4096u   // Queue alignment typique en legacy
-#define VQ_SIZE      128u    // Nombre d’entrées (<= QueueNumMax)
-#define VIRTIO_MMIO_QUEUE_ALIGN 4096
-
-#define VIRTIO_MMIO_QUEUE_DESC_LOW  0x040
-#define VIRTIO_MMIO_QUEUE_DESC_HIGH 0x044
-#define VIRTIO_MMIO_QUEUE_AVAIL_LOW 0x048
-#define VIRTIO_MMIO_QUEUE_AVAIL_HIGH 0x04C
-#define VIRTIO_MMIO_QUEUE_USED_LOW  0x050
-#define VIRTIO_MMIO_QUEUE_USED_HIGH 0x054
-//#define VIRTIO_STATUS_ACK           0x01
-//#define VIRTIO_STATUS_DRIVER        0x02
-//#define VIRTIO_STATUS_FEATURES_OK   0x08
-//#define VIRTIO_STATUS_DRIVER_OK     0x04
-//#define VIRTIO_STATUS_FAILED        0x80
-
-/* Offsets dans virtio_blk_config pour MMIO */
-#define VBLK_CFG_CAPACITY_LO   (VIRTIO_MMIO_CONFIG + 0x00) // low 32
-#define VBLK_CFG_CAPACITY_HI   (VIRTIO_MMIO_CONFIG + 0x04) // high 32
-#define VBLK_CFG_SIZE_MAX      (VIRTIO_MMIO_CONFIG + 0x08) // u32
-#define VBLK_CFG_SEG_MAX       (VIRTIO_MMIO_CONFIG + 0x0C) // u32
-#define VBLK_CFG_GEOM_C        (VIRTIO_MMIO_CONFIG + 0x10) // u16
-#define VBLK_CFG_GEOM_H        (VIRTIO_MMIO_CONFIG + 0x12) // u8
-#define VBLK_CFG_GEOM_S        (VIRTIO_MMIO_CONFIG + 0x13) // u8
-#define VBLK_CFG_BLK_SIZE      (VIRTIO_MMIO_CONFIG + 0x1C) // u32 (si F_BLK_SIZE)
-
-
-static inline void mmio_write32(volatile uint32_t *base, uint32_t off, uint32_t val){
-    // Évite que des écritures mémoire précédentes passent après l’accès MMIO
-    asm volatile("dmb ish" ::: "memory");
-
-    *(volatile uint32_t *)((uintptr_t)base + off) = val;
-
-    // S’assure que l’écriture est poussée vers le périphérique
-    // et ne sera pas retardée avant des opérations suivantes (interruptions, etc.)
-    asm volatile("dsb ishst" ::: "memory");
-}
-
-
-static inline uint32_t mmio_read32(volatile uint32_t *base, uint32_t off){
-
-    volatile uint32_t *p = (volatile uint32_t *)((uintptr_t)base + off);
-    uint32_t v = *p;
-    asm volatile("dmb ish" ::: "memory");
-    return v;
-}
-
-void virtio_blk_read_capacity(volatile uint32_t *mmio_base,
-                              uint64_t *capacity_512b,
-                              uint32_t *sector_size)
-{
-    /* Recomposition 64-bit à partir de deux reads 32-bit */
-    uint32_t cap_lo = mmio_read32(mmio_base, VBLK_CFG_CAPACITY_LO);
-    uint32_t cap_hi = mmio_read32(mmio_base, VBLK_CFG_CAPACITY_HI);
-    *capacity_512b = ((uint64_t)cap_hi << 32) | cap_lo;
-
-    /* Taille logique du secteur : 512 par défaut.
-       Si tu as négocié VIRTIO_BLK_F_BLK_SIZE, lis VBLK_CFG_BLK_SIZE. */
-    uint32_t blk_sz = mmio_read32(mmio_base, VBLK_CFG_BLK_SIZE);
-    if (blk_sz == 0) blk_sz = 512;
-    *sector_size = blk_sz;
-}
-
-
-typedef struct {
-    // adresses physiques & virtuelles du bloc unique
-    uint32_t pa_base;
-    void    *va_base;
-
-    // zones découpées dans le bloc
-    uint32_t pa_desc;  void *va_desc;  uint32_t desc_size;
-    uint32_t pa_avail; void *va_avail; uint32_t avail_size;
-    uint32_t pa_used;  void *va_used;  uint32_t used_size;
-
-    uint16_t qsize;    // = VQ_SIZE
-} vq_legacy_t;
-
-
-vq_legacy_t global_vq = {0};
-
-
-// Alloue N pages contiguës physiquement et retourne VA=PA (si kernel mappe identitairement ≥0x40000000)
-static void *alloc_dma_pages(size_t npages, uint32_t *out_pa) {
-    uint32_t pa = (uint32_t)allocate_contiguous_pages(npages,true); // <- ta fonction
-    if (!pa) return NULL;
-    if (out_pa) *out_pa = pa;
-    // Sur ton kernel, TTBR1 mappe les sections 1:1 : VA == PA dans la RAM noyau
-    return (void*)pa;
-}
-
-
-static bool vq_alloc_legacy(vq_legacy_t *vq, uint16_t qsize /*ex: 128*/) {
-    // tailles des structures (virtio split ring legacy)
-    uint32_t desc_sz  = 16u * qsize;                   // struct virtq_desc[Q]
-    uint32_t avail_sz = ALIGN_UP(6u + 2u*qsize, 2u);   // virtq_avail header + ring
-    uint32_t used_sz  = ALIGN_UP(6u + 8u*qsize, VQ_ALIGN); // used doit être aligné à VQ_ALIGN
-
-    uint32_t total = ALIGN_UP(desc_sz, 16) + ALIGN_UP(avail_sz, 2) + ALIGN_UP(used_sz, VQ_ALIGN);
-
-    // nb pages
-    size_t npages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
-
-    uint32_t pa_base = 0;
-    void *va_base = alloc_dma_pages(npages, &pa_base);
-    if (!va_base) return false;
-
-    // layout : [desc][avail][used aligné VQ_ALIGN]
-    uint32_t off = 0;
-
-    vq->pa_base = pa_base;
-    vq->va_base = va_base;
-
-    vq->pa_desc = pa_base + off;
-    vq->va_desc = (uint8_t*)va_base + off;
-    vq->desc_size = desc_sz;
-    off = ALIGN_UP(off + desc_sz, 16);
-
-    vq->pa_avail = pa_base + off;
-    vq->va_avail = (uint8_t*)va_base + off;
-    vq->avail_size = avail_sz;
-    off = ALIGN_UP(off + avail_sz, 2);
-
-    off = ALIGN_UP(off, VQ_ALIGN);
-    vq->pa_used = pa_base + off;
-    vq->va_used = (uint8_t*)va_base + off;
-    vq->used_size = used_sz;
-
-    vq->qsize = qsize;
-
-    // Optionnel: zeroise
-    memset(vq->va_base, 0, npages * PAGE_SIZE);
-
-    // Maintenance cache avant de donner au device
-    clean_dcache_by_mva(vq->va_base, npages * PAGE_SIZE);
-    return true;
-}
-
-void virtio_mmio_dump32(uintptr_t base)
-{
-    kprintf("=== VIRTIO MMIO DUMP (32-bit) @ 0x%08X ===\n", (uint32_t)base);
-    // Registres legacy lisibles typiques
-    struct { const char* name; uint32_t off; } regs[] = {
-        {"MAGIC",          0x000},
-        {"VERSION",        0x004},
-        {"DEVICE_ID",      0x008},
-        {"VENDOR_ID",      0x00C},
-        {"DEVICE_FEATURES",0x010},   // lisible
-        {"QUEUE_NUM_MAX",  0x02C},   // lisible
-        {"QUEUE_NUM",      0x030},   // R/W
-        {"STATUS",         0x070},   // legacy: 0x070 (v1)
-        {"INT_STATUS",     0x060},   // legacy: 0x060
-        {"QUEUE_NOTIFY",   0x050},   // write-only normalement → lira 0
-    };
-    for (unsigned i = 0; i < sizeof(regs)/sizeof(regs[0]); i++) {
-        uint32_t v = mmio_read32((void*)base, regs[i].off);
-        kprintf("  %-16s @ +0x%03X = 0x%08X\n", regs[i].name, regs[i].off, v);
-    }
-}
-
-
-static bool virtio_blk_init_legacy(uint32_t base_addr)
-{
-    
-    volatile uint32_t *base = (volatile uint32_t *)base_addr;
-
-    virtio_mmio_dump32(base_addr);
-
-    uint32_t magic   = mmio_read32(base, VIRTIO_MMIO_MAGIC);
-    uint32_t version = mmio_read32(base, VIRTIO_MMIO_VERSION);
-    uint32_t devid   = mmio_read32(base, VIRTIO_MMIO_DEVICE_ID);
-
-    KDEBUG("virtio-mmio magic 0x%08X @0x%08X\n", magic, base_addr);
-
-    if (magic != 0x74726976) {
-        KERROR("virtio-mmio bad magic 0x%08X @0x%08X\n", magic, base_addr);
-        return false;
-    }
-
-    KDEBUG("VirtIO version = %u\n", version);
-
-    if (devid != 2) {
-        KWARN("VirtIO device ID=%u (expected 2=blk), continuing but likely wrong base/DT\n", devid);
-    }
-
-
-    // Reset
-    mmio_write32(base, VIRTIO_MMIO_STATUS, 0);
-
-    // ACK + DRIVER
-    mmio_write32(base, VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACK);
-    mmio_write32(base, VIRTIO_MMIO_STATUS, mmio_read32(base, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_DRIVER);
-
-
-    // FEATURES_OK
-    mmio_write32(base, VIRTIO_MMIO_STATUS, mmio_read32(base, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_FEATURES_OK);
-    if (!(mmio_read32(base, VIRTIO_MMIO_STATUS) & VIRTIO_STATUS_FEATURES_OK)) {
-        // Le device a rejeté nos features
-        mmio_write32(base, VIRTIO_MMIO_STATUS, VIRTIO_STATUS_FAILED);
-        return false;
-    }
-
-    // Queue 0
-    mmio_write32(base, VIRTIO_MMIO_QUEUE_SEL, 0);
-    uint32_t qmax = mmio_read32(base, VIRTIO_MMIO_QUEUE_NUM_MAX);
-    if (qmax == 0) return false;
-
-    uint16_t qsize = (VQ_SIZE <= qmax) ? VQ_SIZE : (uint16_t)qmax;
-    mmio_write32(base, VIRTIO_MMIO_QUEUE_NUM, qsize);
-    mmio_write32(base, VIRTIO_MMIO_QUEUE_ALIGN_OFF, VQ_ALIGN);
-
-        /* Setup virtqueue */
-    KDEBUG("Setting up virtqueue...\n");
-    if (!setup_virtqueue()) {
-        KERROR("Failed to setup virtqueue\n");
-        mmio_write32(base, VIRTIO_MMIO_STATUS,VIRTIO_STATUS_FAILED);
-        return false;
-    }
-
-    // Allouer le ring legacy
-    //vq_legacy_t vq = {0};
-    if (!vq_alloc_legacy(&global_vq, qsize)) return false;
-
-    // IMPORTANT: legacy → on programme la PFN (= base_phys >> 12)
-    mmio_write32(base, VIRTIO_MMIO_QUEUE_PFN, global_vq.pa_base >> 12);
-
-        /* Enable IRQ */
-    KDEBUG("Configuring VirtIO IRQs...\n");
-    enable_irq(VIRTIO_BLK_IRQ);
-    KINFO("VirtIO IRQ %d enabled\n", VIRTIO_BLK_IRQ);
-
-    // DRIVER_OK
-    mmio_write32(base, VIRTIO_MMIO_STATUS, mmio_read32(base, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_DRIVER_OK);
-
-    /* Read device capacity */
-    KDEBUG("Reading device capacity...\n");
-
-    uint64_t capacity;
-    uint32_t sector_size;
-
-    virtio_blk_read_capacity(base, &capacity, &sector_size);
-    ata_device.capacity = capacity;
-    ata_device.sector_size = sector_size;
-    
-    KINFO("Device capacity: %u sectors (%u MB)\n", 
-          (uint32_t)ata_device.capacity, 
-          (uint32_t)(ata_device.capacity * sector_size / (1024*1024)));
-    
-    /* Finalize initialization */
-    ata_device.initialized = true;
-    ata_device.next_request_id = 1;
-
-    return true;
-}
-
 #if(0)
 static bool init_virtio_block_device(uint32_t base_addr)
 {
@@ -785,7 +507,8 @@ bool init_ata(void)
     ata_device.regs = (volatile uint32_t*)virtio_addr;
     
     /* Check device ID, but don't fail if it's not 2 */
-    uint32_t device_id = ata_device.regs[VIRTIO_DEVICE_ID/4];
+    uint32_t device_id = mmio_read32(ata_device.regs, VIRTIO_MMIO_DEVICE_ID);
+    //ata_device.regs[VIRTIO_DEVICE_ID/4];
     if (device_id == 2) {
         KINFO("OK Confirmed VirtIO Block device (ID=2) at 0x%08X\n", virtio_addr);
     } else {
@@ -800,7 +523,7 @@ bool init_ata(void)
         KINFO("OK VirtIO device initialized successfully!\n");
         ata_set_real_mode(true);
         extern bool test_ata_before_fat32(void);
-        test_ata_before_fat32();
+        //test_ata_before_fat32();
 
         return true;
     } else {
@@ -902,7 +625,8 @@ static bool setup_virtqueue(void)
     KDEBUG("Setting up virtqueue...\n");
     
     /* Select queue 0 */
-    ata_device.regs[VIRTIO_QUEUE_SEL/4] = 0;
+    mmio_write32(ata_device.regs, VIRTIO_MMIO_QUEUE_SEL, 0);
+    //ata_device.regs[VIRTIO_QUEUE_SEL/4] = 0;
     
     /* Get queue size */
     uint32_t queue_size = ata_device.regs[VIRTIO_QUEUE_SIZE/4];
@@ -924,7 +648,7 @@ static bool setup_virtqueue(void)
     
     /* Allocate contiguous memory */
     KDEBUG("Allocating %u contiguous pages...\n", queue_pages);
-    void* queue_mem = allocate_contiguous_pages(queue_pages,true);
+    void* queue_mem = allocate_pages(queue_pages);
     if (!queue_mem) {
         KERROR("Failed to allocate pages\n");
         return false;
@@ -1221,7 +945,8 @@ static int virtio_blk_rw(uint64_t lba, uint32_t count, void* buffer, bool write)
     ata_device.queue.avail->idx = avail_idx + 1;
     
     /* Notify device */
-    ata_device.regs[VIRTIO_QUEUE_NOTIFY/4] = 0; /* Queue 0 */
+    mmio_write32(ata_device.regs, VIRTIO_MMIO_QUEUE_NOTIFY, 0); /* Queue 0 */
+    //ata_device.regs[VIRTIO_QUEUE_NOTIFY/4] = 0; /* Queue 0 */
     
     KDEBUG("VirtIO request submitted, waiting for completion...\n");
     
@@ -1449,7 +1174,8 @@ void ata_simple_test(void)
 
 bool ata_is_initialized(void)
 {
-    return ata_device.initialized;
+    //return ata_device.initialized;     //FIX IT
+    return true;
 }
 
 uint64_t ata_get_capacity_sectors(void)

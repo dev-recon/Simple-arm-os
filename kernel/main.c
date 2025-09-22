@@ -202,7 +202,7 @@ void kernel_main(void)
 
     KDEBUG("=== STARTING KERNEL INITIALIZATION ===\n");
 
-    disable_branch_predictor();
+    //disable_branch_predictor();
     
     kprintf("Initialize physical memory allocator ... ");
     init_memory();  // <- Allocateur physique EN PREMIER
@@ -228,7 +228,8 @@ void kernel_main(void)
 
     init_gic();
 
-    init_timer_software();
+    //init_timer_software();
+    init_timer();
 
     kprintf("=== STARTING MAIN LOOP ===\n");
 
@@ -279,7 +280,7 @@ void kernel_main(void)
 
 #ifdef USE_RAMFS
     kprintf("Initialize RAMFS ... ");
-    if (init_ramfs()) { 
+    if (/*init_ramfs()*/0) { 
     kprintf("----------------> OK\n");
 } else {
     kprintf("----------------> FAILED\n");

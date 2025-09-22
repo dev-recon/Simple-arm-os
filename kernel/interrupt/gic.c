@@ -92,9 +92,9 @@ void init_gic(void)
     //KDEBUG("[GIC] Enabling important IRQs...\n");
     /* IRQs pour machine virt : UART=1, Timer=30, VirtIO=16-31 */
 #if 1
-    uint32_t important_irqs[] = {1, 30, 16, 17, 18, 19};
+    uint32_t important_irqs[] = {1, 30, 16, 17, 18, 19, 48, 79};
     
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 8; i++) {
         uint32_t irq = important_irqs[i];
         
         /* 1. Configurer comme edge-triggered si IRQ >= 16 */
@@ -168,22 +168,22 @@ void irq_c_handler(void)
     /* Router vers les handlers specifiques pour machine virt */
     switch (int_id) {
         case VIRT_TIMER_NS_EL1_IRQ:  /* Timer generique ARM */
-            kprintf("[IRQ] Generic Timer IRQ %u Received\n", int_id);
+            //kprintf("[IRQ] Generic Timer IRQ %u Received\n", int_id);
             timer_irq_handler();
             break;
             
         case VIRT_UART_IRQ:  /* UART machine virt */
-            kprintf("[IRQ] UART IRQ %u Received\n", int_id);
+            //kprintf("[IRQ] UART IRQ %u Received\n", int_id);
             //uart_irq_handler();
             break;
 
         case 12:
-            kprintf("[IRQ] Keyboard IRQ 12 Received\n");
+            //kprintf("[IRQ] Keyboard IRQ 12 Received\n");
             keyboard_irq_handler();
             break;
             
         case 15:  /* IDE si present */
-            kprintf("[IRQ] IDE IRQ %u Received\n", int_id);
+            //kprintf("[IRQ] IDE IRQ %u Received\n", int_id);
             ide_irq_handler();
             break;
             
@@ -192,7 +192,10 @@ void irq_c_handler(void)
         case VIRT_VIRTIO_BLOCK_IRQ:
         case VIRT_VIRTIO_CONSOLE_IRQ:
         case VIRT_VIRTIO_RNG_IRQ:
-            kprintf("[IRQ] - VirtIO IRQ %u - SUCCESS!\n", int_id);
+        case 79:
+        case 48:
+            //kprintf("[IRQ] - VirtIO IRQ %u - SUCCESS!\n", int_id);
+            //uart_puts("[IRQ] - VirtIO IRQ - SUCCESS!\n");
             /*virtio_irq_handler(int_id); */
             ata_irq_handler();
             break;

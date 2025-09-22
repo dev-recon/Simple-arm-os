@@ -182,7 +182,7 @@ pid_t spawn_ls_process(void)
     
     /* Copier l'espace memoire virtuel (simplifie - pas de COW ici) */
     destroy_vm_space(ls_proc->process->vm);
-    ls_proc->process->vm = create_vm_space(true);
+    ls_proc->process->vm = create_vm_space();
     if (!ls_proc->process->vm) {
         KERROR("[LS] echec de creation de l'espace memoire virtuel\n");
         destroy_process(ls_proc);

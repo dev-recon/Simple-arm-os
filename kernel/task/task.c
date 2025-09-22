@@ -51,7 +51,7 @@ void debug_null_new_ctx(void);
 void debug_context_registers(task_context_t* ctx, const char* moment);
 void debug_task_detailed(task_t *current_task);
 
-void debug_print_ctx(task_context_t *context);
+void debug_print_ctx(task_context_t *context, const char* caller);
 void debug_return_snapshot(task_context_t *ctx, uint32_t spsr, uint32_t usr_pc, uint32_t tracer);
 
 
@@ -62,8 +62,23 @@ extern void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 extern void print_system_stats(void);
 
 
+uid_t current_uid(void) {
+    if (current_task && current_task->process) {
+        return current_task->process->uid;
+    }
+    return 0;  /* Root par défaut */
+}
+
+uid_t current_gid(void) {
+    if (current_task && current_task->process) {
+        return current_task->process->gid;
+    }
+    return 0;  /* Root group par défaut */
+}
+
 // Prototypes utiles
 static inline void *kstack_alloc(size_t sz) { void *p = kmalloc(sz); memset(p, 0, sz); return p; }
+
 
 // Construit une pile noyau "propre" pour un PROCESS (utile pour from_user=true)
 static void build_clean_kernel_stack(task_t *t)
@@ -253,42 +268,6 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     if(!set_process_stack(parent,child, from_user))
         return NULL;
 
-    //KDEBUG("CHILD SP = 0x%08X\n", child->context.sp);
-    //KDEBUG("CHILD Stack Base = 0x%08X\n", child->stack_base);
-    //KDEBUG("CHILD Stack Top = 0x%08X\n", child->stack_top);
-        
-    //KDEBUG("CHILD Stack Top = 0x%08X\n", child->stack_top);
-
-    /* Copier le contenu de la pile parent */
-    //memcpy(child->stack_base, parent->stack_base, KERNEL_TASK_STACK_SIZE);
-    
-
-    /* Stack configuration corrigee */
-    //uint32_t stack_top = (uint32_t)child->stack_top;
-    //uint32_t stack_reserve = 512; /*512 avant*/
-    //child->context.sp = stack_top - stack_reserve;
-    //child->context.sp &= ~7;  /* Alignement 8-bytes */
-
-        //  VeRIFICATION IMMeDIATE
-    //if (child->context.sp < (uint32_t)child->stack_base || 
-    //    child->context.sp >= (uint32_t)child->stack_top) {
-    //    KERROR("task_create_copy: Child SP calculation failed!\n");
-    //    KERROR("  Child: %s\n", child->name);
-    //    KERROR("  Stack: %p - %p (%u bytes)\n", 
-    //           child->stack_base, child->stack_top, child->stack_size);
-    //    KERROR("  SP: 0x%08X (invalid!)\n", child->context.sp);
-        
-        /* Correction d'urgence */
-    //   child->context.sp = (uint32_t)child->stack_top - 512;
-    //    child->context.sp &= ~7;
-        
-    //    KWARN("Emergency SP correction: 0x%08X\n", child->context.sp);
-    //}
-
-    //uint32_t sp_offset = parent->context.sp - (uint32_t)parent->stack_base;
-    //child->context.sp = (uint32_t)child->stack_base + sp_offset;
-
-    
     /* Configuration processus pour l'enfant */
     if (parent->type == TASK_TYPE_PROCESS) {
 
@@ -322,47 +301,18 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->prev = NULL;
     
     /* Statistiques */
-    child->created_time = get_system_ticks();
+    child->created_time = get_current_time();
     child->total_runtime = 0;
     child->switch_count = 0;
     child->context.is_first_run = 1;
     child->context.r0 = 0;
-    // Initialiser le reste à zéro
-    //memset(&child->context.r0, 0, sizeof(uint32_t) * 13);  // r0-r12 = 0
-    
-    //KDEBUG("task_create_copy: Created child task %s (ID=%u, PID=%u) - PC=%p - LR=%p\n", 
-    //       child->name, child->task_id, 
-    //       (child->type == TASK_TYPE_PROCESS) ? child->process->pid : 0, child->context.pc, child->context.lr);
-    
 
     return child;
 }
 
 
 
-/* Ajout des fonctions de gestion des interruptions ARM */
-static inline uint32_t disable_interrupts_save(void)
-{
-    uint32_t cpsr;
-    __asm__ volatile(
-        "mrs %0, cpsr\n"      /* Lire CPSR actuel */
-        "cpsid if"            /* Desactiver IRQ et FIQ */
-        : "=r" (cpsr)
-        :
-        : "memory"
-    );
-    return cpsr;
-}
 
-static inline void restore_interrupts(uint32_t cpsr)
-{
-    __asm__ volatile(
-        "msr cpsr_c, %0"      /* Restaurer seulement les bits de controle */
-        :
-        : "r" (cpsr)
-        : "memory"
-    );
-}
 
 void validate_task_list(const char* location)
 {
@@ -414,9 +364,6 @@ void switch_to_idle_stack(void)
     //KINFO("Switching to idle stack...\n");
     
     uint32_t current_sp;
-    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
-    //KINFO("Current SP (kernel): 0x%08X\n", current_sp);
-    //KINFO("Target SP (idle): 0x%08X\n", idle_task->context.sp);
     
     /* Copier quelques données importantes sur la nouvelle pile */
     uint32_t new_sp = idle_task->context.sp;
@@ -438,14 +385,12 @@ void switch_to_idle_stack(void)
     
     /* Vérification */
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
-    //KINFO("New SP: 0x%08X\n", current_sp);
     
     if (current_sp < (uint32_t)idle_task->stack_base || 
         current_sp >= (uint32_t)idle_task->stack_top) {
         panic("Failed to switch to idle stack");
     }
     
-    //KINFO("Successfully switched to idle stack\n");
 }
 
 
@@ -820,12 +765,7 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         task->process->state = (proc_state_t)PROC_READY;
         
         /* Creer l'espace memoire */
-        if(task->process->pid == 1){
-            task->process->vm = create_vm_space(false); //INIT PROCESS IS KERNEL PROCESS
-        }
-        else{
-            task->process->vm = create_vm_space(false);
-        }
+        task->process->vm = create_vm_space();
 
         if (!task->process->vm) {
             task_destroy(task);
@@ -850,16 +790,9 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         /* Initialiser les signaux */
         init_process_signals(task);
         
-        //KINFO("Created process %s (PID=%u)\n", name, task->process->pid);
-        //KDEBUG(" SCV STACK TOP = 0x%08X\n", task->context.svc_sp_top);
-        //KDEBUG(" SCV STACK SP = 0x%08X\n", task->context.svc_sp);
-        //KDEBUG(" TTBR0 = 0x%08X\n", task->context.ttbr0);
-        //KDEBUG(" ASID = %u\n", task->context.asid);
     } else {
         // Mettre toute la structure process à zéro
         task->process = NULL; // KERNEL TASK
-    
-        //KINFO("Created kernel task %s (ID=%u)\n", name, task->task_id);
     }
     
     return task;
@@ -891,13 +824,6 @@ void setup_task_context(task_t* task)
     /* NOUVEAU: Marquer comme premiere execution */
     task->context.is_first_run = 1;
     
-    /* Debug */
-    //KINFO("OK Task %s context configured:\n", task->name);
-    //KINFO("   SP:           0x%08X\n", task->context.sp);
-    //KINFO("   PC:           0x%08X\n", task->context.pc);
-    //KINFO("   LR:           0x%08X\n", task->context.lr);
-    //KINFO("   is_first_run: %u\n", task->context.is_first_run);
-    
     /* Validation */
     if (task->context.sp >= (uint32_t)task->stack_top || 
         task->context.sp <= (uint32_t)task->stack_base) {
@@ -919,14 +845,14 @@ void task_destroy(task_t* task)
         KERROR("Cannot destroy idle task\n");
         return;
     }
-    
-    //KINFO("Destroying task '%s' (ID=%u)\n", task->name, task->task_id);
+
+    //KDEBUG("DESTROYING TASK %s, with state = %s\n", task->name, task_state_string(task->state));
     
     spin_lock(&task_lock);
     
     /* Marquer comme zombie d'abord */
+    //task_set_state(task, TASK_ZOMBIE);
     task->state = TASK_ZOMBIE;
-    //task->state = TASK_TERMINATED;
     task->process->state = (proc_state_t)PROC_ZOMBIE;
     
     /* Si c'est la tache courante, forcer une commutation */
@@ -989,23 +915,17 @@ void yield(void)
         return;
     }
     
+    spin_lock(&task_lock);
     /* VÉRIFIEZ: La tâche courante devient READY */
     if (current_task && current_task->state == TASK_RUNNING) {
+        //task_set_state(current_task, TASK_READY);
         current_task->state = TASK_READY;
     }
+    spin_unlock(&task_lock);
 
-    //KDEBUG(" TASK %s is yielding : \n", current_task->name) ;
-    //if (current_task && strstr(current_task->name, "child")) {
-    //    KDEBUG("[CHILD] yield() called\n");
-    //}
-
-    task_sleep_ms(100);  // Pause a bit to avoid race conditions.
+    task_sleep_ms(500);  // Pause a bit to avoid race conditions.
     
     schedule();
-    
-    //if (current_task && strstr(current_task->name, "child")) {
-    //    KDEBUG("[CHILD] yield() returning\n");
-    //}
 
 }
 
@@ -1072,10 +992,6 @@ void protect_idle_task(void)
         idle_real_stack_size = idle_task->stack_size;
         idle_protection_initialized = true;
         
-        //KINFO("IDLE PROTECTION: Saved original values\n");
-        //KINFO("  stack_base: 0x%08X\n", (uint32_t)idle_real_stack_base);
-        //KINFO("  stack_top:  0x%08X\n", (uint32_t)idle_real_stack_top);
-        //KINFO("  stack_size: %u\n", idle_real_stack_size);
         return;  /* Pas de vérification au premier appel */
     }
     
@@ -1110,7 +1026,7 @@ void protect_idle_task(void)
     }
 }
 
-void save_task_context_safe(task_t* task)
+void save_task_context_safe(task_t* task, uint32_t current_sp)
 {
     if (!task) return;
     
@@ -1126,7 +1042,7 @@ void save_task_context_safe(task_t* task)
     }
     
     /* Debug pour les enfants */
-    if (strstr(task->name, "child")) {
+/*     if (strstr(task->name, "child")) {
 
         if(task->type == TASK_TYPE_PROCESS){
             if(task->context.cpsr == 0x10 )
@@ -1136,10 +1052,7 @@ void save_task_context_safe(task_t* task)
         __asm__ volatile("mov %0, sp" : "=r"(current_sp));
         //KDEBUG("SAVE child: Current SP=0x%08X, task SP=0x%08X\n", 
         //       current_sp, task->context.sp);
-    }
-    
-    uint32_t current_sp;
-    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+    } */
     
     if (task == idle_task) {
         /* Vérification spéciale pour idle */
@@ -1163,13 +1076,30 @@ void save_task_context_safe(task_t* task)
             task->context.svc_sp = current_sp;
             //KDEBUG("Saved valid SP for %s: 0x%08X\n", task->name, current_sp);
         } else {
-
             //task_dump_stacks_detailed();
-            KERROR("Task %s has invalid SP: 0x%08X - context SP = 0x%08X\n", task->name, current_sp, task->context.sp);
+            //KERROR("Task %s has invalid SP: 0x%08X - context SP = 0x%08X\n", task->name, current_sp, task->context.sp);
             //panic("Stopping");
+            yield();
             return;
         }
     }
+}
+
+void switch_to_idle(void){
+
+    spin_lock(&task_lock);
+
+        idle_task->state = TASK_RUNNING;
+        current_task = idle_task;
+
+        // Next task is idle, switching to idle stack
+        switch_to_idle_stack();
+        idle_task->context.pc = (uint32_t)idle_task->entry_point;
+
+    spin_unlock(&task_lock);
+
+    // *** Commutation speciale : pas de sauvegarde pour zombie ***        
+    __task_switch(NULL, &idle_task->context);
 }
 
 
@@ -1177,46 +1107,37 @@ void save_task_context_safe(task_t* task)
 void schedule(void)
 {
     uint32_t irq_flags;
+    uint32_t current_sp;
     task_t* old_task;
     task_t* next_task;
+    task_t* proc = current_task;
 
     static uint32_t schedule_count = 0;
     schedule_count++;
     
-    if (!scheduler_initialized || !current_task) {
+    if (!scheduler_initialized || !current_task || get_critical_section() ) {
         KERROR("SCHED: Not initialized or no current task\n");
         return;
     }
 
-    //void* caller = __builtin_return_address(0);
-    //KDEBUG("[CHILD] schedule() called from 0x%08X\n", (uint32_t)caller);
-
-    //validate_task_list("SCHEDULE_START");
-    
-    //KDEBUG("SCHED: === Starting schedule() ===\n");
+    //KERROR("=== SCHED ==================\n");
     
     irq_flags = disable_interrupts_save();
-    //KDEBUG("SCHED: IRQ disabled\n");
-
-    //if (schedule_count /*% 50 == 0*/) {
-    //    KINFO("=== SCHEDULE DEBUG #%u ===\n", schedule_count);
-    //    verify_ready_queue_integrity();
-    //}
+    set_critical_section();
     
     /* Petit délai pour éviter les race conditions */
     for (volatile int i = 0; i < 1000; i++);
-    
-    protect_idle_task();
-
-    if (current_task && current_task->state != TASK_ZOMBIE) {
-        save_task_context_safe(current_task);
-    } else {
-        //KDEBUG("schedule: NOT saving zombie context\n");  /*  Debug */
-    }
-
-    old_task = current_task;
 
     spin_lock(&task_lock);
+    
+    //protect_idle_task();
+    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+
+    if (proc && proc->state != TASK_ZOMBIE) {
+        save_task_context_safe(proc, current_sp);
+    }
+
+    old_task = proc;
 
     /* Modifications atomiques */
     if (old_task->state == TASK_RUNNING) {
@@ -1226,69 +1147,43 @@ void schedule(void)
     spin_unlock(&task_lock);
 
 
-    // *** NOUVEAU: Verifier si la tache courante doit etre detruite ***
+    // NOUVEAU: Verifier si la tache courante doit etre detruite
     if (old_task->state == TASK_ZOMBIE) {
-        spin_lock(&task_lock);
+/*         spin_lock(&task_lock);
 
-        //KDEBUG("SCHED: Current task is zombie, switching without save\n");
-        
-        //next_task = schedule_next_task();
-        //if (next_task == old_task) {
-            next_task = idle_task; // Forcer vers idle si pas d'autre choix
-        //}
-        
+        // Current task is zombie, switching without save
+        next_task = idle_task; // Forcer vers idle si pas d'autre choix
         next_task->state = TASK_RUNNING;
         current_task = next_task;
 
-                // *** Commutation speciale : pas de sauvegarde pour zombie ***
+        // Commutation speciale : pas de sauvegarde pour zombie
         if(next_task == idle_task){
-            //KDEBUG("SCHED: Next task is idle, switching to idle stack\n");
-                switch_to_idle_stack();
-                next_task->context.pc = (uint32_t)idle_task->entry_point;
+            // Next task is idle, switching to idle stack
+            switch_to_idle_stack();
+            next_task->context.pc = (uint32_t)idle_task->entry_point;
         }
 
-        //KDEBUG("Next task: %s (ID=%u) is doing is calling __task_first_switch_v2\n", next_task->name, next_task->task_id);
-        //KDEBUG("Task stack_base: %p\n", next_task->stack_base);
-        //KDEBUG("Task stack_top:  %p\n", next_task->stack_top);
-        //KDEBUG("Task stack_size: %u bytes\n", next_task->stack_size);
-        //KDEBUG("Task context.sp: 0x%08X\n", next_task->context.sp);
-        //KDEBUG("       PC=0x%08X\n", next_task->context.pc);
-        //KDEBUG("       SP=0x%08X\n", next_task->context.sp);
-        //KDEBUG("       LR=0x%08X\n", next_task->context.lr);
-
         spin_unlock(&task_lock);
+        restore_interrupts(irq_flags);
+        unset_critical_section();
+        //  Commutation speciale : pas de sauvegarde pour zombie        
+        __task_switch(NULL, &next_task->context); */
 
-        // *** Commutation speciale : pas de sauvegarde pour zombie ***        
-        __task_switch(NULL, &next_task->context);
+        restore_interrupts(irq_flags);
+        unset_critical_section();
+
+        //KERROR("\n\n======================================= switched to idle ==================\n");
+
+        switch_to_idle();
 
         KERROR("\n\n======================================= NEVER COME BACK HERE ==================\n");
 
-        
         // Ne revient jamais ici
         return;
     }
 
     next_task = schedule_next_task();
-    
-    //KDEBUG("SCHED: old=%s, next=%s\n", old_task->name, next_task->name);
-    //print_system_stats();
-
-        // DEBUG DIAGNOSTIC DeTAILLe AVANT VeRIFICATION
-    //KDEBUG("=== SCHEDULE DEBUG: Task SP Analysis ===\n");
-    //KDEBUG("Next task: %s (ID=%u)\n", next_task->name, next_task->task_id);
-    //KDEBUG("Task stack_base: %p\n", next_task->stack_base);
-    //KDEBUG("Task stack_top:  %p\n", next_task->stack_top);
-    //KDEBUG("Task stack_size: %u bytes\n", next_task->stack_size);
-    //KDEBUG("Task context.sp: 0x%08X\n", next_task->context.sp);
-    
-    // Calculer les limites attendues
-    //uint32_t expected_bottom = (uint32_t)next_task->stack_base;
-    //uint32_t expected_top = expected_bottom + next_task->stack_size;
-    
-    //KDEBUG("Expected range: 0x%08X - 0x%08X\n", expected_bottom, expected_top);
-    //KDEBUG("SP position relative to base: %d bytes\n", 
-    //       (int)(next_task->context.sp - expected_bottom));
-    
+        
     // Verifications specifiques
     if (!next_task->stack_base) {
         KERROR("KO stack_base is NULL!\n");
@@ -1309,8 +1204,6 @@ void schedule(void)
         KERROR("   stack_top: %p\n", next_task->stack_top);
         KERROR("   Expected:  %p\n", (uint8_t*)next_task->stack_base + next_task->stack_size);
     }
-
-    //task_sleep_ms(20000);
     
     if (next_task == (task_t *)current_task) {
         //KDEBUG("SCHED: No change needed\n");
@@ -1322,44 +1215,10 @@ void schedule(void)
         }
         restore_interrupts(irq_flags);
         spin_unlock(&task_lock);
+        unset_critical_section();
 
         return;
     }
-    
-    /* Verifications pre-commutation */
-    //KDEBUG("SCHED: Pre-switch validation\n");
-    //KDEBUG("SCHED: old_task SP=0x%08X, PC will be saved as LR\n", old_task->context.sp);
-    //KDEBUG("SCHED: next_task SP=0x%08X, PC=0x%08X\n", next_task->context.sp, next_task->context.pc);
-
-    //task_dump_info(old_task);
-    //task_dump_info(next_task);
-    //task_dump_stacks_detailed();
-
-    //if (next_task && strcmp(next_task->name, "shell-child") == 0) {
-    //    KDEBUG("=== SHELL-CHILD SP TRACKING ===\n");
-    //    KDEBUG("About to schedule shell-child\n");
-    //    KDEBUG("Expected SP: 0x413FC010\n");  // Le bon SP calcule
-    //    KDEBUG("Actual SP:   0x%08X\n", next_task->context.sp);
-        
-    //    if (next_task->context.sp != 0x413FC010) {
-    //        KERROR("KO SP CORRUPTION DETECTED!\n");
-    //        KERROR("   SP should be 0x413FC010, but is 0x%08X\n", next_task->context.sp);
-            
-            //  CORRECTION D'URGENCE
-    //        KWARN("FIX Emergency SP correction\n");
-    //        next_task->context.sp = 0x413FC010;
-    //    }
-        //KDEBUG("=================================\n");
-    // }
-    //task_list_all();
-    //task_dump_stacks_detailed();
-    
-
-    //KDEBUG("OLD TASK NAME = %s : SP = %p : STK BASE = %p , STACK TOP = %p\n" ,
-    //        old_task->name , old_task->context.sp, old_task->stack_base, old_task->stack_top );
-
-    //KDEBUG("NEW TASK NAME = %s : SP = %p : STK BASE = %p , STACK TOP = %p\n" ,
-    //        next_task->name , next_task->context.sp, next_task->stack_base, old_task->stack_top );
 
     /* Verifier que les SP sont dans les bonnes plages */
     if (old_task->context.sp < (uint32_t)old_task->stack_base || 
@@ -1367,6 +1226,7 @@ void schedule(void)
         KERROR("SCHED: old_task SP out of range!\n");
 
         restore_interrupts(irq_flags);
+        unset_critical_section();
         return;
     }
     
@@ -1382,15 +1242,12 @@ void schedule(void)
         KERROR("SCHED: old_task Stack Top 0x%08X\n", (uint32_t)old_task->stack_top);
 
 
-        debug_print_ctx(&next_task->context);
+        //debug_print_ctx(&next_task->context, "-->>> SCHEDULE()");
 
         restore_interrupts(irq_flags);
+        unset_critical_section();
         return;
     }
-
-    //KDEBUG("ROBUST: %s->%s (old_first=%u, new_first=%u)\n", 
-    //       old_task->name, next_task->name,
-    //       old_task->context.is_first_run, next_task->context.is_first_run);
     
     next_task->state = TASK_RUNNING;
     next_task->switch_count++;
@@ -1406,75 +1263,20 @@ void schedule(void)
  
         if(strstr(old_task->name,"shell")){
             KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
-            debug_print_ctx(&old_task->context);
+            debug_print_ctx(&old_task->context, "--->>> SCHEDUL(1)");
         }
         if(strstr(next_task->name,"shell")) {
             KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
-            debug_print_ctx(&next_task->context);
+            debug_print_ctx(&next_task->context, "--->>> SCHEDUL(2)");
         }
     }
     #endif
-    //debug_task_detailed(old_task);
-    //debug_task_detailed(next_task);
 
-    //debug_context_registers(&old_task->context, "BEFORE___task_switch_asm_debug__old_task->context");
-    //debug_context_registers(&next_task->context, "BEFORE___task_switch_asm_debug__next_task->context");
-    
-    /* === POINT CRITIQUE === */
+    unset_critical_section();
+    /* === CRITIACL POINT === */
     __task_switch(&old_task->context, &next_task->context);
-    //__task_switch_asm_debug(&old_task->context, &next_task->context);
-
-    //KDEBUG("TASK SWITCH SUCCESSFULLLLLLLL ============================================================\n");
-    
-    /* === On arrive ici dans le contexte de next_task === */
-
-    /*if( strstr(current_task->name, "child"))
-    {
-        uart_puts("SCHED: RETURNED from __task_switch_asm - now in ");
-        uart_puts(current_task->name);
-        uart_puts("\n");
-
-        uint32_t reg;
-        __asm__ volatile("mov %0, sp" : "=r"(reg));
-        KDEBUG("SP immediately after asm: 0x%08X\n", reg);
-        __asm__ volatile("mov %0, lr" : "=r"(reg));
-        KDEBUG("LR immediately after asm: 0x%08X\n", reg);
-        __asm__ volatile("mov %0, pc" : "=r"(reg));
-        KDEBUG("PC immediately after asm: 0x%08X\n", reg);
-
-        KDEBUG("Valeurs de la structure context de la tache:\n");
-        KDEBUG("   SP : %p\n", current_task->context.sp);
-        KDEBUG("   LR : %p\n", current_task->context.lr);
-        KDEBUG("   PC : %p\n", current_task->context.pc);
-        KDEBUG("   R0 : %p\n", current_task->context.r0);
-
-
-        uart_puts("[CHILD]: PID =  ");
-        uart_put_dec(sys_getpid());
-        uart_puts("\n");
-        uart_puts("[CHILD]: PPID =  ");
-        uart_put_dec(sys_getppid());
-        uart_puts("\n");
-        task_list_all();
-        task_dump_stacks_detailed();
-        uart_puts("[CHILD] Debug completed, about to restore interrupts\n");
-    }*/
-
-    //uart_puts("[DEBUG] Restoring interrupts\n");
 
     restore_interrupts(irq_flags);
-    //uart_puts("[DEBUG] Schedule() returning\n");
-
-    //validate_task_list("SCHEDULE_START");
-    //if (strstr(current_task->name, "child")) {
-    //    KDEBUG("[CHILD] Returned from schedule() - should go to user code now\n");
-        //sys_exit(99);
-   // }
-
-    //caller = __builtin_return_address(0);
-    //KDEBUG("[SCHED] schedule() returning to 0x%08X\n", (uint32_t)caller);
-
-    //KDEBUG("SCHED: === schedule() completed for %s ===\n", current_task->name);
 
 }
 
@@ -1511,25 +1313,7 @@ void sched_start(void)
         KERROR("No tasks to run!\n");
         return;
     }
-    
-    //KDEBUG("SCHEDULER STARTED\n");
-    //task_dump_stacks_detailed();
-
-    /* Choisir la premiere tache */
-    //current_task = schedule_next_task();
-    //if (!current_task) {
-    //    spin_unlock(&task_lock);
-    //    KERROR("Unable to select first task!\n");
-    //    return;
-    //}
-    
-    /* OK CORRECTION: Marquer idle comme READY avant le switch */
-    //if (idle_task && idle_task->state == TASK_RUNNING) {
-    //    idle_task->state = TASK_READY;
-    //}
-
-    //current_task->state = TASK_RUNNING;
-    
+        
     /* La tache idle devient la tache courante */
     current_task = idle_task;
     current_task->state = TASK_RUNNING;
@@ -1538,14 +1322,7 @@ void sched_start(void)
     switch_to_idle_stack();
     
     spin_unlock(&task_lock);
-    
-    //KINFO("Starting scheduler with task: %s (ID=%u) - Is first RUN = %d\n", 
-    //      current_task->name, current_task->task_id, current_task->context.is_first_run);
-    //task_dump_stacks_detailed();
-    
-    /* Premiere commutation unique */
-    //print_system_stats();
-    //__task_first_switch_v2(&current_task->context);
+
     __task_switch(NULL, &current_task->context);
     
     /* On ne devrait jamais arriver ici */
@@ -1591,8 +1368,6 @@ static task_t* schedule_next_task(void)
     task_t* fallback = NULL;
     int count = 0;
     
-    //KDEBUG("schedule_next_task: Starting search from %s\n", 
-    //       start_search ? start_search->name : "NULL");
     spin_lock(&task_lock);
 
     do {
@@ -1633,7 +1408,7 @@ static task_t* schedule_next_task(void)
     
     /* Dernier recours : idle */
     //KDEBUG("  -> No ready tasks, returning idle\n");
-        spin_unlock(&task_lock);
+    spin_unlock(&task_lock);
 
     return idle_task;
 }
@@ -1662,7 +1437,6 @@ void add_task_to_list(task_t* task)
     task_count++;
 
     spin_unlock(&task_lock);
-
 
 }
 
@@ -2063,7 +1837,7 @@ void task_list_all(void)
 void task_sleep_ms(uint32_t ms)
 {
     /* Version amelioree qui cede le processeur */
-    uint32_t iterations_per_ms = 10000;  /* Ajustez selon votre CPU */
+    uint32_t iterations_per_ms = 1000;  /* Ajustez selon votre CPU */
     uint32_t total_iterations = ms * iterations_per_ms;
     uint32_t yield_interval = 1000;  /* Ceder toutes les 1000 iterations */
     
@@ -2072,7 +1846,7 @@ void task_sleep_ms(uint32_t ms)
         
         /* Ceder le processeur regulierement */
         if (i % yield_interval == 0) {
-            //yield();
+            //schedule();
         }
     }
 }
@@ -2272,7 +2046,7 @@ void debug_print_sp()
     );
  */
 
-    debug_print_ctx((task_context_t *)r0_val);
+    debug_print_ctx((task_context_t *)r0_val, "---->>>> IN DEBUG__PRINT_SP - CALLED FROM ASM");
     
     /* Maintenant afficher avec kprintf (les registres originaux sont intacts) */
     uart_puts("\n\nRegisters __task_switch_asm_debug:\n");
@@ -2326,7 +2100,7 @@ void debug_print_sp2()
 void debug_print_sp3()
 {
     //uart_puts("\n\n[DEBUG_SP] =============================\n\n");
-    uint32_t r0_val, r1_val, sp_val, pc_val, lr_val;
+    uint32_t r0_val, r1_val, sp_val, pc_val, lr_val, r7_val;
     
     __asm__ volatile(
         /* Sauvegarder tous les registres dans les variables locales */
@@ -2335,7 +2109,8 @@ void debug_print_sp3()
         "mov %2, sp\n"          /* Sauvegarder sp */
         "mov %3, pc\n"          /* Sauvegarder pc (approximatif) */
         "mov %4, lr\n"          /* Sauvegarder lr */
-        : "=r"(r0_val), "=r"(r1_val), "=r"(sp_val), "=r"(pc_val), "=r"(lr_val)
+        "mov %5, r7\n"          /* Sauvegarder r7 */
+        : "=r"(r0_val), "=r"(r1_val), "=r"(sp_val), "=r"(pc_val), "=r"(lr_val), "=r"(r7_val)
         :
         : /* Pas de registres clobbered car on les sauvegarde explicitement */
     );
@@ -2345,7 +2120,9 @@ void debug_print_sp3()
     uart_puts("  r0: ");
     uart_put_hex(r0_val);
     uart_puts("\n  r1: ");
-    uart_put_hex(r1_val);
+    uart_put_hex(r7_val);
+    uart_puts("\n  r7: ");
+    uart_put_hex(r7_val);
     uart_puts("\n  sp: ");
     uart_put_hex(sp_val);
     uart_puts("\n  pc: ");
@@ -2361,7 +2138,7 @@ void debug_print_sp3()
     //uart_puts("\n\n");
 }
 
-void debug_print_ctx(task_context_t *context)
+void debug_print_ctx(task_context_t *context, const char* caller)
 {
     if(!context)
         KWARN("debug_print_ctx: Input task is NULL\n");
@@ -2416,7 +2193,7 @@ void debug_print_ctx(task_context_t *context)
 
     
     /* Maintenant afficher avec kprintf (les registres originaux sont intacts) */
-    kprintf("Current Task (0x%08X) saved Context:\n", (uint32_t)context);
+    kprintf("Current Task (0x%08X) saved Contex - Called from %st:\n", (uint32_t)context, caller);
     kprintf("  r0: 0x%08X\n", context->r0);
     kprintf("  r1: 0x%08X\n", context->r1);
     kprintf("  r2: 0x%08X\n", context->r2);
@@ -2627,7 +2404,7 @@ void remove_from_ready_queue(task_t* task)
     /*  Simplement marquer comme non-READY */
     /* Le scheduler ignorera automatiquement cette tache */
     if (task->state == TASK_READY) {
-        task->state = TASK_ZOMBIE;  /* ou autre etat approprie */
+        task->state = TASK_BLOCKED;  /* ou autre etat approprie */
     }
     
     spin_unlock(&task_lock);
@@ -2647,15 +2424,15 @@ void destroy_zombie_process(task_t* zombie)
         return;
     }
     
-    //KDEBUG("destroy_zombie_process: Destroying zombie %s (PID=%u)\n", 
-    //       zombie->name, zombie->process->pid);
+    KDEBUG("destroy_zombie_process: Destroying zombie %s (PID=%u)\n", 
+           zombie->name, zombie->process->pid);
     
     /* Maintenant on peut vraiment le retirer de la liste */
     remove_task_from_list(zombie);
     
     /* Liberer les ressources */
     if (zombie->process->vm) {
-        destroy_vm_space(zombie->process->vm);
+        //destroy_vm_space(zombie->process->vm);
         zombie->process->vm = NULL;
     }
     
