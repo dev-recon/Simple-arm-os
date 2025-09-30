@@ -49,6 +49,8 @@ static uint32_t read_le32(const uint8_t* p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+
+
 void fat32_parse_boot_sector(fat32_boot_sector_t* dst, const fat32_raw_sector_t* raw)
 {
     const uint8_t* src = raw->data;

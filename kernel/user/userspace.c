@@ -198,7 +198,7 @@ int copy_from_user(void* to, const void* from, size_t n)
     //KDEBUG("test_str = %s of len = %d\n", test_str, strlen(test_str));
     
     /* Copie securisee */
-    memcpy(to, (void *)from, strlen(from));
+    memcpy(to, (void *)from, n);
     //memcpy(to, (void *)test_str, strlen(test_str));
 
 

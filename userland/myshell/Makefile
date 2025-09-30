@@ -1,8 +1,7 @@
 # Makefile pour MyShell
 
 CC = gcc
-CFLAGS = -Wall -Wextra -std=gnu89 -pedantic -g -O2
-CPPFLAGS = -Iinclude
+CFLAGS = -Wall -Wextra -std=gnu89 -pedantic -g -O0 -Iinclude
 LDFLAGS = 
 LIBS = 
 
@@ -33,7 +32,7 @@ $(TARGET): $(OBJECTS) | $(BINDIR)
 
 # Compilation des fichiers objets
 $(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 # Nettoyage
 clean:
@@ -45,12 +44,12 @@ distclean: clean
 
 # Installation
 install: $(TARGET)
-	cp $(TARGET) /usr/local/bin/
-	chmod 755 /usr/local/bin/myshell
+	cp $(TARGET) /bin/
+	chmod 755 /bin/myshell
 
 # Desinstallation
 uninstall:
-	rm -f /usr/local/bin/myshell
+	rm -f /bin/myshell
 
 # Tests
 test: $(TARGET)

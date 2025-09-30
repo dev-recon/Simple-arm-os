@@ -257,7 +257,7 @@ extern uint32_t __stack_svc_top;
 
 /* NOUVELLE : Zone dediee aux signal stacks APReS la stack user */
 #define USER_SIGNAL_REGION_START USER_STACK_TOP               /* 0x3F000000 */
-#define USER_SIGNAL_REGION_END   KERNEL_START                 /* Jusqu'au kernel (~0x40000000) */
+#define USER_SIGNAL_REGION_END   0x3FFFF000u                 /* Jusqu'au kernel (~0x40000000) */
 #define USER_SIGNAL_REGION_SIZE  (USER_SIGNAL_REGION_END - USER_SIGNAL_REGION_START)  /* ~16MB */
 
 /* ========================================================================

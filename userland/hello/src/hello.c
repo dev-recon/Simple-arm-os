@@ -1,8 +1,125 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
 
-int main() {
+void my_handler(int sig) {
+    const char msg[] = "Child: received SIGUSR1\n";
+    /* write est async-signal-safe */
+    write(1, msg, sizeof(msg)-1);
+    exit(58);
+}
+
+int test_kill(void) {
+
+    pid_t pid;
+    int status = 0;
+
+    printf("Testing signal system call from userspace...\n");
+    
+    pid = fork();
+    if (pid == 0) {
+        /* Enfant - écrivain */
+        //signal(SIGUSR1, my_handler);
+            struct sigaction sa = {0};
+
+    /* Installer le handler pour SIGUSR1 avec SA_SIGINFO */
+    sa.sa_handler = my_handler;
+    //sigemptyset(&sa.sa_mask);          /* aucun signal masqué pendant l'exécution du handler */
+    sa.sa_flags = SA_RESTART; /* SA_RESTART utile pour relancer certains syscalls */
+
+    if (sigaction(SIGUSR1, &sa, NULL) == -1) {
+        printf("     SIGACTION ERROR ... 0x%08X\n", my_handler);
+        exit(EXIT_FAILURE);
+    }
+        printf("     Child is writing message ... 0x%08X\n", my_handler);
+
+        long i = 0;
+        while(1)
+        {
+            for(int j=0; j<1000000; j++){
+
+            }
+
+            printf("            Child wait loop tour %u\n", i);
+            
+            i++;
+        }
+
+    } else {
+        /* Parent - lecteur */
+        printf(" DAD will send a signal to son ...\n");
+
+        for(int i=0; i<100000; i++)
+        {
+            for(int j=0; j<10000; j++){
+
+            }
+
+            if( (i%10000) == 0)
+                printf(" dad loop before kill %d\n", i);
+
+        }
+
+        printf(" DAD sending signal SIGUSR1 ...\n");
+        kill(pid, SIGUSR1);
+        waitpid(-1, &status, 0);
+        printf("Parent waked up waited_pid %d, son status = %d\n", pid, status);
+
+    }
+    
+    return 0;
+}
+
+int test_pipe(void) {
+    int pipefd[2];
+    pid_t pid;
+    char buffer[100];
+
+    printf("Testing pipe system call from userspace...\n");
+    
+    if (pipe(pipefd) == -1) {
+        printf("PIPE error\n");
+        return 1;
+    }
+    
+    pid = fork();
+    if (pid == 0) {
+        /* Enfant - écrivain */
+        printf("     Child is writing message ...\n", pipefd[1]);
+
+        close(pipefd[0]);  /* Fermer lecture */
+        int nb = write(pipefd[1], "Hello from child!", 17);
+        printf("     Child wrote %d chars in pipe ...\n", nb);
+        close(pipefd[1]);
+        printf("     Child returning ok ...\n");
+        exit(0);
+    } else {
+        /* Parent - lecteur */
+        printf(" DAD is reading message in pipe ...\n");
+
+        close(pipefd[1]);  /* Fermer écriture */
+        /*for(int i=0; i<1000000; i++){
+            for(int j=0; j<1000; j++);
+            if( (i%10000) == 0)
+                printf(" dad loop before kill %d\n", i);
+        }*/
+       int status = -1;
+        int waited_pid = waitpid(-1, &status, 0);
+        ssize_t n = read(pipefd[0], buffer, sizeof(buffer));
+        buffer[n] = '\0';
+        printf("Parent read %d bytes from %d: %s\n",n, pipefd[0], buffer);
+        close(pipefd[0]);
+
+
+        printf("Parent did wait for child pid %d - status = %d\n",waited_pid, status);
+
+    }
+    
+    return 0;
+}
+
+int test_execve(void) {
     int version = 11 ;
     
     printf("******************************************************\n");
@@ -42,7 +159,20 @@ int main() {
         int waited_pid = waitpid(child_pid, &status, 0);
         printf("Parent waked up waited_pid %d, son status = %d\n", waited_pid, status);
 
-        exit(version+1);
+        return(version+1);
     } 
+
+}
+
+int main() {
+    int version = 11 ;
+    
+    printf("******************************************************\n");
+
+    test_pipe();
+
+    printf("DAD EXITING **********************************************\n");
+
+    exit(version);
 
 }

@@ -103,6 +103,7 @@ typedef enum {
 #define EDOM           33       /* Math argument out of domain */
 #define ERANGE         34       /* Math result not representable */
 #define ENOSYS         38       /* Function not implemented */
+#define ENOTEMPTY      39       /* Directory not empty */
 #define EINPROGRESS   115       /* Operation now in progress */
 
 /* === TYPES DE SYNCHRONISATION === */

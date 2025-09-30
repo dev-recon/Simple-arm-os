@@ -223,6 +223,13 @@ INLINE void set_sctlr(uint32_t sctlr)
  * pour eviter les conflits entre inline et non-inline
  */
 
+INLINE uint32_t get_lr(void)
+{
+    uint32_t return_address;
+    __asm__ volatile("mov %0, lr" : "=r"(return_address));
+    return return_address;
+}
+
 INLINE uint32_t get_ttbr1(void)
 {
     uint32_t ttbr1;
@@ -544,6 +551,13 @@ INLINE void disable_branch_prediction(void)
     sctlr &= ~(1 << 11);  /* Z bit */
     set_sctlr(sctlr);
 }
+
+INLINE uint32_t get_cpu_mode(void)
+{
+    uint32_t cpu_mode = get_cpsr();
+    return cpu_mode & 0x1F;  
+}
+
 
 /* Macros pour les constantes courantes */
 #define SCTLR_M     (1 << 0)    /* MMU enable */

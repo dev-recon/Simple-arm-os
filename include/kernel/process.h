@@ -21,6 +21,7 @@
 /* Variables globales - utilisant vos declarations existantes */
 extern task_t* current_task;        /* Deja defini dans votre task.h */
 extern task_t* init_process;        /* Deja defini dans votre task.h */
+extern volatile int need_resched;
 
 /* Fonctions process - UTILISANT task_t, PAS process_t */
 task_t* create_process(const char* name);

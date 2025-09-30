@@ -61,10 +61,14 @@ struct process;
 #define __NR_signal              48
 #define __NR_geteuid             49
 #define __NR_getegid             50
+#define __NR_dup2                63      /* dup2 */
 #define __NR_sigaction           67
+#define __NR_stat               106
+#define __NR_fstat              108
 #define __NR_getppid            119  /* Moved to avoid conflicts */
 #define __NR_print              121
 #define __NR_rt_sigreturn       173
+#define __NR_getcwd             183     /* getcwd */
 
 /* Syscall handler */
 int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2, 
@@ -77,7 +81,11 @@ int sys_open(const char* pathname, int flags, mode_t mode);
 int sys_close(int fd);
 off_t sys_lseek(int fd, off_t offset, int whence);
 int sys_stat(const char* pathname, struct stat* statbuf);
+int sys_fstat(int fd, struct stat* statbuf);
 int sys_print(const char* msg);
+int sys_mkdir(const char* pathname, mode_t mode);
+int sys_rmdir(const char* pathname);
+int sys_unlink(const char* pathname);
 
 /* Process syscalls */
 int sys_fork(void);

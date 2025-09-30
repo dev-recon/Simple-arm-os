@@ -172,7 +172,7 @@ void init_process_main(void* arg)
         
         /* Status periodique */
         static int status_counter = 0;
-        if (++status_counter % 50 == 0) {
+        if (++status_counter % 500 == 0) {
             KINFO("[INIT] Status: %d children reaped, system running\n", reaped_count);
             //list_all_processes();
         }
@@ -227,15 +227,15 @@ void destroy_process(task_t* process)
             process->process->files[i] = NULL;
         }
     }
+
+     /* Nettoyer les signaux */
+    cleanup_process_signals(process);
     
     /* Liberer l'espace memoire virtuel - ACCeS CORRECT */
     if (process->process->vm) {
         destroy_vm_space(process->process->vm);
         process->process->vm = NULL;
     }
-    
-    /* Nettoyer les signaux */
-    cleanup_process_signals(process);
     
     /* Utiliser votre fonction de destruction de tache existante */
     task_destroy(process);

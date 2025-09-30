@@ -129,6 +129,7 @@ typedef int intptr_t;
 /* ========================================
  * Types pour la compatibilité
  * ======================================== */
+typedef int  off_t;
 
 /* Type pour les codes d'erreur */
 typedef int error_t;
@@ -138,5 +139,17 @@ typedef int handle_t;
 
 /* Type générique pour les IDs */
 typedef unsigned int id_t;
+
+typedef unsigned int           mode_t;
+typedef int                    pid_t;
+typedef unsigned int           uid_t;
+typedef unsigned int           gid_t;
+typedef unsigned int           dev_t;
+typedef unsigned int           ino_t;
+typedef unsigned int           nlink_t;
+typedef unsigned int           blksize_t;
+typedef unsigned int           blkcnt_t;
+typedef unsigned int           time_t;
+
 
 #endif /* _STDDEF_H */

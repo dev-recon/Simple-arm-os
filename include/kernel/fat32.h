@@ -3,6 +3,7 @@
 #define _KERNEL_FAT32_H
 
 #include <kernel/types.h>
+#include <kernel/file.h>
 
 #define FAT32_SECTOR_SIZE   512
 #define FAT32_MAX_FILENAME  255
@@ -105,11 +106,6 @@ typedef struct {
 
 #define FAT32_ATTR_LONG_NAME FAT_ATTR_LFN
 
-
-/* Permissions pour inode_permission */
-#define MAY_EXEC    1
-#define MAY_WRITE   2
-#define MAY_READ    4
 
 /* Macro pour détecter les entrées Long File Name (LFN) */
 #define IS_LONG_NAME(attr)      (((attr) & FAT32_ATTR_LONG_NAME_MASK) == FAT32_ATTR_LONG_NAME)

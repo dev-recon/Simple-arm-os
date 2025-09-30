@@ -1,5 +1,5 @@
 /* src/main.c */
-#include "shell.h"
+#include "../userland/myshell/include/shell.h"
 
 shell_state_t shell_state;
 

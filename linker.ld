@@ -76,7 +76,7 @@ SECTIONS
     .irqpile : {
         . = ALIGN(8);
         __irq_stack_bottom = .;
-        . += 2048;            /* 2KB - augmente pour Cortex-A15 */
+        . += 4096;            /* 2KB - augmente pour Cortex-A15 */
         __irq_stack_top = .;
     } > RAM
 
@@ -84,7 +84,7 @@ SECTIONS
     .svcpile : {
         . = ALIGN(8);
         __svc_stack_bottom = .;
-        . += 4096;            /* 4KB pour SVC - mode principal du kernel */
+        . += 8192;            /* 4KB pour SVC - mode principal du kernel */
         __svc_stack_top = .;
     } > RAM
     

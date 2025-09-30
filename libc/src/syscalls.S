@@ -43,12 +43,26 @@ SYSCALL sys_waitpid, 7      /* __NR_waitpid */
 SYSCALL sys_brk, 45         /* __NR_brk */
 
 
+
 /* I/O et fichiers */
 SYSCALL sys_read, 3         /* __NR_read */
 SYSCALL sys_write, 4        /* __NR_write */
 SYSCALL sys_open, 5         /* __NR_open */
 SYSCALL sys_close, 6        /* __NR_close */
 SYSCALL sys_lseek, 19       /* __NR_lseek */
+SYSCALL sys_mkdir, 39       /* __NR_mkdir */
+SYSCALL sys_rmdir, 40       /* __NR_rmdir */
+SYSCALL sys_unlink, 10      /* __NR_unlink */
+SYSCALL sys_chdir, 12       /* __NR_chdir */
+
+SYSCALL sys_dup, 41         /* __NR_dup2 */
+SYSCALL sys_dup2, 63        /* __NR_dup2 */
+SYSCALL sys_getcwd, 183     /* __NR_getcwd */
+
+SYSCALL sys_pipe, 42        /* __NR_pipe */
+SYSCALL sys_stat, 106       /* __NR_stat */
+SYSCALL sys_fstat, 108      /* __NR_fstat */
+
 
 /* Signaux */
 SYSCALL sys_kill, 37        /* __NR_kill */
@@ -433,6 +447,181 @@ sbrk_success:
     pop {r4-r7, lr}
     bx lr
 
+
+.global mkdir
+.type mkdir, %function
+mkdir:
+    push {r7, lr}
+    mov r7, #39             /* SYS_MKDIR */
+    swi #0
+    
+    cmp r0, #0
+    bge mkdir_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+mkdir_success:
+    pop {r7, lr}
+    bx lr
+
+.global rmdir
+.type rmdir, %function
+rmdir:
+    push {r7, lr}
+    mov r7, #40             /* SYS_RMDIR */
+    swi #0
+    
+    cmp r0, #0
+    bge rmdir_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+rmdir_success:
+    pop {r7, lr}
+    bx lr
+
+
+.global chdir
+.type chdir, %function
+chdir:
+    push {r7, lr}
+    mov r7, #12             /* SYS_CHDIR */
+    swi #0
+    
+    cmp r0, #0
+    bge chdir_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+chdir_success:
+    pop {r7, lr}
+    bx lr
+
+
+.global unlink
+.type unlink, %function
+unlink:
+    push {r7, lr}
+    mov r7, #10             /* SYS_UNLINK */
+    swi #0
+    
+    cmp r0, #0
+    bge unlink_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+unlink_success:
+    pop {r7, lr}
+    bx lr
+
+.global dup
+.type dup, %function
+dup:
+    push {r7, lr}
+    mov r7, #41            /* SYS_DUP */
+    swi #0
+    
+    cmp r0, #0
+    bge dup_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+dup_success:
+    pop {r7, lr}
+    bx lr
+
+
+.global dup2
+.type dup2, %function
+dup2:
+    push {r7, lr}
+    mov r7, #63             /* SYS_DUP2 */
+    swi #0
+    
+    cmp r0, #0
+    bge dup2_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+dup2_success:
+    pop {r7, lr}
+    bx lr
+
+.global _getcwd
+.type _getcwd, %function
+_getcwd:
+    push {r7, lr}
+    mov r7, #183            /* SYS_GETCWD */
+    swi #0
+    
+    cmp r0, #0
+    bge _getcwd_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #0              /* getcwd retourne NULL en cas d'erreur */
+    
+_getcwd_success:
+    pop {r7, lr}
+    bx lr
+
+
+.global pipe
+.type pipe, %function
+pipe:
+    push {r7, lr}
+    mov r7, #42             /* SYS_PIPE */
+    swi #0
+    
+    cmp r0, #0
+    bge pipe_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+pipe_success:
+    pop {r7, lr}
+    bx lr
+
+
+.global stat
+.type stat, %function
+stat:
+    push {r7, lr}
+    mov r7, #106            /* SYS_STAT */
+    swi #0
+    
+    cmp r0, #0
+    bge stat_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+stat_success:
+    pop {r7, lr}
+    bx lr
+
+.global fstat
+.type fstat, %function
+fstat:
+    push {r7, lr}
+    mov r7, #108            /* SYS_FSTAT */
+    swi #0
+    
+    cmp r0, #0
+    bge fstat_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+    
+fstat_success:
+    pop {r7, lr}
+    bx lr
 
 /* ========================================
  * Gestion d'errno (simple)

@@ -222,13 +222,13 @@ void cleanup_process_signals(task_t* proc)
         
         uint32_t phys_addr = get_physical_address(proc->process->vm->pgdir, vaddr);
         if (phys_addr != 0) {
-            map_user_page(proc->process->vm->pgdir, vaddr, 0,proc->process->vm->vma_list->flags,proc->process->vm->asid);
+            //map_user_page(proc->process->vm->pgdir, vaddr, 0,proc->process->vm->vma_list->flags,proc->process->vm->asid);
             free_page((void*)phys_addr);
         }
     }
     
     /* ACCeS CORRECT */
-    KDEBUG("[SIGNAL] Freed signal stack for process %u\n", proc->process->pid);
+    //KDEBUG("[SIGNAL] Freed signal stack for process %u\n", proc->process->pid);
     
     proc->process->signal_stack_base = 0;
     proc->process->signal_stack_size = 0;
@@ -263,7 +263,7 @@ int send_signal(task_t* target, int sig)
     if (sig <= 0 || sig >= MAX_SIGNALS) return -1;
     if (!target || target->type != TASK_TYPE_PROCESS || target->state == TASK_TERMINATED) return -1;
     
-    KDEBUG("[SIGNAL] Sending signal %d to process PID=%u\n", sig, target->process->pid);
+    //KDEBUG("[SIGNAL] Sending signal %d to process PID=%u\n", sig, target->process->pid);
     
     /* SIGKILL et SIGSTOP ne peuvent pas etre bloques */
     if (sig == SIGKILL || sig == SIGSTOP) {
@@ -283,7 +283,7 @@ int send_signal(task_t* target, int sig)
     target->process->signals.pending |= (1 << sig);
     wake_up_process_for_signal(target);
     
-    KDEBUG("[SIGNAL] Signal %d delivered to PID=%u\n", sig, target->process->pid);
+    //KDEBUG("[SIGNAL] Signal %d delivered to PID=%u\n", sig, target->process->pid);
     return 0;
 }
 
@@ -292,6 +292,7 @@ int send_signal(task_t* target, int sig)
  */
 void wake_up_process_for_signal(task_t* proc)
 {
+    //KDEBUG("wake_up_process_for_signal: %s - PID %d\n", proc->name, proc->process->pid);
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         KERROR("wake_up_process_for_signal: NULL PROC\n");
         return;
@@ -302,6 +303,7 @@ void wake_up_process_for_signal(task_t* proc)
         proc->state = TASK_READY;
         add_to_ready_queue(proc);
     }
+    //KDEBUG("wake_up_process_for_signal: state %s\n", task_state_string(proc->state));
 }
 
 
@@ -337,7 +339,7 @@ void deliver_signal(task_t* proc, int sig)
     sig_state = &proc->process->signals;
     action = &sig_state->actions[sig];
     
-    KDEBUG("[SIGNAL] Delivering signal %d to process PID=%u\n", sig, proc->process->pid);
+    //KDEBUG("[SIGNAL] Delivering signal %d to process PID=%u\n", sig, proc->process->pid);
     
     /* Verifier si le signal est ignore */
     if (action->sa_handler == SIG_IGN) {
@@ -347,14 +349,14 @@ void deliver_signal(task_t* proc, int sig)
     
     if (action->sa_handler == SIG_DFL) {
         /* Action par defaut */
-        KDEBUG("[SIGNAL] Using default action for signal %d\n", sig);
+        KDEBUG("[SIGNAL] Proc %s Using default action for signal %d\n", proc->name, sig);
         handle_default_signal_action(proc, sig);
         return;
     }
     
     /* Handler utilisateur */
-    KDEBUG("[SIGNAL] Calling user handler 0x%08X for signal %d\n", 
-           (uint32_t)action->sa_handler, sig);
+    //KDEBUG("[SIGNAL] Calling user handler 0x%08X for signal %d\n", 
+    //       (uint32_t)action->sa_handler, sig);
     setup_signal_handler(proc, sig, action);
 }
 
@@ -368,7 +370,7 @@ static void handle_default_signal_action(task_t* proc, int sig)
          return ;
     }
      
-    KDEBUG("[SIGNAL] Default action for signal %d: %d\n", sig, default_signal_actions[sig]);
+    //KDEBUG("[SIGNAL] Default action for signal %d: %d\n", sig, default_signal_actions[sig]);
     
     switch (default_signal_actions[sig]) {
         case SIG_ACT_TERM:
@@ -435,7 +437,7 @@ static void setup_signal_handler(task_t* proc, int sig, sigaction_t* action)
     signal_sp = proc->process->signal_stack_base + proc->process->signal_stack_size - 16;
     setup_signal_frame(proc, sig, (uint32_t)action->sa_handler, signal_sp, old_blocked);
     
-    KDEBUG("[SIGNAL] Signal handler setup complete for signal %d\n", sig);
+    //KDEBUG("[SIGNAL] Signal handler setup complete for signal %d\n", sig);
 }
 
 /**
@@ -449,7 +451,7 @@ static void setup_signal_frame(task_t* proc, int sig, uint32_t handler_addr,
     uint32_t temp_mapping;
     uint32_t offset;
     uint32_t* stack_ptr;
-    uint32_t final_sp;
+    //uint32_t final_sp;
     int i;
     
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)  {
@@ -460,10 +462,20 @@ static void setup_signal_frame(task_t* proc, int sig, uint32_t handler_addr,
     /* Mapper temporairement la pile signal */
     page_addr = signal_sp & ~(PAGE_SIZE - 1);
     phys_addr = get_physical_address(proc->process->vm->pgdir, page_addr);
-    
+  
+    //KDEBUG("[SIGNAL] Proc %s Signal stack page for PID=%u, page_addr = 0x%08X\n", proc->name, proc->process->pid, page_addr);
+
     if (phys_addr == 0) {
-        KERROR("[SIGNAL] Signal stack page not mapped for PID=%u\n", proc->process->pid);
-        return;
+        KERROR("[SIGNAL] Signal stack page not mapped for PID=%u, page_addr = 0x%08X\n", proc->process->pid, page_addr);
+        void *new_page = allocate_page();
+        if (page_addr < 0x40000000) {
+            KDEBUG("[SIGNAL] Mapping Signal stack at 0x%08X\n", page_addr);
+
+            map_user_page( proc->process->vm->pgdir, page_addr, (uint32_t)new_page, VMA_READ | VMA_WRITE, proc->process->vm->asid );
+        }
+        else{
+            map_kernel_page( page_addr, (uint32_t)new_page);
+        }
     }
     
     temp_mapping = map_temp_page(phys_addr);
@@ -501,19 +513,30 @@ static void setup_signal_frame(task_t* proc, int sig, uint32_t handler_addr,
         *(--stack_ptr) = reg_value;
     }
     
-    final_sp = signal_sp - ((uint32_t)stack_ptr - (temp_mapping + offset));
+    //final_sp = signal_sp - ((uint32_t)stack_ptr - (temp_mapping + offset));
     
     unmap_temp_page((void*)temp_mapping);
     
     /* Modifier le contexte processus pour appeler le handler */
     proc->context.r0 = sig;  /* Argument du signal */
-    proc->context.sp = final_sp;
+    proc->context.usr_r[0] = sig;  /* Argument du signal */
+    proc->context.usr_sp = signal_sp;
     proc->context.lr = (uint32_t)signal_return_trampoline;
-    proc->context.pc = handler_addr;
+    proc->context.usr_pc = handler_addr;
+    proc->context.usr_lr = handler_addr;
     proc->context.cpsr = 0x10;  /* Mode utilisateur */
-    
-    KDEBUG("[SIGNAL] Signal frame setup: handler=0x%08X, sp=0x%08X, sig=%d\n", 
-           handler_addr, final_sp, sig);
+    proc->context.is_first_run = 0;  /* Mode utilisateur */
+    proc->context.returns_to_user = 1;  /* Mode utilisateur */
+   
+    //KDEBUG("[SIGNAL] Signal frame setup: PGDIR = 0x%08X, handler=0x%08X, sp=0x%08X, sig=%d\n", (uint32_t)proc->process->vm->pgdir, 
+    //       handler_addr, final_sp, sig);
+
+    //KDEBUG("[SIGNAL] Signal frame setup: Current Process = %s\n", current_task->name);
+
+
+    schedule_to(proc);
+
+    //__task_switch(NULL, &proc->context);
 }
 
 /**
@@ -525,7 +548,7 @@ int sys_kill(pid_t pid, int sig)
     
     if (sig < 0 || sig >= MAX_SIGNALS) return -EINVAL;
     
-    KDEBUG("[SYSCALL] sys_kill: pid=%d, sig=%d\n", pid, sig);
+    //KDEBUG("[SYSCALL] sys_kill: pid=%d, sig=%d\n", pid, sig);
     
     if (pid > 0) {
         target = find_process_by_pid(pid);
@@ -573,8 +596,8 @@ int sys_signal(int sig, sig_handler_t handler)
     sig_state->actions[sig].sa_mask = 0;
     sig_state->actions[sig].sa_flags = SA_RESTART;
     
-    KDEBUG("[SYSCALL] sys_signal: sig=%d, handler=0x%08X, old=0x%08X\n", 
-           sig, (uint32_t)handler, (uint32_t)old_handler);
+    //KDEBUG("[SYSCALL] sys_signal: sig=%d, handler=0x%08X, old=0x%08X\n", 
+    //       sig, (uint32_t)handler, (uint32_t)old_handler);
     
     return (int)old_handler;
 }
@@ -611,8 +634,8 @@ int sys_sigaction(int sig, const sigaction_t* act, sigaction_t* oldact)
         
         sig_state->actions[sig] = new_action;
         
-        KDEBUG("[SYSCALL] sys_sigaction: sig=%d, handler=0x%08X, mask=0x%08X, flags=0x%08X\n", 
-               sig, (uint32_t)new_action.sa_handler, new_action.sa_mask, new_action.sa_flags);
+        //KDEBUG("[SYSCALL] sys_sigaction: sig=%d, handler=0x%08X, mask=0x%08X, flags=0x%08X\n", 
+        //       sig, (uint32_t)new_action.sa_handler, new_action.sa_mask, new_action.sa_flags);
     }
     
     return 0;
@@ -711,22 +734,28 @@ void check_pending_signals(void)
     int signal_num;
     
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
+
+    //KDEBUG("[SIGNAL] entered check_pending_signals PID=%u - TTBR0 = 0x%08X\n", proc->process->pid, (uint32_t)proc->process->vm->pgdir);
     
     sig = &proc->process->signals;
     
     /* Trouver les signaux delivrables */
     deliverable = sig->pending & ~sig->blocked;
     if (!deliverable) return;
-    
+
+    //KDEBUG("[SIGNAL] Deliverable signals found %u PID=%u\n", deliverable, proc->process->pid);
+
     /* Trouver le signal de plus haute priorite */
     signal_num = find_highest_priority_signal(deliverable);
     if (signal_num == 0) return;
     
+     //KDEBUG("[SIGNAL] find_highest_priority_signal found %d PID=%u\n", signal_num, proc->process->pid);
+
     /* Effacer le bit pending */
     sig->pending &= ~(1 << signal_num);
     
-    KDEBUG("[SIGNAL] Processing pending signal %d for PID=%u\n", 
-           signal_num, proc->process->pid);
+    //KDEBUG("[SIGNAL] Processing pending signal %d for PID=%u\n", 
+    //       signal_num, proc->process->pid);
     
     deliver_signal(proc, signal_num);
 }
@@ -761,7 +790,7 @@ static void terminate_process(task_t* proc, int sig)
 {
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
     
-    KINFO("[SIGNAL] Terminating process PID=%u with signal %d\n", proc->process->pid, sig);
+    //KINFO("[SIGNAL] Terminating process PID=%u with signal %d\n", proc->process->pid, sig);
     
     proc->process->exit_code = sig;
     sys_exit(sig);  /* Utiliser la version corrigee */

@@ -916,6 +916,10 @@ int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t 
     //KDEBUG("map_user_page: pgdir=0x%08X, vaddr=0x%08X, paddr=0x%08X, flags=0x%08X, asid=%u\n", pgdir,
     //       vaddr, phys_addr, vma_flags, asid);
     
+    uint32_t return_address ;
+    __asm__ volatile("mov %0, lr" : "=r"(return_address));
+    //KDEBUG("map_user_page: called from 0x%08X\n", return_address);
+
     if (!pgdir || !is_valid_vaddr(vaddr)) {
         KERROR("Invalid pgdir or vaddr\n");
         return -1;

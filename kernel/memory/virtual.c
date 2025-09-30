@@ -622,13 +622,13 @@ vma_t *find_vma(vm_space_t *vm, uint32_t addr)
     {
         if (addr >= vma->start && addr < vma->end)
         {
-             KDEBUG("find_vma: Found VMA for addr 0x%08X in ASID %u\n", addr, vm->asid);
+             //KDEBUG("find_vma: Found VMA for addr 0x%08X in ASID %u\n", addr, vm->asid);
             return vma;
         }
         vma = vma->next;
     }
 
-     KDEBUG("find_vma: No VMA found for addr 0x%08X in ASID %u\n", addr, vm->asid);
+     //KDEBUG("find_vma: No VMA found for addr 0x%08X in ASID %u\n", addr, vm->asid);
     return NULL;
 }
 

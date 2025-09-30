@@ -14,6 +14,11 @@ static int fat32_file_open(inode_t* inode, file_t* file);
 static int fat32_file_close(file_t* file);
 static off_t fat32_file_lseek(file_t* file, off_t offset, int whence);
 static int fat32_dir_readdir(file_t* file, dirent_t* dirent);
+int fat32_inode_mkdir(inode_t* dir, const char* name, uint16_t mode);
+int fat32_add_dir_entry(uint32_t parent_cluster, fat32_dir_entry_t* new_entry);
+int fat32_inode_unlink(inode_t* dir, const char* name);
+int fat32_remove_dir_entry(uint32_t dir_cluster, const char* name);
+bool fat32_directory_is_not_empty(uint32_t dir_cluster);
 
 fat32_dir_entry_t* fat32_find_entry_by_cluster(uint32_t parent_cluster, uint32_t target_cluster);
 fat32_dir_entry_t* fat32_search_recursive(uint32_t dir_cluster, inode_t* target_inode) ;
@@ -24,6 +29,8 @@ int fat32_update_entry_recursive(uint32_t dir_cluster, fat32_dir_entry_t* target
 fat32_dir_entry_t* fat32_find_entry_in_all_dirs(inode_t* target_inode);
 fat32_dir_entry_t* fat32_find_dir_entry_for_inode(inode_t* inode);
 fat32_dir_entry_t* fat32_find_entry(uint32_t dir_cluster, const char* name);
+fat32_dir_entry_t* fat32_create_dir_entry(const char* name, uint32_t cluster, mode_t mode);
+void fat32_free_cluster(uint32_t cluster);
 
 /* Convertir timestamp Unix vers date FAT32 */
 uint16_t fat32_unix_to_fat_date(uint32_t unix_time);
@@ -91,8 +98,8 @@ file_operations_t fat32_dir_ops = {
 inode_operations_t fat32_inode_ops = {
     .lookup = fat32_inode_lookup,
     .create = NULL,
-    .mkdir = NULL,
-    .unlink = NULL
+    .mkdir = fat32_inode_mkdir,
+    .unlink = fat32_inode_unlink
 };
 
 static bool fat_dirty = false;
@@ -101,6 +108,179 @@ static bool fat_dirty = false;
 #define MAX_DIRTY_INODES 64
 static inode_t* dirty_inodes[MAX_DIRTY_INODES];
 static int dirty_count = 0;
+
+
+bool fat32_directory_is_not_empty(uint32_t dir_cluster) {
+    uint32_t cluster = dir_cluster;
+    
+    while (cluster != 0 && cluster < FAT32_EOC) {
+        uint32_t bytes_per_cluster = get_fat32_bytes_per_cluster();
+        void* cluster_data = kmalloc(bytes_per_cluster);
+        if (!cluster_data) {
+            KERROR("[READDIR] Failed to allocate cluster buffer\n");
+            return true;
+        }
+        
+        /* Lire le cluster */
+        if (fat32_read_cluster(cluster, cluster_data) < 0) {
+            KERROR("[fat32_file_write] Failed to read cluster %u\n", cluster);
+            kfree(cluster_data);
+            return true;
+        }
+        
+        fat32_dir_entry_t* entries = (fat32_dir_entry_t*)cluster_data;
+        int entries_per_cluster = bytes_per_cluster / sizeof(fat32_dir_entry_t);
+        
+        for (int i = 0; i < entries_per_cluster; i++) {
+            fat32_dir_entry_t* entry = &entries[i];
+            
+            if (entry->name[0] == FAT32_END_OF_ENTRIES) break;
+            if (entry->name[0] == FAT32_DELETED_ENTRY) continue;
+            if (IS_LONG_NAME(entry->attr)) continue;
+            
+            /* Ignorer . et .. */
+            if (memcmp(entry->name, ".          ", 11) == 0 ||
+                memcmp(entry->name, "..         ", 11) == 0) {
+                continue;
+            }
+            
+            /* Trouvé une entrée valide */
+            kfree(cluster_data);
+            return true;  /* Répertoire non vide */
+        }
+        
+        kfree(cluster_data);
+        cluster = fat32_get_next_cluster(cluster);
+    }
+    
+    return false;  /* Répertoire vide */
+}
+
+void fat32_free_cluster_chain(uint32_t start_cluster) {
+    if (start_cluster < 2 ) return;
+    
+    uint32_t cluster = start_cluster;
+    uint32_t clusters_freed = 0;
+    
+    //KDEBUG("Freeing cluster chain starting at %u\n", start_cluster);
+    
+    while (cluster != 0 && cluster < FAT32_EOC) {
+        uint32_t next_cluster = fat32_get_next_cluster(cluster);
+        
+        /* Libérer le cluster actuel */
+        fat32_set_cluster_value(cluster, FAT32_FREE_CLUSTER);
+        clusters_freed++;
+        
+        //KDEBUG("Freed cluster %u\n", cluster);
+        
+        /* Passer au suivant */
+        cluster = next_cluster;
+    }
+    
+    //KDEBUG("Freed %u clusters total\n", clusters_freed);
+}
+
+int fat32_inode_unlink(inode_t* dir, const char* name) {
+    /* Trouver l'entrée */
+    fat32_dir_entry_t* entry = fat32_find_entry(dir->first_cluster, name);
+    if (!entry) return -ENOENT;
+    
+    /* Vérifier que ce n'est pas un répertoire */
+    if (entry->attr & FAT_ATTR_DIRECTORY) {
+        kfree(entry);
+        return -EISDIR;
+    }
+    
+    /* Libérer la chaîne de clusters du fichier */
+    uint32_t cluster = fat32_get_cluster_from_entry(entry);
+    if (cluster != 0) {
+        fat32_free_cluster_chain(cluster);  /* ← Utilisation ici */
+    }
+    
+    /* Supprimer l'entrée du répertoire */
+    int result = fat32_remove_dir_entry(dir->first_cluster, name);
+    
+    kfree(entry);
+    return result;
+}
+
+void fat32_free_cluster(uint32_t cluster) {
+    if (cluster < 2 ) return;
+    
+    uint32_t total_clusters = fat32_get_total_clusters();
+    if (cluster >= total_clusters) return;
+    
+    //KDEBUG("Freeing cluster %u", cluster);
+    
+    /* Marquer le cluster comme libre dans la FAT */
+    fat32_set_cluster_value(cluster, FAT32_FREE_CLUSTER);
+}
+
+int fat32_init_directory(uint32_t dir_cluster, uint32_t parent_cluster) {
+    char* cluster_data = kzalloc(get_fat32_bytes_per_cluster());
+    if (!cluster_data) return -ENOMEM;
+    
+    fat32_dir_entry_t* entries = (fat32_dir_entry_t*)cluster_data;
+    
+    /* Créer l'entrée "." (répertoire courant) */
+    memcpy(entries[0].name, ".          ", 11);
+    entries[0].attr = FAT_ATTR_DIRECTORY;
+    fat32_set_cluster_in_entry(&entries[0], dir_cluster);
+    entries[0].file_size = 0;
+    
+    /* Créer l'entrée ".." (répertoire parent) */
+    memcpy(entries[1].name, "..         ", 11);
+    entries[1].attr = FAT_ATTR_DIRECTORY;
+    fat32_set_cluster_in_entry(&entries[1], parent_cluster);
+    entries[1].file_size = 0;
+    
+    /* Marquer la fin des entrées */
+    entries[2].name[0] = FAT32_END_OF_ENTRIES;
+    
+    /* Écrire le cluster initialisé */
+    int result = fat32_write_cluster(dir_cluster, cluster_data);
+    kfree(cluster_data);
+    
+    return result;
+}
+
+int fat32_inode_mkdir(inode_t* dir, const char* name, uint16_t mode) {
+    /* Vérifier que le nom n'existe pas déjà */
+    if (fat32_find_entry(dir->first_cluster, name) != NULL) {
+        return -EEXIST;
+    }
+    
+    /* Allouer un cluster pour le nouveau répertoire */
+    uint32_t new_cluster = fat32_alloc_cluster();
+    if (new_cluster == 0) return -ENOSPC;
+    
+    /* Marquer la fin de chaîne */
+    fat32_set_cluster_value(new_cluster, FAT32_EOC);
+    
+    /* Créer l'entrée de répertoire */
+    fat32_dir_entry_t* entry = fat32_create_dir_entry(name, new_cluster, mode | S_IFDIR);
+    if (!entry) {
+        fat32_free_cluster(new_cluster);
+        return -ENOMEM;
+    }
+    
+    /* Ajouter au répertoire parent */
+    if (fat32_add_dir_entry(dir->first_cluster, entry) != 0) {
+        fat32_free_cluster(new_cluster);
+        kfree(entry);
+        return -EIO;
+    }
+    
+    /* Initialiser le nouveau répertoire avec . et .. */
+    if (fat32_init_directory(new_cluster, dir->first_cluster) != 0) {
+        fat32_free_cluster(new_cluster);
+        kfree(entry);
+        return -EIO;
+    }
+    
+    kfree(entry);
+    return 0;
+}
 
 /**
  * Vérifier si un fichier existe déjà dans un répertoire
@@ -884,7 +1064,7 @@ int sync_inode_to_disk(inode_t* inode) {
 
 /* Synchroniser tous les inodes dirty */
 void sync_dirty_inodes(void) {
-    KDEBUG("SYNCING %u INODES TO DISK....\n", dirty_count);
+    //KDEBUG("SYNCING %u INODES TO DISK....\n", dirty_count);
     for (int i = 0; i < dirty_count; i++) {
         sync_inode_to_disk(dirty_inodes[i]);
         dirty_inodes[i] = NULL;
@@ -910,7 +1090,7 @@ int sync_fat_to_disk(void) {
         return 0;
     }
     
-    KDEBUG("SYNCING FAT TO DISK....\n");
+    //KDEBUG("SYNCING FAT TO DISK....\n");
     /* Écrire la FAT sur le disque */
     uint32_t fat_size_sectors = fat32_fs.boot_sector.fat_size_32;
     char* fat_data = (char*)fat32_fs.fat_table;
@@ -922,7 +1102,7 @@ int sync_fat_to_disk(void) {
         }
     }
 
-     KDEBUG("SYNCING FAT1 START SECTOR = %u....\n", fat32_fs.fat_start_sector);
+    //KDEBUG("SYNCING FAT1 START SECTOR = %u....\n", fat32_fs.fat_start_sector);
 
 
     /* AJOUT : Écrire FAT2 */
@@ -935,7 +1115,7 @@ int sync_fat_to_disk(void) {
         }
     }
 
-    KDEBUG("SYNCING FAT2 START SECTOR = %u....->> fat_size_sectors=%u\n", fat2_start_sector, fat_size_sectors);
+    //KDEBUG("SYNCING FAT2 START SECTOR = %u....->> fat_size_sectors=%u\n", fat2_start_sector, fat_size_sectors);
 
 
     
@@ -1064,8 +1244,8 @@ int fat32_set_cluster_value(uint32_t cluster, uint32_t value) {
         return -EIO;
     }
     
-    KDEBUG("Updated cluster %u in both FAT1 (sector %u) and FAT2 (sector %u)", 
-           cluster, fat_sector, fat2_sector);
+    //KDEBUG("Updated cluster %u in both FAT1 (sector %u) and FAT2 (sector %u)", 
+    //       cluster, fat_sector, fat2_sector);
     
     return 0;
 }
@@ -1079,16 +1259,16 @@ int fat32_write_cluster(uint32_t cluster, const char* data) {
     uint32_t start_sector = fat32_cluster_to_sector(cluster);
 
     /* Debug du contenu avant écriture secteur */
-    KDEBUG("fat32_write_cluster: data content=%.64s\n", data);
+    //KDEBUG("fat32_write_cluster: data content=%.64s\n", data);
 
 
-    KDEBUG("fat32_write_cluster: cluster=%u -> start_sector=%u\n", cluster, start_sector);
-    KDEBUG("fat32_write_cluster: data_start_sector=%u\n", fat32_fs.data_start_sector);
-    KDEBUG("fat32_write_cluster: sectors_per_cluster=%u\n", fat32_fs.sectors_per_cluster);
+    //KDEBUG("fat32_write_cluster: cluster=%u -> start_sector=%u\n", cluster, start_sector);
+    //KDEBUG("fat32_write_cluster: data_start_sector=%u\n", fat32_fs.data_start_sector);
+    //KDEBUG("fat32_write_cluster: sectors_per_cluster=%u\n", fat32_fs.sectors_per_cluster);
 
     /* Vérifier que le calcul est correct */
     uint32_t expected_sector = fat32_fs.data_start_sector + ((cluster - 2) * fat32_fs.sectors_per_cluster);
-    KDEBUG("fat32_write_cluster: expected_sector=%u, calculated=%u\n", expected_sector, start_sector);
+    //KDEBUG("fat32_write_cluster: expected_sector=%u, calculated=%u\n", expected_sector, start_sector);
     
     if (start_sector != expected_sector) {
         KDEBUG("ERROR: Sector calculation mismatch!\n");
@@ -1098,8 +1278,8 @@ int fat32_write_cluster(uint32_t cluster, const char* data) {
     
     /* Écrire tous les secteurs du cluster */
     for (uint32_t i = 0; i < get_fat32_sectors_per_cluster(); i++) {
-        KDEBUG("Writing sector %u with data starting with: %.64s\n", 
-               start_sector + i, data + (i * get_fat32_bytes_per_cluster()));
+        //KDEBUG("Writing sector %u with data starting with: %.64s\n", 
+        //       start_sector + i, data + (i * get_fat32_bytes_per_cluster()));
 
         if (blk_write_sector(start_sector + i, (void *)(data + (i * get_fat32_bytes_per_cluster()))) != 0) {
             return -EIO;
@@ -1117,7 +1297,7 @@ int fat32_update_file_size_in_dir(const char* filename, uint32_t parent_cluster,
         return -EINVAL;
     }
     
-    KDEBUG("Updating size of '%.11s' to %u bytes\n", search_name, new_size);
+    //KDEBUG("Updating size of '%.11s' to %u bytes\n", search_name, new_size);
     
     uint32_t cluster = parent_cluster;
     
@@ -1149,8 +1329,8 @@ int fat32_update_file_size_in_dir(const char* filename, uint32_t parent_cluster,
             if (entry->attr & FAT_ATTR_VOLUME_ID) continue;
             
             if (memcmp(entry->name, search_name, 11) == 0) {
-                KDEBUG("Found entry '%.11s': old_size=%u, new_size=%u\n", 
-                       entry->name, entry->file_size, new_size);
+                //KDEBUG("Found entry '%.11s': old_size=%u, new_size=%u\n", 
+                //       entry->name, entry->file_size, new_size);
                 entry->file_size = new_size;
                 found = true;
                 break;
@@ -1160,7 +1340,7 @@ int fat32_update_file_size_in_dir(const char* filename, uint32_t parent_cluster,
         if (found) {
             int result = fat32_write_cluster(cluster, cluster_data);
             kfree(cluster_data);
-            KDEBUG("Updated directory entry size, write result=%d\n", result);
+            //KDEBUG("Updated directory entry size, write result=%d\n", result);
             return result;
         }
         
@@ -1168,7 +1348,7 @@ int fat32_update_file_size_in_dir(const char* filename, uint32_t parent_cluster,
         cluster = fat32_get_next_cluster(cluster);
     }
     
-    KDEBUG("ERROR: Could not find file '%.11s' to update size\n", search_name);
+    //KDEBUG("ERROR: Could not find file '%.11s' to update size\n", search_name);
     return -ENOENT;
 }
 
@@ -1182,7 +1362,7 @@ int fat32_update_file_cluster_in_parent(inode_t* file_inode, uint32_t new_cluste
         return -EINVAL;
     }
     
-    KDEBUG("[DEBUG] Searching in parent cluster %u\n", parent_cluster);
+    //KDEBUG("[DEBUG] Searching in parent cluster %u\n", parent_cluster);
     
     uint32_t cluster = parent_cluster;
     
@@ -1216,7 +1396,7 @@ int fat32_update_file_cluster_in_parent(inode_t* file_inode, uint32_t new_cluste
             uint32_t entry_cluster = fat32_get_cluster_from_entry(entry);
             if (entry_cluster == 0 && entry->file_size == 0) {
                 /* C'est probablement notre fichier - mettre à jour */
-                KDEBUG("[DEBUG] Found entry to update: %.11s\n", entry->name);
+                //KDEBUG("[DEBUG] Found entry to update: %.11s\n", entry->name);
                 
                 fat32_set_cluster_in_entry(entry, new_cluster);
                 found = true;
@@ -1228,7 +1408,7 @@ int fat32_update_file_cluster_in_parent(inode_t* file_inode, uint32_t new_cluste
             /* Écrire le cluster modifié */
             int result = fat32_write_cluster(cluster, cluster_data);
             kfree(cluster_data);
-            KDEBUG("[DEBUG] Directory cluster %u updated, result=%d\n", cluster, result);
+            //KDEBUG("[DEBUG] Directory cluster %u updated, result=%d\n", cluster, result);
             return result;
         }
         
@@ -1236,7 +1416,7 @@ int fat32_update_file_cluster_in_parent(inode_t* file_inode, uint32_t new_cluste
         cluster = fat32_get_next_cluster(cluster);
     }
     
-    KERROR("[ERROR] Could not find directory entry to update\n");
+    //KERROR("[ERROR] Could not find directory entry to update\n");
     return -ENOENT;
 }
 
@@ -1249,7 +1429,7 @@ int fat32_update_file_by_name(const char* filename, uint32_t parent_cluster, uin
         return -EINVAL;
     }
     
-    KDEBUG("[DEBUG] Looking for file '%.11s' (from '%s')\n", search_name, filename);
+    //KDEBUG("[DEBUG] Looking for file '%.11s' (from '%s')\n", search_name, filename);
     
     uint32_t cluster = parent_cluster;
     
@@ -1282,11 +1462,11 @@ int fat32_update_file_by_name(const char* filename, uint32_t parent_cluster, uin
             /* Ignorer les entrées de volume */
             if (entry->attr & FAT_ATTR_VOLUME_ID) continue;
             
-            KDEBUG("[DEBUG] Comparing '%.11s' with '%.11s'\n", entry->name, search_name);
+            //KDEBUG("[DEBUG] Comparing '%.11s' with '%.11s'\n", entry->name, search_name);
             
             /* Comparer les noms */
             if (memcmp(entry->name, search_name, 11) == 0) {
-                KDEBUG("[DEBUG] MATCH! Updating '%.11s' cluster to %u\n", entry->name, new_cluster);
+                //KDEBUG("[DEBUG] MATCH! Updating '%.11s' cluster to %u\n", entry->name, new_cluster);
                 
                 fat32_set_cluster_in_entry(entry, new_cluster);
                 found = true;
@@ -1304,7 +1484,7 @@ int fat32_update_file_by_name(const char* filename, uint32_t parent_cluster, uin
         cluster = fat32_get_next_cluster(cluster);
     }
     
-    KERROR("[ERROR] File '%.11s' not found in directory\n", search_name);
+    //KERROR("[ERROR] File '%.11s' not found in directory\n", search_name);
     return -ENOENT;
 }
 
@@ -1321,7 +1501,7 @@ ssize_t fat32_file_write(file_t* file, const void* buffer, size_t count) {
     uint32_t cluster = inode->first_cluster;
     uint32_t cluster_size = 512;
     
-    KDEBUG("fat32_file_write: current_offset=%u, cluster=%u, buffer=%s, count=%u\n", current_offset, cluster, buf, count);
+    //KDEBUG("fat32_file_write: current_offset=%u, cluster=%u, buffer=%s, count=%u\n", current_offset, cluster, buf, count);
 
     if( is_dirty_inodes() ){
         sync_dirty_inodes();
@@ -1336,7 +1516,7 @@ ssize_t fat32_file_write(file_t* file, const void* buffer, size_t count) {
     if (cluster == 0) {
         cluster = fat32_alloc_cluster();
         if (cluster == 0) return -ENOSPC;
-        KDEBUG("fat32_file_write: Allocated cluster=%u\n", cluster);
+        //KDEBUG("fat32_file_write: Allocated cluster=%u\n", cluster);
         
         inode->first_cluster = cluster;
         inode->blocks = fat32_fs.sectors_per_cluster; 
@@ -1351,11 +1531,11 @@ ssize_t fat32_file_write(file_t* file, const void* buffer, size_t count) {
     
     /* Naviguer jusqu'au cluster de départ */
     uint32_t cluster_offset = current_offset / cluster_size;
-    KDEBUG("fat32_file_write: cluster_offset=%u\n", cluster_offset);
+    //KDEBUG("fat32_file_write: cluster_offset=%u\n", cluster_offset);
 
     for (uint32_t i = 0; i < cluster_offset && cluster != FAT32_EOC; i++) {
         uint32_t next = fat32_get_next_cluster(cluster);
-        KDEBUG("fat32_file_write: next cluster=%u\n", next);
+       //KDEBUG("fat32_file_write: next cluster=%u\n", next);
 
         if (next >= FAT32_EOC) {
             /* Besoin d'étendre le fichier */
@@ -1373,7 +1553,7 @@ ssize_t fat32_file_write(file_t* file, const void* buffer, size_t count) {
         uint32_t cluster_pos = current_offset % cluster_size;
         uint32_t to_write = MIN(count, cluster_size - cluster_pos);
 
-        KDEBUG("fat32_file_write: cluster_pos=%u, bytes to_write=%u\n", cluster_pos, to_write);
+        //KDEBUG("fat32_file_write: cluster_pos=%u, bytes to_write=%u\n", cluster_pos, to_write);
 
 
         uint32_t bytes_per_cluster = get_fat32_bytes_per_cluster();
@@ -1390,7 +1570,7 @@ ssize_t fat32_file_write(file_t* file, const void* buffer, size_t count) {
             return -EIO;
         }
 
-        KDEBUG("fat32_file_write: before memcpy cluster_data=%.64s\n", (char*)cluster_data);
+        //KDEBUG("fat32_file_write: before memcpy cluster_data=%.64s\n", (char*)cluster_data);
 
         /* Lire le cluster, le modifier, l'écrire */
         //char* cluster_data = fat32_read_cluster(cluster);
@@ -1398,7 +1578,7 @@ ssize_t fat32_file_write(file_t* file, const void* buffer, size_t count) {
         
         memcpy(cluster_data + cluster_pos, buf + bytes_written, to_write);
 
-        KDEBUG("fat32_file_write: after memcpy cluster_data=%.64s\n", (char*)cluster_data);
+        //KDEBUG("fat32_file_write: after memcpy cluster_data=%.64s\n", (char*)cluster_data);
 
         
         if (fat32_write_cluster(cluster, cluster_data) != 0) {
@@ -1430,18 +1610,18 @@ ssize_t fat32_file_write(file_t* file, const void* buffer, size_t count) {
     /* Mettre à jour la taille du fichier et la position */
     if (current_offset > inode->size) {
         inode->size = current_offset;
-        KDEBUG("Updated inode size to %u\n", inode->size);
+        //KDEBUG("Updated inode size to %u\n", inode->size);
         mark_inode_dirty(inode);
         
         /* AJOUTER CECI : Mettre à jour la taille dans l'entrée de répertoire */
-        int size_result = fat32_update_file_size_in_dir( file->name, inode->parent_cluster, inode->size);
-        KDEBUG("Directory entry size update result=%d\n", size_result);
+        fat32_update_file_size_in_dir( file->name, inode->parent_cluster, inode->size);
+        //KDEBUG("Directory entry size update result=%d\n", size_result);
     }
     
     file->offset = current_offset;
     inode->mtime = get_current_time();
     
-    KDEBUG("Wrote %zu bytes total\n", bytes_written);
+    //KDEBUG("Wrote %zu bytes total\n", bytes_written);
 
     return bytes_written;
 }
@@ -1668,9 +1848,9 @@ static int fat32_dir_readdir(file_t* file, dirent_t* dirent)
         
         /* Passer au cluster suivant */
         cluster = fat32_get_next_cluster(cluster);
-        KDEBUG("[READDIR] Moving to next cluster: %u\n", cluster);
+        //KDEBUG("[READDIR] Moving to next cluster: %u\n", cluster);
     }
     
-    KDEBUG("[READDIR] No more entries found\n");
+    //KDEBUG("[READDIR] No more entries found\n");
     return 0; /* Fin du repertoire */
 }

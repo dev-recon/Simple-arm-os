@@ -161,7 +161,7 @@ void init_timer(void)
     kprintf("[TIMER] Timer frequency: %u Hz\n", timer_freq);
     
     /* 2. Calculer l'interval pour 100Hz (10ms) */
-    uint32_t interval = timer_freq / TIMER_FREQ;
+    uint32_t interval = timer_freq / TIMER_FREQ / 10;
     kprintf("[TIMER] Timer interval: %u ticks (%u ms)\n", interval, 1000/TIMER_FREQ);
     
     /* 3. Configurer le timer EL1 (non-secure) */
@@ -186,7 +186,7 @@ void init_timer(void)
     gic_enable_irq_kernel(VIRT_TIMER_NS_EL1_IRQ);  // IRQ 30
     
     /* Programmer une interruption toutes les 10ms */
-    uint32_t timeout = timer_freq / 100;  // 10ms
+    uint32_t timeout = timer_freq / TIMER_FREQ / 10;  // 10ms
     timer_set_timeout(timeout);
     
     /* 5. Activer les interruptions au niveau CPU */
@@ -209,7 +209,7 @@ void timer_irq_handler(void)
     
     /* 2. CORRECTION: Programmer le PROCHAIN timer (relatif) */
     uint32_t timer_freq = get_timer_frequency();
-    uint32_t next_interval = timer_freq / TIMER_FREQ;  /* 10ms */
+    uint32_t next_interval = timer_freq / TIMER_FREQ / 10;  /* 10ms */
     __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(next_interval));
     
     /* 3. Réactiver le timer */
@@ -220,82 +220,25 @@ void timer_irq_handler(void)
     system_ticks++;
     
     /* 5. RÉDUIRE drastiquement les messages */
-    if (system_ticks % 1000 == 0) {  /* Toutes les 10 secondes seulement */
-        uart_puts("[TIMER] System uptime: ");
-        uart_put_dec(system_ticks / 100);
-        uart_puts(" seconds\n");
-        kprintf("[TIMER] System uptime: %u seconds\n", system_ticks / 100);
+    if (system_ticks % 2500 == 0) {  /* Toutes les 10 secondes seulement */
+        kprintf("[TIMER] System uptime: %u seconds -> %s\n", system_ticks / 250, current_task->name);
     }
     
     /* 6. Scheduling sans messages debug */
     if (process_system_ready) {
         extern task_t* current_task;
-        extern void schedule(void);
         
-        if (current_task) {
+        if (current_task && !in_critical_section) {
             current_task->quantum_left--;
-            if (current_task->quantum_left == 0) {
-                current_task->quantum_left = 8;
-                current_task->state = TASK_READY;
-                yield();
-            }
-        }
-    }
-}
 
-void timer_irq_handler2(void)
-{
-    extern int kprintf(const char *format, ...);
-    
-    /* 1. Lire le registre de controle */
-    uint32_t timer_ctrl;
-    __asm__ volatile("mrc p15, 0, %0, c14, c2, 1" : "=r"(timer_ctrl));
-    
-    /* 2. Acquitter l'interruption en mettant le bit ISTATUS */
-    timer_ctrl |= 0x4;  // Set ISTATUS bit to clear interrupt
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
-    
-    /* 3. Reprogrammer le timer pour la prochaine interruption */
-    uint32_t timer_freq = get_timer_frequency();
-    uint32_t interval = timer_freq / TIMER_FREQ;
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(interval));
-    
-    /* 4. Reactiver le timer */
-    timer_ctrl = 0x1;  // Enable bit seulement
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
-    
-    /* 5. Increment system tick counter */
-    system_ticks++;
-    
-    /* Afficher un message toutes les 100 ticks (1 seconde) */
-    if (system_ticks % 100 == 0) {
-        kprintf("[TIMER] System uptime: %u seconds\n", system_ticks / 100);
-    }
-    
-    /* 6. Scheduling seulement si le systeme de processus est pret */
-    if (process_system_ready) {
-        /* Declarations externes pour eviter les includes problematiques */
-        extern task_t* current_task;
-        extern void schedule(void);
-        extern void wake_up_sleeping_processes(void);
-        
-        /* Decrement current process quantum */
-        if (current_task) {
-            current_task->quantum_left--;
-            
             if (current_task->quantum_left == 0) {
-                current_task->quantum_left = 8; /* QUANTUM_TICKS */
-                current_task->state = TASK_READY; /* PROC_READY */
-                schedule();
+                current_task->quantum_left = QUANTUM_TICKS;
+                //current_task->state = TASK_READY;
+                need_resched = 1;
+                check_pending_signals();
+                //KDEBUG("YIELDING BECAUSE OF TIMER\n");
+                //yield();
             }
-        }
-        
-        /* Wake up sleeping processes */
-        wake_up_sleeping_processes();
-    } else {
-        /* Avant que les processus soient prets, juste compter les ticks */
-        if (system_ticks % 500 == 0) { /* Toutes les 5 secondes */
-            kprintf("[TIMER] Waiting for process system... (tick %u)\n", system_ticks);
         }
     }
 }

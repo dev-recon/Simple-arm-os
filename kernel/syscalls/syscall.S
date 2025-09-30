@@ -100,7 +100,7 @@ swi_handler:
     str     r4,  [r12, #(88 + 16)]   /* ATTENTION: r4/r5 = args4/5 du user ! */
     str     r5,  [r12, #(88 + 20)]
     str     r6,  [r12, #(88 + 24)]
-    str     r7,  [r12, #(88 + 24)]
+    str     r7,  [r12, #(88 + 28)]
     str     r11,  [r12, #(88 + 44)]
 
     /* 2) Sauvegardes “banquées” essentielles (sans BL, donc pas de clobber imprévu) */
@@ -122,6 +122,14 @@ swi_handler:
     sub   sp, sp, #8           /* Allouer 8 octets pour 2 arguments sur pile */
     str   r4, [sp, #0]        /* [sp+0] = a4 (5ème param de syscall_handler) */
     str   r5, [sp, #4]         /* [sp+4] = a5 (6ème param de syscall_handler) */
+
+    //mov     r0,  sp
+    //str     r0,  [r12, #52]         /* sauvagarde SP SVC */
+
+    //push {r0-r3, lr}
+    //mov r0, r12
+    //bl debug_print_sp
+    //pop {r0-r3, lr}
 
     /* Préparer les 4 premiers arguments dans les registres */
     mov   r0, r7               /* r0 = num (1er param) */
@@ -147,8 +155,7 @@ syscall_return:
     ldmfd  sp!, {r4-r5, r7-r12, lr}
 
     //push {r0-r3, lr}
-    //mov r0, r12
-    //bl debug_print_sp
+    //bl debug_print_sp3
     //pop {r0-r3, lr}
 
     /* Remettre la valeur de retour dans r0 */

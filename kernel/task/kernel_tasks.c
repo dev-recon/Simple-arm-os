@@ -619,7 +619,7 @@ void mini_shell_CREATE(const char* path) {
 
 
 
-void simple_shell_task(void* arg) {
+void simple_shell_task3(void* arg) {
 
     (void)arg;
 
@@ -650,12 +650,12 @@ void simple_shell_task(void* arg) {
     sys_exit(-1);
 }
 
-void simple_shell_task3(void* arg) {
+void simple_shell_task(void* arg) {
 
     (void)arg;
 
-    const char* path = "/bin/malloc";
-    char* name = "malloc";
+    const char* path = "/bin/hello";
+    char* name = "hello";
 
     //task_sleep_ms(10000); 
     //yield();
@@ -664,6 +664,8 @@ void simple_shell_task3(void* arg) {
         
     char* const argv[] = { name, NULL };
     char* const envp[] = { NULL };
+
+    //debug_all_task_stacks();
         
     int result = sys_execve(path , argv, envp);
         

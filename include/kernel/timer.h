@@ -99,4 +99,24 @@ void debug_timer_state(void);
 void trigger_timer_interrupt(void);
 void test_timer_functionality(void);
 
+/* Lecture 64-bit du compteur virtuel CNTVCT */
+static inline uint64_t read_cntvct64(void)
+{
+    uint64_t val;
+    /* ISB avant lecture pour s'assurer que l'ordonnancement est correct */
+    asm volatile("isb" ::: "memory");
+    /* MRRC p15,1 -> lire CNTVCT (virtual count) en deux registres */
+    asm volatile("mrrc p15, 1, %Q0, %R0, c14" : "=r"(val));
+    return val;
+}
+
+/* Ecriture 64-bit du compare (virtual timer CVAL) */
+static inline void write_cntv_cval64(uint64_t cval)
+{
+    /* Ecrire CVAL en 64 bits avec MCRR p15,3 (CP15 c14, opc1=3) */
+    asm volatile("mcrr p15, 3, %Q0, %R0, c14" :: "r"(cval));
+    /* Garantir que l'écriture est visible avant de quitter l'IRQ */
+    asm volatile("dsb; isb" ::: "memory");
+}
+
 #endif

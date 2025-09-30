@@ -44,12 +44,12 @@ void *malloc(size_t size) {
 
     uint32_t left_size = (uint32_t)current_brk - (uint32_t)heap_start ;
 
-    printf("malloc: left size in current allocated heap %u bytes\n", left_size);
+    //printf("malloc: left size in current allocated heap %u bytes\n", left_size);
 
 
-    printf("malloc: current_brk 0x%08X \n", current_brk);
-    printf("malloc: heap_start 0x%08X \n", heap_start);
-    printf("malloc: heap_head 0x%08X \n", (uint32_t)heap_head);
+    //printf("malloc: current_brk 0x%08X \n", current_brk);
+    //printf("malloc: heap_start 0x%08X \n", heap_start);
+    //printf("malloc: heap_head 0x%08X \n", (uint32_t)heap_head);
 
     if(!heap_start && !current_brk)
     {
@@ -57,7 +57,7 @@ void *malloc(size_t size) {
         heap_start = current_brk ;
         heap_head = heap_start ;
 
-        printf("malloc: current_brk 0x%08X \n", current_brk);
+        //printf("malloc: current_brk 0x%08X \n", current_brk);
         
         // Pas de bloc libre, étendre le heap
         block = extend_heap(size);
@@ -66,7 +66,7 @@ void *malloc(size_t size) {
         return (char*)block + HEADER_SIZE;
     }
 
-    printf("malloc: trying to find free block of size %u \n", size);
+    //printf("malloc: trying to find free block of size %u \n", size);
  
     // Chercher un bloc libre existant
     block = find_free_block(size);
@@ -80,7 +80,7 @@ void *malloc(size_t size) {
     
     left_size = (uint32_t)current_brk - (uint32_t)heap_head ;
 
-    printf("malloc: left size in current allocated heap %u bytes\n", left_size);
+    //printf("malloc: left size in current allocated heap %u bytes\n", left_size);
 
     if(total_size > left_size)
     {
@@ -132,7 +132,7 @@ struct block_header *allocate_block(size_t size) {
         new_block->prev = last;
     }
 
-    printf("Exiting  allocate_block: new_block at %p\n", new_block);
+    //printf("Exiting  allocate_block: new_block at %p\n", new_block);
     uint32_t new_head = (uint32_t)new_block + size + HEADER_SIZE;
     heap_head = (struct block_header*)new_head;
 
@@ -145,14 +145,14 @@ struct block_header *extend_heap(size_t size) {
     if(!size)
         return NULL;
     
-    printf("Extending heap by %d bytes\n", size);
+    //printf("Extending heap by %d bytes\n", size);
    
     // Calculer la taille totale nécessaire
     size_t total_size = HEADER_SIZE + size;
     
     // Étendre le heap
     void *new_brk = sbrk(total_size+heap_start);
-    printf("Got new BRK at %p bytes\n", new_brk);
+    //printf("Got new BRK at %p bytes\n", new_brk);
 
     if (new_brk == (void*)-1) {
         return NULL;  // Échec allocation
@@ -162,7 +162,7 @@ struct block_header *extend_heap(size_t size) {
     
     // Créer le nouveau bloc
     struct block_header *new_block = allocate_block( size);
-    printf("Exiting  extend_heap: new_block at %p\n", new_block);
+    //printf("Exiting  extend_heap: new_block at %p\n", new_block);
     
     return new_block;
 }

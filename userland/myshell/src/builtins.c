@@ -1,6 +1,6 @@
 /* src/builtins.c */
-#include "shell.h"
-
+#include <shell.h>
+ 
 typedef struct {
     char* name;
     int (*func)(int argc, char** argv);

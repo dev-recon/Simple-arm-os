@@ -16,7 +16,7 @@ struct file;
 #define TASK_NAME_MAX           32              /* Longueur max du nom */
 #define MAX_SIGNALS             32
 
-#define QUANTUM_TICKS 10
+#define QUANTUM_TICKS           10
 
 /* Forward declarations for structures */
 typedef struct inode inode_t;
@@ -216,6 +216,8 @@ typedef struct {
     int waitpid_iteration;      /* Numero d'iteration dans waitpid */
     uint32_t waitpid_caller_lr; /* LR pour retourner apres waitpid */
 
+    char cwd[MAX_PATH];   /* Current Working Directory */
+
 } __attribute__((aligned(8))) process_t;
 
 
@@ -249,6 +251,7 @@ typedef struct task {
     /* === EXTENSIONS PROCESSUS === */
     task_type_t type;               /* Type de tache */
     uint32_t quantum_left;
+    volatile uint8_t defer_return_to_user; /* 0/1 */
     
     /* Donnees processus (seulement si type == PROCESS) */
     union {
@@ -279,6 +282,7 @@ void yield(void);                           /* Ceder le CPU volontairement */
 void schedule(void);                        /* Forcer une commutation */
 void sched_start(void);                     /* Demarrer le scheduler */
 void task_sleep_ms(uint32_t ms);
+void schedule_to(task_t *next_task);
 
 /* Acces aux taches */
 task_t* task_find_by_id(uint32_t task_id);  /* Trouver par ID */

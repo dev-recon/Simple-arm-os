@@ -152,6 +152,13 @@ void fiq_c_handler(void)
 
 void irq_c_handler(void)
 {
+    uint32_t old_ttbr0 = get_ttbr0();
+    uint32_t ttbr0 = (uint32_t)get_kernel_ttbr0();
+
+    set_ttbr0(ttbr0);
+    /* dsb isb if needed */
+    __asm__ volatile ("dsb; isb");
+
     volatile uint32_t* gicc = (volatile uint32_t*)LOCAL_GICC_BASE;
     
     /* Lire l'IRQ ID */
@@ -212,6 +219,7 @@ void irq_c_handler(void)
     
     /* CRITIQUE : Acquitter l'IRQ */
     gicc[0x010/4] = irq_id;  /* GICC_EOIR */
+    set_ttbr0(old_ttbr0);
 }
 
 void enable_irq(uint32_t irq)

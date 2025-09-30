@@ -2,6 +2,7 @@
 .text
 .align 4
 
+.global current_task
 
 /* ---------------- Offsets (structure task_context_t) ---------------- */
     .equ CTX_R0,              0      /* r0 */
@@ -113,8 +114,16 @@ __task_switch:
 
     /* r0 = &old_ctx */
     stmia   r0, {r0-r12}                   // save r0..r12
+
+    /* Retourne-t-on en mode utilisateur ? */
+    ldr     r2, [r0, #CTX_RET_TO_USER]
+    cmp     r2, #1
+    beq     __user_ctx
+
     str     sp, [r0, #CTX_SP]              // sp courant (pile kernel de la tâche)
     str     sp, [r0, #CTX_SVC_SP]          // sp courant (pile kernel de la tâche)
+
+__user_ctx:
     str     lr, [r0, #CTX_LR]              // lr point de reprise
     str     lr, [r0, #CTX_PC]              // pc (option: identique au lr ici)
     mrs     r2, cpsr
@@ -140,6 +149,12 @@ __load_new_context:
     dsb
     isb
 
+    /* -- insertion atomique update current_task -- */
+    sub    r3, r12, #48    @ r12 est &new_ctx dans ton code ; r3 = next_task
+    ldr    r2, =current_task
+    str    r3, [r2]
+    dmb
+
     /* Première exécution ? */
     ldr     r2, [r12, #CTX_FIRST]
     cmp     r2, #1
@@ -161,6 +176,7 @@ __restore_to_kernel:
 
     /* ---------- RESTORE USER (tâche user suspendue) ---------- */
 __restore_to_user:
+    ldr     sp, [r12, #CTX_SVC_SP_TOP]
     /* 1) SPSR <- usr_cpsr (forcer ARM, T=0) */
     //push {r0-r3, lr}
     //mov r0, r12
@@ -184,7 +200,7 @@ __restore_to_user:
     ldr     r10, [r12, #CTX_USR_R10]
 
     /* 4) LR_svc = usr_pc (pair en ARM) */
-    ldr     lr, [r12, #CTX_USR_PC]
+    ldr     lr, [r12, #CTX_USR_LR]
     bic     lr, lr, #1
 
     /* 5) Restaurer r11 puis r12 à la toute fin */
@@ -202,7 +218,7 @@ __first_run_setup:
 
 __first_run_kernel:
     /* pile kernel de départ */
-    ldr     sp, [r12, #CTX_SVC_SP_TOP]
+    ldr     sp, [r12, #CTX_SP]
     /* point d’entrée kernel */
     ldr     lr, [r12, #CTX_PC]
     mov     r2, #0
@@ -214,6 +230,7 @@ __first_run_kernel:
 __first_run_user:
     /* pile kernel pour la tâche */
     ldr     sp, [r12, #CTX_SVC_SP_TOP]
+    //ldr     sp, [r12, #CTX_SVC_SP]
 
     /* SPSR = usr_cpsr (ARM) */
     ldr     r2, [r12, #CTX_USR_CPSR]

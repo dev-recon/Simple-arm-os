@@ -1,6 +1,8 @@
 #ifndef _KERNEL_FILE_H
 #define _KERNEL_FILE_H
 
+#include <kernel/task.h>
+
 /* accès (mutuellement exclusifs) */
 #ifndef O_RDONLY
 #define O_RDONLY    0       /* lecture seule */
@@ -106,5 +108,14 @@
 #ifndef S_IRWXO
 #define S_IRWXO (S_IROTH|S_IWOTH|S_IXOTH)
 #endif
+
+
+/* Permissions pour inode_permission */
+#define MAY_EXEC    1
+#define MAY_WRITE   2
+#define MAY_READ    4
+
+int split_path(const char* full_path, char** parent_path, char** filename);
+bool inode_permission(inode_t* inode, int mask);
 
 #endif /* _KERNEL_FILE_H */

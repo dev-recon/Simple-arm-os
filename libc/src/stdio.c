@@ -1,11 +1,20 @@
 #include <../include/stdarg.h>
 #include <../include/stddef.h>
 #include <../include/unistd.h>
+#include <../include/stdint.h>
+#include <../include/string.h>
+#include <../include/spinlock.h>
 
+/* Taille du buffer printf */
+#define PRINTF_BUF_SIZE 1024
 
 // Buffer pour printf (évite les appels syscall trop fréquents)
-static char printf_buffer[1024];
+static char printf_buffer[PRINTF_BUF_SIZE];
 static size_t printf_buf_pos = 0;
+static bool in_use = false;
+
+/* Spinlock : 0 = unlocked, 1 = locked */
+static volatile uint32_t printf_lock = 0;
 
 
 int vprintf(const char* format, va_list args);
@@ -81,22 +90,97 @@ static int ptoa(void *ptr, char *str) {
     return len + 2;
 }
 
+/* ------------ printf flush / putc using the spinlock above ------------ */
 
-static void printf_flush(void) {
-    if (printf_buf_pos > 0) {
+#if(1)
+/* Flush: copy-then-release; write outside the lock */
+static void printf_flush(void)
+{
+    char localbuf[PRINTF_BUF_SIZE];
+    size_t len;
+
+    /* Fast exit */
+    if (printf_buf_pos == 0) return;
+
+    /* Acquire lock */
+    spin_lock(&printf_lock);
+
+    /* Recheck and copy under lock */
+    len = printf_buf_pos;
+    if (len == 0) {
+        spin_unlock(&printf_lock);
+        return;
+    }
+    if (len > sizeof(localbuf)) len = sizeof(localbuf);
+    memcpy(localbuf, printf_buffer, len);
+    printf_buf_pos = 0;
+
+    /* Release lock before slow syscall */
+    spin_unlock(&printf_lock);
+
+    /* Write outside lock (may reenter printf) */
+    write(1, localbuf, len);
+}
+
+/* Put a char safely into the buffer */
+static void printf_putc(char c)
+{
+    int need_flush_after = 0;
+
+    /* Acquire lock */
+    spin_lock(&printf_lock);
+
+    /* Ensure space BEFORE writing to avoid overflow */
+    if (printf_buf_pos >= PRINTF_BUF_SIZE - 1) {
+        /* Buffer full: copy out and flush now (while holding lock we avoid races) */
+        char localbuf[PRINTF_BUF_SIZE];
+        size_t len = printf_buf_pos;
+        if (len > sizeof(localbuf)) len = sizeof(localbuf);
+        memcpy(localbuf, printf_buffer, len);
+        printf_buf_pos = 0;
+        /* release lock before write */
+        spin_unlock(&printf_lock);
+        write(1, localbuf, len);
+        /* reacquire lock to append this char */
+        spin_lock(&printf_lock);
+    }
+
+    /* Now safe to append */
+    printf_buffer[printf_buf_pos++] = c;
+
+    /* Decide to flush: newline or full */
+    if (c == '\n' || printf_buf_pos >= PRINTF_BUF_SIZE - 1) {
+        need_flush_after = 1;
+    }
+
+    /* Release lock */
+    spin_unlock(&printf_lock);
+
+    /* Do flush outside lock if requested */
+    if (need_flush_after) {
+        printf_flush();
+    }
+}
+#endif
+
+static void printf_flush2(void) {
+
+    if ((printf_buf_pos > 0) && !in_use ) {
+        in_use = true ;
         write(1, printf_buffer, printf_buf_pos);
+        in_use = false;
         printf_buf_pos = 0;
     }
 }
 
-static void printf_putc(char c) {
+static void printf_putc2(char c) {
     printf_buffer[printf_buf_pos++] = c;
     
     // Flush si buffer plein ou newline
     if (printf_buf_pos >= sizeof(printf_buffer) - 1 || c == '\n') {
         printf_flush();
     }
-}
+} 
 
 // Fonction printf utilisateur
 int printf(const char* format, ...) {

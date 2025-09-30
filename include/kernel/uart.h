@@ -1,7 +1,7 @@
 #ifndef UART_H
 #define UART_H
 
-#include <kernel/vfs.h>
+#include <kernel/task.h>
 
 // Adresse base de l'UART pour QEMU virt machine
 #define UART_BASE_ADDR   0x09000000

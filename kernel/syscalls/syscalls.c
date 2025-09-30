@@ -36,6 +36,16 @@ static syscall_func_t syscall_table[256] = {
     [__NR_print] = (syscall_func_t)sys_print,
     [__NR_rt_sigreturn] = (syscall_func_t)sys_sigreturn,
     [__NR_brk] = (syscall_func_t)sys_brk,
+    [__NR_mkdir] = (syscall_func_t)sys_mkdir,
+    [__NR_rmdir] = (syscall_func_t)sys_rmdir,
+    [__NR_unlink] = (syscall_func_t)sys_unlink,
+    [__NR_dup2] = (syscall_func_t)sys_dup2,
+    [__NR_dup] = (syscall_func_t)sys_dup,
+    [__NR_getcwd] = (syscall_func_t)sys_getcwd,
+    [__NR_chdir] = (syscall_func_t)sys_chdir,
+    [__NR_pipe] = (syscall_func_t)sys_pipe,
+    [__NR_stat] = (syscall_func_t)sys_stat,
+    [__NR_fstat] = (syscall_func_t)sys_fstat,
 };
 
 #pragma GCC diagnostic pop
@@ -60,6 +70,13 @@ extern void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 extern int copy_user_stack_pages(vm_space_t *parent_vm, vm_space_t *child_vm, 
                           uint32_t stack_start, uint32_t stack_size);
 
+void dump_svc_stack(task_t *task, uint32_t *sp) {
+    kprintf("SVC stack @%08x:\n", (unsigned)sp);
+    for (int i=0;i<12;i++) {
+        kprintf(" +%02x: %08x\n", i*4, sp[i]);
+    }
+    kprintf("Offset of context = %d\n", (uint32_t)&(task->context) - (uint32_t)task );
+}
 
 void print_cpu_mode(void){
      uint32_t cpsr = get_cpsr();
@@ -293,6 +310,8 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     proc->context.svc_sp_top = (uint32_t)proc->stack_top; /* Pile kernel pour cette tâche */
     proc->context.sp = proc->context.svc_sp_top - 512;             /* Stack pointer */
     proc->context.sp &= ~7;
+    proc->context.svc_sp = proc->context.sp;
+
 
     /* Configuration USER - CORRECTION CRITIQUE */
     proc->context.usr_pc = elf_header.e_entry;         /* Point d'entrée USER */
@@ -383,6 +402,8 @@ int sys_fork(void)
         }
     }
 
+    init_process_signals(child);
+
     parent->context.usr_lr = return_address ;    /* Adresse après SWI */
     child->context.ttbr0 = (uint32_t)child->process->vm->pgdir;
     child->context.asid = child->process->vm->asid;
@@ -396,7 +417,7 @@ int sys_fork(void)
         child->context.usr_sp   = parent->context.usr_sp;
 
         // Marquer premier run
-        child->context.is_first_run = 0;
+        child->context.is_first_run = 1;
         child->context.returns_to_user = 1;
 
         /* CRITIQUE: Copier le contexte de reprise du parent */
@@ -419,7 +440,7 @@ int sys_fork(void)
     else{
         /* L'enfant retourne 0 dans r0 */
         child->context.r0 = 0;
-        child->context.is_first_run = 0;
+        child->context.is_first_run = 1;
         child->context.pc = return_address;       /* Après sys_fork() dans C */
         child->context.lr = return_address;       /* LR cohérent */
         child->context.returns_to_user = 0;
@@ -458,8 +479,8 @@ void sys_exit(int status)
     }
 
     int irq_flags = disable_interrupts_save();
-    set_critical_section();
-    //KDEBUG("EXITING TASK %s, with state = %s\n", proc->name, task_state_string(proc->state));
+    //set_critical_section();
+    //KDEBUG("EXITING TASK %s - Status = %d, with state = %s\n", proc->name, status, task_state_string(proc->state));
 
     spin_lock(&task_lock);    
     /* CORRECTION: États cohérents avec sys_waitpid */
@@ -482,8 +503,8 @@ void sys_exit(int status)
     orphan_children(proc);
 
     //KDEBUG("EXITING TASK %s, with state = %s-----\n", proc->name, task_state_string(proc->state));
-
-    unset_critical_section();
+    
+    //unset_critical_section();
     restore_interrupts(irq_flags);
     /* Declencher une commutation de contexte */
     switch_to_idle();
@@ -515,10 +536,13 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
         return -EINVAL;
     }
         
+    //KDEBUG("ENTERING KERNEL WAITPID LOOP for %s...\n", parent->name);
+
     while (1) {
         /* Chercher un processus zombie - ACCeS CORRECT */
         zombie = find_zombie_child(parent, pid);
-        
+
+        //KDEBUG("SEEKING FOR ZOMBIE CHILD...\n");
         if (zombie) {
             /* Zombie trouve - ACCeS CORRECT */
             pid_t child_pid = zombie->process->pid;
@@ -541,6 +565,8 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
             return child_pid;
         }
         
+        //KDEBUG("NO ZOMBIE CHILD FOUND...\n");
+
         /* Verifier s'il y a encore des enfants eligibles - ACCeS CORRECT */
         if (!has_children(parent, pid)) {
             KDEBUG("kernel_waitpid: No eligible children\n");
@@ -573,16 +599,20 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
 
 int sys_waitpid(pid_t pid, int* status, int options)
 {
+
+    task_sleep_ms(10000);
     //KDEBUG("sys_waitpid: called for = %d - &status = 0x%08X\n", pid, (uint32_t)status);
 
     task_t *parent = current_task;
 
     //debug_print_ctx(&parent->context, "--->>> SYS_WAITPID START");
 
+
     bool from_user = parent->context.returns_to_user ? true : false;
     if(from_user){
-        parent->context.returns_to_user = 0 ;  // FIX IT
+        //parent->context.returns_to_user = 0 ;  // FIX IT
         // Parent is temporarily restoring to kernel to not resuming too early to user 
+               //yield();
     }
 
     int exit_code;
@@ -598,12 +628,12 @@ int sys_waitpid(pid_t pid, int* status, int options)
     //debug_print_ctx(&parent->context, "---->>> SYS_WAITPID AFTER KERNEL_WAITPID");
 
     if(from_user){
-        parent->context.returns_to_user = 1 ;  // FIX IT
-        yield();
+        parent->defer_return_to_user = 1 ;  // FIX IT
+        //yield();
         // Parent is temporarily restoring to kernel to not resuming to user too early
     }
 
-    KDEBUG("sys_waitpid: returning to callee  = %d\n", sys_getppid());
+    //KDEBUG("sys_waitpid: returning to callee  = %d\n", sys_getppid());
 
     
     return result;
@@ -723,18 +753,22 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
                    uint32_t arg3, uint32_t arg4, uint32_t arg5)
 {
     //KDEBUG("====== SYSCALL HANDLER ===========\n");
-    //KDEBUG(" SYSCALL NUM == %u ==\n", syscall_num);
+    //char str[100];
 
     if (syscall_num >= 256 || !syscall_table[syscall_num]) {
         return -ENOSYS;
     }
 
     task_t *proc = current_task;
+    uint32_t usr_r11 = proc->context.usr_r[11];
 
     if(proc && proc->context.returns_to_user)
     {
-        proc->context.svc_sp = proc->context.sp;
+        //proc->context.svc_sp = proc->context.sp;
     }
+
+    //KDEBUG(" SYSCALL NUM == %u == %s\n", syscall_num, proc->name);
+
 
 //print_task_offsets();
 // print_context_offsets();
@@ -742,8 +776,8 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
     /* Check pending signals before syscall */
     check_pending_signals();
 
-    uint32_t usr_r[13];
-    get_usr_regs(usr_r);
+    //uint32_t usr_r[13];
+    //get_usr_regs(usr_r);
     //store_usr_regs(&proc->context, usr_r);
 
     //debug_print_ctx(&proc->context, "----->>>>>> ENTER SYSCALL HANDLER");
@@ -754,7 +788,38 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
     /* Check pending signals after syscall */
     check_pending_signals();
 
-    //KDEBUG(" SYSCALL %d RESULT == 0x%08X ==\n", syscall_num, result);
+    if (need_resched /* && (syscall_num != __NR_waitpid) */) {
+        need_resched = 0;
+        bool from_user = proc->context.returns_to_user ? true : false;
+        if(from_user){
+            //proc->context.returns_to_user = 0 ;  // FIX IT
+            proc->defer_return_to_user = 1;
+            // Parent is temporarily restoring to kernel to not resuming too early to user 
+        }
+
+        //KDEBUG("RESCHEDULING SOME TASK: PROC %s\n", proc->name);
+
+
+
+        //schedule_to(idle_task);  /* Ici on est en mode SVC, pas IRQ */
+        yield();
+
+        if(from_user){
+            //proc->context.returns_to_user = 1 ;  // FIX IT
+            proc->defer_return_to_user = 0;
+            // Parent is temporarily restoring to kernel to not resuming too early to user 
+            //yield();
+        }
+
+        //debug_print_ctx(&proc->context, str);
+
+    }
+    proc->context.usr_r[11] = usr_r11;
+    //snprintf(str, 100, "PROC CONTEXT %s", proc->name);
+    //KDEBUG(" SYSCALL %d RESULT == 0x%08X == %s\n", syscall_num, result, proc->name);
+    //debug_print_ctx(&proc->context, str);
+    //dump_svc_stack(proc , &proc->context.sp);
+    //print_context_offsets();
 
     return result;
 }
@@ -827,7 +892,7 @@ int sys_print(const char* msg) {
     }
     else {
         if(msg)
-            KERROR("Invalid String frum userspace %s\n", msg);
+            KERROR("Invalid String from userspace %s\n", msg);
         else
             KERROR("Invalid String from userspace: NULL message\n");
         return -1;

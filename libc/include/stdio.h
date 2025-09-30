@@ -15,6 +15,7 @@
 
 /* Type pour les positions dans les fichiers */
 typedef long fpos_t;
+typedef int  off_t;
 
 /* Structure de fichier (opaque pour l'utilisateur) */
 typedef struct _FILE {
@@ -135,6 +136,8 @@ int fclose(FILE* stream);
 /* Flush */
 int fflush(FILE* stream);
 
+char* getcwd(char *buf, size_t size);
+
 /* ========================================
  * Positionnement dans les fichiers
  * ======================================== */
@@ -146,10 +149,6 @@ void rewind(FILE* stream);
 int fgetpos(FILE* stream, fpos_t* pos);
 int fsetpos(FILE* stream, const fpos_t* pos);
 
-/* Constantes pour fseek */
-#define SEEK_SET 0
-#define SEEK_CUR 1
-#define SEEK_END 2
 
 /* ========================================
  * Gestion d'erreurs

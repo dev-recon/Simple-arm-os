@@ -9,6 +9,7 @@
 #include <kernel/signal.h>
 #include <kernel/timer.h>
 #include <kernel/process.h>
+#include <asm/arm.h>
 
 
 //const uint32_t TASK_CONTEXT_OFF = offsetof(task_t, context);
@@ -21,6 +22,8 @@ static uint32_t next_pid = 1;
 uint32_t task_count = 0;
 static bool scheduler_initialized = false;
 DEFINE_SPINLOCK(task_lock);
+
+volatile int need_resched = 0;
 
 //static spinlock_t task_lock = {0};
 
@@ -288,6 +291,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             
             /* La VM sera copiee avec COW dans sys_fork() */
             child->process->vm = NULL;
+
         }
         else panic("Task Create Copy - cannot allocate Process Structure");
     } else {
@@ -698,6 +702,8 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     task->context.svc_sp = ((uint32_t)task->stack_top - 512) & ~7u;
     task->context.sp = task->context.svc_sp;
 
+    task->quantum_left = QUANTUM_TICKS;
+    task->defer_return_to_user = 0;
 
     //debug_context_registers(&task->context, "AFTER_setup_task_context");
     
@@ -786,6 +792,7 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         task->process->waitpid_options = 0;
         task->process->waitpid_iteration = 0;
         task->process->waitpid_caller_lr = 0;
+        strcpy(task->process->cwd, "/");    // Setting Current Working Directory
         
         /* Initialiser les signaux */
         init_process_signals(task);
@@ -924,6 +931,8 @@ void yield(void)
     spin_unlock(&task_lock);
 
     task_sleep_ms(500);  // Pause a bit to avoid race conditions.
+
+    //KDEBUG("Task %s is yielding...\n", current_task->name);
     
     schedule();
 
@@ -1076,8 +1085,8 @@ void save_task_context_safe(task_t* task, uint32_t current_sp)
             task->context.svc_sp = current_sp;
             //KDEBUG("Saved valid SP for %s: 0x%08X\n", task->name, current_sp);
         } else {
-            //task_dump_stacks_detailed();
-            //KERROR("Task %s has invalid SP: 0x%08X - context SP = 0x%08X\n", task->name, current_sp, task->context.sp);
+            task_dump_stacks_detailed();
+            KERROR("Task %s has invalid SP: 0x%08X - context SP = 0x%08X\n", task->name, current_sp, task->context.sp);
             //panic("Stopping");
             yield();
             return;
@@ -1108,19 +1117,22 @@ void schedule(void)
 {
     uint32_t irq_flags;
     uint32_t current_sp;
-    task_t* old_task;
+    //task_t* old_task;
     task_t* next_task;
-    task_t* proc = current_task;
+    //task_t* old_task;
 
     static uint32_t schedule_count = 0;
     schedule_count++;
     
-    if (!scheduler_initialized || !current_task || get_critical_section() ) {
+    if (!scheduler_initialized || !current_task || get_critical_section()) {
         KERROR("SCHED: Not initialized or no current task\n");
         return;
     }
 
-    //KERROR("=== SCHED ==================\n");
+    //KDEBUG("=== SCHED ==== get_cpu_mode = 0X%02X ==========\n", get_cpu_mode());
+    if( get_cpu_mode() == ARM_MODE_IRQ ) return;
+
+    //KDEBUG("=== SCHED ==================\n");
     
     irq_flags = disable_interrupts_save();
     set_critical_section();
@@ -1133,46 +1145,25 @@ void schedule(void)
     //protect_idle_task();
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
 
-    if (proc && proc->state != TASK_ZOMBIE) {
-        save_task_context_safe(proc, current_sp);
+    if (current_task && current_task->state != TASK_ZOMBIE) {
+        //save_task_context_safe(proc, current_sp);
     }
 
-    old_task = proc;
-
     /* Modifications atomiques */
-    if (old_task->state == TASK_RUNNING) {
-        old_task->state = TASK_READY;
+    if (current_task->state == TASK_RUNNING) {
+        current_task->state = TASK_READY;
     }
 
     spin_unlock(&task_lock);
 
 
     // NOUVEAU: Verifier si la tache courante doit etre detruite
-    if (old_task->state == TASK_ZOMBIE) {
-/*         spin_lock(&task_lock);
-
-        // Current task is zombie, switching without save
-        next_task = idle_task; // Forcer vers idle si pas d'autre choix
-        next_task->state = TASK_RUNNING;
-        current_task = next_task;
-
-        // Commutation speciale : pas de sauvegarde pour zombie
-        if(next_task == idle_task){
-            // Next task is idle, switching to idle stack
-            switch_to_idle_stack();
-            next_task->context.pc = (uint32_t)idle_task->entry_point;
-        }
-
-        spin_unlock(&task_lock);
-        restore_interrupts(irq_flags);
-        unset_critical_section();
-        //  Commutation speciale : pas de sauvegarde pour zombie        
-        __task_switch(NULL, &next_task->context); */
+    if (current_task->state == TASK_ZOMBIE) {
 
         restore_interrupts(irq_flags);
         unset_critical_section();
 
-        //KERROR("\n\n======================================= switched to idle ==================\n");
+        KDEBUG("======================================= switched to idle ==================\n");
 
         switch_to_idle();
 
@@ -1183,6 +1174,10 @@ void schedule(void)
     }
 
     next_task = schedule_next_task();
+
+    //KDEBUG("SCHED: States updated, Old task %s sp = 0x%08X, svc_sp_top = 0x%08X, svc_sp = 0x%08X, ret_to_user = %d\n",current_task->name, current_task->context.sp, current_task->context.svc_sp_top, current_task->context.svc_sp, current_task->context.returns_to_user);
+    //KDEBUG("SCHED: States updated, Next task %s sp = 0x%08X, svc_sp_top = 0x%08X, svc_sp = 0x%08X, ret_to_user = %d\n",next_task->name, next_task->context.sp, next_task->context.svc_sp_top, next_task->context.svc_sp, next_task->context.returns_to_user);
+
         
     // Verifications specifiques
     if (!next_task->stack_base) {
@@ -1210,8 +1205,8 @@ void schedule(void)
         /* Pas de changement, restaurer l'etat */
         spin_lock(&task_lock);
 
-        if (old_task->state == TASK_READY) {
-            old_task->state = TASK_RUNNING;
+        if (current_task->state == TASK_READY) {
+            current_task->state = TASK_RUNNING;
         }
         restore_interrupts(irq_flags);
         spin_unlock(&task_lock);
@@ -1221,9 +1216,16 @@ void schedule(void)
     }
 
     /* Verifier que les SP sont dans les bonnes plages */
-    if (old_task->context.sp < (uint32_t)old_task->stack_base || 
-        old_task->context.sp >= (uint32_t)old_task->stack_top) {
-        KERROR("SCHED: old_task SP out of range!\n");
+    if (current_task->context.sp < (uint32_t)current_task->stack_base || 
+        current_task->context.sp >= (uint32_t)current_task->stack_top) {
+        KERROR("SCHED: old_task (%s) SP 0x%08X out of range!\n", current_task->name, current_task->context.sp);
+        KERROR("     SP BASE: 0x%08X \n", (uint32_t)current_task->stack_base);
+        KERROR("     SP TOP: 0x%08X \n", (uint32_t)current_task->stack_top);
+        KERROR("     SVC SP: 0x%08X \n", current_task->context.svc_sp);
+        KERROR("     SVC SP TOP: 0x%08X \n", current_task->context.svc_sp_top);
+        KERROR("     CURRENT SP: 0x%08X \n", current_sp);
+
+        //old_task->context.sp = current_sp;
 
         restore_interrupts(irq_flags);
         unset_critical_section();
@@ -1236,10 +1238,158 @@ void schedule(void)
         KERROR("SCHED: next_task SP 0x%08X\n", next_task->context.sp);
         KERROR("SCHED: next_task Stack Base 0x%08X\n", (uint32_t)next_task->stack_base);
         KERROR("SCHED: next_task Stack Top 0x%08X\n", (uint32_t)next_task->stack_top);
-        KERROR("SCHED: old_task %s !\n", old_task->name);
-        KERROR("SCHED: old_task SP 0x%08X\n", old_task->context.sp);
-        KERROR("SCHED: old_task Stack Base 0x%08X\n", (uint32_t)old_task->stack_base);
-        KERROR("SCHED: old_task Stack Top 0x%08X\n", (uint32_t)old_task->stack_top);
+        KERROR("SCHED: old_task %s !\n", current_task->name);
+        KERROR("SCHED: old_task SP 0x%08X\n", current_task->context.sp);
+        KERROR("SCHED: old_task Stack Base 0x%08X\n", (uint32_t)current_task->stack_base);
+        KERROR("SCHED: old_task Stack Top 0x%08X\n", (uint32_t)current_task->stack_top);
+
+
+        //debug_print_ctx(&next_task->context, "-->>> SCHEDULE()");
+
+        restore_interrupts(irq_flags);
+        unset_critical_section();
+        return;
+    }
+            spin_lock(&task_lock);
+    next_task->state = TASK_RUNNING;
+    next_task->switch_count++;
+    //old_task = current_task;
+    //current_task = next_task;
+            spin_unlock(&task_lock);
+
+ 
+    #if(0)
+    {
+        //KDEBUG("SCHED: States updated, about to call __task_switch R0= %p, R1= %p\n", &old_task->context,&next_task->context);
+        KDEBUG("SCHED: States updated, Old task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",old_task->name, old_task->context.is_first_run, old_task->context.cpsr ,old_task->context.returns_to_user);
+         KDEBUG("SCHED: States updated, Old task %s svc_sp_top = 0x%08X, svc_sp = 0x%08X\n",old_task->name, old_task->context.svc_sp_top, old_task->context.svc_sp);
+        KDEBUG("SCHED: States updated, Old task %s sp = 0x%08X\n",old_task->name, old_task->context.sp);
+       KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
+        KDEBUG("SCHED: States updated, New task %s svc_sp_top = 0x%08X, svc_sp = 0x%08X\n",next_task->name, next_task->context.svc_sp_top, next_task->context.svc_sp);
+        KDEBUG("SCHED: States updated, New task %s sp = 0x%08X\n",next_task->name, next_task->context.sp);
+        KDEBUG("SCHED: States updated, New task %s TTBR = 0x%08X, ASID = %d\n",next_task->name, next_task->context.ttbr0, next_task->context.asid);
+ 
+        if(strstr(old_task->name,"shell") ){
+            KDEBUG("SCHED: States updated, Old task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",old_task->name, old_task->context.is_first_run, old_task->context.cpsr ,old_task->context.returns_to_user);
+            //debug_print_ctx(&old_task->context, "--->>> SCHEDUL(1)");
+        }
+        if(strstr(next_task->name,"shell") ) {
+            KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
+            //debug_print_ctx(&next_task->context, "--->>> SCHEDUL(2)");
+        }
+    }
+    #endif
+
+    //int wants_user = next_task->context.returns_to_user;
+    //if (next_task->defer_return_to_user) wants_user = 0;
+
+    //next_task->context.returns_to_user = wants_user;
+
+    unset_critical_section();
+    /* === CRITIACL POINT === */
+    __task_switch(&current_task->context, &next_task->context);
+
+    restore_interrupts(irq_flags);
+
+}
+
+void schedule_to(task_t *next_task)
+{
+    uint32_t irq_flags;
+    uint32_t current_sp;
+
+    static uint32_t schedule_count = 0;
+    schedule_count++;
+    
+    if (!scheduler_initialized || !current_task || !next_task || get_critical_section() ) {
+        KERROR("SCHED: Not initialized or no current task\n");
+        return;
+    }
+
+    //KDEBUG("=== SCHED ==== get_cpu_mode = 0X%02X ==========\n", get_cpu_mode());
+    if( get_cpu_mode() == ARM_MODE_IRQ ) return;
+
+    //KDEBUG("=== SCHED ==================\n");
+    
+    irq_flags = disable_interrupts_save();
+    set_critical_section();
+    
+    /* Petit délai pour éviter les race conditions */
+    for (volatile int i = 0; i < 1000; i++);
+
+    // NOUVEAU: Verifier si la tache courante doit etre detruite
+    if (current_task->state == TASK_ZOMBIE) {
+
+        spin_lock(&task_lock);
+        next_task->state = TASK_RUNNING;
+        next_task->switch_count++;
+        spin_unlock(&task_lock);
+
+        restore_interrupts(irq_flags);
+        unset_critical_section();
+
+        KDEBUG("======================================= switched to %s ==================\n", next_task->name);
+
+        //switch_to_idle();
+        __task_switch(NULL, &next_task->context);
+
+        KERROR("\n\n======================================= NEVER COME BACK HERE ==================\n");
+
+        // Ne revient jamais ici
+        return;
+    }
+
+     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+        
+    // Verifications specifiques
+    if (!next_task->stack_base) {
+        KERROR("KO stack_base is NULL!\n");
+    }
+    if (!next_task->stack_top) {
+        KERROR("KO stack_top is NULL!\n");
+    }
+    if (next_task->stack_size == 0) {
+        KERROR("KO stack_size is 0!\n");
+    }
+    if (next_task->context.sp == 0) {
+        KERROR("KO context.sp is 0!\n");
+    }
+    
+    // Verifier coherence stack_top
+    if (next_task->stack_top != (uint8_t*)next_task->stack_base + next_task->stack_size) {
+        KERROR("KO stack_top inconsistent!\n");
+        KERROR("   stack_top: %p\n", next_task->stack_top);
+        KERROR("   Expected:  %p\n", (uint8_t*)next_task->stack_base + next_task->stack_size);
+    }
+    
+
+    /* Verifier que les SP sont dans les bonnes plages */
+    if (current_task->context.sp < (uint32_t)current_task->stack_base || 
+        current_task->context.sp >= (uint32_t)current_task->stack_top) {
+        KERROR("SCHED: old_task (%s) SP 0x%08X out of range!\n", current_task->name, current_task->context.sp);
+        KERROR("     SP BASE: 0x%08X \n", (uint32_t)current_task->stack_base);
+        KERROR("     SP TOP: 0x%08X \n", (uint32_t)current_task->stack_top);
+        KERROR("     SVC SP: 0x%08X \n", current_task->context.svc_sp);
+        KERROR("     SVC SP TOP: 0x%08X \n", current_task->context.svc_sp_top);
+        KERROR("     CURRENT SP: 0x%08X \n", current_sp);
+
+        //old_task->context.sp = current_sp;
+
+        restore_interrupts(irq_flags);
+        unset_critical_section();
+        return;
+    }
+    
+    if (next_task->context.sp < (uint32_t)next_task->stack_base || 
+        next_task->context.sp >= (uint32_t)next_task->stack_top) {
+        KERROR("SCHED: next_task %s SP out of range!\n", next_task->name);
+        KERROR("SCHED: next_task SP 0x%08X\n", next_task->context.sp);
+        KERROR("SCHED: next_task Stack Base 0x%08X\n", (uint32_t)next_task->stack_base);
+        KERROR("SCHED: next_task Stack Top 0x%08X\n", (uint32_t)next_task->stack_top);
+        KERROR("SCHED: old_task %s !\n", current_task->name);
+        KERROR("SCHED: old_task SP 0x%08X\n", current_task->context.sp);
+        KERROR("SCHED: old_task Stack Base 0x%08X\n", (uint32_t)current_task->stack_base);
+        KERROR("SCHED: old_task Stack Top 0x%08X\n", (uint32_t)current_task->stack_top);
 
 
         //debug_print_ctx(&next_task->context, "-->>> SCHEDULE()");
@@ -1249,32 +1399,46 @@ void schedule(void)
         return;
     }
     
+    spin_lock(&task_lock);
+
+    /* Modifications atomiques */
+    if (current_task->state == TASK_RUNNING) {
+        current_task->state = TASK_READY;
+    }
+
     next_task->state = TASK_RUNNING;
     next_task->switch_count++;
-    current_task = next_task;
+    //current_task = next_task;
+    spin_unlock(&task_lock);
 
     #if(0)
     {
         //KDEBUG("SCHED: States updated, about to call __task_switch R0= %p, R1= %p\n", &old_task->context,&next_task->context);
-        //KDEBUG("SCHED: States updated, Old task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",old_task->name, old_task->context.is_first_run, old_task->context.cpsr ,old_task->context.returns_to_user);
-        //KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
-        //KDEBUG("SCHED: States updated, New task %s svc_sp_top = 0x%08X, svc_sp = 0x%08X\n",next_task->name, next_task->context.svc_sp_top, next_task->context.svc_sp);
+        KDEBUG("SCHED: States updated, Old task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",old_task->name, old_task->context.is_first_run, old_task->context.cpsr ,old_task->context.returns_to_user);
+        KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
+        KDEBUG("SCHED: States updated, New task %s svc_sp_top = 0x%08X, svc_sp = 0x%08X\n",next_task->name, next_task->context.svc_sp_top, next_task->context.svc_sp);
+        KDEBUG("SCHED: States updated, New task %s sp = 0x%08X\n",next_task->name, next_task->context.sp);
         //KDEBUG("SCHED: States updated, New task %s TTBR = 0x%08X, ASID = %d\n",next_task->name, next_task->context.ttbr0, next_task->context.asid);
  
-        if(strstr(old_task->name,"shell")){
+        if(strstr(old_task->name,"shell") || strstr(old_task->name,"idle")){
             KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
             debug_print_ctx(&old_task->context, "--->>> SCHEDUL(1)");
         }
-        if(strstr(next_task->name,"shell")) {
+        if(strstr(next_task->name,"shell") || strstr(next_task->name,"idle")) {
             KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
             debug_print_ctx(&next_task->context, "--->>> SCHEDUL(2)");
         }
     }
     #endif
 
+    //int wants_user = next_task->context.returns_to_user;
+    //if (next_task->defer_return_to_user) wants_user = 0;
+
+    //next_task->context.returns_to_user = wants_user;
+
     unset_critical_section();
     /* === CRITIACL POINT === */
-    __task_switch(&old_task->context, &next_task->context);
+    __task_switch(&current_task->context, &next_task->context);
 
     restore_interrupts(irq_flags);
 
@@ -1839,14 +2003,14 @@ void task_sleep_ms(uint32_t ms)
     /* Version amelioree qui cede le processeur */
     uint32_t iterations_per_ms = 1000;  /* Ajustez selon votre CPU */
     uint32_t total_iterations = ms * iterations_per_ms;
-    uint32_t yield_interval = 1000;  /* Ceder toutes les 1000 iterations */
+    uint32_t yield_interval = 10000;  /* Ceder toutes les 1000 iterations */
     
     for (volatile uint32_t i = 0; i < total_iterations; i++) {
         __asm__ volatile("nop");
         
         /* Ceder le processeur regulierement */
         if (i % yield_interval == 0) {
-            //schedule();
+            //yield();
         }
     }
 }

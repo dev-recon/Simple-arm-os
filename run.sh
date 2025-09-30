@@ -25,6 +25,7 @@ if [ ! -d "$LIBC_DIR" ]; then
 fi
 
 cd $LIBC_DIR
+make distclean
 make install
 
 cd "../$USERLAND_DIR/hello/"
