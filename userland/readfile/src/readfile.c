@@ -190,9 +190,9 @@ int main() {
 
     //test_unlink();
 
-    //test_chdir();
+    test_chdir();
 
-    test_stat();
+    //test_stat();
 
     exit(version);
 }

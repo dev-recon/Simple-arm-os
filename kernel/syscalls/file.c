@@ -341,7 +341,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     kernel_path = copy_string_from_user(pathname);
     if (!kernel_path) return -EFAULT;
 
-    //KDEBUG("sys_open: opening file %s, kernel_path = %s\n", pathname, kernel_path);
+    KDEBUG("sys_open: opening file %s, kernel_path = %s, flags = %d\n", pathname, kernel_path, flags);
     /* Résoudre le chemin (absolu ou relatif) */
     full_path = resolve_path(kernel_path);
     kfree(kernel_path);
@@ -350,7 +350,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
 
     fd = kernel_open(full_path, flags, mode);
 
-    //KDEBUG("sys_open: opened file fd = %d\n", fd);
+    KDEBUG("sys_open: opened file fd = %d\n", fd);
   
 
     return fd;

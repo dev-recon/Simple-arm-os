@@ -10,6 +10,7 @@
 #include <kernel/timer.h>
 #include <kernel/process.h>
 #include <asm/arm.h>
+#include <kernel/file.h>
 
 
 //const uint32_t TASK_CONTEXT_OFF = offsetof(task_t, context);

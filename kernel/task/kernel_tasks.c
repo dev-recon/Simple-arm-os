@@ -654,8 +654,8 @@ void simple_shell_task(void* arg) {
 
     (void)arg;
 
-    const char* path = "/bin/hello";
-    char* name = "hello";
+    const char* path = "/bin/newlib";
+    char* name = "newlib";
 
     //task_sleep_ms(10000); 
     //yield();

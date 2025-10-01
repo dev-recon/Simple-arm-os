@@ -6,6 +6,7 @@
 #include <kernel/kernel.h>
 #include <kernel/elf32.h>
 #include <kernel/kprintf.h>
+#include <kernel/file.h>
 
 
 /* Forward declarations de toutes les fonctions statiques */

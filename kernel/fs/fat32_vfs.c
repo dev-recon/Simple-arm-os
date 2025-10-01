@@ -1725,9 +1725,9 @@ static int fat32_file_open(inode_t* inode, file_t* file)
         return -EISDIR;
     }
     
-    if ((file->flags & (O_WRONLY | O_RDWR))) {
-        return -EROFS; /* Read-only filesystem */
-    }
+ /*    if ((file->flags & (O_WRONLY | O_RDWR))) {
+        return -EROFS; // Read-only filesystem 
+    } */
     
     return 0;
 }

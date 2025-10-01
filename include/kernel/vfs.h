@@ -38,15 +38,6 @@ struct process;
 #define S_IWOTH     0000002
 #define S_IXOTH     0000001
 
-/* Open flags */
-#define O_RDONLY    0000000
-#define O_WRONLY    0000001
-#define O_RDWR      0000002
-#define O_CREAT     0000100
-#define O_EXCL      0000200
-#define O_TRUNC     0001000
-#define O_APPEND    0002000
-#define O_CLOEXEC   0020000
 
 /* Seek whence */
 #define SEEK_SET    0
