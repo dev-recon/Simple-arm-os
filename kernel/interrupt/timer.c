@@ -221,7 +221,7 @@ void timer_irq_handler(void)
     
     /* 5. RÉDUIRE drastiquement les messages */
     if (system_ticks % 2500 == 0) {  /* Toutes les 10 secondes seulement */
-        kprintf("[TIMER] System uptime: %u seconds -> %s\n", system_ticks / 250, current_task->name);
+        //kprintf("[TIMER] System uptime: %u seconds -> %s\n", system_ticks / 250, current_task->name);
     }
     
     /* 6. Scheduling sans messages debug */

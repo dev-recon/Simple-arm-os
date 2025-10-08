@@ -41,7 +41,7 @@ void idle_task_func(void* arg);
 void init_process_main(void* arg);
 static task_t* schedule_next_task(void);
 void add_task_to_list(task_t* task);
-static void remove_task_from_list(task_t* task);
+void remove_task_from_list(task_t* task);
 void setup_task_context(task_t* task);
 static task_t* schedule_next_task2(void);
 bool is_in_ready_queue(task_t* task);
@@ -1164,7 +1164,7 @@ void schedule(void)
         restore_interrupts(irq_flags);
         unset_critical_section();
 
-        KDEBUG("======================================= switched to idle ==================\n");
+        //KDEBUG("======================================= switched to idle ==================\n");
 
         switch_to_idle();
 
@@ -1329,8 +1329,10 @@ void schedule_to(task_t *next_task)
         restore_interrupts(irq_flags);
         unset_critical_section();
 
-        KDEBUG("======================================= switched to %s ==================\n", next_task->name);
+        //KDEBUG("======================================= switched to %s ==================\n", next_task->name);
 
+        //debug_print_ctx(&next_task->context, "-->>> SCHEDULE_TO()");
+        
         //switch_to_idle();
         __task_switch(NULL, &next_task->context);
 
@@ -1409,28 +1411,8 @@ void schedule_to(task_t *next_task)
 
     next_task->state = TASK_RUNNING;
     next_task->switch_count++;
-    //current_task = next_task;
     spin_unlock(&task_lock);
 
-    #if(0)
-    {
-        //KDEBUG("SCHED: States updated, about to call __task_switch R0= %p, R1= %p\n", &old_task->context,&next_task->context);
-        KDEBUG("SCHED: States updated, Old task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",old_task->name, old_task->context.is_first_run, old_task->context.cpsr ,old_task->context.returns_to_user);
-        KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
-        KDEBUG("SCHED: States updated, New task %s svc_sp_top = 0x%08X, svc_sp = 0x%08X\n",next_task->name, next_task->context.svc_sp_top, next_task->context.svc_sp);
-        KDEBUG("SCHED: States updated, New task %s sp = 0x%08X\n",next_task->name, next_task->context.sp);
-        //KDEBUG("SCHED: States updated, New task %s TTBR = 0x%08X, ASID = %d\n",next_task->name, next_task->context.ttbr0, next_task->context.asid);
- 
-        if(strstr(old_task->name,"shell") || strstr(old_task->name,"idle")){
-            KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
-            debug_print_ctx(&old_task->context, "--->>> SCHEDUL(1)");
-        }
-        if(strstr(next_task->name,"shell") || strstr(next_task->name,"idle")) {
-            KDEBUG("SCHED: States updated, New task %s first_run = %u, cpsr = 0x%02X, return_to_user = %u\n",next_task->name, next_task->context.is_first_run, next_task->context.cpsr ,next_task->context.returns_to_user);
-            debug_print_ctx(&next_task->context, "--->>> SCHEDUL(2)");
-        }
-    }
-    #endif
 
     //int wants_user = next_task->context.returns_to_user;
     //if (next_task->defer_return_to_user) wants_user = 0;
@@ -1608,7 +1590,7 @@ void add_task_to_list(task_t* task)
 /**
  * Retirer une tache de la liste circulaire
  */
-static void remove_task_from_list(task_t* task)
+void remove_task_from_list(task_t* task)
 {
     if (!task || !task_list_head) return;
 

@@ -191,7 +191,7 @@ vm_space_t *create_vm_space(void)
     vm->heap_start = USER_HEAP_START;
     vm->brk = USER_HEAP_START;
     vm->heap_end = USER_HEAP_END;
-    vm->stack_start = USER_STACK_BOTTOM;
+    vm->stack_start = USER_STACK_TOP;   // FIX IT
     vm->asid = asid; /* Nouveau champ ASID */
 
     map_kernel_readonly_in_user_space(vm->pgdir);
@@ -377,6 +377,7 @@ vm_space_t *fork_vm_space(vm_space_t *parent_vm)
     child_vm->brk = parent_vm->brk;
 
     copy_user_stack_pages(parent_vm, child_vm, (USER_STACK_TOP - PAGE_SIZE) & ~0xFFF, PAGE_SIZE);
+    //copy_user_stack_pages(parent_vm, child_vm, ALIGN_DOWN(USER_STACK_BOTTOM, PAGE_SIZE), USER_STACK_SIZE);
 
      //KDEBUG("fork_vm_space: Fork completed - Child Heap Start 0x%08X, Child Heap End 0x%08X, Child Stack Start 0x%08X\n",
      //       child_vm->heap_start, child_vm->heap_end, child_vm->stack_start);
@@ -420,7 +421,10 @@ static void cow_copy_vma(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma
         else
             pte_flags |= (2 << 4) | 0x1; // AP=2 + XN=1
 
-        map_user_page(child_vm->pgdir, vaddr, phys_addr, vma->flags, child_vm->asid);
+        void* child_page = allocate_page();
+        memcpy(child_page, (void *)temp_ptr, PAGE_SIZE);
+
+        map_user_page(child_vm->pgdir, vaddr, (uint32_t)child_page, vma->flags, child_vm->asid);  // FIX IT
 
         // track_cow_page(phys_addr);
     }

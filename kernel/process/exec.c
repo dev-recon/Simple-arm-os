@@ -263,7 +263,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
                 }
             } */
         } else {
-            KERROR("Page contains no file data (BSS or padding)\n");
+            //KERROR("Page contains no file data (BSS or padding)\n");
         }
         
         /* Debug: show first few bytes of the page */

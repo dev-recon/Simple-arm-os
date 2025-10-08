@@ -4,6 +4,8 @@
 #include <kernel/debug_print.h>
 #include <asm/arm.h>
 #include <kernel/uart.h>
+#include <kernel/process.h>
+#include <kernel/task.h>
 
 // Implémentez ces handlers
 void undefined_instruction_handler(void) {
@@ -300,6 +302,16 @@ static void dump_l1_l2(uint32_t va) {
     uart_puts("  L1: Fault/Reserved type\n");
 }
 
+void dump_task_context(task_t *t) {
+    uint8_t *p = (uint8_t*)&t->context;
+    kprintf("DUMP context for task %s @ %p\n", t->name, t);
+    for (int i = 0; i < 168; i += 16) {
+        kprintf("%02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x\n",
+               p[i+0], p[i+1], p[i+2], p[i+3], p[i+4], p[i+5], p[i+6], p[i+7],
+               p[i+8], p[i+9], p[i+10], p[i+11], p[i+12], p[i+13], p[i+14], p[i+15]);
+    }
+}
+
 void data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t *saved)
 {
     /* saved = {r0,r1,r2,r3,r12,lr_abt} empilés par le vecteur */
@@ -348,6 +360,32 @@ void data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_
     dump_l1_l2(fault_pc);
 
     /* Ici: tu peux aussi dumper TTBR0/1, CONTEXTIDR/ASID, current->pgdir, etc. */
+
+    uart_puts("TACHE COURANTE = ");
+    uart_puts(current_task->name);
+    uart_puts("\n");
+
+    //task_t *parent = current_task->process->parent;
+    
+        /* Creer le shell de demonstration */
+    task_t* shell_proc  = task_create_process("shell", simple_shell_task, NULL, 10, TASK_TYPE_PROCESS);
+    //init_process = create_process("init");
+    if (!shell_proc) {
+        panic("Failed to create init process");
+    }
+
+    shell_proc->context.is_first_run = 1;                    
+    shell_proc->context.returns_to_user = 0;
+
+    //KDEBUG("[SHELL PROC] SCV STACK TOP = 0x%08X\n", shell_proc->context.svc_sp_top);
+    //KDEBUG("[SHELL PROC] SCV STACK SP = 0x%08X\n", shell_proc->context.svc_sp);
+    add_to_ready_queue(shell_proc);
+    task_destroy(current_task);
+
+   //dump_task_context(current_task);
+
+    //schedule_to(parent);
+    yield();
 
     /* Stop net (ou tente une recovery si tu peux) */
     while (1) { /* halt */ }

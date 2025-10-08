@@ -37,6 +37,7 @@ extern bool is_fat_dirty(void);
 extern bool is_dirty_inodes(void);
 extern void sync_fat_to_disk(void);
 extern void sync_dirty_inodes(void);
+extern uint32_t fat32_get_total_clusters(void);
 
 /* Utiliser un buffer aligne pour etre s-r */
 //static uint8_t boot_buffer[516] __attribute__((aligned(8)));
@@ -244,7 +245,7 @@ bool fat32_mount(){
     
     /* Charger la table FAT */
     uint32_t fat_size_bytes = fat32_fs.boot_sector.fat_size_32 * 512;
-    fat32_fs.fat_table = kmalloc(fat_size_bytes);
+    fat32_fs.fat_table = (uint32_t *)kmalloc(fat_size_bytes);
     if (!fat32_fs.fat_table) {
         KERROR("Failed to allocate FAT table (%u bytes)\n", fat_size_bytes);
         kfree(bs);
@@ -365,6 +366,18 @@ uint32_t cluster_to_sector(uint32_t cluster)
 }
 
 uint32_t fat32_get_next_cluster(uint32_t cluster)
+{
+    if (cluster < 2 || cluster >= fat32_get_total_clusters()) {
+        return FAT32_BAD_CLUSTER;  /* 0x0FFFFFF7 */
+    }
+    
+    uint32_t next = fat32_fs.fat_table[cluster] & 0x0FFFFFFF;
+    
+    /* Retourner tel quel - l'appelant teste si >= FAT32_EOC */
+    return next;
+}
+
+uint32_t fat32_get_next_cluster2(uint32_t cluster)
 {
     uint32_t next;
     

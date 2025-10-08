@@ -292,6 +292,7 @@ void add_to_ready_queue(task_t* task);
 void remove_from_ready_queue(task_t* task);
 void destroy_zombie_process(task_t* zombie);
 bool is_in_ready_queue(task_t* task);
+void remove_task_from_list(task_t* task);
 
 /* Gestion des priorites */
 void task_set_priority(task_t* task, uint32_t priority);

@@ -184,14 +184,14 @@ __restore_to_user:
     //pop {r0-r3, lr}
 
     ldr     r2, [r12, #CTX_USR_CPSR]
-    bic     r2, r2, #0x20
+    //bic     r2, r2, #0x20
     msr     spsr_cxsf, r2
 
     /* 2) Registres bankés (SP/LR user) */
     cps     #0x1F
     ldr     sp, [r12, #CTX_USR_SP]
     ldr     lr, [r12, #CTX_USR_LR]
-    bic     lr, lr, #1
+    //bic     lr, lr, #1
     cps     #0x13
 
     /* 3) r0..r10 depuis usr_r[], garder r12 comme base ctx */
@@ -201,7 +201,7 @@ __restore_to_user:
 
     /* 4) LR_svc = usr_pc (pair en ARM) */
     ldr     lr, [r12, #CTX_USR_LR]
-    bic     lr, lr, #1
+    //bic     lr, lr, #1
 
     /* 5) Restaurer r11 puis r12 à la toute fin */
     ldr     r11, [r12, #CTX_USR_R11]
@@ -234,12 +234,12 @@ __first_run_user:
 
     /* SPSR = usr_cpsr (ARM) */
     ldr     r2, [r12, #CTX_USR_CPSR]
-    bic     r2, r2, #0x20
+    //bic     r2, r2, #0x20
     msr     spsr_cxsf, r2
 
     /* LR_svc = usr_pc (pair) */
     ldr     lr, [r12, #CTX_USR_PC]
-    bic     lr, lr, #1
+    //bic     lr, lr, #1
 
     /* marquer non-première exécution */
     mov     r3, #0
@@ -249,7 +249,7 @@ __first_run_user:
     cps     #0x1F
     ldr     sp, [r12, #CTX_USR_SP]
     ldr     lr, [r12, #CTX_USR_LR]
-    bic     lr, lr, #1
+    //bic     lr, lr, #1
     cps     #0x13
 
     /* r0..r10 init depuis usr_r[] */

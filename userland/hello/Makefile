@@ -46,6 +46,9 @@ $(PROGRAM):  $(OBJECTS)
 #	@echo "Compiling CRT0: $<"
 #	$(CC) $(CFLAGS) -c $< -o $@
 
+install: $(PROGRAM)
+	cp $(PROGRAM) ../../userfs/bin
+
 # Nettoyage
 clean:
 	rm -f $(OBJECTS) $(PROGRAM)
@@ -61,4 +64,4 @@ check-deps:
 		echo "ERROR: libc.a not found. Run 'make install' in libc/"; exit 1; \
 	fi
 
-.PHONY: all clean check-deps
+.PHONY: all install clean check-deps

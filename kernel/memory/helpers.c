@@ -2261,14 +2261,14 @@ int copy_user_stack_pages(vm_space_t *parent_vm, vm_space_t *child_vm,
         
         // 3. Mapper temporairement la page enfant
         //uint32_t temp_child = map_temp_page((uint32_t)child_phys_page);
-        uint32_t temp_child = (uint32_t)child_phys_page;
+        void *temp_child = child_phys_page;
         if (!temp_child) {
             free_page(child_phys_page);
             return -ENOMEM;
         }
         
         // 4. Copier le contenu
-        memcpy((void *)temp_child, (void *)temp_parent, PAGE_SIZE);
+        memcpy(temp_child, (void *)temp_parent, PAGE_SIZE);
         
         // 5. Mapper la page dans l'espace enfant
         map_user_page(child_vm->pgdir, current_addr, (uint32_t)child_phys_page, 

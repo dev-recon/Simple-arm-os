@@ -6,6 +6,11 @@ int main() {
 
     printf("p1 = 0x%08X, path = 0x%08X\n", p1, path);
 
+    if(!p1){
+        printf("p1 is NULL\n");
+        return -1;
+    }
+
     for( int i = 0 ; i < 26; i++)
     {
         p1[i] = 'A' + i;

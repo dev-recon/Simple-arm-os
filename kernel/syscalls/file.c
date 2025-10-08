@@ -9,6 +9,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/fat32.h>
 #include <kernel/timer.h>
+#include <kernel/dirent.h>
 
 
 /* Forward declarations de toutes les fonctions statiques */
@@ -233,6 +234,14 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
             return -ENOENT;
         }
     }
+    else{
+        // File exists
+        // If O_CREAT && 0_EXCL then return error
+        if((flags & O_CREAT) && (flags & O_EXCL)) {
+            kfree(kernel_path);
+            return -EEXIST;
+        }
+    }
     
     kfree(kernel_path);
     
@@ -258,7 +267,15 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     
     file->inode = inode;
     file->flags = flags;
-    file->offset = 0;
+
+    if (flags & O_APPEND) {
+        KDEBUG("APPEND FLAG DETECTED offset = %d...\n", inode->size);
+        file->offset = inode->size;
+    }
+    else {
+        file->offset = 0;
+    }
+
     file->f_op = inode->f_op;
 
     if(new_file)
@@ -302,6 +319,10 @@ char* resolve_path(const char* path) {
     if (path[0] == '/') {
         return strdup(path);
     }
+
+    if(path[0] == '.') {
+        return strdup(current_task->process->cwd);
+    }
     
     /* Chemin relatif - obtenir le répertoire courant */
     cwd = get_current_working_directory();
@@ -341,7 +362,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     kernel_path = copy_string_from_user(pathname);
     if (!kernel_path) return -EFAULT;
 
-    KDEBUG("sys_open: opening file %s, kernel_path = %s, flags = %d\n", pathname, kernel_path, flags);
+    //KDEBUG("sys_open: opening file %s, kernel_path = %s, flags = %d\n", pathname, kernel_path, flags);
     /* Résoudre le chemin (absolu ou relatif) */
     full_path = resolve_path(kernel_path);
     kfree(kernel_path);
@@ -350,7 +371,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
 
     fd = kernel_open(full_path, flags, mode);
 
-    KDEBUG("sys_open: opened file fd = %d\n", fd);
+    //KDEBUG("sys_open: opened file fd = %d\n", fd);
   
 
     return fd;
@@ -507,3 +528,72 @@ static bool check_file_permission(inode_t* inode, int flags)
 }
 
 
+int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count) {
+    file_t *file;
+    char *user_buf = (char *)dirp;
+    char *buf_ptr = user_buf;
+    size_t bytes_written = 0;
+    
+    /* Vérifier le fd */
+    if (fd >= MAX_FILES || !current_task->process->files[fd]) {
+        return -EBADF;
+    }
+    
+    file = current_task->process->files[fd];
+    
+    /* Vérifier que c'est un répertoire */
+    if (!file->inode || !S_ISDIR(file->inode->mode)) {
+        return -ENOTDIR;
+    }
+    
+    /* Vérifier que le buffer est valide */
+    if (!user_buf || count < sizeof(struct linux_dirent)) {
+        return -EINVAL;
+    }
+    
+    //KDEBUG("Reading entries from %s fd=%d\n", file->name, fd);
+
+    /* Lire les entrées du répertoire */
+    while (bytes_written < count) {
+        struct dirent entry;
+        struct linux_dirent *dirent;
+        size_t name_len;
+        size_t rec_len;
+        
+        /* Lire une entrée via le VFS */
+        ssize_t ret = file->f_op->readdir(file, &entry);
+        
+        if (ret <= 0) {
+            /* Fin du répertoire ou erreur */
+            break;
+        }
+
+        /* Calculer la taille de l'entrée */
+        name_len = strlen(entry.d_name);
+        rec_len = offsetof(struct linux_dirent, d_name) + name_len + 1 ;
+        rec_len = (rec_len + 7) & ~7;  /* Aligner sur 4 bytes */
+
+        /* Vérifier qu'il reste assez de place */
+        if (bytes_written + rec_len > count) {
+            /* Reculer la position de lecture pour cette entrée */
+            file->offset--;
+            break;
+        }
+        
+        /* Construire l'entrée linux_dirent */
+        dirent = (struct linux_dirent *)buf_ptr;
+        
+        dirent->d_ino = entry.d_ino;
+        dirent->d_off = file->offset;
+        dirent->d_reclen = rec_len;
+        dirent->d_type = entry.d_type;
+        
+        /* Copier le nom */
+        memcpy(dirent->d_name, entry.d_name, name_len + 1);
+        
+        buf_ptr += rec_len;
+        bytes_written += rec_len;
+    }
+    
+    return bytes_written;
+}

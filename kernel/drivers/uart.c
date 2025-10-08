@@ -4,6 +4,8 @@
 #include <kernel/spinlock.h>
 #include <kernel/vfs.h>
 #include <kernel/userspace.h>
+#include <kernel/tty.h>
+#include <kernel/kprintf.h>
 
 /* Registres PL011 UART */
 #define UART_DR         (*(volatile uint32_t*)(UART0_BASE + 0x00))  /* Data */
@@ -366,9 +368,9 @@ static ssize_t uart_console_read(file_t* file, void* buf, size_t count) {
     char* data = (char*)buf;
     size_t read_count = 0;
     
-    if (!is_valid_user_range(buf, count)) {
+/*     if (!is_valid_user_range(buf, count)) {
         return -EFAULT;
-    }
+    } */
     
     for (size_t i = 0; i < count; i++) {
         // Utiliser votre fonction UART de lecture
@@ -388,6 +390,16 @@ static ssize_t uart_console_read(file_t* file, void* buf, size_t count) {
     }
     
     return read_count;
+}
+
+static ssize_t uart_console_read2(file_t* file, void* buf, size_t count) {
+    (void)file;
+    return tty_read((char*)buf, count);
+}
+
+static ssize_t uart_console_write2(file_t* file, const void* buf, size_t count) {
+    (void)file;
+    return tty_write((const char*)buf, count);
 }
 
 // File operations pour console UART
@@ -419,4 +431,32 @@ file_t* create_uart_console_file(const char* name, int flags) {
     }
     
     return file;
+}
+
+/* Dans uart.c */
+void uart_irq_handler(void) {
+    uint32_t mis = UART_MIS;  /* Masked Interrupt Status */
+    
+    KDEBUG("UART IRQ! MIS=0x%X\n", mis);
+    
+    /* RX interrupt ? */
+    if (mis & (1 << 4)) {
+        /* Lire tous les caractères disponibles */
+        while (uart_has_data()) {
+            char c = uart_getc();
+            KDEBUG("UART received: '%c' (0x%02X)\n", c, c);
+            
+            /* Envoyer au TTY */
+            tty_input_char(c);
+        }
+        
+        /* Acquitter l'interruption RX */
+        UART_ICR = (1 << 4);
+    }
+    
+    /* Autres interruptions (TX, erreurs, etc.) */
+    if (mis & ~(1 << 4)) {
+        KDEBUG("UART other interrupt: 0x%X\n", mis);
+        UART_ICR = mis;  /* Acquitter toutes */
+    }
 }

@@ -53,8 +53,23 @@ int kill(pid_t pid, int sig);
 long syscall(long number, ...);
 
 /* Gestion mémoire */
-void *brk(void *addr);
+//void *brk(void *addr);
 void *sbrk(void *addr);
 int print(const char* msg);
+
+/* Équivalent uart_putc */
+static inline int putc_tty(char c) {
+    return write(STDOUT_FILENO, &c, 1) == 1 ? 0 : -1;
+}
+
+/* Équivalent uart_getc */
+static inline int getc_tty(void) {
+    char c;
+    if (read(STDIN_FILENO, &c, 1) == 1) {
+        return (unsigned char)c;
+    }
+    return -1;  /* EOF ou erreur */
+}
+
 
 #endif

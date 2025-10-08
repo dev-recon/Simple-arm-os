@@ -173,7 +173,7 @@ void init_process_main(void* arg)
         /* Status periodique */
         static int status_counter = 0;
         if (++status_counter % 500 == 0) {
-            KINFO("[INIT] Status: %d children reaped, system running\n", reaped_count);
+            //KINFO("[INIT] Status: %d children reaped, system running\n", reaped_count);
             //list_all_processes();
         }
         

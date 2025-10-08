@@ -351,9 +351,9 @@ int sys_brk(void* addr)
         if (!new_vma) return -ENOMEM;
         
         /* Check if we have enough space */
-        if (new_brk > proc->vm->stack_start) {
-            return -ENOMEM;
-        }
+        //if (new_brk > proc->vm->stack_start) {
+        //    return -ENOMEM;
+        //}
 
         if(new_brk == old_brk)
             new_brk += PAGE_SIZE ;

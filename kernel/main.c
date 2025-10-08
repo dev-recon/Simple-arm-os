@@ -23,6 +23,8 @@
 #include <kernel/task.h>
 #include <kernel/kernel_tasks.h>
 
+#include <kernel/tty.h>
+
 //extern void test_utoa_direct();
 //extern void simple_utoa(unsigned int val, char *str, int base);
 
@@ -113,6 +115,7 @@ void early_init(void)
 {
     /* Phase 1: Hardware de base uniquement */
     uart_init();
+    tty_init();
     
     /* Phase 2: Detection memoire pour MMU */
     kernel_memory_size = detect_memory();

@@ -86,12 +86,6 @@ swi_handler:
     ldr     r12, [r12]               /* r12 = current_task */
     add     r12, r12, #48          /* r12 = &current->context */ // FIX IT !!!
 
-    /* 1) Sauver IMMÉDIATEMENT les 4 args user AVANT toute modif */
-    mov   r8,  r0              /* a0 */
-    mov   r9,  r1              /* a1 */
-    mov   r10, r2              /* a2 */
-    mov   r6, r3              /* a3 (utilise r12 comme temp ici) */
-
     /* Copier 9 arguments user dans ctx->usr_r[0..7] + ctx->usr_r[11] */
     str     r0,  [r12, #(88 + 0)]
     str     r1,  [r12, #(88 + 4)]
@@ -102,6 +96,12 @@ swi_handler:
     str     r6,  [r12, #(88 + 24)]
     str     r7,  [r12, #(88 + 28)]
     str     r11,  [r12, #(88 + 44)]
+
+    /* 1) Sauver IMMÉDIATEMENT les 4 args user AVANT toute modif */
+    mov   r8,  r0              /* a0 */
+    mov   r9,  r1              /* a1 */
+    mov   r10, r2              /* a2 */
+    mov   r6, r3              /* a3 (utilise r12 comme temp ici) */
 
     /* 2) Sauvegardes “banquées” essentielles (sans BL, donc pas de clobber imprévu) */
     mrs     r0, spsr
@@ -136,6 +136,7 @@ swi_handler:
     mov   r1, r8               /* r1 = a1  (2ème param) */
     mov   r2, r9               /* r2 = a2  (3ème param) */
     mov   r3, r10              /* r3 = a3  (4ème param) */
+    mov   r4, r6               /* r3 = a3  (5ème param) */
 
     /* Appeler le handler C */
     bl syscall_handler

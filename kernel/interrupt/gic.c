@@ -92,9 +92,9 @@ void init_gic(void)
     //KDEBUG("[GIC] Enabling important IRQs...\n");
     /* IRQs pour machine virt : UART=1, Timer=30, VirtIO=16-31 */
 #if 1
-    uint32_t important_irqs[] = {1, 30, 16, 17, 18, 19, 48, 79};
+    uint32_t important_irqs[] = {1, 33, 30, 16, 17, 18, 19, 48, 79};
     
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 9; i++) {
         uint32_t irq = important_irqs[i];
         
         /* 1. Configurer comme edge-triggered si IRQ >= 16 */
@@ -184,8 +184,8 @@ void irq_c_handler(void)
             //uart_irq_handler();
             break;
 
-        case 12:
-            //kprintf("[IRQ] Keyboard IRQ 12 Received\n");
+        case IRQ_KEYBOARD:
+            kprintf("[IRQ] Keyboard IRQ 33 Received\n");
             keyboard_irq_handler();
             break;
             

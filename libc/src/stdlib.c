@@ -36,3 +36,5 @@ char* getcwd(char *buf, size_t size) {
     /* Succès - retourner le buffer */
     return result_buf;
 }
+
+

@@ -112,5 +112,8 @@
 
 int split_path(const char* full_path, char** parent_path, char** filename);
 bool inode_permission(inode_t* inode, int mask);
+bool can_read(file_t* file) ;
+
+bool can_write(file_t* file) ;
 
 #endif /* _KERNEL_FILE_H */

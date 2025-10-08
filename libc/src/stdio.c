@@ -163,6 +163,10 @@ static void printf_putc(char c)
 }
 #endif
 
+void pflush(void){
+    printf_flush();
+}
+
 static void printf_flush2(void) {
 
     if ((printf_buf_pos > 0) && !in_use ) {
@@ -498,5 +502,155 @@ int vprintf2(const char* format, va_list args) {
     }
     
     printf_flush();  // S'assurer que tout est affiché
+    return written;
+}
+
+int snprintf(char* str, size_t size, const char* format, ...)
+{
+    va_list args;
+    const char* p;
+    char* out;
+    char* out_end;
+    int written = 0;
+    int temp_len;
+    char temp_buf[32];
+    const char* s;
+    int d;
+    unsigned int u;
+    char c;
+    
+    if (!str || size == 0) return 0;
+    
+    va_start(args, format);
+    
+    out = str;
+    out_end = str + size - 1; /* Reserve space for null terminator */
+    
+    for (p = format; *p && out < out_end; p++) {
+        if (*p != '%') {
+            *out++ = *p;
+            written++;
+            continue;
+        }
+        
+        p++; /* Skip '%' */
+        
+        /* Handle format specifiers */
+        switch (*p) {
+            case 'c':
+                c = (char)va_arg(args, int);
+                if (out < out_end) {
+                    *out++ = c;
+                    written++;
+                }
+                break;
+                
+            case 's':
+                s = va_arg(args, const char*);
+                if (!s) s = "(null)";
+                while (*s && out < out_end) {
+                    *out++ = *s++;
+                    written++;
+                }
+                break;
+                
+            case 'd':
+            case 'i':
+                d = va_arg(args, int);
+                temp_len = itoa(d, temp_buf);
+                {
+                    int i; /* Declaration GNU89 */
+                    for (i = 0; i < temp_len && out < out_end; i++) {
+                        *out++ = temp_buf[i];
+                        written++;
+                    }
+                }
+                break;
+                
+            case 'u':
+                u = va_arg(args, unsigned int);
+                temp_len = utoa(u, temp_buf, 10);
+                {
+                    int i; /* Declaration GNU89 */
+                    for (i = 0; i < temp_len && out < out_end; i++) {
+                        *out++ = temp_buf[i];
+                        written++;
+                    }
+                }
+                break;
+                
+            case 'x':
+                u = va_arg(args, unsigned int);
+                temp_len = utoa(u, temp_buf, 16);
+                {
+                    int i; /* Declaration GNU89 */
+                    for (i = 0; i < temp_len && out < out_end; i++) {
+                        *out++ = temp_buf[i];
+                        written++;
+                    }
+                }
+                break;
+                
+            case 'X':
+                u = va_arg(args, unsigned int);
+                temp_len = utoa(u, temp_buf, 16);
+                {
+                    int i; /* Declaration GNU89 */
+                    for (i = 0; i < temp_len && out < out_end; i++) {
+                        char ch = temp_buf[i];
+                        *out++ = (ch >= 'a' && ch <= 'f') ? ch - 'a' + 'A' : ch;
+                        written++;
+                    }
+                }
+                break;
+                
+            case '%':
+                if (out < out_end) {
+                    *out++ = '%';
+                    written++;
+                }
+                break;
+                
+            case '.':
+                /* Handle precision specifier like %.*s */
+                if (*(p + 1) == '*' && *(p + 2) == 's') {
+                    int max_len = va_arg(args, int);
+                    s = va_arg(args, const char*);
+                    if (!s) s = "(null)";
+                    {
+                        int count = 0;
+                        while (*s && count < max_len && out < out_end) {
+                            *out++ = *s++;
+                            written++;
+                            count++;
+                        }
+                    }
+                    p += 2; /* Skip '*s' */
+                } else {
+                    /* Simple . handling - just copy the character */
+                    if (out < out_end) {
+                        *out++ = '.';
+                        written++;
+                    }
+                }
+                break;
+                
+            default:
+                /* Unknown format specifier, just copy it */
+                if (out < out_end) {
+                    *out++ = '%';
+                    written++;
+                }
+                if (out < out_end) {
+                    *out++ = *p;
+                    written++;
+                }
+                break;
+        }
+    }
+    
+    *out = '\0';
+    va_end(args);
+    
     return written;
 }

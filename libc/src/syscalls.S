@@ -62,6 +62,7 @@ SYSCALL sys_getcwd, 183     /* __NR_getcwd */
 SYSCALL sys_pipe, 42        /* __NR_pipe */
 SYSCALL sys_stat, 106       /* __NR_stat */
 SYSCALL sys_fstat, 108      /* __NR_fstat */
+SYSCALL sys_getdents, 141   /* __NR_getdents */
 
 
 /* Signaux */
@@ -376,7 +377,7 @@ print:
 .type brk, %function
 brk:
     push {r7, lr}
-    mov r7, #45             /* SYS_BRK */
+    mov r7, #45             // SYS_BRK 
     swi #0
     
     cmp r0, #0
@@ -396,40 +397,10 @@ brk_success:
 sbrk:
     push {r4-r7, lr}
     
-    /* Sauvegarder l'incrément */
-    //mov r4, r0
-    
-    /* Obtenir le brk actuel */
-    //mov r0, #0
-    //mov r7, #45             /* SYS_BRK */
-    //swi #0
-    
-    /* Sauvegarder l'ancien brk */
-    //mov r5, r0              /* r5 = ancien brk */
-    
-    /* Si increment == 0, retourner le brk actuel */
-    //cmp r4, #0
-    //moveq r0, r5
-    //beq sbrk_end
-    
-    /* Calculer nouveau brk */
-    //add r6, r5, r4          /* nouveau_brk = ancien + increment */
-    
     /* Appeler sys_brk avec le nouveau brk */
     mov r7, #45
     swi #0
     
-    /* Vérifier le succès */
-    //mov r6, #-1
-    //cmp r0, r6
-    //addne r0, r5, r4        /* Si succès, retourner nouveau brk */
-    //moveq r0, r5            /* Si succès, retourner ancien brk */
-    //bne sbrk_error
-    
-    /* Succès : retourner l'ancien brk */
-    //mov r0, r6
-    //b sbrk_end
-
     cmp r0, #0
     bge sbrk_success
     
@@ -620,6 +591,15 @@ fstat:
     mov r0, #-1
     
 fstat_success:
+    pop {r7, lr}
+    bx lr
+
+.global getdents
+.type getdents, %function
+getdents:
+    push {r7, lr}
+    mov r7, #141        /* __NR_getdents */
+    swi #0
     pop {r7, lr}
     bx lr
 

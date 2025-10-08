@@ -61,6 +61,7 @@ KERNEL_OBJS = \
 	kernel/drivers/display.o \
 	kernel/drivers/console.o \
 	kernel/drivers/uart.o \
+	kernel/drivers/tty.o \
 	kernel/drivers/ide.o \
 	kernel/drivers/ramfs.o \
 	kernel/drivers/tar_parser_ramfs.o \
@@ -109,10 +110,6 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 # Creation du disque avec FAT32 (version macOS)
 $(DISK_IMG): $(USERFS_DIR)
 	@echo "Creating disk image $(DISK_IMG) ($(DISK_SIZE_MB)MB) on macOS..."
-	cp -f $(USERLAND_DIR)/hello/hello $(USERFS_DIR)/bin
-	cp -f $(USERLAND_DIR)/hello2/hello2 $(USERFS_DIR)/bin
-	cp -f $(USERLAND_DIR)/readfile/readfile $(USERFS_DIR)/bin
-	cp -f $(USERLAND_DIR)/malloc/malloc $(USERFS_DIR)/bin
 
 	# Creer un fichier image vide
 	dd if=/dev/zero of=$(DISK_IMG) bs=1m count=$(DISK_SIZE_MB) 2>/dev/null

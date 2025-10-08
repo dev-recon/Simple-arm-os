@@ -340,14 +340,14 @@ void cleanup_exec_args(char* filename, char** argv, char** envp)
     
     if (argv) {
         for (i = 0; argv[i]; i++) {
-            kfree(argv[i]);
+            if (argv[i]) kfree(argv[i]);
         }
         kfree(argv);
     }
     
     if (envp) {
         for (i = 0; envp[i]; i++) {
-            kfree(envp[i]);
+            if (envp[i]) kfree(envp[i]);
         }
         kfree(envp);
     }

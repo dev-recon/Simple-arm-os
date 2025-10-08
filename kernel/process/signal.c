@@ -531,7 +531,7 @@ static void setup_signal_frame(task_t* proc, int sig, uint32_t handler_addr,
     //KDEBUG("[SIGNAL] Signal frame setup: PGDIR = 0x%08X, handler=0x%08X, sp=0x%08X, sig=%d\n", (uint32_t)proc->process->vm->pgdir, 
     //       handler_addr, final_sp, sig);
 
-    //KDEBUG("[SIGNAL] Signal frame setup: Current Process = %s\n", current_task->name);
+    KDEBUG("[SIGNAL] Signal frame setup: Current Process = %s\n", current_task->name);
 
 
     schedule_to(proc);

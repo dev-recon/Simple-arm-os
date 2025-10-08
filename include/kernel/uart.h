@@ -25,6 +25,7 @@ void uart_puts(const char* str);
 char uart_getc(void);
 void uart_put_hex(unsigned long value);
 void uart_put_dec(int num);
+void uart_irq_handler(void);
 
 file_t* create_uart_console_file(const char* name, int flags);
 

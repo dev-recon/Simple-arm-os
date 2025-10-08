@@ -145,7 +145,7 @@ struct block_header *extend_heap(size_t size) {
     if(!size)
         return NULL;
     
-    //printf("Extending heap by %d bytes\n", size);
+    //printf("Extending heap by %d bytes starting at 0x%08X\n", size, heap_start);
    
     // Calculer la taille totale nécessaire
     size_t total_size = HEADER_SIZE + size;

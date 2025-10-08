@@ -72,6 +72,7 @@ extern FILE* stderr;
 /* ========================================
  * Fonctions de formatage
  * ======================================== */
+void pflush(void);
 
 /* Sortie formatée */
 int printf(const char* format, ...);

@@ -139,12 +139,40 @@ int test_stat(void) {
     return 0;
 }
 
+int test_cpfile(void){
 
-int main() {
-    int version = 33 ;
+    char *buffer = NULL;
+    struct stat st;
+    int fd = open("/readme.txt" , O_RDONLY, 0);
 
-    printf("Hello from userspace version %d!\n", version);
-    printf("My PID: %d\n", getpid());
+    if (fd < 0) {
+        printf("Failed to open file %s\n", "/readme.txt");
+        exit(1);
+    }
+
+   int fd2 = open("/test.txt" , O_CREAT | O_WRONLY, 0);
+
+    if (fd2 < 0) {
+        printf("Failed to open file %s\n", "/test.txt");
+        exit(1);
+    }
+
+    fstat(fd, &st);
+
+    buffer = malloc(st.st_size+1);
+    read(fd, buffer, st.st_size);
+    write(fd2, buffer, st.st_size);
+        //printf("%c", buffer[0]);
+
+
+    close(fd);
+    close(fd2);
+
+    return 0;
+
+}
+
+int test_lseek(void){
 
     const char* path = "/readme.txt";
     struct stat st;
@@ -154,7 +182,7 @@ int main() {
     
     if (fd < 0) {
         printf("Failed to open file %s\n", path);
-        exit(version);
+        exit(1);
     }
 
     fstat(fd, &st);
@@ -185,12 +213,20 @@ int main() {
     close(fd);
 
 
+}
+
+
+int main() {
+    int version = 33 ;
+
+    printf("Hello from userspace version %d!\n", version);
+    printf("My PID: %d\n", getpid());
 
     //test_mkdir_rmdir();
 
     //test_unlink();
 
-    test_chdir();
+    test_cpfile();
 
     //test_stat();
 

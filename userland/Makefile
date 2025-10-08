@@ -1,6 +1,6 @@
 # Makefile principal pour tous les programmes userspace
 
-PROGRAMS = hello shell calculator
+PROGRAMS = ansy_tty hello malloc mash readfile term_dmo
 
 BUILD_DIR = ../build
 LIBC_DIR = ../libc
@@ -11,10 +11,10 @@ LIBC_DIR = ../libc
 all: check-libc $(PROGRAMS)
 
 check-libc:
-	@if [ ! -f "$(BUILD_DIR)/lib/libc.a" ]; then \
-		echo "Building and installing libc..."; \
-		$(MAKE) -C $(LIBC_DIR) install; \
-	fi
+	echo "Building and installing libc..."; \
+	$(MAKE) -C $(LIBC_DIR) distclean; \
+	$(MAKE) -C $(LIBC_DIR) install; \
+
 
 $(PROGRAMS):
 	@echo "Building program: $@"

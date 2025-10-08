@@ -28,23 +28,10 @@ cd $LIBC_DIR
 make distclean
 make install
 
-cd "../$USERLAND_DIR/hello/"
-rm hello
-make
+cd "../$USERLAND_DIR"
+make install
 
-cd "../../$USERLAND_DIR/hello2/"
-rm hello2
-make
-
-cd "../../$USERLAND_DIR/readfile/"
-rm readfile
-make
-
-cd "../../$USERLAND_DIR/malloc/"
-rm malloc
-make
-
-cd "../../"
+cd "../"
 rm disk.img
 make disk.img
 make run-userfs

@@ -46,6 +46,8 @@ static syscall_func_t syscall_table[256] = {
     [__NR_pipe] = (syscall_func_t)sys_pipe,
     [__NR_stat] = (syscall_func_t)sys_stat,
     [__NR_fstat] = (syscall_func_t)sys_fstat,
+    [__NR_getdents] = (syscall_func_t)sys_getdents,
+
 };
 
 #pragma GCC diagnostic pop
@@ -64,7 +66,6 @@ extern void orphan_children(task_t* proc);
 extern void switch_to_idle_stack(void);
 
 extern void __task_switch_to_user(task_context_t* new_ctx);
-extern void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 extern void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 
 extern int copy_user_stack_pages(vm_space_t *parent_vm, vm_space_t *child_vm, 
@@ -316,7 +317,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     /* Configuration USER - CORRECTION CRITIQUE */
     proc->context.usr_pc = elf_header.e_entry;         /* Point d'entrée USER */
     //proc->context.usr_sp = new_vm->stack_start + USER_STACK_SIZE - 512;        /* Stack USER */
-    proc->context.usr_sp = new_vm->stack_start;        /* Stack USER */
+    proc->context.usr_sp = new_vm->stack_start;        /* Stack USER updated by */
     proc->context.usr_sp &= ~7;
     proc->context.usr_cpsr = 0x60000010;               /* MODE USER + IRQ enabled */
 
@@ -324,7 +325,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     proc->context.usr_r[0] = (uint32_t)kernel_filename;                     /* r0 = argc */
     proc->context.usr_r[1] = (uint32_t)kernel_argv;     /* r1 = argv */
     proc->context.usr_r[2] = (uint32_t)kernel_envp;     /* r2 = envp */
-    proc->context.usr_r[3] = argc;     /* r2 = envp */
+    proc->context.usr_r[3] = argc;     /* r3 = argc */
 
    /* Fermer tous les fichiers CLOEXEC - ACCeS CORRECT */
     close_cloexec_files(proc);
@@ -404,7 +405,7 @@ int sys_fork(void)
 
     init_process_signals(child);
 
-    parent->context.usr_lr = return_address ;    /* Adresse après SWI */
+    //parent->context.usr_lr = return_address ;    /* Adresse après SWI */
     child->context.ttbr0 = (uint32_t)child->process->vm->pgdir;
     child->context.asid = child->process->vm->asid;
 
@@ -431,8 +432,8 @@ int sys_fork(void)
         child->context.r0 = 0;
         child->context.lr = return_address;
         child->context.pc = return_address;
-        child->context.usr_lr   = parent->context.usr_pc;
-        child->context.usr_pc   = parent->context.usr_pc;
+        //child->context.usr_lr   = parent->context.usr_pc;
+        //child->context.usr_pc   = parent->context.usr_pc;
 
         child->context.spsr = read_spsr_svc();
 
@@ -600,7 +601,7 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
 int sys_waitpid(pid_t pid, int* status, int options)
 {
 
-    task_sleep_ms(10000);
+    task_sleep_ms(1000);
     //KDEBUG("sys_waitpid: called for = %d - &status = 0x%08X\n", pid, (uint32_t)status);
 
     task_t *parent = current_task;
@@ -760,14 +761,15 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
     }
 
     task_t *proc = current_task;
-    uint32_t usr_r11 = proc->context.usr_r[11];
+    //uint32_t usr_r11 = proc->context.usr_r[11];
 
     if(proc && proc->context.returns_to_user)
     {
-        //proc->context.svc_sp = proc->context.sp;
+        proc->context.svc_sp = proc->context.sp;
     }
 
-    //KDEBUG(" SYSCALL NUM == %u == %s\n", syscall_num, proc->name);
+    //if( syscall_num != __NR_read &&
+    //    syscall_num != __NR_write ) KDEBUG(" SYSCALL NUM == %u == %s\n", syscall_num, proc->name);
 
 
 //print_task_offsets();
@@ -814,9 +816,10 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
         //debug_print_ctx(&proc->context, str);
 
     }
-    proc->context.usr_r[11] = usr_r11;
+    //proc->context.usr_r[11] = usr_r11;
     //snprintf(str, 100, "PROC CONTEXT %s", proc->name);
-    //KDEBUG(" SYSCALL %d RESULT == 0x%08X == %s\n", syscall_num, result, proc->name);
+    //if( syscall_num != __NR_read &&
+    //    syscall_num != __NR_write )  KDEBUG(" SYSCALL %d RESULT == 0x%08X == %s\n", syscall_num, result, proc->name);
     //debug_print_ctx(&proc->context, str);
     //dump_svc_stack(proc , &proc->context.sp);
     //print_context_offsets();

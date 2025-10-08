@@ -359,8 +359,9 @@ void wakeup_parent(task_t *proc){
                 
                 /* Ajouter le parent a la ready queue */
                 add_to_ready_queue(parent);
-                KDEBUG("sys_exit: Parent PID=%u added to ready queue\n", 
-                       parent->process->pid);
+                //KDEBUG("sys_exit: Parent PID=%u added to ready queue\n", 
+                //       parent->process->pid);
+                //debug_print_ctx(&parent->context, "SYS_EXIT");
                 schedule_to(parent);
 
             } else {
@@ -368,8 +369,8 @@ void wakeup_parent(task_t *proc){
                        wait_pid, proc->process->pid);
             }
         } else {
-            KINFO("sys_exit: Parent not blocked (state=%s proc_state=%s)\n", 
-                  task_state_string(parent->state), proc_state_string(parent->process->state));
+            //KINFO("sys_exit: Parent not blocked (state=%s proc_state=%s)\n", 
+            //      task_state_string(parent->state), proc_state_string(parent->process->state));
         }
     } else {
         KWARN("sys_exit: No parent found\n");

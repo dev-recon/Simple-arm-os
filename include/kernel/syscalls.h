@@ -5,6 +5,7 @@
 #include <kernel/types.h>
 #include <kernel/vfs.h>
 #include <kernel/signal.h>  /* Pour sig_handler_t et sigaction_t */
+#include <kernel/dirent.h>
 
 /* Forward declarations */
 struct process;
@@ -67,6 +68,7 @@ struct process;
 #define __NR_fstat              108
 #define __NR_getppid            119  /* Moved to avoid conflicts */
 #define __NR_print              121
+#define __NR_getdents           141
 #define __NR_rt_sigreturn       173
 #define __NR_getcwd             183     /* getcwd */
 
@@ -86,6 +88,7 @@ int sys_print(const char* msg);
 int sys_mkdir(const char* pathname, mode_t mode);
 int sys_rmdir(const char* pathname);
 int sys_unlink(const char* pathname);
+int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count);
 
 /* Process syscalls */
 int sys_fork(void);

@@ -9,6 +9,7 @@
 #include <kernel/process.h>
 #include <kernel/timer.h>
 #include <kernel/file.h>
+#include <kernel/uart.h>
 
 /* === VARIABLES STATIQUES === */
 static volatile bool system_shutdown = false;
@@ -650,13 +651,151 @@ void simple_shell_task3(void* arg) {
     sys_exit(-1);
 }
 
+
+#define SHELL_BUFFER_SIZE 512
+#define SHELL_MAX_ARGS      16
+
+// Codes de retour des commandes
+#define SHELL_OK            0
+#define SHELL_ERROR         1
+#define SHELL_EXIT          2
+
+static char input_buffer[SHELL_BUFFER_SIZE];
+static char* argv_buffer[SHELL_MAX_ARGS];
+static int shell_running = 0;
+
+
+// Afficher la bannière du shell
+void shell_print_banner(void) {
+    uart_puts("\n");
+    uart_puts("================================\n");
+    uart_puts("    ARM32 Mini OS Shell v3.0    \n");
+    uart_puts("   (avec support fork/exec)     \n");
+    uart_puts("================================\n");
+    uart_puts("Tapez 'help' pour voir les commandes disponibles\n");
+    uart_puts("\n");
+}
+
+// Afficher le prompt
+void shell_print_prompt(void) {
+    uart_puts("arm32os> ");
+}
+
+
+// Lire une ligne de commande
+char* shell_read_line(void) {
+    int pos = 0;
+    char c;
+    
+    while (pos < SHELL_BUFFER_SIZE - 1) {
+        c = uart_getc();
+        
+        if (c == '\r' || c == '\n') {
+            uart_puts("\n");
+            break;
+        } else if (c == '\b' || c == 0x7F) {  // Backspace
+            if (pos > 0) {
+                pos--;
+                uart_puts("\b \b");
+            }
+        } else if (c >= ' ' && c <= '~') {  // Caractères imprimables
+            input_buffer[pos++] = c;
+            uart_putc(c);
+        }
+    }
+    
+    input_buffer[pos] = '\0';
+    return input_buffer;
+}
+
+
+// Parser une ligne en arguments
+int shell_parse_line(char* line, char* argv[]) {
+    int argc = 0;
+    char* token = line;
+    
+    while (*token && argc < SHELL_MAX_ARGS - 1) {
+        // Ignorer les espaces
+        while (*token == ' ' || *token == '\t') {
+            token++;
+        }
+        
+        if (*token == '\0') {
+            break;
+        }
+        
+        argv[argc++] = token;
+        
+        // Trouver la fin du token
+        while (*token && *token != ' ' && *token != '\t') {
+            token++;
+        }
+        
+        if (*token) {
+            *token++ = '\0';
+        }
+    }
+    
+    argv[argc] = NULL;
+    return argc;
+}
+
+// Exécuter une commande
+int shell_execute(int argc, char* argv[]) {
+    if (argc == 0) {
+        return SHELL_OK;
+    }
+    
+    // Commande exit intégrée
+    if (strcmp(argv[0], "exit") == 0) {
+        uart_puts("Au revoir!\n");
+        shell_running = 0;
+        return SHELL_EXIT;
+    }
+
+    
+    // Commande inconnue
+    uart_puts("Commande inconnue: ");
+    uart_puts(argv[0]);
+    uart_puts("\n");
+    return SHELL_ERROR;
+}
+
+
+// Boucle principale du shell
+void shell_run(void) {
+    shell_print_banner();
+    shell_running = 1;
+    
+    while (shell_running) {
+        shell_print_prompt();
+        
+        char* line = shell_read_line();
+        if (!line || strlen(line) == 0) {
+            continue;
+        }
+        
+        int argc = shell_parse_line(line, argv_buffer);
+        if (argc > 0) {
+            int result = shell_execute(argc, argv_buffer);
+            if (result == SHELL_EXIT) {
+                break;
+            }
+        }
+    }
+    
+    uart_puts("Shell ferme\n");
+}
+
+
+
 void simple_shell_task(void* arg) {
 
     (void)arg;
 
-    const char* path = "/bin/newlib";
-    char* name = "newlib";
-
+    const char* path = "/bin/mash";
+    char* name = "mash";
+    int result = 0;
     //task_sleep_ms(10000); 
     //yield();
 
@@ -666,8 +805,9 @@ void simple_shell_task(void* arg) {
     char* const envp[] = { NULL };
 
     //debug_all_task_stacks();
-        
-    int result = sys_execve(path , argv, envp);
+      
+    //shell_run();
+    result = sys_execve(path , argv, envp);
         
     // Si on arrive ici, exec a échoué
     kprintf("Child: exec failed with %d\n", result);

@@ -104,7 +104,7 @@ int test_pipe(void) {
             if( (i%10000) == 0)
                 printf(" dad loop before kill %d\n", i);
         }*/
-       int status = -1;
+       int status = 0;
         int waited_pid = waitpid(-1, &status, 0);
         ssize_t n = read(pipefd[0], buffer, sizeof(buffer));
         buffer[n] = '\0';
@@ -165,13 +165,11 @@ int test_execve(void) {
 }
 
 int main() {
-    int version = 11 ;
-    
-    printf("******************************************************\n");
+    int version = 0 ;
 
     test_pipe();
 
-    printf("DAD EXITING **********************************************\n");
+    printf("PROCESS HELLO EXITING ...\n");
 
     exit(version);
 
