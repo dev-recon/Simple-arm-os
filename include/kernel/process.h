@@ -8,11 +8,13 @@
 #include <kernel/types.h>
 
 /* etats de processus - mapping vers vos etats existants */
-#define PROC_READY      TASK_READY
-#define PROC_RUNNING    TASK_RUNNING
-#define PROC_BLOCKED    TASK_BLOCKED
-#define PROC_ZOMBIE     TASK_ZOMBIE
-#define PROC_DEAD       TASK_TERMINATED
+#define PROC_READY           TASK_READY
+#define PROC_RUNNING         TASK_RUNNING
+#define PROC_BLOCKED         TASK_BLOCKED
+#define PROC_ZOMBIE          TASK_ZOMBIE
+#define PROC_DEAD            TASK_TERMINATED
+#define PROC_INTERRUPTIBLE   TASK_INTERRUPTIBLE
+#define PROC_UNINTERRUPTIBLE TASK_UNINTERRUPTIBLE
 
 /* Constantes adaptees */
 #define PROC_NAME_MAX   TASK_NAME_MAX

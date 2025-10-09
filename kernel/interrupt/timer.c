@@ -287,7 +287,7 @@ uint64_t get_timer_count(void)
 uint32_t get_system_ticks(void)
 {
     /* Mettre à jour avant de retourner */
-    update_timer_software();
+    //update_timer_software();
     return system_ticks;
 }
 

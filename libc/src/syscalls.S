@@ -70,6 +70,8 @@ SYSCALL sys_kill, 37        /* __NR_kill */
 SYSCALL sys_signal, 48      /* __NR_signal */
 SYSCALL sys_sigaction, 67   /* __NR_sigaction */
 SYSCALL sys_sigreturn, 173  /* __NR_rt_sigreturn */
+SYSCALL sys_nanosleep, 162  /* __NR_nanosleep */
+
 
 /* Syscall spécial de votre kernel */
 SYSCALL sys_print, 121      /* __NR_print */
@@ -599,6 +601,15 @@ fstat_success:
 getdents:
     push {r7, lr}
     mov r7, #141        /* __NR_getdents */
+    swi #0
+    pop {r7, lr}
+    bx lr
+
+.global nanosleep
+.type nanosleep, %function
+nanosleep:
+    push {r7, lr}
+    mov r7, #162        /* __NR_nanosleep */
     swi #0
     pop {r7, lr}
     bx lr

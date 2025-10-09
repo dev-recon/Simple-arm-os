@@ -453,22 +453,22 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
 
 int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer) {
 
-    return virtio_blk_read_sectors( virtio_mmio_base, &global_vq, lba, count, buffer, 1000);
+    return virtio_blk_read_sectors( virtio_mmio_base, &global_vq, lba, count, buffer, VIRTIO_BLOCK_TIMEOUT);
 }
 
 int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer) {
 
-    return virtio_blk_write_sectors( virtio_mmio_base, &global_vq, lba, count, buffer, 1000);
+    return virtio_blk_write_sectors( virtio_mmio_base, &global_vq, lba, count, buffer, VIRTIO_BLOCK_TIMEOUT);
 }
 
 int blk_read_sector(uint64_t lba, void* buffer) {
 
-    return virtio_blk_read_sectors( virtio_mmio_base, &global_vq, lba, 1, buffer, 1000);
+    return virtio_blk_read_sectors( virtio_mmio_base, &global_vq, lba, 1, buffer, VIRTIO_BLOCK_TIMEOUT);
 }
 
 int blk_write_sector(uint64_t lba, void* buffer) {
 
-    return virtio_blk_write_sectors( virtio_mmio_base, &global_vq, lba, 1, buffer, 1000);
+    return virtio_blk_write_sectors( virtio_mmio_base, &global_vq, lba, 1, buffer, VIRTIO_BLOCK_TIMEOUT);
 }
 
 bool blk_is_initialized(void) {
@@ -495,7 +495,7 @@ void read_sector0_and_print(void)
     uint8_t buf[4096];   /* large enough pour la plupart des tailles de secteurs */
     memset(buf, 0, sec_size);
 
-    int ret = virtio_blk_read_sectors(virtio_mmio_base, &global_vq, /*sector=*/0, /*nsectors=*/1, buf, /*timeout_ms=*/5000);
+    int ret = virtio_blk_read_sectors(virtio_mmio_base, &global_vq, /*sector=*/0, /*nsectors=*/1, buf, /*timeout_ms=*/VIRTIO_BLOCK_TIMEOUT);
     if (ret != 0) {
         KERROR("virtio read sector 0 failed (ret=%d)\n", ret);
         return;

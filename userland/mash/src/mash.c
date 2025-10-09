@@ -11,7 +11,7 @@ extern int command_init(void);
 
 void my_handler(int sig) {
     const char msg[] = "Child: received SIGUSR1\n";
-    /* write est async-signal-safe */
+    /* write is async-signal-safe */
     write(1, msg, sizeof(msg)-1);
     exit(58);
 }
@@ -25,14 +25,14 @@ int test_kill(void) {
     
     pid = fork();
     if (pid == 0) {
-        /* Enfant - écrivain */
+        /* child - writer */
         //signal(SIGUSR1, my_handler);
             struct sigaction sa = {0};
 
-    /* Installer le handler pour SIGUSR1 avec SA_SIGINFO */
+    /* Install the handler for SIGUSR1 with SA_SIGINFO */
     sa.sa_handler = my_handler;
-    //sigemptyset(&sa.sa_mask);          /* aucun signal masqué pendant l'exécution du handler */
-    sa.sa_flags = SA_RESTART; /* SA_RESTART utile pour relancer certains syscalls */
+    //sigemptyset(&sa.sa_mask);          /* no signal masked during handler execution */
+    sa.sa_flags = SA_RESTART; /* SA_RESTART useful to restart certain syscalls */
 
     if (sigaction(SIGUSR1, &sa, NULL) == -1) {
         printf("     SIGACTION ERROR ... 0x%08X\n", my_handler);
@@ -53,7 +53,7 @@ int test_kill(void) {
         }
 
     } else {
-        /* Parent - lecteur */
+        /* Parent - reader */
         printf(" DAD will send a signal to son ...\n");
 
         for(int i=0; i<100000; i++)
@@ -91,20 +91,20 @@ int test_pipe(void) {
     
     pid = fork();
     if (pid == 0) {
-        /* Enfant - écrivain */
+        /* Child - writer */
         printf("     Child is writing message ...\n", pipefd[1]);
 
-        close(pipefd[0]);  /* Fermer lecture */
+        close(pipefd[0]);  /* Close read end */
         int nb = write(pipefd[1], "Hello from child!", 17);
         printf("     Child wrote %d chars in pipe ...\n", nb);
         close(pipefd[1]);
         printf("     Child returning ok ...\n");
         exit(0);
     } else {
-        /* Parent - lecteur */
+        /* Parent - reader */
         printf(" DAD is reading message in pipe ...\n");
 
-        close(pipefd[1]);  /* Fermer écriture */
+        close(pipefd[1]);  /* Close write end */
         /*for(int i=0; i<1000000; i++){
             for(int j=0; j<1000; j++);
             if( (i%10000) == 0)
@@ -167,28 +167,27 @@ int test_execve(void) {
 
         return(version+1);
     } 
-
 }
 
-// Afficher la bannière du shell
+// Display the shell banner
 void shell_print_banner(void) {
     printf("\n");
     printf("================================\n");
-    printf("    ARM32 Mini OS Shell v3.0    \n");
-    printf("   (avec support fork/exec)     \n");
+    printf("    ARM32 mash v1.0    \n");
+    printf("   (support fork/exec)     \n");
     printf("================================\n");
-    printf("Tapez 'help' pour voir les commandes disponibles\n");
+    printf("Type 'help' to see available commands\n");
     printf("\n");
 }
 
-// Afficher le prompt
+// Display the prompt
 void shell_print_prompt(void) {
-    printf("arm32os> ");
+    printf("mash$> ");
     pflush();
 }
 
 
-// Lire une ligne de commande
+// Read a command line
 char* shell_read_line(void) {
     int pos = 0;
     char c;
@@ -204,7 +203,7 @@ char* shell_read_line(void) {
                 pos--;
                 printf("\b \b");
             }
-        } else if (c >= ' ' && c <= '~') {  // Caractères imprimables
+        } else if (c >= ' ' && c <= '~') {  // Printable characters
             input_buffer[pos++] = c;
             putc_tty(c);
         }
@@ -216,13 +215,13 @@ char* shell_read_line(void) {
 }
 
 
-// Parser une ligne en arguments
+// Parse a line into arguments
 int shell_parse_line(char* line, char* argv[]) {
     int argc = 0;
     char* token = line;
     
     while (*token && argc < SHELL_MAX_ARGS - 1) {
-        // Ignorer les espaces
+        // Ignore spaces
         while (*token == ' ' || *token == '\t') {
             token++;
         }
@@ -232,8 +231,8 @@ int shell_parse_line(char* line, char* argv[]) {
         }
         
         argv[argc++] = token;
-        
-        // Trouver la fin du token
+
+        // Find the end of the token
         while (*token && *token != ' ' && *token != '\t') {
             token++;
         }
@@ -247,13 +246,13 @@ int shell_parse_line(char* line, char* argv[]) {
     return argc;
 }
 
-// Exécuter une commande
+// Execute a command
 int shell_execute(int argc, char* argv[]) {
     if (argc == 0) {
         return SHELL_OK;
     }
-    
-    // Commande exit intégrée
+
+    // Command exit built-in
     if (strcmp(argv[0], "exit") == 0) {
         printf("Au revoir!\n");
         shell_running = 0;
@@ -275,28 +274,28 @@ int shell_execute(int argc, char* argv[]) {
     
     int child_pid = fork();
     if (child_pid == 0) {
-        printf("                 ************ Child process running!\n");
+        //printf("                 ************ Child process running!\n");
             
         char* const argv[] = { cmd, NULL };
         char* const envp[] = { NULL };
             
         int result = execve(cmd , argv, envp);
-            
-        // Si on arrive ici, exec a échoué
-        printf("                 ************ Child: exec failed with %d\n", result);
+
+        // If we arrive here, exec failed
+        printf("exec %s failed with %d\n", cmd, result);
         exit(-1);
         
     } else {
 
         int status = 0;
         int waited_pid = waitpid(child_pid, &status, 0);
-        printf("SHELL waked up waited_pid %d, son status = %d\n", waited_pid, status);
+        //printf("SHELL waked up waited_pid %d, son status = %d\n", waited_pid, status);
 
         return(status);
     } 
 
 
-    // Commande inconnue
+    // Command unknown
     //printf("Commande inconnue: ");
     //printf(argv[0]);
     //printf("\n");
@@ -304,7 +303,7 @@ int shell_execute(int argc, char* argv[]) {
 }
 
 
-// Boucle principale du shell
+// Shell main loop
 void shell_run(void) {
     shell_print_banner();
     shell_running = 1;
@@ -326,7 +325,7 @@ void shell_run(void) {
         }
     }
     
-    printf("Shell ferme\n");
+    printf("Shell closed\n");
 }
 
 

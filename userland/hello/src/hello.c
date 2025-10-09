@@ -93,7 +93,7 @@ int test_pipe(void) {
         printf("     Child wrote %d chars in pipe ...\n", nb);
         close(pipefd[1]);
         printf("     Child returning ok ...\n");
-        exit(0);
+        exit(22);
     } else {
         /* Parent - lecteur */
         printf(" DAD is reading message in pipe ...\n");
@@ -165,7 +165,7 @@ int test_execve(void) {
 }
 
 int main() {
-    int version = 0 ;
+    int version = 99 ;
 
     test_pipe();
 

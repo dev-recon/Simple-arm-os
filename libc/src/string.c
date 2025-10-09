@@ -1,5 +1,16 @@
 #include <../include/string.h>
 #include <../include/stdio.h>
+#include <../include/errno.h>
+#include <../include/limits.h>
+
+static inline int is_space(char c) {
+    return (c == ' ' || c == '\t' || c == '\n' || 
+            c == '\r' || c == '\v' || c == '\f');
+}
+
+static inline int is_digit(char c) {
+    return (c >= '0' && c <= '9');
+}
 
 size_t strlen(const char* str) {
     const char* s = str;
@@ -202,4 +213,82 @@ char* strtok(char* str, const char* delim)
     }
     
     return token_start;
+}
+
+long strtol(const char* str, char** endptr, int base) {
+    long result = 0;
+    int sign = 1;
+    const char* start = str;
+    
+    if (!str) {
+        if (endptr) *endptr = NULL;
+        return 0;
+    }
+    
+    /* Ignorer les espaces */
+    while (is_space(*str)) str++;
+    
+    /* Signe */
+    if (*str == '-') {
+        sign = -1;
+        str++;
+    } else if (*str == '+') {
+        str++;
+    }
+    
+    /* Détection automatique de la base */
+    if (base == 0) {
+        if (*str == '0') {
+            if (str[1] == 'x' || str[1] == 'X') {
+                base = 16;
+                str += 2;
+            } else {
+                base = 8;
+                str++;
+            }
+        } else {
+            base = 10;
+        }
+    } else if (base == 16 && *str == '0' && 
+               (str[1] == 'x' || str[1] == 'X')) {
+        str += 2;
+    }
+    
+    /* Conversion */
+    while (*str) {
+        int digit;
+        
+        if (is_digit(*str)) {
+            digit = *str - '0';
+        } else if (*str >= 'a' && *str <= 'z') {
+            digit = *str - 'a' + 10;
+        } else if (*str >= 'A' && *str <= 'Z') {
+            digit = *str - 'A' + 10;
+        } else {
+            break;
+        }
+        
+        if (digit >= base) break;
+        
+        /* Vérifier le débordement */
+        if (result > (LONG_MAX - digit) / base) {
+            errno = ERANGE;
+            if (endptr) *endptr = (char*)str;
+            return (sign == 1) ? LONG_MAX : LONG_MIN;
+        }
+        
+        result = result * base + digit;
+        str++;
+    }
+    
+    if (endptr) {
+        *endptr = (char*)((str == start) ? start : str);
+    }
+    
+    return sign * result;
+}
+
+/* atoi en termes de strtol */
+int atoi(const char* str) {
+    return (int)strtol(str, NULL, 10);
 }

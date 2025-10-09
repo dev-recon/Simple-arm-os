@@ -69,6 +69,7 @@ struct process;
 #define __NR_getppid            119  /* Moved to avoid conflicts */
 #define __NR_print              121
 #define __NR_getdents           141
+#define __NR_nanosleep          162
 #define __NR_rt_sigreturn       173
 #define __NR_getcwd             183     /* getcwd */
 
@@ -109,6 +110,7 @@ int sys_kill(pid_t pid, int sig);
 int sys_signal(int sig, sig_handler_t handler);
 int sys_sigaction(int sig, const sigaction_t* act, sigaction_t* oldact);
 void sys_sigreturn(void);
+int sys_nanosleep(const timespec_t *req, timespec_t *rem);
 
 /* Memory syscalls */
 int sys_brk(void* addr);

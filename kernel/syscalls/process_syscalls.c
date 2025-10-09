@@ -8,6 +8,7 @@
 #include <kernel/userspace.h>
 #include <kernel/kprintf.h>
 #include <kernel/file.h>
+#include <kernel/timer.h>
 
 #define PIPE_BUF_SIZE 4096
 
@@ -476,6 +477,8 @@ int sys_getcwd(char* buf, size_t size)
         return -EFAULT;
     }
 
+    //KDEBUG("sys_getcwd: CWD = %s\n", task->process->cwd);
+
     size_t len = strlen(task->process->cwd);
 
     if(len == 0)
@@ -740,5 +743,56 @@ int sys_mkdir(const char* pathname, mode_t mode)
     return result;
 }
 
+
+int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
+    uint32_t sleep_ms;
+    uint32_t start_time, elapsed_time;
+    
+    if (!req) return -EFAULT;
+
+    //KDEBUG("sys_nanosleep: req->sec=%u, req->nsec=%u\n", req->sec, req->nsec);
+    
+    /* Convertir en millisecondes */
+    sleep_ms = req->sec * 350 + req->nsec / 1000000;
+
+    //KDEBUG("sys_nanosleep: sleep_ms=%u\n", sleep_ms);
+    
+    if (sleep_ms == 0) {
+        yield();  /* Juste céder le CPU */
+        return 0;
+    }
+    
+    start_time = get_system_ticks();
+    //KDEBUG("sys_nanosleep: start_time=%u\n", start_time);
+    
+    spin_lock(&task_lock);
+        /* Mettre le processus en sommeil */
+    current_task->state = TASK_INTERRUPTIBLE;
+    current_task->wakeup_time = start_time + sleep_ms;
+    current_task->context.returns_to_user = 0;
+    spin_unlock(&task_lock);
+    
+    yield();
+    
+    //KDEBUG("sys_nanosleep: woke up\n");
+
+    current_task->context.returns_to_user = 1;
+    yield();
+
+    /* Vérifier si réveillé par signal */
+    if (current_task->state == TASK_RUNNING && 
+        get_system_ticks() < current_task->wakeup_time) {
+        /* Réveillé prématurément par un signal */
+        if (rem) {
+            elapsed_time = get_system_ticks() - start_time;
+            uint32_t remaining_ms = sleep_ms - elapsed_time;
+            rem->sec = remaining_ms / 1000;
+            rem->nsec = (remaining_ms % 1000) * 1000000;
+        }
+        return -EINTR;
+    }
+    
+    return 0;
+}
 
 

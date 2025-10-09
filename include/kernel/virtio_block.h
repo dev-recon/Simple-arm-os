@@ -13,6 +13,8 @@
 #define VIRTIO_BLOCK_IRQ        VIRT_VIRTIO_BLOCK_IRQ   /* IRQ 17 */
 #define VIRTIO_BLOCK_SIZE       VIRT_VIRTIO_SIZE        /* 512 bytes */
 
+#define VIRTIO_BLOCK_TIMEOUT    1000    /* Timeout for block operations - 1s */
+
 /* Registres VirtIO MMIO (offsets depuis base) */
 #define VIRTIO_REG_MAGIC        0x000   /* Magic value */
 #define VIRTIO_REG_VERSION      0x004   /* Version */

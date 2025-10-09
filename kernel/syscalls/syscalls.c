@@ -47,6 +47,7 @@ static syscall_func_t syscall_table[256] = {
     [__NR_stat] = (syscall_func_t)sys_stat,
     [__NR_fstat] = (syscall_func_t)sys_fstat,
     [__NR_getdents] = (syscall_func_t)sys_getdents,
+    [__NR_nanosleep] = (syscall_func_t)sys_nanosleep,
 
 };
 
@@ -529,6 +530,7 @@ void sys_exit(int status)
 int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
 {
     task_t* zombie = NULL;
+    //uint32_t iteration = 1;
     
     (void)options;
     
@@ -563,6 +565,8 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
             zombie->process->state = (proc_state_t)PROC_DEAD;
             destroy_process(zombie);
             
+            KDEBUG("kernel_waitpid: Returning PID %u with exit code %d\n", child_pid, exit_code);
+
             return child_pid;
         }
         
@@ -587,8 +591,12 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
 
         remove_from_ready_queue(parent);
 
-        yield();
-        
+        //KDEBUG("kernel_waitpid: Parent PID %u going to sleep, waiting for child PID %d\n", 
+        //       parent->process->pid, pid);
+
+        // Parent is temporarily restoring to kernel to not resuming too early to user
+        yield(); 
+
         //KDEBUG("kernel_waitpid: Parent PID %u resumed\n", parent->process->pid);
     }
     
@@ -606,15 +614,9 @@ int sys_waitpid(pid_t pid, int* status, int options)
 
     task_t *parent = current_task;
 
-    //debug_print_ctx(&parent->context, "--->>> SYS_WAITPID START");
 
-
-    bool from_user = parent->context.returns_to_user ? true : false;
-    if(from_user){
-        //parent->context.returns_to_user = 0 ;  // FIX IT
-        // Parent is temporarily restoring to kernel to not resuming too early to user 
-               //yield();
-    }
+    //parent->context.returns_to_user = 0;
+    //yield();
 
     int exit_code;
     pid_t result = kernel_waitpid(pid, &exit_code, options, parent);
@@ -626,14 +628,8 @@ int sys_waitpid(pid_t pid, int* status, int options)
         }
     }
 
-    //debug_print_ctx(&parent->context, "---->>> SYS_WAITPID AFTER KERNEL_WAITPID");
-
-    if(from_user){
-        parent->defer_return_to_user = 1 ;  // FIX IT
-        //yield();
-        // Parent is temporarily restoring to kernel to not resuming to user too early
-    }
-
+    //parent->context.returns_to_user = 1;
+    //yield();
     //KDEBUG("sys_waitpid: returning to callee  = %d\n", sys_getppid());
 
     

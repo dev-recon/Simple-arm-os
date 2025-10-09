@@ -736,6 +736,11 @@ void check_pending_signals(void)
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
 
     //KDEBUG("[SIGNAL] entered check_pending_signals PID=%u - TTBR0 = 0x%08X\n", proc->process->pid, (uint32_t)proc->process->vm->pgdir);
+
+    if( proc->state == TASK_UNINTERRUPTIBLE ){
+        //KDEBUG("[SIGNAL] process in TASK_UNINTERRUPTIBLE PID=%u - skipping\n", proc->process->pid);
+        return;
+    }
     
     sig = &proc->process->signals;
     

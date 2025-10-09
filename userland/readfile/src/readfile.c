@@ -70,6 +70,11 @@ void test_chdir() {
         //char cwd[256] ;
         char *cwd = NULL;
         cwd = getcwd(NULL, 0);
+
+        if(!cwd) {
+            printf("getcwd failed\n");
+            return;
+        }   
       
         printf("Current Working Directory is %s, 0x%08X\n", cwd, cwd);
 
@@ -84,7 +89,7 @@ void test_chdir() {
         free(cwd);
 
             // Créer un fichier de test 
-        fd = open(path, O_CREAT , 0644);
+        fd = open(path, O_CREAT | O_WRONLY, 0644);
         printf("AFTER OPEN fd = %d for filepath = %s\n", fd, path);
         if (fd >= 0) {
 
@@ -227,6 +232,8 @@ int main() {
     //test_unlink();
 
     test_cpfile();
+
+    test_chdir();
 
     //test_stat();
 

@@ -16,7 +16,7 @@ struct file;
 #define TASK_NAME_MAX           32              /* Longueur max du nom */
 #define MAX_SIGNALS             32
 
-#define QUANTUM_TICKS           10
+#define QUANTUM_TICKS           10 
 
 /* Forward declarations for structures */
 typedef struct inode inode_t;
@@ -109,7 +109,9 @@ typedef enum {
     TASK_RUNNING,           /* En cours d'execution */
     TASK_BLOCKED,           /* Bloquee (I/O, sleep, etc.) */
     TASK_ZOMBIE,            /* Terminee, en attente de nettoyage */
-    TASK_TERMINATED         /* Completement terminee */
+    TASK_TERMINATED,        /* Completement terminee */
+    TASK_INTERRUPTIBLE,     /* Bloquee mais peut etre reveillee par un signal */
+    TASK_UNINTERRUPTIBLE    /* Bloquee, ne peut pas etre reveillee */
 } task_state_t;
 
 typedef enum {
@@ -117,7 +119,9 @@ typedef enum {
     PROC_RUNNING,
     PROC_BLOCKED,
     PROC_ZOMBIE,
-    PROC_DEAD
+    PROC_DEAD,
+    PROC_INTERRUPTIBLE,
+    PROC_UNINTERRUPTIBLE
 } proc_state_t;
 
 typedef enum {
@@ -247,6 +251,7 @@ typedef struct task {
     uint64_t created_time;                  /* Timestamp de creation */
     uint64_t total_runtime;                 /* Temps total d'execution */
     uint32_t switch_count;                  /* Nombre de commutations */
+    uint32_t wakeup_time;                  /* Temps de reveil (ms) */
     
     /* === EXTENSIONS PROCESSUS === */
     task_type_t type;               /* Type de tache */

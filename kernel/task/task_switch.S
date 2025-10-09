@@ -116,9 +116,9 @@ __task_switch:
     stmia   r0, {r0-r12}                   // save r0..r12
 
     /* Retourne-t-on en mode utilisateur ? */
-    ldr     r2, [r0, #CTX_RET_TO_USER]
-    cmp     r2, #1
-    beq     __user_ctx
+    //ldr     r2, [r0, #CTX_RET_TO_USER]
+    //cmp     r2, #1
+    //beq     __user_ctx
 
     str     sp, [r0, #CTX_SP]              // sp courant (pile kernel de la tâche)
     str     sp, [r0, #CTX_SVC_SP]          // sp courant (pile kernel de la tâche)
@@ -155,6 +155,8 @@ __load_new_context:
     str    r3, [r2]
     dmb
 
+    /* -- fin update current_task -- */
+
     /* Première exécution ? */
     ldr     r2, [r12, #CTX_FIRST]
     cmp     r2, #1
@@ -171,7 +173,8 @@ __restore_to_kernel:
     ldr     r2, [r12, #CTX_CPSR]
     msr     cpsr_cxsf, r2
     ldr     lr, [r12, #CTX_LR]
-    ldmia   r12, {r0-r12}                  // r0..r12 depuis le contexte
+    ldmia   r12, {r0-r11}              /* Restaurer r0-r11 */
+    ldr     r12, [r12, #CTX_R12]       /* Restaurer r12 */
     bx      lr
 
     /* ---------- RESTORE USER (tâche user suspendue) ---------- */
@@ -200,7 +203,7 @@ __restore_to_user:
     ldr     r10, [r12, #CTX_USR_R10]
 
     /* 4) LR_svc = usr_pc (pair en ARM) */
-    ldr     lr, [r12, #CTX_USR_LR]
+    ldr     lr, [r12, #CTX_USR_PC]
     //bic     lr, lr, #1
 
     /* 5) Restaurer r11 puis r12 à la toute fin */

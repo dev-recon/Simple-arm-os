@@ -359,10 +359,13 @@ void wakeup_parent(task_t *proc){
                 
                 /* Ajouter le parent a la ready queue */
                 add_to_ready_queue(parent);
-                //KDEBUG("sys_exit: Parent PID=%u added to ready queue\n", 
-                //       parent->process->pid);
+                //KDEBUG("sys_exit: Parent %s PID=%u added to ready queue, son %s pid =%u, exit code =%d\n", 
+                //    parent->name, parent->process->pid, proc->name, proc->process->pid, *parent->process->waitpid_status);
                 //debug_print_ctx(&parent->context, "SYS_EXIT");
-                schedule_to(parent);
+
+                yield();
+                //schedule_to(parent);
+
 
             } else {
                 KINFO("sys_exit: Parent waiting for different PID (%d vs %u)\n", 

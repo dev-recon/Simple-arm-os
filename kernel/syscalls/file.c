@@ -269,7 +269,7 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     file->flags = flags;
 
     if (flags & O_APPEND) {
-        KDEBUG("APPEND FLAG DETECTED offset = %d...\n", inode->size);
+        //KDEBUG("APPEND FLAG DETECTED offset = %d...\n", inode->size);
         file->offset = inode->size;
     }
     else {

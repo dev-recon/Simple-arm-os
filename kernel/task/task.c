@@ -202,12 +202,12 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
                     }
                 }
 
-                //KDEBUG("Stack address corrections: %u pointers fixed\n", corrections);
+                KDEBUG("Stack address corrections: %u pointers fixed\n", corrections);
                 
-                //KDEBUG("Child stack analysis:\n");
-                //KDEBUG("  Child stack: %p - %p\n", child->stack_base, child->stack_top);
-                //KDEBUG("  Child SP: 0x%08X\n", child->context.sp);
-                //KDEBUG("  Copied stack with SP offset %u from top\n", parent_sp_offset_from_top);
+                KDEBUG("Child stack analysis:\n");
+                KDEBUG("  Child stack: %p - %p\n", child->stack_base, child->stack_top);
+                KDEBUG("  Child SP: 0x%08X\n", child->context.sp);
+                KDEBUG("  Copied stack with SP offset %u from top\n", parent_sp_offset_from_top);
             }
         } else {
             /* Pile propre si parent invalide */
@@ -225,7 +225,7 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
     
     /*  Alignement final */
     child->context.sp &= ~7;  /* Alignement 8-bytes */
-    child->context.svc_sp &= ~7u;
+    child->context.svc_sp &= ~7;
 
     return child;
 
@@ -286,6 +286,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             child->process->exit_code = 0;
             child->process->uid = parent->process->uid;
             child->process->gid = parent->process->gid;
+            strcpy(child->process->cwd, parent->process->cwd);    // Setting Current Working Directory
             
             /* Initialiser la table des fichiers (sera copiee plus tard) */
             memset(child->process->files, 0, sizeof(child->process->files));
@@ -311,6 +312,9 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->switch_count = 0;
     child->context.is_first_run = 1;
     child->context.r0 = 0;
+    child->wakeup_time = 0;
+    child->quantum_left = QUANTUM_TICKS;
+    child->defer_return_to_user = 0;
 
     return child;
 }
@@ -705,6 +709,8 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
 
     task->quantum_left = QUANTUM_TICKS;
     task->defer_return_to_user = 0;
+    task->wakeup_time = 0;
+    task->process = NULL;  /* Par defaut, pas de processus associe */
 
     //debug_context_registers(&task->context, "AFTER_setup_task_context");
     
@@ -931,7 +937,7 @@ void yield(void)
     }
     spin_unlock(&task_lock);
 
-    task_sleep_ms(500);  // Pause a bit to avoid race conditions.
+    //task_sleep_ms(500);  // Pause a bit to avoid race conditions.
 
     //KDEBUG("Task %s is yielding...\n", current_task->name);
     
@@ -1112,7 +1118,29 @@ void switch_to_idle(void){
     __task_switch(NULL, &idle_task->context);
 }
 
+static void for_each_task(task_t* current)
+{
+    task_t* task = current->next;
+    uint32_t current_time = get_system_ticks();
+    int count = 0;
+    
+    /* Chercher la prochaine tache READY avec la meme priorite */
+    do {
+        if (task->state == TASK_INTERRUPTIBLE && 
+            task->wakeup_time > 0 &&
+            current_time >= task->wakeup_time) {
 
+            //KDEBUG("Waking up task %s from sleep\n", task->name);
+            
+            task->state = TASK_READY;
+            task->wakeup_time = 0;
+        }
+        task = task->next;
+        count++;
+    } while (task != current && count < MAX_TASKS);
+    
+    return ;  /* Pas d'autre tache de meme priorite */
+}
 
 void schedule(void)
 {
@@ -1132,6 +1160,8 @@ void schedule(void)
 
     //KDEBUG("=== SCHED ==== get_cpu_mode = 0X%02X ==========\n", get_cpu_mode());
     if( get_cpu_mode() == ARM_MODE_IRQ ) return;
+
+    for_each_task(current_task);
 
     //KDEBUG("=== SCHED ==================\n");
     
@@ -1288,6 +1318,7 @@ void schedule(void)
 
     unset_critical_section();
     /* === CRITIACL POINT === */
+
     __task_switch(&current_task->context, &next_task->context);
 
     restore_interrupts(irq_flags);
@@ -1309,6 +1340,8 @@ void schedule_to(task_t *next_task)
 
     //KDEBUG("=== SCHED ==== get_cpu_mode = 0X%02X ==========\n", get_cpu_mode());
     if( get_cpu_mode() == ARM_MODE_IRQ ) return;
+
+    for_each_task(current_task);
 
     //KDEBUG("=== SCHED ==================\n");
     
