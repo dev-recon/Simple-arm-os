@@ -1971,6 +1971,9 @@ static int fat32_dir_readdir(file_t* file, dirent_t* dirent)
     uint32_t cluster = dir_inode->first_cluster;
     uint32_t target_entry = file->offset;
     uint32_t entry_count = 0;
+    char lfn_name[FAT32_MAX_FILENAME + 1];
+    uint8_t lfn_checksum = 0;
+    bool lfn_pending = false;
     
     if (!S_ISDIR(dir_inode->mode)) {
         KDEBUG("[READDIR] Not a directory (mode: 0x%04X)\n", dir_inode->mode);
@@ -1978,6 +1981,7 @@ static int fat32_dir_readdir(file_t* file, dirent_t* dirent)
     }
     
     //KDEBUG("[READDIR] cluster=%u target=%u inode=%p\n", cluster, target_entry, dir_inode);
+    fat32_lfn_clear(lfn_name, sizeof(lfn_name));
     
     /* Parcourir les clusters du repertoire */
     while (cluster && cluster >= 2 && cluster < 0x0FFFFFF8) {
@@ -2011,8 +2015,36 @@ static int fat32_dir_readdir(file_t* file, dirent_t* dirent)
                 return 0;
             }
             
-            /* Ignorer les entrees supprimees et LFN */
-            if (entry->name[0] == 0xE5 || entry->attr == FAT_ATTR_LFN) {
+            /* Ignorer les entrees supprimees */
+            if (entry->name[0] == 0xE5) {
+                lfn_pending = false;
+                fat32_lfn_clear(lfn_name, sizeof(lfn_name));
+                continue;
+            }
+
+            if (IS_LONG_NAME(entry->attr)) {
+                fat32_lfn_entry_t* lfn = (fat32_lfn_entry_t*)entry;
+
+                if (lfn->order & 0x40) {
+                    fat32_lfn_clear(lfn_name, sizeof(lfn_name));
+                    lfn_checksum = lfn->checksum;
+                    lfn_pending = true;
+                }
+
+                if (lfn_pending &&
+                    lfn->checksum == lfn_checksum &&
+                    fat32_lfn_decode_entry(lfn, lfn_name, sizeof(lfn_name)) == 0) {
+                    continue;
+                }
+
+                lfn_pending = false;
+                fat32_lfn_clear(lfn_name, sizeof(lfn_name));
+                continue;
+            }
+
+            if (entry->attr & FAT_ATTR_VOLUME_ID) {
+                lfn_pending = false;
+                fat32_lfn_clear(lfn_name, sizeof(lfn_name));
                 continue;
             }
             
@@ -2022,8 +2054,14 @@ static int fat32_dir_readdir(file_t* file, dirent_t* dirent)
                 dirent->d_ino = (entry->first_cluster_hi << 16) | entry->first_cluster_lo;
                 dirent->d_type = (entry->attr & FAT_ATTR_DIRECTORY) ? DT_DIR : DT_REG;
                 
-                /* Convertir le nom 8.3 */
-                fat32_83_to_name((char*)entry->name, dirent->d_name);
+                if (lfn_pending &&
+                    fat32_lfn_matches_short(lfn_name, lfn_checksum, entry)) {
+                    strncpy(dirent->d_name, lfn_name, sizeof(dirent->d_name) - 1);
+                    dirent->d_name[sizeof(dirent->d_name) - 1] = '\0';
+                } else {
+                    /* Convertir le nom 8.3 */
+                    fat32_83_to_name((char*)entry->name, dirent->d_name);
+                }
                 dirent->d_reclen = sizeof(dirent_t);
                 
                 /* Incrementer l'offset pour la prochaine lecture */
@@ -2034,6 +2072,8 @@ static int fat32_dir_readdir(file_t* file, dirent_t* dirent)
             }
             
             entry_count++;
+            lfn_pending = false;
+            fat32_lfn_clear(lfn_name, sizeof(lfn_name));
         }
         
         kfree(cluster_buf);

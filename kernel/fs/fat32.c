@@ -446,6 +446,9 @@ fat32_dir_entry_t* fat32_find_file(uint32_t dir_cluster, const char* filename)
     fat32_dir_entry_t* entry;
     char entry_name[13];
     fat32_dir_entry_t* result;
+    char lfn_name[FAT32_MAX_FILENAME + 1];
+    uint8_t lfn_checksum = 0;
+    bool lfn_pending = false;
 
 
     if( is_dirty_inodes() ){
@@ -479,15 +482,46 @@ fat32_dir_entry_t* fat32_find_file(uint32_t dir_cluster, const char* filename)
             }
             
             /* Deleted entry */
-            if (entry->name[0] == 0xE5) continue;
+            if (entry->name[0] == 0xE5) {
+                lfn_pending = false;
+                fat32_lfn_clear(lfn_name, sizeof(lfn_name));
+                continue;
+            }
             
             /* LFN entry */
-            if (entry->attr == FAT_ATTR_LFN) continue;
+            if (IS_LONG_NAME(entry->attr)) {
+                fat32_lfn_entry_t* lfn = (fat32_lfn_entry_t*)entry;
+
+                if (lfn->order & 0x40) {
+                    fat32_lfn_clear(lfn_name, sizeof(lfn_name));
+                    lfn_checksum = lfn->checksum;
+                    lfn_pending = true;
+                }
+
+                if (lfn_pending &&
+                    lfn->checksum == lfn_checksum &&
+                    fat32_lfn_decode_entry(lfn, lfn_name, sizeof(lfn_name)) == 0) {
+                    continue;
+                }
+
+                lfn_pending = false;
+                fat32_lfn_clear(lfn_name, sizeof(lfn_name));
+                continue;
+            }
+
+            if (entry->attr & FAT_ATTR_VOLUME_ID) {
+                lfn_pending = false;
+                fat32_lfn_clear(lfn_name, sizeof(lfn_name));
+                continue;
+            }
             
             /* Convert name and compare */
             fat32_83_to_name(entry->name, entry_name);
             
-            if (strcmp(entry_name, filename) == 0) {
+            if ((lfn_pending &&
+                 fat32_lfn_matches_short(lfn_name, lfn_checksum, entry) &&
+                 fat32_name_equals(lfn_name, filename)) ||
+                fat32_name_equals(entry_name, filename)) {
                 result = kmalloc(sizeof(fat32_dir_entry_t));
                 if (result) {
                     memcpy(result, entry, sizeof(fat32_dir_entry_t));
@@ -495,6 +529,9 @@ fat32_dir_entry_t* fat32_find_file(uint32_t dir_cluster, const char* filename)
                 kfree(cluster_buf);
                 return result;
             }
+
+            lfn_pending = false;
+            fat32_lfn_clear(lfn_name, sizeof(lfn_name));
         }
         
         kfree(cluster_buf);
@@ -502,6 +539,86 @@ fat32_dir_entry_t* fat32_find_file(uint32_t dir_cluster, const char* filename)
     }
     
     return NULL;
+}
+
+uint8_t fat32_lfn_checksum(const char fat_name[11])
+{
+    uint8_t sum = 0;
+
+    for (int i = 0; i < 11; i++) {
+        sum = ((sum & 1) ? 0x80 : 0) + (sum >> 1) + (uint8_t)fat_name[i];
+    }
+
+    return sum;
+}
+
+void fat32_lfn_clear(char* lfn, size_t len)
+{
+    if (!lfn || len == 0) return;
+    memset(lfn, 0, len);
+}
+
+static void fat32_lfn_store_char(char* lfn, size_t len, size_t pos, uint16_t ch)
+{
+    if (!lfn || pos >= len - 1) return;
+
+    if (ch == 0x0000 || ch == 0xFFFF) {
+        return;
+    }
+
+    lfn[pos] = (ch < 0x80) ? (char)ch : '?';
+}
+
+int fat32_lfn_decode_entry(const fat32_lfn_entry_t* entry, char* lfn, size_t len)
+{
+    uint8_t order;
+    size_t pos;
+
+    if (!entry || !lfn || len == 0 || entry->attr != FAT_ATTR_LFN ||
+        entry->type != 0 || entry->first_cluster != 0) {
+        return -EINVAL;
+    }
+
+    order = entry->order & 0x1F;
+    if (order == 0) {
+        return -EINVAL;
+    }
+
+    pos = (order - 1) * 13;
+    if (pos >= len) {
+        return -EINVAL;
+    }
+
+    for (int i = 0; i < 5; i++)
+        fat32_lfn_store_char(lfn, len, pos++, entry->name1[i]);
+    for (int i = 0; i < 6; i++)
+        fat32_lfn_store_char(lfn, len, pos++, entry->name2[i]);
+    for (int i = 0; i < 2; i++)
+        fat32_lfn_store_char(lfn, len, pos++, entry->name3[i]);
+
+    lfn[len - 1] = '\0';
+    return 0;
+}
+
+bool fat32_lfn_matches_short(const char* lfn, uint8_t checksum, const fat32_dir_entry_t* entry)
+{
+    return lfn && lfn[0] != '\0' && entry &&
+           checksum == fat32_lfn_checksum(entry->name);
+}
+
+bool fat32_name_equals(const char* a, const char* b)
+{
+    if (!a || !b) return false;
+
+    while (*a && *b) {
+        if (tolower(*a) != tolower(*b)) {
+            return false;
+        }
+        a++;
+        b++;
+    }
+
+    return *a == '\0' && *b == '\0';
 }
 
 void fat32_83_to_name(const char* fat_name, char* output)
