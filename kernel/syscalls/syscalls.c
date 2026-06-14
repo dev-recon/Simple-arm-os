@@ -66,7 +66,8 @@ extern int load_elf_segments(inode_t* inode, elf32_ehdr_t* elf_header, vm_space_
 extern int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm);
 extern int setup_user_stack(vm_space_t* vm, char** argv, char** envp);
 extern int count_strings(char** strings);
-extern char** setup_stack_strings(char** strings, char** stack_ptr);
+extern char** setup_stack_strings(char** strings, char** stack_ptr, int count,
+                                  uint32_t temp_stack, uint32_t user_stack_page);
 extern void copy_string_array(char** src, char** dest, int count);
 extern void orphan_children(task_t* proc);
 extern void switch_to_idle_stack(void);
@@ -338,7 +339,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     /* Remplacer l'espace memoire - ACCeS CORRECT */
     destroy_vm_space(old_vm);
     proc->process->vm = new_vm;
-    
+
     /* Reinitialiser le contexte CPU - ADAPTe a VOTRE STRUCTURE */
     memset(&proc->context, 0, sizeof(task_context_t));
 
@@ -359,8 +360,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     /* Configuration USER - CORRECTION CRITIQUE */
     proc->context.usr_pc = elf_header.e_entry;         /* Point d'entrée USER */
     //proc->context.usr_sp = new_vm->stack_start + USER_STACK_SIZE - 512;        /* Stack USER */
-    proc->context.usr_sp = new_vm->stack_start;        /* Stack USER updated by */
-    proc->context.usr_sp &= ~7;
+    proc->context.usr_sp = new_vm->stack_start;        /* Points at argc for crt0 */
     proc->context.usr_cpsr = 0x60000010;               /* MODE USER + IRQ enabled */
 
     /* Arguments initiaux (argc, argv, etc.) */

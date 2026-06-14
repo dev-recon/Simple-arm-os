@@ -1,6 +1,6 @@
 # Makefile principal pour tous les programmes userspace
 
-PROGRAMS = ansy_tty hello malloc mash readfile systest term_dmo
+PROGRAMS = ansy_tty coreutils hello malloc mash readfile systest term_dmo
 
 BUILD_DIR = ../build
 LIBC_DIR = ../libc

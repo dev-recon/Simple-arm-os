@@ -50,7 +50,8 @@ int strnlen_user(const char* str, int maxlen);
 
 int count_strings(char** strings);
 
-char** setup_stack_strings(char** strings, char** stack_ptr);
+char** setup_stack_strings(char** strings, char** stack_ptr, int count,
+                           uint32_t temp_stack, uint32_t user_stack_page);
 void copy_string_array(char** src, char** dest, int count);
 int unmap_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t asid);
 

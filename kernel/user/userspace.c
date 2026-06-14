@@ -397,7 +397,8 @@ int count_strings(char** strings)
     return count;
 }
 
-char** setup_stack_strings(char** strings, char** stack_ptr, int count)
+char** setup_stack_strings(char** strings, char** stack_ptr, int count,
+                           uint32_t temp_stack, uint32_t user_stack_page)
 {
     if (!strings) return NULL;
     
@@ -419,7 +420,7 @@ char** setup_stack_strings(char** strings, char** stack_ptr, int count)
         
         // Copier la string
         strcpy(*stack_ptr, strings[i]);
-        result[i] = *stack_ptr;  // Pointeur vers la string sur la pile
+        result[i] = (char*)(user_stack_page + ((uint32_t)*stack_ptr - temp_stack));
     }
     
     return result;
@@ -539,8 +540,8 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
     //KDEBUG("After count_strings\n");    
     
     /* Setup stack layout */
-    stack_argv = setup_stack_strings(argv, &stack_ptr, argc);
-    stack_envp = setup_stack_strings(envp, &stack_ptr, envc);
+    stack_argv = setup_stack_strings(argv, &stack_ptr, argc, temp_stack, stack_top_page);
+    stack_envp = setup_stack_strings(envp, &stack_ptr, envc, temp_stack, stack_top_page);
 
     //KDEBUG("After setup_stack_strings\n");     
     

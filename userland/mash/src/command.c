@@ -17,7 +17,6 @@ static int command_count = 0;
 
 // Command functions (declarations)
 static int cmd_help(int argc, char* argv[]);
-static int cmd_echo(int argc, char* argv[]);
 static int cmd_touch(int argc, char* argv[]);
 static int cmd_rm(int argc, char* argv[]);
 static int cmd_write(int argc, char* argv[]);
@@ -30,9 +29,7 @@ static int cmd_ps(int argc, char* argv[]);
 static int cmd_yield(int argc, char* argv[]);
 static int cmd_fork_test(int argc, char* argv[]);
 static int cmd_pstree(int argc, char* argv[]);
-static int cmd_pwd(int argc, char* argv[]);
 static int cmd_ls(int argc, char *argv[]);
-static int cmd_cat(int argc, char *argv[]);
 static int cmd_cd(int argc, char *argv[]);
 static int cmd_sleep(int argc, char *argv[]);
 static int cmd_mkdir(int argc, char *argv[]);
@@ -51,9 +48,8 @@ int command_init(void) {
     }
     command_count = 0;
     
-    // Register basic commands (except ls and cat which are now executables)
+    // Register builtins; simple stateless commands live in /bin.
     register_command("help", "Display this help", cmd_help);
-    register_command("echo", "Display text", cmd_echo);
     register_command("touch", "Create an empty file", cmd_touch);
     register_command("rm", "Delete a file", cmd_rm);
     register_command("write", "Write to a file", cmd_write);
@@ -66,9 +62,7 @@ int command_init(void) {
     register_command("yield", "Yield the CPU", cmd_yield);
     register_command("fork", "Test fork()", cmd_fork_test);
     register_command("yield", "Yield the CPU", cmd_yield);
-    register_command("pwd", "Display current directory", cmd_pwd);
     register_command("ls", "List files or directories", cmd_ls);
-    register_command("cat", "Read the contents of a file", cmd_cat);
     register_command("cd", "Change the current directory", cmd_cd);
     register_command("sleep", "Sleep for a specified time", cmd_sleep);
     register_command("mkdir", "Create a directory", cmd_mkdir);
@@ -220,37 +214,6 @@ static int cmd_cd(int argc, char* argv[]) {
 
 }
 
-static int cmd_cat(int argc, char* argv[]) {
-    char buffer[256];
-    int n;
-
-    if (argc < 2) {
-        while ((n = read(STDIN_FILENO, buffer, sizeof(buffer))) > 0) {
-            if (write(STDOUT_FILENO, buffer, n) != n)
-                return 1;
-        }
-        return n < 0 ? 1 : 0;
-    }
-
-    int fd = open(argv[1], O_RDONLY , 0);
-    if(fd >= 0) {
-        struct stat st;
-        fstat(fd, &st);
-        int i = 0;
-        char *buffer = malloc(st.st_size+1);
-        read(fd, buffer, st.st_size);
-        while( i < st.st_size)
-            putc_tty(buffer[i++]);
-        close(fd);
-        free(buffer);
-    } else {
-        printf("Error: %d\n", fd);
-        return fd;
-    }
-    
-    return 0;
-}
-
 // Simple implementation of 'ls' command using getdents syscall
 /* Construit la chaîne de permissions rwxrwxrwx à partir de st_mode. */
 static void ls_perm_string(mode_t mode, char *out) {
@@ -374,27 +337,9 @@ static int cmd_ls(int argc, char *argv[]) {
     return 0;
 }
 
-// === Implementation of commands ===
-static int cmd_pwd(int argc, char* argv[]) {
-    (void)argc; (void)argv;
-    printf("%s\n", getcwd(NULL, 0));
-    return 0;
-}
-
 static int cmd_help(int argc, char* argv[]) {
     (void)argc; (void)argv;
     list_commands();
-    return 0;
-}
-
-static int cmd_echo(int argc, char* argv[]) {
-    for (int i = 1; i < argc; i++) {
-        printf(argv[i]);
-        if (i < argc - 1) {
-            printf(" ");
-        }
-    }
-    printf("\n");
     return 0;
 }
 

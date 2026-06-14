@@ -4,12 +4,18 @@
 .global _start
 
 _start:
-    /* Point d'entrée depuis le kernel */
-    
-    /* Initialiser la pile si nécessaire */
-    /* (normalement déjà configurée par le kernel) */
-    
-    /* Appeler main() */
+    /* Stack layout prepared by the kernel:
+     *   sp[0]        = argc
+     *   sp[1..]      = argv pointers, NULL terminated
+     *   after argv   = envp pointers, NULL terminated
+     */
+    ldr r0, [sp]          /* argc */
+    add r1, sp, #4        /* argv */
+    add r2, r1, r0, lsl #2
+    add r2, r2, #4        /* envp = argv + argc + NULL */
+    bic sp, sp, #7        /* keep AAPCS 8-byte stack alignment for main */
+
+    /* Appeler main(argc, argv, envp) */
     bl main
     
     /* Si main() retourne, appeler exit() */
@@ -31,4 +37,3 @@ _start_with_args:
     /* exit(retval) */
     bl exit
     b .
-    
