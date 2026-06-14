@@ -24,6 +24,7 @@ void exit(int status) __attribute__((noreturn));
 int mkdir(const char* path, int flags);
 int rmdir(const char* path);
 int unlink(const char* pathname);
+int rename(const char* oldpath, const char* newpath);
 
 /* Informations processus (temporaire — sera remplacé par /proc) */
 struct proc_info {

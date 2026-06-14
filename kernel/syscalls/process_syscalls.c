@@ -663,6 +663,63 @@ int sys_unlink(const char* pathname)
 }
 
 
+int sys_rename(const char* oldpath, const char* newpath)
+{
+    char *old_kpath, *new_kpath;
+    char *old_full, *new_full;
+    char *old_parent_path, *old_name;
+    char *new_parent_path, *new_name;
+    inode_t *old_parent, *new_parent;
+    int result;
+
+    old_kpath = copy_string_from_user(oldpath);
+    if (!old_kpath) return -EFAULT;
+
+    new_kpath = copy_string_from_user(newpath);
+    if (!new_kpath) { kfree(old_kpath); return -EFAULT; }
+
+    old_full = resolve_path(old_kpath); kfree(old_kpath);
+    if (!old_full) { kfree(new_kpath); return -ENOENT; }
+
+    new_full = resolve_path(new_kpath); kfree(new_kpath);
+    if (!new_full) { kfree(old_full); return -ENOENT; }
+
+    result = split_path(old_full, &old_parent_path, &old_name);
+    if (result != 0) { kfree(old_full); kfree(new_full); return result; }
+
+    result = split_path(new_full, &new_parent_path, &new_name);
+    if (result != 0) {
+        kfree(old_full); kfree(new_full);
+        kfree(old_parent_path); kfree(old_name);
+        return result;
+    }
+
+    old_parent = path_lookup(old_parent_path);
+    if (!old_parent) { result = -ENOENT; goto out; }
+
+    new_parent = path_lookup(new_parent_path);
+    if (!new_parent) { put_inode(old_parent); result = -ENOENT; goto out; }
+
+    if (!old_parent->i_op || !old_parent->i_op->rename) {
+        result = -ENOSYS;
+    } else if (!inode_permission(new_parent, MAY_WRITE)) {
+        result = -EACCES;
+    } else {
+        result = old_parent->i_op->rename(old_parent, old_name,
+                                          new_parent, new_name);
+    }
+
+    put_inode(old_parent);
+    put_inode(new_parent);
+
+out:
+    kfree(old_full); kfree(new_full);
+    kfree(old_parent_path); kfree(old_name);
+    kfree(new_parent_path); kfree(new_name);
+    return result;
+}
+
+
 int sys_rmdir(const char* pathname)
 {
     char* kernel_path;

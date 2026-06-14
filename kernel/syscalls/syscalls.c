@@ -36,6 +36,7 @@ static syscall_func_t syscall_table[256] = {
     [__NR_print] = (syscall_func_t)sys_print,
     [__NR_rt_sigreturn] = (syscall_func_t)sys_sigreturn,
     [__NR_brk] = (syscall_func_t)sys_brk,
+    [__NR_rename] = (syscall_func_t)sys_rename,
     [__NR_mkdir] = (syscall_func_t)sys_mkdir,
     [__NR_rmdir] = (syscall_func_t)sys_rmdir,
     [__NR_unlink] = (syscall_func_t)sys_unlink,

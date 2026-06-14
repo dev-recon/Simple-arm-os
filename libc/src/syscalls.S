@@ -50,6 +50,7 @@ SYSCALL sys_write, 4        /* __NR_write */
 SYSCALL sys_open, 5         /* __NR_open */
 SYSCALL sys_close, 6        /* __NR_close */
 SYSCALL sys_lseek, 19       /* __NR_lseek */
+SYSCALL sys_rename, 38      /* __NR_rename */
 SYSCALL sys_mkdir, 39       /* __NR_mkdir */
 SYSCALL sys_rmdir, 40       /* __NR_rmdir */
 SYSCALL sys_unlink, 10      /* __NR_unlink */
@@ -477,6 +478,23 @@ mkdir:
     mov r0, #-1
     
 mkdir_success:
+    pop {r7, lr}
+    bx lr
+
+.global rename
+.type rename, %function
+rename:
+    push {r7, lr}
+    mov r7, #38             /* SYS_RENAME */
+    swi #0
+
+    cmp r0, #0
+    bge rename_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+rename_success:
     pop {r7, lr}
     bx lr
 

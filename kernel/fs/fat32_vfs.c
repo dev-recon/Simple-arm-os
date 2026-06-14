@@ -95,11 +95,15 @@ file_operations_t fat32_dir_ops = {
     .readdir = fat32_dir_readdir
 };
 
+static int fat32_inode_rename(inode_t* old_dir, const char* old_name,
+                              inode_t* new_dir, const char* new_name);
+
 inode_operations_t fat32_inode_ops = {
     .lookup = fat32_inode_lookup,
     .create = NULL,
-    .mkdir = fat32_inode_mkdir,
-    .unlink = fat32_inode_unlink
+    .mkdir  = fat32_inode_mkdir,
+    .unlink = fat32_inode_unlink,
+    .rename = fat32_inode_rename,
 };
 
 static bool fat_dirty = false;
@@ -178,6 +182,38 @@ void fat32_free_cluster_chain(uint32_t start_cluster) {
     }
     
     //KDEBUG("Freed %u clusters total\n", clusters_freed);
+}
+
+static int fat32_inode_rename(inode_t* old_dir, const char* old_name,
+                              inode_t* new_dir, const char* new_name)
+{
+    fat32_dir_entry_t* old_entry = fat32_find_entry(old_dir->first_cluster, old_name);
+    if (!old_entry) return -ENOENT;
+
+    uint32_t cluster   = fat32_get_cluster_from_entry(old_entry);
+    uint32_t file_size = old_entry->file_size;
+    uint8_t  attr      = old_entry->attr;
+
+    fat32_dir_entry_t* new_entry = fat32_create_dir_entry(new_name, cluster,
+                                                           old_dir->mode & ~S_IFMT);
+    if (!new_entry) {
+        kfree(old_entry);
+        return -ENOMEM;
+    }
+    new_entry->file_size = file_size;
+    new_entry->attr      = attr;
+
+    if (fat32_add_dir_entry(new_dir->first_cluster, new_entry) != 0) {
+        kfree(old_entry);
+        kfree(new_entry);
+        return -EIO;
+    }
+
+    int ret = fat32_remove_dir_entry(old_dir->first_cluster, old_name);
+
+    kfree(old_entry);
+    kfree(new_entry);
+    return ret;
 }
 
 int fat32_inode_unlink(inode_t* dir, const char* name) {

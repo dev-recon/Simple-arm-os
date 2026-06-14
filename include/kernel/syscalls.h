@@ -116,6 +116,7 @@ int sys_print(const char* msg);
 int sys_mkdir(const char* pathname, mode_t mode);
 int sys_rmdir(const char* pathname);
 int sys_unlink(const char* pathname);
+int sys_rename(const char* oldpath, const char* newpath);
 int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count);
 int sys_access(const char* pathname, int mode);
 int sys_umask(int mask);
