@@ -741,11 +741,6 @@ nanosleep:
  * Gestion d'errno (simple)
  * ======================================== */
 
-.data
-.global errno
-errno:
-    .word 0
-
 .text
 .global __set_errno
 .type __set_errno, %function
