@@ -12,6 +12,20 @@ extern int command_init(void);
 
 static char token_buffer[SHELL_BUFFER_SIZE];
 
+#define SHELL_MAX_ENV       16
+#define SHELL_ENV_NAME_LEN  32
+#define SHELL_ENV_VALUE_LEN 160
+
+typedef struct shell_env {
+    char name[SHELL_ENV_NAME_LEN];
+    char value[SHELL_ENV_VALUE_LEN];
+} shell_env_t;
+
+static shell_env_t shell_env[SHELL_MAX_ENV];
+static int shell_env_count = 0;
+static char shell_env_strings[SHELL_MAX_ENV][SHELL_ENV_NAME_LEN + SHELL_ENV_VALUE_LEN + 1];
+static char* shell_envp[SHELL_MAX_ENV + 1];
+
 static void shell_reap_background(void) {
     int status = 0;
     int pid;
@@ -48,18 +62,177 @@ static int token_has_slash(const char* s) {
     return 0;
 }
 
-static void build_exec_path(const char* name, char* out, size_t out_size, int index) {
-    const char* dirs[] = { "/bin/", "/usr/bin/" };
+static const char* shell_getenv(const char* name) {
+    int i;
+
+    for (i = 0; i < shell_env_count; i++) {
+        if (strcmp(shell_env[i].name, name) == 0)
+            return shell_env[i].value;
+    }
+
+    return NULL;
+}
+
+static int shell_setenv(const char* name, const char* value) {
+    int i;
+
+    if (!name || !value || !*name)
+        return -1;
+
+    for (i = 0; i < shell_env_count; i++) {
+        if (strcmp(shell_env[i].name, name) == 0) {
+            strncpy(shell_env[i].value, value, SHELL_ENV_VALUE_LEN - 1);
+            shell_env[i].value[SHELL_ENV_VALUE_LEN - 1] = '\0';
+            return 0;
+        }
+    }
+
+    if (shell_env_count >= SHELL_MAX_ENV)
+        return -1;
+
+    strncpy(shell_env[shell_env_count].name, name, SHELL_ENV_NAME_LEN - 1);
+    shell_env[shell_env_count].name[SHELL_ENV_NAME_LEN - 1] = '\0';
+    strncpy(shell_env[shell_env_count].value, value, SHELL_ENV_VALUE_LEN - 1);
+    shell_env[shell_env_count].value[SHELL_ENV_VALUE_LEN - 1] = '\0';
+    shell_env_count++;
+    return 0;
+}
+
+static char** shell_build_envp(void) {
+    int i;
+
+    for (i = 0; i < shell_env_count; i++) {
+        shell_env_strings[i][0] = '\0';
+        strncat(shell_env_strings[i], shell_env[i].name, sizeof(shell_env_strings[i]) - 1);
+        strncat(shell_env_strings[i], "=", sizeof(shell_env_strings[i]) - strlen(shell_env_strings[i]) - 1);
+        strncat(shell_env_strings[i], shell_env[i].value, sizeof(shell_env_strings[i]) - strlen(shell_env_strings[i]) - 1);
+        shell_envp[i] = shell_env_strings[i];
+    }
+    shell_envp[shell_env_count] = NULL;
+    return shell_envp;
+}
+
+static void shell_init_env(void) {
+    shell_setenv("PATH", "/bin:/usr/bin");
+    shell_setenv("HOME", "/home/user");
+    shell_setenv("USER", "user");
+    shell_setenv("PS1", "mash$> ");
+}
+
+static char* trim_spaces(char* s) {
+    char* end;
+
+    while (*s == ' ' || *s == '\t')
+        s++;
+
+    end = s + strlen(s);
+    while (end > s && (end[-1] == ' ' || end[-1] == '\t' ||
+                       end[-1] == '\r' || end[-1] == '\n')) {
+        *--end = '\0';
+    }
+
+    return s;
+}
+
+static int starts_with(const char* s, const char* prefix) {
+    while (*prefix) {
+        if (*s++ != *prefix++)
+            return 0;
+    }
+    return 1;
+}
+
+static void shell_apply_rc_line(char* line) {
+    char* name;
+    char* value;
+    char* eq;
+
+    line = trim_spaces(line);
+    if (!*line || *line == '#')
+        return;
+
+    if (starts_with(line, "export "))
+        line = trim_spaces(line + 7);
+
+    eq = strchr(line, '=');
+    if (!eq)
+        return;
+
+    *eq = '\0';
+    name = trim_spaces(line);
+    value = trim_spaces(eq + 1);
+
+    if (*value && (*value == '"' || *value == '\'') && value[strlen(value) - 1] == *value) {
+        value[strlen(value) - 1] = '\0';
+        value++;
+    }
+
+    shell_setenv(name, value);
+}
+
+static void shell_load_rc_file(const char* path) {
+    char buffer[512];
+    int fd;
+    int n;
+    int start = 0;
+    int i;
+
+    fd = open(path, O_RDONLY, 0);
+    if (fd < 0)
+        return;
+
+    n = read(fd, buffer, sizeof(buffer) - 1);
+    close(fd);
+    if (n <= 0)
+        return;
+
+    buffer[n] = '\0';
+    for (i = 0; i <= n; i++) {
+        if (buffer[i] == '\n' || buffer[i] == '\0') {
+            buffer[i] = '\0';
+            shell_apply_rc_line(&buffer[start]);
+            start = i + 1;
+        }
+    }
+}
+
+static void shell_load_startup_files(void) {
+    shell_load_rc_file("/etc/mashrc");
+    shell_load_rc_file("/home/user/mashrc");
+}
+
+static int build_exec_path_from_dir(const char* dir, int dir_len,
+                                    const char* name, char* out, size_t out_size) {
+    size_t pos = 0;
 
     if (token_has_slash(name)) {
         strncpy(out, name, out_size - 1);
         out[out_size - 1] = '\0';
-        return;
+        return 0;
     }
 
-    out[0] = '\0';
-    strncat(out, dirs[index], out_size - 1);
-    strncat(out, name, out_size - strlen(out) - 1);
+    if (dir_len <= 0) {
+        if (out_size < 3)
+            return -1;
+        out[pos++] = '.';
+    } else {
+        if ((size_t)dir_len >= out_size)
+            return -1;
+        memcpy(out, dir, dir_len);
+        pos = dir_len;
+    }
+
+    if (pos > 0 && out[pos - 1] != '/') {
+        if (pos + 1 >= out_size)
+            return -1;
+        out[pos++] = '/';
+    }
+
+    if (pos + strlen(name) >= out_size)
+        return -1;
+
+    strcpy(out + pos, name);
+    return 0;
 }
 
 static int parse_redirections(int* argc, char* argv[], shell_redirs_t* redirs) {
@@ -163,22 +336,39 @@ static int argv_has_pipeline(int argc, char* argv[]) {
 
 static void exec_external_or_die(int argc, char* argv[]) {
     char* exec_argv[SHELL_MAX_ARGS];
-    char* const envp[] = { NULL };
+    char** envp = shell_build_envp();
     char cmd[256];
+    const char* path;
+    const char* entry;
     int i;
 
-    build_exec_path(argv[0], cmd, sizeof(cmd), 0);
-    exec_argv[0] = cmd;
     for (i = 1; i < argc && i < SHELL_MAX_ARGS - 1; i++)
         exec_argv[i] = argv[i];
     exec_argv[i] = NULL;
 
-    execve(cmd, exec_argv, envp);
-
-    if (!token_has_slash(argv[0])) {
-        build_exec_path(argv[0], cmd, sizeof(cmd), 1);
+    if (token_has_slash(argv[0])) {
+        build_exec_path_from_dir(NULL, 0, argv[0], cmd, sizeof(cmd));
         exec_argv[0] = cmd;
         execve(cmd, exec_argv, envp);
+    } else {
+        path = shell_getenv("PATH");
+        if (!path || !*path)
+            path = "/bin:/usr/bin";
+
+        entry = path;
+        while (*entry) {
+            const char* next = strchr(entry, ':');
+            int len = next ? (int)(next - entry) : (int)strlen(entry);
+
+            if (build_exec_path_from_dir(entry, len, argv[0], cmd, sizeof(cmd)) == 0) {
+                exec_argv[0] = cmd;
+                execve(cmd, exec_argv, envp);
+            }
+
+            if (!next)
+                break;
+            entry = next + 1;
+        }
     }
 
     printf("exec %s failed\n", argv[0]);
@@ -563,7 +753,9 @@ void shell_print_banner(void) {
 
 // Display the prompt
 void shell_print_prompt(void) {
-    printf("mash$> ");
+    const char* ps1 = shell_getenv("PS1");
+
+    printf("%s", ps1 ? ps1 : "mash$> ");
     pflush();
 }
 
@@ -771,6 +963,8 @@ int main() {
 
     printf("******************************************************\n");
 
+    shell_init_env();
+    shell_load_startup_files();
     command_init();
     shell_run();
     //shell_execute(1, cmd2);

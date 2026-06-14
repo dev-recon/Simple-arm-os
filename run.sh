@@ -1,38 +1,47 @@
 #!/bin/bash
-# run.sh - run kernel
+# run.sh - rebuild userland, recreate the FAT image, then boot the kernel.
+
+set -euo pipefail
+
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
 USERFS_DIR="userfs"
 USERLAND_DIR="userland"
 LIBC_DIR="libc"
 
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "=== RUN KERNEL SCRIPT ==="
 
-# Verifier que userfs existe
-if [ ! -d "$USERFS_DIR" ]; then
-    echo "Error: userfs directory not found!"
-    exit 1
-fi
+cd "$ROOT_DIR"
 
-if [ ! -d "$USERLAND_DIR" ]; then
-    echo "Error: userland directory not found!"
-    exit 1
-fi
+for dir in "$USERFS_DIR" "$USERLAND_DIR" "$LIBC_DIR"; do
+    if [ ! -d "$dir" ]; then
+        echo "Error: $dir directory not found!"
+        exit 1
+    fi
+done
 
-if [ ! -d "$LIBC_DIR" ]; then
-    echo "Error: libc directory not found!"
-    exit 1
-fi
+for tool in make arm-none-eabi-gcc arm-none-eabi-ld arm-none-eabi-objcopy arm-none-eabi-objdump mkfs.fat mcopy mmd qemu-system-arm; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "Error: required tool '$tool' not found in PATH"
+        exit 1
+    fi
+done
 
-cd $LIBC_DIR
-make distclean
-make install
+echo "=== Rebuilding libc ==="
+make -C "$LIBC_DIR" distclean
+make -C "$LIBC_DIR" install
 
-cd "../$USERLAND_DIR"
-make install
+echo "=== Rebuilding userland ==="
+make -C "$USERLAND_DIR" install
 
-cd "../"
-rm disk.img
+echo "=== Rebuilding kernel ==="
+make kernel.bin
+
+echo "=== Recreating disk image ==="
+rm -f disk.img
 make disk.img
-make run-userfs
 
+echo "=== Booting QEMU ==="
+make run-userfs
