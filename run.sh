@@ -34,6 +34,7 @@ make -C "$LIBC_DIR" distclean
 make -C "$LIBC_DIR" install
 
 echo "=== Rebuilding userland ==="
+make -C "$USERLAND_DIR" clean
 make -C "$USERLAND_DIR" install
 
 echo "=== Rebuilding kernel ==="

@@ -125,6 +125,31 @@ bool is_valid_user_range(const void* ptr, size_t size)
     return true;
 }
 
+static bool is_mapped_user_range(uint32_t *pgdir, const void *ptr, size_t size)
+{
+    uint32_t start = (uint32_t)ptr;
+    uint32_t end = start + size - 1;
+    uint32_t page = start & PAGE_MASK;
+    uint32_t last_page = end & PAGE_MASK;
+
+    if (!pgdir || !is_valid_user_range(ptr, size)) {
+        return false;
+    }
+
+    while (page <= last_page) {
+        if (!get_physical_address(pgdir, page)) {
+            return false;
+        }
+
+        if (page > 0xFFFFFFFFu - PAGE_SIZE) {
+            break;
+        }
+        page += PAGE_SIZE;
+    }
+
+    return true;
+}
+
 uint32_t map_user_to_kernel(uint32_t *pgdir, uint32_t vaddr){
 
     //uint32_t user_addr = vaddr;
@@ -149,8 +174,13 @@ uint32_t map_user_to_kernel(uint32_t *pgdir, uint32_t vaddr){
 /* Helper functions */
 int copy_to_user(void* to, const void* from, size_t n)
 {
+    task_t* task = get_current_task();
+    uint32_t* pgdir = (task && task->process && task->process->vm)
+                    ? task->process->vm->pgdir
+                    : NULL;
+
     /* Verifications de securite de base */
-    if (!to || !from || n == 0) {
+    if (!to || !from || n == 0 || !pgdir) {
         return -1;  /* Pointeurs invalides */
     }
     
@@ -171,6 +201,12 @@ int copy_to_user(void* to, const void* from, size_t n)
     /* Verifier le debordement */
     if ((uint32_t)to + n < (uint32_t)to) {
         return -1;  /* Overflow */
+    }
+
+    if (!is_mapped_user_range(pgdir, to, n)) {
+        KERROR("[COPY] ERROR: copy_to_user destination 0x%08X+%u is not mapped\n",
+                (uint32_t)to, n);
+        return -1;
     }
 
     /* Copie securisee */
@@ -211,6 +247,12 @@ int copy_from_user(void* to, const void* from, size_t n)
     /* Verifier le debordement */
     if ((uint32_t)from + n < (uint32_t)from) {
         return -1;  /* Overflow */
+    }
+
+    if (!is_mapped_user_range(pgdir, from, n)) {
+        KERROR("[COPY] ERROR: copy_from_user source 0x%08X+%u is not mapped\n",
+                (uint32_t)from, n);
+        return -1;
     }
 
     //uint32_t offset = (uint32_t)from & 0xFFF;

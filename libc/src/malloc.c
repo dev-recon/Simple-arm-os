@@ -142,8 +142,8 @@ struct block_header *extend_heap(size_t size) {
     // Calculer la taille totale nécessaire
     size_t total_size = HEADER_SIZE + size;
     
-    // Étendre le heap
-    void *new_brk = sbrk(total_size+heap_start);
+    // Étendre le heap jusqu'à la fin réelle du nouveau bloc.
+    void *new_brk = sbrk((void *)((uintptr_t)heap_head + total_size));
     //printf("Got new BRK at %p bytes\n", new_brk);
 
     if (new_brk == (void*)-1) {
@@ -250,7 +250,6 @@ void *realloc(void *ptr, size_t size) {
     free(ptr);
     return new_ptr;
 }
-
 
 
 
