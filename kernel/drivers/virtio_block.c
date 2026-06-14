@@ -38,7 +38,8 @@ vq_legacy_t global_vq = {0};
 uint32_t ata_sector_size = 0;
 
 #define VIRTIO_PHY_ADDR 0x0A003E00u
-volatile uint32_t *virtio_mmio_base = (volatile uint32_t *)VIRTIO_PHY_ADDR;
+volatile uint32_t *virtio_mmio_base =
+    (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(VIRTIO_PHY_ADDR);
 
 
 // Alloue N pages contiguës physiquement et retourne VA=PA (si kernel mappe identitairement ≥0x40000000)
@@ -240,23 +241,37 @@ static inline struct vring_used *vq_used_ptr(vq_legacy_t *vq) {
     return (struct vring_used *)((uint8_t *)(uintptr_t)vq->va_used);
 }
 
-/* simple wait/poll with timeout (ms) */
+/* Lit le compteur physique 64-bit du generic timer ARM (toujours actif sur A15). */
+static inline uint32_t vblk_cntpct_lo(void) {
+    uint32_t lo, hi;
+    asm volatile("mrrc p15, 0, %0, %1, c14" : "=r"(lo), "=r"(hi));
+    (void)hi;
+    return lo;
+}
+
+/* Poll used ring avec un vrai timeout en ms basé sur CNTPCT. */
 static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms)
 {
-    unsigned waited = 0;
-    while (vq_used_ptr(vq)->idx == prev_idx) {
-            /* Invalidate the used area to see device updates */
-        invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used, vq->used_size);
+    uint32_t freq;
+    asm volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(freq));
+    if (freq == 0) freq = 62500000; /* 62.5 MHz défaut QEMU */
+
+    uint32_t timeout_ticks = timeout_ms * (freq / 1000);
+    uint32_t t0 = vblk_cntpct_lo();
+
+    while (1) {
+        invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
+            sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
         asm volatile("dmb ish" ::: "memory");
 
-        task_sleep_ms(1);
-        waited++;
-        if (waited > timeout_ms) return -1;
-        /* invalidation mémoire du used header pour voir les updates */
-        invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used, sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
+        if (vq_used_ptr(vq)->idx != prev_idx)
+            return 0;
 
+        if ((vblk_cntpct_lo() - t0) >= timeout_ticks) {
+            KERROR("virtio_blk: timeout waiting used ring\n");
+            return -1;
+        }
     }
-    return 0;
 }
 
 /* Fonction générique de soumission synchrone (1 request) */
@@ -327,10 +342,8 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
 
     /* wait for completion by polling used.idx (blocking) */
     uint16_t prev_used = vq->last_used_idx;
-    if (wait_for_used(vq, prev_used, timeout_ms) != 0) {
-        KERROR("virtio_blk: timeout waiting used ring\n");
+    if (wait_for_used(vq, prev_used, timeout_ms) != 0)
         return -1;
-    }
 
     /* read the used element (invalidate used memory then read) */
     invalidate_dcache_by_mva((void *)vq->va_used, sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
@@ -384,7 +397,10 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
     size_t npages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
     uint32_t data_pa = 0;
     void *data_va = alloc_dma_pages(npages, &data_pa);
-    if (!data_va) return -1;
+    if (!data_va) {
+        free_pages(hdr_va, 1);
+        return -1;
+    }
 
     /* Fill header */
     hdr->type = VIRTIO_BLK_T_IN;
@@ -397,6 +413,10 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
     /* submit request (device will fill data_va and status) */
     int r = virtio_blk_submit_one(vq, mmio_base, hdr, hdr_pa, data_va, data_pa, bytes, /*data_is_write=*/1, status_va, status_pa, timeout_ms);
     if (r != 0) {
+        /*
+         * Ne pas liberer apres un timeout: sans annulation/reset du device,
+         * il pourrait encore referencer ces buffers DMA.
+         */
         return -1;
     }
 
@@ -404,6 +424,8 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
     invalidate_dcache_by_mva(data_va, bytes);
     memcpy(buf, data_va, bytes);
 
+    free_pages(data_va, npages);
+    free_pages(hdr_va, 1);
     return 0;
 }
 
@@ -432,7 +454,10 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
     size_t npages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
     uint32_t data_pa = 0;
     void *data_va = alloc_dma_pages(npages, &data_pa);
-    if (!data_va) return -1;
+    if (!data_va) {
+        free_pages(hdr_va, 1);
+        return -1;
+    }
 
     /* copy user data into DMA buffer */
     memcpy(data_va, buf, bytes);
@@ -445,9 +470,12 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
     /* submit request (device will read data_va and write status) */
     int r = virtio_blk_submit_one(vq, mmio_base, hdr, hdr_pa, data_va, data_pa, bytes, /*data_is_write=*/0, status_va, status_pa, timeout_ms);
     if (r != 0) {
+        /* Voir le chemin read: un timeout ne prouve pas que le DMA est fini. */
         return -1;
     }
 
+    free_pages(data_va, npages);
+    free_pages(hdr_va, 1);
     return 0;
 }
 

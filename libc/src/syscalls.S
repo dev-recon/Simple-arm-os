@@ -71,6 +71,7 @@ SYSCALL sys_signal, 48      /* __NR_signal */
 SYSCALL sys_sigaction, 67   /* __NR_sigaction */
 SYSCALL sys_sigreturn, 173  /* __NR_rt_sigreturn */
 SYSCALL sys_nanosleep, 162  /* __NR_nanosleep */
+SYSCALL sys_sysinfo,   116  /* __NR_sysinfo — getprocs temporaire */
 
 
 /* Syscall spécial de votre kernel */
@@ -317,10 +318,29 @@ kill_success:
 .global signal
 .type signal, %function
 signal:
-    push {r7, lr}
-    mov r7, #48             /* SYS_SIGNAL */
+    push {r4, r5, r7, lr}
+    mov r4, r0              /* sig */
+    mov r5, r1              /* handler */
+    sub sp, sp, #32         /* nouvelle action + ancienne action */
+
+    str r5, [sp, #0]
+    mov r2, #0
+    str r2, [sp, #4]        /* sa_mask */
+    mov r2, #1
+    str r2, [sp, #8]        /* SA_RESTART */
+    ldr r2, =__signal_return_trampoline
+    str r2, [sp, #12]
+
+    mov r0, r4
+    mov r1, sp
+    add r2, sp, #16
+    mov r7, #67             /* __NR_sigaction */
     swi #0
-    pop {r7, lr}
+
+    cmp r0, #0
+    ldrge r0, [sp, #16]     /* ancien handler */
+    add sp, sp, #32
+    pop {r4, r5, r7, lr}
     bx lr
 
 //   SIGACTION -> SYS_SIGACTION
@@ -328,6 +348,9 @@ signal:
 .type sigaction, %function
 sigaction:
     push {r7, lr}
+    cmp r1, #0
+    ldrne r3, =__signal_return_trampoline
+    strne r3, [r1, #12]
     mov r7, #67             /* SYS_SIGACTION */
     swi #0
     
@@ -341,6 +364,15 @@ sigaction:
 sigaction_success:
     pop {r7, lr}
     bx lr
+
+.global __signal_return_trampoline
+.type __signal_return_trampoline, %function
+__signal_return_trampoline:
+    mov r7, #173            /* __NR_rt_sigreturn */
+    swi #0
+    mov r7, #1              /* sys_exit si sigreturn echoue */
+    mov r0, #-1
+    swi #0
 
 //   LSEEK -> SYS_LSEEK
 .global lseek
@@ -602,6 +634,21 @@ getdents:
     push {r7, lr}
     mov r7, #141        /* __NR_getdents */
     swi #0
+    pop {r7, lr}
+    bx lr
+
+.global getsysinfo
+.type getsysinfo, %function
+getsysinfo:
+    push {r7, lr}
+    mov r7, #116            /* __NR_sysinfo */
+    swi #0
+    cmp r0, #0
+    bge getsysinfo_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+getsysinfo_success:
     pop {r7, lr}
     bx lr
 

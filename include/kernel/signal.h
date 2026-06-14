@@ -36,6 +36,7 @@
 void init_process_signals(task_t* proc);
 int send_signal(task_t* target, int sig);
 void check_pending_signals(void);
+int signal_consume_user_return_override(void);
 void deliver_signal(task_t* proc, int sig);
 bool has_pending_signals(task_t* proc);
 

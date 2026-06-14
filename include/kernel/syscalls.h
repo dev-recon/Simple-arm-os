@@ -72,6 +72,31 @@ struct process;
 #define __NR_nanosleep          162
 #define __NR_rt_sigreturn       173
 #define __NR_getcwd             183     /* getcwd */
+#define __NR_sysinfo            116     /* reused for getprocs — remplacer par /proc plus tard */
+
+/* Informations sur un processus */
+struct proc_info {
+    int      pid;
+    int      ppid;
+    uint32_t priority;
+    uint32_t switches;
+    uint32_t cpu_pct_x10;   /* %CPU * 10  (ex: 875 = 87.5%) */
+    uint32_t stack_kb;
+    uint32_t heap_kb;
+    char     name[32];
+    char     state;          /* R=run S=sleep Z=zombie T=term D=uninterruptible */
+    char     type;           /* P=process K=kernel T=thread */
+    char     _pad[2];
+};
+
+/* Réponse complète de sys_sysinfo */
+struct sysinfo_response {
+    uint32_t        mem_total_kb;
+    uint32_t        mem_free_kb;
+    int             proc_count;
+    uint32_t        _pad;
+    struct proc_info procs[64];
+};
 
 /* Syscall handler */
 int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2, 
@@ -92,6 +117,8 @@ int sys_unlink(const char* pathname);
 int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count);
 
 /* Process syscalls */
+#define WNOHANG 1
+
 int sys_fork(void);
 int sys_execve(const char* filename, char* const argv[], char* const envp[]);
 void sys_exit(int status);
@@ -121,5 +148,6 @@ int sys_dup2(int oldfd, int newfd);
 int sys_pipe(int pipefd[2]);
 int sys_chdir(const char* path);
 int sys_getcwd(char* buf, size_t size);
+int sys_sysinfo(struct sysinfo_response *resp);
 
 #endif

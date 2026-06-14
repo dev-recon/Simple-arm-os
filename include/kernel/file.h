@@ -112,8 +112,11 @@
 
 int split_path(const char* full_path, char** parent_path, char** filename);
 bool inode_permission(inode_t* inode, int mask);
-bool can_read(file_t* file) ;
+bool can_read(file_t* file);
+bool can_write(file_t* file);
 
-bool can_write(file_t* file) ;
+char* resolve_path(const char* path);
+void  path_canonicalize(char* path);
+char* get_current_working_directory(void);
 
 #endif /* _KERNEL_FILE_H */

@@ -48,6 +48,7 @@ static syscall_func_t syscall_table[256] = {
     [__NR_fstat] = (syscall_func_t)sys_fstat,
     [__NR_getdents] = (syscall_func_t)sys_getdents,
     [__NR_nanosleep] = (syscall_func_t)sys_nanosleep,
+    [__NR_sysinfo]   = (syscall_func_t)sys_sysinfo,
 
 };
 
@@ -89,6 +90,66 @@ void print_cpu_mode(void){
             cpsr , cpsr == ARM_MODE_USR ? "USR" : cpsr == ARM_MODE_SVC ? "SVC" : "UNKNOWN" );
     kprintf("**************************************\n\n");
 
+}
+
+static int count_exec_vector(char* const vector[], bool from_user, uint32_t* count)
+{
+    uint32_t i;
+
+    *count = 0;
+    if (!vector)
+        return 0;
+
+    for (i = 0; i < 32; i++) {
+        char* value;
+
+        if (from_user) {
+            if (copy_from_user(&value, &vector[i], sizeof(value)) < 0)
+                return -EFAULT;
+        } else {
+            value = vector[i];
+        }
+
+        if (!value) {
+            *count = i;
+            return 0;
+        }
+    }
+
+    return -E2BIG;
+}
+
+static char** copy_exec_vector(char* const vector[], uint32_t count, bool from_user)
+{
+    char** copy = kmalloc((count + 1) * sizeof(char*));
+    uint32_t i;
+
+    if (!copy)
+        return NULL;
+
+    memset(copy, 0, (count + 1) * sizeof(char*));
+
+    for (i = 0; i < count; i++) {
+        char* value;
+
+        if (from_user) {
+            if (copy_from_user(&value, &vector[i], sizeof(value)) < 0)
+                goto fail;
+            copy[i] = copy_string_from_user(value);
+        } else {
+            value = vector[i];
+            copy[i] = value ? strdup(value) : NULL;
+        }
+
+        if (!copy[i])
+            goto fail;
+    }
+
+    return copy;
+
+fail:
+    cleanup_exec_args(NULL, copy, NULL);
+    return NULL;
 }
 
 void check_instruction(uint32_t test_vaddr, uint32_t phys_addr, uint32_t instruction)
@@ -177,9 +238,9 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     elf32_ehdr_t elf_header;
     vm_space_t* old_vm;
     vm_space_t* new_vm;
-    int len = 0 ;
     uint32_t argc = 0;
     uint32_t envpc = 0;
+    int result;
     
     /* Verification processus - ADAPTe */
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
@@ -194,58 +255,34 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         return -EINVAL;
     }
 
-    len = strlen(filename);
-
-    if(argv )
-    while (argc < 32 && argv[argc]) {
-        argc++;
-    }
-
-    if(envp )
-    while (envpc < 32 && envp[envpc]) {
-        envpc++;
-    }
-
     uint32_t spsr = read_spsr();
     uint32_t caller_mode = spsr & 0x1f;   // 0x10 = USR
 
     bool from_user = (caller_mode == ARM_MODE_USR);  // tu n’utilises pas SYS ici
 
-   if(from_user){
+    result = count_exec_vector(argv, from_user, &argc);
+    if (result < 0)
+        return result;
 
-        kernel_filename = (char *)kmalloc(len+1);
-        kernel_argv = (char **)kmalloc(sizeof(char*) * 5);
-        kernel_envp = (char **)kmalloc(sizeof(char*) * 5);
-        for(int i=0; i < 5; i++){
-            if(kernel_argv)
-                kernel_argv[i] = (char *)kmalloc(256);
-            if(kernel_envp)
-                kernel_envp[i] = (char *)kmalloc(256);
-        }
+    result = count_exec_vector(envp, from_user, &envpc);
+    if (result < 0)
+        return result;
 
-        strcpy(kernel_filename, filename);
-        strcpy(kernel_argv[0], argv[0]);
+    kernel_filename = from_user ? copy_string_from_user(filename) : strdup(filename);
+    if (!kernel_filename)
+        return -EFAULT;
 
-        kernel_argv[1] = argv[1];
-        kernel_envp[0] = envp[0];
-   }
-   else {
-        kernel_filename = (char *)kmalloc(len+1);
-        kernel_argv = (char **)kmalloc(sizeof(char*) * 5);
-        kernel_envp = (char **)kmalloc(sizeof(char*) * 5);
-        for(int i=0; i < 5; i++){
-            if(kernel_argv)
-                kernel_argv[i] = (char *)kmalloc(256);
-            if(kernel_envp)
-                kernel_envp[i] = (char *)kmalloc(256);
-        }
+    kernel_argv = copy_exec_vector(argv, argc, from_user);
+    if (!kernel_argv) {
+        kfree(kernel_filename);
+        return -ENOMEM;
+    }
 
-        strcpy(kernel_filename, filename);
-        strcpy(kernel_argv[0], argv[0]);
-
-        kernel_argv[1] = argv[1];
-        kernel_envp[0] = envp[0];
-   }
+    kernel_envp = copy_exec_vector(envp, envpc, from_user);
+    if (!kernel_envp) {
+        cleanup_exec_args(kernel_filename, kernel_argv, NULL);
+        return -ENOMEM;
+    }
 
     /* Ouvrir le fichier executable */
     exe_inode = path_lookup(kernel_filename);
@@ -492,28 +529,24 @@ void sys_exit(int status)
     proc->process->state = (proc_state_t)PROC_ZOMBIE;
     spin_unlock(&task_lock);
 
-    /* Reveiller le parent s'il attend - ACCeS CORRECT */
-    wakeup_parent(proc);
-
-    /* Fermer tous les fichiers ouverts - ACCeS CORRECT */
+    /* Fermer tous les fichiers ouverts avant de reveiller le parent */
     close_all_process_files(proc);
-    
+
     /* Retirer le processus zombie de la ready queue */
     remove_from_ready_queue(proc);
 
     /* Orpheliner tous les enfants vers init (PID 1) - ACCeS CORRECT */
     orphan_children(proc);
 
-    //KDEBUG("EXITING TASK %s, with state = %s-----\n", proc->name, task_state_string(proc->state));
-    
-    //unset_critical_section();
-    restore_interrupts(irq_flags);
-    /* Declencher une commutation de contexte */
-    switch_to_idle();
-    //schedule();
+    /* Reveiller le parent seulement lorsque le nettoyage de sortie est termine. */
+    wakeup_parent(proc);
 
-    
-    //KDEBUG("EXITING TASK %s, with state = %s\n", proc->name, task_state_string(proc->state));
+    /*
+     * Ne pas reactiver les IRQ avant d'avoir quitte la pile du zombie: le
+     * parent reveille pourrait sinon liberer proc et sa pile kernel.
+     */
+    (void)irq_flags;
+    switch_to_idle();
 
     /* Cette ligne ne devrait jamais s'executer */
     KERROR("sys_exit: FATAL - Zombie process PID=%u was rescheduled!\n", 
@@ -531,11 +564,13 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
 {
     task_t* zombie = NULL;
     //uint32_t iteration = 1;
-    
-    (void)options;
-    
+
     if (!parent || parent->type != TASK_TYPE_PROCESS || !parent->process) {
         KERROR("kernel_waitpid: NULL Proc\n");
+        return -EINVAL;
+    }
+
+    if (options & ~WNOHANG) {
         return -EINVAL;
     }
         
@@ -564,8 +599,6 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
             zombie->state = TASK_TERMINATED;
             zombie->process->state = (proc_state_t)PROC_DEAD;
             destroy_process(zombie);
-            
-            KDEBUG("kernel_waitpid: Returning PID %u with exit code %d\n", child_pid, exit_code);
 
             return child_pid;
         }
@@ -574,8 +607,14 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
 
         /* Verifier s'il y a encore des enfants eligibles - ACCeS CORRECT */
         if (!has_children(parent, pid)) {
-            KDEBUG("kernel_waitpid: No eligible children\n");
+            if (!(options & WNOHANG)) {
+                KDEBUG("kernel_waitpid: No eligible children\n");
+            }
             return -ECHILD;
+        }
+
+        if (options & WNOHANG) {
+            return 0;
         }
         
         /* Sauvegarder le contexte d'attente - ACCeS CORRECT */
@@ -609,13 +648,15 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
 int sys_waitpid(pid_t pid, int* status, int options)
 {
 
-    task_sleep_ms(1000);
+    //task_sleep_ms(1000);  // ancien workaround pour le bug returns_to_user, supprime
     //KDEBUG("sys_waitpid: called for = %d - &status = 0x%08X\n", pid, (uint32_t)status);
 
-    task_t *parent = current_task;
 
+    task_t *parent = current_task;
+    //debug_print_ctx(&parent->context, "PARENT CONTEXT BEFORE WAITPID");
 
     //parent->context.returns_to_user = 0;
+    //parent->context.cpsr = 0x60000013;  // SVC mode
     //yield();
 
     int exit_code;
@@ -628,7 +669,10 @@ int sys_waitpid(pid_t pid, int* status, int options)
         }
     }
 
+    //debug_print_ctx(&parent->context, "PARENT CONTEXT AFTER WAITPID");
+
     //parent->context.returns_to_user = 1;
+    //parent->context.cpsr = 0x60000010;  // USER mode
     //yield();
     //KDEBUG("sys_waitpid: returning to callee  = %d\n", sys_getppid());
 
@@ -771,9 +815,6 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
 //print_task_offsets();
 // print_context_offsets();
 
-    /* Check pending signals before syscall */
-    check_pending_signals();
-
     //uint32_t usr_r[13];
     //get_usr_regs(usr_r);
     //store_usr_regs(&proc->context, usr_r);
@@ -782,43 +823,33 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
     
     /* Call syscall */
     int result = syscall_table[syscall_num](arg1, arg2, arg3, arg4, arg5);
-   
-    /* Check pending signals after syscall */
-    check_pending_signals();
+
+    /*
+     * Le contexte user canonique doit contenir la valeur de retour avant de
+     * construire une eventuelle frame signal. rt_sigreturn a deja restaure r0.
+     */
+    if (proc && syscall_num != __NR_rt_sigreturn) {
+        proc->context.usr_r[0] = (uint32_t)result;
+    }
+
+    if (syscall_num != __NR_rt_sigreturn) {
+        check_pending_signals();
+    }
 
     if (need_resched /* && (syscall_num != __NR_waitpid) */) {
         need_resched = 0;
         bool from_user = proc->context.returns_to_user ? true : false;
         if(from_user){
-            //proc->context.returns_to_user = 0 ;  // FIX IT
             proc->defer_return_to_user = 1;
-            // Parent is temporarily restoring to kernel to not resuming too early to user 
         }
 
-        //KDEBUG("RESCHEDULING SOME TASK: PROC %s\n", proc->name);
-
-
-
-        //schedule_to(idle_task);  /* Ici on est en mode SVC, pas IRQ */
         yield();
 
         if(from_user){
-            //proc->context.returns_to_user = 1 ;  // FIX IT
             proc->defer_return_to_user = 0;
-            // Parent is temporarily restoring to kernel to not resuming too early to user 
-            //yield();
         }
-
-        //debug_print_ctx(&proc->context, str);
-
     }
-    //proc->context.usr_r[11] = usr_r11;
-    //snprintf(str, 100, "PROC CONTEXT %s", proc->name);
-    //if( syscall_num != __NR_read &&
-    //    syscall_num != __NR_write )  KDEBUG(" SYSCALL %d RESULT == 0x%08X == %s\n", syscall_num, result, proc->name);
-    //debug_print_ctx(&proc->context, str);
-    //dump_svc_stack(proc , &proc->context.sp);
-    //print_context_offsets();
+
 
     return result;
 }

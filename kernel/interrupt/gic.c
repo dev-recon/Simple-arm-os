@@ -13,10 +13,10 @@
 static volatile uint32_t irq_count = 0;
 static volatile uint32_t last_irq_id = 0;
 
-/* Utiliser les constantes de kernel.h au lieu de redefinir */
-#define LOCAL_GICD_BASE     VIRT_GIC_DIST_BASE
-#define LOCAL_GICC_BASE     VIRT_GIC_CPU_BASE
-#define LOCAL_VIRTIO_BASE   VIRTIO_BASE
+/* Acces runtime via l'alias MMIO prive TTBR1. */
+#define LOCAL_GICD_BASE     KERNEL_MMIO_GIC_DIST_BASE
+#define LOCAL_GICC_BASE     KERNEL_MMIO_GIC_CPU_BASE
+#define LOCAL_VIRTIO_BASE   KERNEL_MMIO_VIRTIO_BASE
 
 void init_gic(void)
 {
@@ -152,13 +152,6 @@ void fiq_c_handler(void)
 
 void irq_c_handler(void)
 {
-    uint32_t old_ttbr0 = get_ttbr0();
-    uint32_t ttbr0 = (uint32_t)get_kernel_ttbr0();
-
-    set_ttbr0(ttbr0);
-    /* dsb isb if needed */
-    __asm__ volatile ("dsb; isb");
-
     volatile uint32_t* gicc = (volatile uint32_t*)LOCAL_GICC_BASE;
     
     /* Lire l'IRQ ID */
@@ -219,7 +212,6 @@ void irq_c_handler(void)
     
     /* CRITIQUE : Acquitter l'IRQ */
     gicc[0x010/4] = irq_id;  /* GICC_EOIR */
-    set_ttbr0(old_ttbr0);
 }
 
 void enable_irq(uint32_t irq)

@@ -129,7 +129,6 @@ bool setup_mmu(void);
 void switch_address_space(uint32_t* pgdir);                           /* TTBR0 seulement */
 void switch_address_space_with_asid(uint32_t* pgdir, uint32_t asid);   /* TTBR0 + ASID */
 int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid);
-void map_kernel_page(uint32_t vaddr, uint32_t phys_addr);
 uint32_t get_physical_address(uint32_t* pgdir, uint32_t vaddr);
 void debug_mmu_state(void);
 void unmap_temp_pages_contiguous(uint32_t base_vaddr, int num_pages);

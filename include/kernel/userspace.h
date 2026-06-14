@@ -52,7 +52,7 @@ int count_strings(char** strings);
 
 char** setup_stack_strings(char** strings, char** stack_ptr);
 void copy_string_array(char** src, char** dest, int count);
-void unmap_user_page(uint32_t* pgdir, uint32_t vaddr);
+int unmap_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t asid);
 
 int setup_user_stack(vm_space_t* vm, char** argv, char** envp);
 

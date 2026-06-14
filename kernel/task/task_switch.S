@@ -130,6 +130,7 @@ __user_ctx:
     str     r2, [r0, #CTX_CPSR]            // cpsr
     mov     r2, #0
     str     r2, [r0, #CTX_FIRST]           // is_first_run = 0
+    str     r2, [r0, #CTX_RET_TO_USER]     // returns_to_user = 0 : force __restore_to_kernel au resume
 
     /* tenir usr_r[] en phase avec les regs CPU */
     //add     r3, r0, #CTX_USR_R0
@@ -169,13 +170,24 @@ __load_new_context:
 
     /* ---------- RESTORE KERNEL (tâche suspendue kernel) ---------- */
 __restore_to_kernel:
-    ldr     sp, [r12, #CTX_SP]             // pile kernel de la tâche
+    ldr     sp, [r12, #CTX_SP]             // r13_svc = pile kernel de la tâche
     ldr     r2, [r12, #CTX_CPSR]
     msr     cpsr_cxsf, r2
-    ldr     lr, [r12, #CTX_LR]
+    ldr     lr, [r12, #CTX_LR]             // r14_svc = point de reprise kernel
+
+    /* Restaurer les registres banqués user (r13_usr, r14_usr).
+     * __first_run_user / __restore_to_user d'une autre tâche les ont peut-être
+     * écrasés. swi_handler fait movs pc, lr qui commute en mode user et utilise
+     * r13_usr — s'il est corrompu, le pop {r7,lr} de la libc lit depuis la
+     * mauvaise adresse et bx lr saute à 0. */
+    cps     #0x1F                          // SYS mode : r13/r14 = user banked
+    ldr     sp, [r12, #CTX_USR_SP]         // r13_usr = ctx->usr_sp
+    ldr     lr, [r12, #CTX_USR_LR]         // r14_usr = ctx->usr_lr
+    cps     #0x13                          // retour SVC : r13_svc et r14_svc restaurés
+
     ldmia   r12, {r0-r11}              /* Restaurer r0-r11 */
     ldr     r12, [r12, #CTX_R12]       /* Restaurer r12 */
-    bx      lr
+    bx      lr                         // r14_svc = retour dans schedule()
 
     /* ---------- RESTORE USER (tâche user suspendue) ---------- */
 __restore_to_user:
@@ -222,6 +234,9 @@ __first_run_setup:
 __first_run_kernel:
     /* pile kernel de départ */
     ldr     sp, [r12, #CTX_SP]
+    /* Restaurer aussi l'etat IRQ/FIQ du nouveau contexte kernel. */
+    ldr     r2, [r12, #CTX_CPSR]
+    msr     cpsr_cxsf, r2
     /* point d’entrée kernel */
     ldr     lr, [r12, #CTX_PC]
     mov     r2, #0
@@ -314,4 +329,3 @@ task_switch_info:
     .ascii "ARM32 Task Switch v1.0 - Cortex-A15 Optimized\0"
     .ascii "Context size: 68 bytes\0"
     .ascii "Supports: Full context save/restore\0"
-

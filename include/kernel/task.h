@@ -180,6 +180,7 @@ typedef struct {
     sig_handler_t sa_handler;
     uint32_t sa_mask;
     int sa_flags;
+    void (*sa_restorer)(void);
 } sigaction_t;
 
 /* Signal state */
@@ -188,6 +189,7 @@ typedef struct {
     uint32_t pending;
     uint32_t blocked;
     uint32_t in_handler;
+    uint32_t return_override;
     
     task_context_t saved_context;
 } signal_state_t;

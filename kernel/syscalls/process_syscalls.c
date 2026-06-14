@@ -294,6 +294,28 @@ cleanup:
 }
 
 
+static vma_t *find_heap_vma(vm_space_t *vm)
+{
+    vma_t *vma = vm->vma_list;
+
+    while (vma) {
+        if (vma->start == vm->heap_start)
+            return vma;
+        vma = vma->next;
+    }
+    return NULL;
+}
+
+static void rollback_brk_growth(vm_space_t *vm, uint32_t start, uint32_t end)
+{
+    for (uint32_t vaddr = start; vaddr < end; vaddr += PAGE_SIZE) {
+        uint32_t phys_addr = get_physical_address(vm->pgdir, vaddr);
+        if (phys_addr && unmap_user_page(vm->pgdir, vaddr, vm->asid) == 0) {
+            free_page((void *)phys_addr);
+        }
+    }
+}
+
 int sys_brk(void* addr)
 {
     task_t* task = current_task ;
@@ -303,7 +325,6 @@ int sys_brk(void* addr)
     uint32_t addr_to_unmap;
     uint32_t addr_to_map;
     vma_t* heap_vma = NULL;
-    vma_t* new_vma = NULL;
     
     if (!task ) {
         return -EINVAL;
@@ -321,67 +342,66 @@ int sys_brk(void* addr)
     if (!addr) {
         return (int)old_brk;
     }
-    
-    /* Align to page boundary */
-    new_brk = ALIGN_UP(new_brk, PAGE_SIZE);
 
-    //KDEBUG("sys_brk: new_brk = 0x%08X, old_brk = 0x%08X\n", new_brk, old_brk);
-    
+    if (new_brk < proc->vm->heap_start || new_brk > proc->vm->heap_end) {
+        return -ENOMEM;
+    }
+
+    if (new_brk > 0xFFFFFFFFu - (PAGE_SIZE - 1)) {
+        return -ENOMEM;
+    }
+
+    new_brk = ALIGN_UP(new_brk, PAGE_SIZE);
+    if (new_brk > proc->vm->heap_end) {
+        return -ENOMEM;
+    }
+
     if (new_brk < old_brk) {
         /* Shrinking heap */
-        heap_vma = find_vma(proc->vm, proc->vm->heap_start);
+        heap_vma = find_heap_vma(proc->vm);
         if (!heap_vma) return -ENOMEM;
         
         /* Unmap pages */
         for (addr_to_unmap = new_brk; addr_to_unmap < old_brk; addr_to_unmap += PAGE_SIZE) {
-            if (addr_to_unmap >= proc->vm->heap_start) {
-                uint32_t phys_addr = get_physical_address(proc->vm->pgdir ,addr_to_unmap);
+            uint32_t phys_addr = get_physical_address(proc->vm->pgdir, addr_to_unmap);
+            if (phys_addr) {
+                if (unmap_user_page(proc->vm->pgdir, addr_to_unmap, proc->vm->asid) < 0) {
+                    return -EFAULT;
+                }
                 free_page((void *)phys_addr);
-                unmap_user_page(proc->vm->pgdir, addr_to_unmap);
             }
         }
-
-    } else if (new_brk >= old_brk) {
+        heap_vma->end = new_brk;
+    } else if (new_brk > old_brk) {
         /* Growing heap */
-        heap_vma = find_vma(proc->vm, proc->vm->heap_start);
-        if(!heap_vma)
-        {
-            new_vma = create_vma(proc->vm, proc->vm->heap_start, PAGE_SIZE, VMA_READ | VMA_WRITE);
-        }
-
-        if (!new_vma) return -ENOMEM;
-        
-        /* Check if we have enough space */
-        //if (new_brk > proc->vm->stack_start) {
-        //    return -ENOMEM;
-        //}
-
-        if(new_brk == old_brk)
-            new_brk += PAGE_SIZE ;
+        heap_vma = find_heap_vma(proc->vm);
 
         for (addr_to_map = old_brk; addr_to_map < new_brk; addr_to_map += PAGE_SIZE) {
-            if (addr_to_map >= proc->vm->heap_start) {
+            void *new_page = allocate_page();
+            if (!new_page) {
+                rollback_brk_growth(proc->vm, old_brk, addr_to_map);
+                return -ENOMEM;
+            }
 
-                void * new_page = allocate_page();
-
-                //KDEBUG("sys_brk: allocating new page at vaddr = 0x%08X, paddr = 0x%08X\n", addr_to_map, (uint32_t)new_page);
-
-
-                if (!new_page) {
-                    return -ENOMEM;
-                }
-        
-                // Zero the page
-                memset((void *)new_page, 0, PAGE_SIZE);
-                
-                // Map new page in process PGDIR
-                map_user_page(proc->vm->pgdir, addr_to_map, (uint32_t)new_page, 
-                            VMA_READ | VMA_WRITE, proc->vm->asid);
-
+            if (map_user_page(proc->vm->pgdir, addr_to_map, (uint32_t)new_page,
+                              VMA_READ | VMA_WRITE, proc->vm->asid) < 0) {
+                free_page(new_page);
+                rollback_brk_growth(proc->vm, old_brk, addr_to_map);
+                return -ENOMEM;
             }
         }
-        
-        // FIX IT  Pages will be allocated on demand via page faults
+
+        if (!heap_vma) {
+            heap_vma = create_vma(proc->vm, proc->vm->heap_start,
+                                  new_brk - proc->vm->heap_start,
+                                  VMA_READ | VMA_WRITE);
+            if (!heap_vma) {
+                rollback_brk_growth(proc->vm, old_brk, new_brk);
+                return -ENOMEM;
+            }
+        } else {
+            heap_vma->end = new_brk;
+        }
     }
 
     //KDEBUG("sys_brk: New BRK is at 0x%08X\n", new_brk);
@@ -436,35 +456,39 @@ int sys_dup2(int oldfd, int newfd)
 int sys_chdir(const char* path)
 {
     char* kernel_path;
+    char* abs_path;
     inode_t* inode;
     task_t *task = current_task;
-    
-    if(!task || !task->process) return -EFAULT;
+
+    if (!task || !task->process) return -EFAULT;
 
     kernel_path = copy_string_from_user(path);
     if (!kernel_path) return -EFAULT;
-    
-    inode = path_lookup(kernel_path);
-    
-    if (!inode){
-        kfree(kernel_path);
+
+    /* Résoudre en chemin absolu puis canonicaliser (. et .. compris) */
+    abs_path = resolve_path(kernel_path);
+    kfree(kernel_path);
+    if (!abs_path) return -ENOMEM;
+
+    path_canonicalize(abs_path);
+
+    inode = path_lookup(abs_path);
+    if (!inode) {
+        kfree(abs_path);
         return -ENOENT;
-    } 
-    
+    }
+
     if (!S_ISDIR(inode->mode)) {
         put_inode(inode);
-        kfree(kernel_path);
+        kfree(abs_path);
         return -ENOTDIR;
     }
-    //KDEBUG("ABOUT TO CHANGE CURRENT DIR\n");
-    //KDEBUG("CWD = %s\n", task->process->cwd);
-    //KDEBUG("kernel_path = %s\n", kernel_path);
 
-    strcpy(task->process->cwd, kernel_path);
-    /* TODO: Update current working directory */
+    strncpy(task->process->cwd, abs_path, MAX_PATH - 1);
+    task->process->cwd[MAX_PATH - 1] = '\0';
+
     put_inode(inode);
-    //KDEBUG("2 CWD = %s\n", task->process->cwd);
-
+    kfree(abs_path);
     return 0;
 }
 
@@ -629,68 +653,65 @@ int sys_unlink(const char* pathname)
 int sys_rmdir(const char* pathname)
 {
     char* kernel_path;
+    char* abs_path;
     char* parent_path;
     char* dir_name;
     inode_t* parent_inode;
     inode_t* target_inode;
     int result;
-    
-    /* Copier le chemin depuis l'userspace */
+
     kernel_path = copy_string_from_user(pathname);
     if (!kernel_path) return -EFAULT;
-    
-    /* Vérifier le répertoire à supprimer */
-    target_inode = path_lookup(kernel_path);
+
+    abs_path = resolve_path(kernel_path);
+    kfree(kernel_path);
+    if (!abs_path) return -ENOMEM;
+
+    target_inode = path_lookup(abs_path);
     if (!target_inode) {
-        kfree(kernel_path);
+        kfree(abs_path);
         return -ENOENT;
     }
-    
-    /* Vérifier que c'est un répertoire */
+
     if (!S_ISDIR(target_inode->mode)) {
         put_inode(target_inode);
-        kfree(kernel_path);
+        kfree(abs_path);
         return -ENOTDIR;
     }
-    
-    /* Vérifier que le répertoire est vide */
+
     if (fat32_directory_is_not_empty(target_inode->first_cluster)) {
         put_inode(target_inode);
-        kfree(kernel_path);
+        kfree(abs_path);
         return -ENOTEMPTY;
     }
-    
-    /* Séparer parent et nom */
-    result = split_path(kernel_path, &parent_path, &dir_name);
+
+    result = split_path(abs_path, &parent_path, &dir_name);
     if (result != 0) {
         put_inode(target_inode);
-        kfree(kernel_path);
+        kfree(abs_path);
         return result;
     }
-    
-    /* Trouver le répertoire parent */
+
     parent_inode = path_lookup(parent_path);
     if (!parent_inode) {
         put_inode(target_inode);
-        kfree(kernel_path);
+        kfree(abs_path);
         kfree(parent_path);
         kfree(dir_name);
         return -ENOENT;
     }
-    
-    /* Supprimer l'entrée du répertoire parent */
+
     result = fat32_remove_dir_entry(parent_inode->first_cluster, dir_name);
     if (result == 0) {
-        /* Libérer le cluster du répertoire */
         fat32_free_cluster(target_inode->first_cluster);
     }
-    
+
     put_inode(target_inode);
     put_inode(parent_inode);
-    kfree(kernel_path);
+    kfree(abs_path);
     kfree(parent_path);
     kfree(dir_name);
-    
+
     return result;
 }
 
@@ -698,48 +719,48 @@ int sys_rmdir(const char* pathname)
 int sys_mkdir(const char* pathname, mode_t mode)
 {
     char* kernel_path;
+    char* abs_path;
     char* parent_path;
     char* dir_name;
     inode_t* parent_inode;
     int result;
-    
-    /* Copier le chemin depuis l'userspace */
+
     kernel_path = copy_string_from_user(pathname);
     if (!kernel_path) return -EFAULT;
-    
-    /* Séparer parent et nom du répertoire */
-    result = split_path(kernel_path, &parent_path, &dir_name);
+
+    abs_path = resolve_path(kernel_path);
+    kfree(kernel_path);
+    if (!abs_path) return -ENOMEM;
+
+    result = split_path(abs_path, &parent_path, &dir_name);
     if (result != 0) {
-        kfree(kernel_path);
+        kfree(abs_path);
         return result;
     }
-    
-    /* Trouver le répertoire parent */
+
     parent_inode = path_lookup(parent_path);
     if (!parent_inode) {
-        kfree(kernel_path);
+        kfree(abs_path);
         kfree(parent_path);
         kfree(dir_name);
         return -ENOENT;
     }
-    
-    /* Vérifier que le parent est un répertoire */
+
     if (!S_ISDIR(parent_inode->mode)) {
         put_inode(parent_inode);
-        kfree(kernel_path);
+        kfree(abs_path);
         kfree(parent_path);
         kfree(dir_name);
         return -ENOTDIR;
     }
-    
-    /* Créer le répertoire via l'inode operation */
+
     result = parent_inode->i_op->mkdir(parent_inode, dir_name, mode | S_IFDIR);
-    
+
     put_inode(parent_inode);
-    kfree(kernel_path);
+    kfree(abs_path);
     kfree(parent_path);
     kfree(dir_name);
-    
+
     return result;
 }
 
@@ -769,18 +790,14 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
         /* Mettre le processus en sommeil */
     current_task->state = TASK_INTERRUPTIBLE;
     current_task->wakeup_time = start_time + sleep_ms;
-    current_task->context.returns_to_user = 0;
     spin_unlock(&task_lock);
     
     yield();
     
     //KDEBUG("sys_nanosleep: woke up\n");
 
-    current_task->context.returns_to_user = 1;
-    yield();
-
     /* Vérifier si réveillé par signal */
-    if (current_task->state == TASK_RUNNING && 
+    if (current_task->state == TASK_RUNNING &&
         get_system_ticks() < current_task->wakeup_time) {
         /* Réveillé prématurément par un signal */
         if (rem) {
@@ -791,8 +808,86 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
         }
         return -EINTR;
     }
-    
+
     return 0;
 }
 
+int sys_sysinfo(struct sysinfo_response *resp)
+{
+    if (!resp) return -EINVAL;
 
+    static const char state_char[7] = {
+        'S', /* TASK_READY           */
+        'R', /* TASK_RUNNING         */
+        'S', /* TASK_BLOCKED         */
+        'Z', /* TASK_ZOMBIE          */
+        'T', /* TASK_TERMINATED      */
+        'S', /* TASK_INTERRUPTIBLE   */
+        'D', /* TASK_UNINTERRUPTIBLE */
+    };
+
+    struct sysinfo_response *local = kmalloc(sizeof(struct sysinfo_response));
+    if (!local) return -ENOMEM;
+    memset(local, 0, sizeof(struct sysinfo_response));
+
+    /* Mémoire système */
+    local->mem_total_kb = (get_total_page_count() * PAGE_SIZE) / 1024;
+    local->mem_free_kb  = (get_free_page_count()  * PAGE_SIZE) / 1024;
+
+    /* Uptime pour %CPU */
+    uint32_t uptime = get_system_ticks();
+    if (uptime == 0) uptime = 1;
+
+    /* Liste des tâches */
+    int count = 0;
+    task_t *task = task_list_head;
+    if (!task) goto out;
+
+    do {
+        if (count >= 64) break;
+        struct proc_info *p = &local->procs[count];
+
+        p->pid      = task->process ? task->process->pid : (int)task->task_id;
+        p->ppid     = task->process ? task->process->ppid : 0;
+        p->priority = task->priority;
+        p->switches = task->switch_count;
+        /* Division 64-bit évitée : on scale down en uint32 avant de diviser */
+        uint32_t rt32 = (task->total_runtime >= (uint64_t)uptime)
+                        ? uptime : (uint32_t)task->total_runtime;
+        uint32_t u = uptime, r = rt32;
+        while (u > 0x00100000u) { u >>= 1; r >>= 1; }
+        p->cpu_pct_x10 = u ? (r * 1000u) / u : 0u;
+        p->stack_kb = task->stack_size / 1024;
+        p->state    = (task->state < 7) ? state_char[task->state] : '?';
+
+        switch (task->type) {
+            case TASK_TYPE_PROCESS: p->type = 'P'; break;
+            case TASK_TYPE_THREAD:  p->type = 'T'; break;
+            default:                p->type = 'K'; break;
+        }
+
+        if (task->process && task->process->vm) {
+            vm_space_t *vm = task->process->vm;
+            uint32_t used = (vm->brk > vm->heap_start) ? (vm->brk - vm->heap_start) : 0;
+            p->heap_kb = used / 1024;
+        }
+
+        int i;
+        for (i = 0; i < 31 && task->name[i]; i++)
+            p->name[i] = task->name[i];
+        p->name[i] = '\0';
+
+        count++;
+        task = task->next;
+    } while (task && task != task_list_head);
+
+out:
+    local->proc_count = count;
+
+    int ret = count;
+    if (copy_to_user(resp, local, sizeof(struct sysinfo_response)) < 0)
+        ret = -EFAULT;
+
+    kfree(local);
+    return ret;
+}

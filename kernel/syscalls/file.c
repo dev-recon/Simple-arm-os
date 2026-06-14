@@ -74,7 +74,6 @@ int sys_write(int fd, const void* buf, size_t count)
     
     file = current_task->process->files[fd];
     if (!file) return -EBADF;
-    
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
 
 
@@ -112,7 +111,9 @@ int sys_write(int fd, const void* buf, size_t count)
 int sys_close(int fd)
 {
     file_t* file;
-    
+
+    //KDEBUG("[CLOSE] fd=%d\n", fd);
+
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
     
     file = current_task->process->files[fd];
@@ -310,41 +311,68 @@ char *get_current_working_directory(void){
 }
 
 
+/* Normalise un chemin absolu en place : résout . et .. composant par composant. */
+void path_canonicalize(char *path) {
+    const char *segs[64];
+    int depth = 0;
+    const char *p = path + 1;
+
+    while (*p) {
+        const char *seg = p;
+        while (*p && *p != '/') p++;
+        size_t len = (size_t)(p - seg);
+
+        if (len == 0 || (len == 1 && seg[0] == '.')) {
+            /* ignore . et slashs multiples */
+        } else if (len == 2 && seg[0] == '.' && seg[1] == '.') {
+            if (depth > 0) depth--;   /* remonte d'un niveau (plancher = racine) */
+        } else {
+            segs[depth++] = seg;
+        }
+        if (*p == '/') p++;
+    }
+
+    /* Reconstruction en place (toujours plus court ou égal à l'original) */
+    char *out = path + 1;
+    for (int i = 0; i < depth; i++) {
+        if (i > 0) *out++ = '/';
+        const char *s = segs[i];
+        while (*s && *s != '/') *out++ = *s++;
+    }
+    *out = '\0';
+}
+
 char* resolve_path(const char* path) {
     char* full_path;
     char* cwd;
     size_t cwd_len, path_len;
-    
-    /* Si chemin absolu, retourner une copie */
+
     if (path[0] == '/') {
-        return strdup(path);
+        char* abs = strdup(path);
+        if (abs) path_canonicalize(abs);
+        return abs;
     }
 
-    if(path[0] == '.') {
-        return strdup(current_task->process->cwd);
-    }
-    
-    /* Chemin relatif - obtenir le répertoire courant */
+    /* Chemin relatif (y compris ".", "..", "./foo", "../foo") : préfixer avec cwd */
     cwd = get_current_working_directory();
     if (!cwd) return NULL;
-    
+
     cwd_len = strlen(cwd);
     path_len = strlen(path);
-    
-    /* Allouer pour "cwd/path\0" */
+
     full_path = kmalloc(cwd_len + 1 + path_len + 1);
     if (!full_path) {
         kfree(cwd);
         return NULL;
     }
-    
-    /* Construire le chemin complet */
+
     strcpy(full_path, cwd);
     if (cwd[cwd_len - 1] != '/') {
         strcat(full_path, "/");
     }
     strcat(full_path, path);
-    
+
+    path_canonicalize(full_path);
     kfree(cwd);
     return full_path;
 }
@@ -355,10 +383,10 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     char* full_path;
 
     int fd;
-    
+
     /* Suppression du warning unused parameter */
     (void)mode;
-    
+
     kernel_path = copy_string_from_user(pathname);
     if (!kernel_path) return -EFAULT;
 
@@ -371,7 +399,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
 
     fd = kernel_open(full_path, flags, mode);
 
-    //KDEBUG("sys_open: opened file fd = %d\n", fd);
+    //KDEBUG("sys_open: '%s' flags=0x%x -> fd=%d\n", pathname, flags, fd);
   
 
     return fd;
@@ -504,6 +532,11 @@ file_t* create_file(void)
 void close_file(file_t* file)
 {
     if (!file) return;
+
+    if (file->ref_count == 0) {
+        KERROR("close_file: invalid zero refcount for file %p\n", file);
+        return;
+    }
     
     file->ref_count--;
     if (file->ref_count == 0) {
@@ -533,9 +566,13 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
     char *user_buf = (char *)dirp;
     char *buf_ptr = user_buf;
     size_t bytes_written = 0;
-    
+
+    //KDEBUG("[GETDENTS] entry fd=%u dirp=%p count=%u\n", fd, dirp, count);
+
     /* Vérifier le fd */
     if (fd >= MAX_FILES || !current_task->process->files[fd]) {
+        KERROR("[GETDENTS] EBADF fd=%u files[fd]=%p\n", fd,
+               fd < MAX_FILES ? (void*)current_task->process->files[fd] : NULL);
         return -EBADF;
     }
     
@@ -553,13 +590,24 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
     
     //KDEBUG("Reading entries from %s fd=%d\n", file->name, fd);
 
+    /* Vérifier que f_op et readdir sont valides */
+    if (!file->f_op || !file->f_op->readdir) {
+        KERROR("[GETDENTS] fd=%u: f_op=%p readdir=%p\n",
+               fd, file->f_op,
+               file->f_op ? (void*)file->f_op->readdir : NULL);
+        return -ENOSYS;
+    }
+
+    //KDEBUG("[GETDENTS] fd=%u file=%p inode=%p f_op=%p readdir=%p\n",
+    //       fd, file, file->inode, file->f_op, file->f_op->readdir);
+
     /* Lire les entrées du répertoire */
     while (bytes_written < count) {
         struct dirent entry;
         struct linux_dirent *dirent;
         size_t name_len;
         size_t rec_len;
-        
+
         /* Lire une entrée via le VFS */
         ssize_t ret = file->f_op->readdir(file, &entry);
         

@@ -94,6 +94,21 @@ extern uint32_t __stack_svc_top;
 #define VIRT_VIRTIO_SIZE        0x00000200u                    /* 512 bytes per device */
 #define VIRT_VIRTIO_IRQ_BASE    16                            /* IRQ 16+ */
 
+/*
+ * Alias MMIO prives dans TTBR1. Les pilotes utilisent encore les adresses
+ * physiques basses; ces alias permettent leur migration progressive sans
+ * exposer les peripheriques dans les futurs espaces TTBR0 des processus.
+ */
+#define KERNEL_MMIO_GIC_BASE    0xF0000000u
+#define KERNEL_MMIO_UART_BASE   0xF0100000u
+#define KERNEL_MMIO_VIRTIO_BASE 0xF0200000u
+#define KERNEL_MMIO_SECTION_SIZE 0x00100000u
+#define KERNEL_MMIO_GIC_DIST_BASE KERNEL_MMIO_GIC_BASE
+#define KERNEL_MMIO_GIC_CPU_BASE  (KERNEL_MMIO_GIC_BASE + (VIRT_GIC_CPU_BASE - VIRT_GIC_DIST_BASE))
+#define KERNEL_MMIO_RTC_BASE       (KERNEL_MMIO_UART_BASE + (VIRT_RTC_BASE - VIRT_UART_BASE))
+#define KERNEL_MMIO_VIRTIO_ADDR(paddr) \
+    (KERNEL_MMIO_VIRTIO_BASE + ((uint32_t)(paddr) - VIRT_VIRTIO_BASE))
+
 /* Alias pour compatibilite avec votre code existant */
 #define VIRTIO_BASE             VIRT_VIRTIO_BASE              /* 0x0A000000 */
 #define VIRTIO_SIZE             VIRT_VIRTIO_SIZE              /* 512 bytes per device */
@@ -205,8 +220,8 @@ extern uint32_t __stack_svc_top;
 #define UART3_BASE              (VIRT_UART_BASE + 0x3000)    /* UART3 hypothetique */
 
 /* Interrupt Controller (GIC) */
-#define GIC_DIST_BASE           VIRT_GIC_DIST_BASE            /* GIC Distributor */
-#define GIC_CPU_BASE            VIRT_GIC_CPU_BASE             /* GIC CPU Interface */
+#define GIC_DIST_BASE           KERNEL_MMIO_GIC_DIST_BASE     /* GIC Distributor runtime */
+#define GIC_CPU_BASE            KERNEL_MMIO_GIC_CPU_BASE      /* GIC CPU Interface runtime */
 
 /* Timer (ARM Generic Timer) */
 #define TIMER0_BASE             0x09000000u                    /* Pas utilise sur virt */

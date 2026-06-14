@@ -181,7 +181,8 @@ static inline void tlb_flush_by_asid(uint32_t asid)
 
 static inline void tlb_flush_by_va_asid(uint32_t vaddr, uint32_t asid)
 {
-    uint32_t tlbimvaa_val = (vaddr & ~0xFFF) | (asid & ASID_MASK);
+    (void)asid;
+    uint32_t tlbimvaa_val = vaddr & ~0xFFF;
     __asm__ volatile("mcr p15, 0, %0, c8, c7, 3" : : "r"(tlbimvaa_val));  /* TLBIMVAA */
     __asm__ volatile("dsb");
     __asm__ volatile("isb");

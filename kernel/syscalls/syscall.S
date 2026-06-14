@@ -10,6 +10,15 @@
 .global save_user_bank
 .global signal_return_trampoline
 .equ __NR_rt_sigreturn, 173
+.equ CTX_USR_R0,       88
+.equ CTX_USR_R10,     128
+.equ CTX_USR_R11,     132
+.equ CTX_USR_R12,     136
+.equ CTX_USR_SP,      140
+.equ CTX_USR_LR,      144
+.equ CTX_USR_PC,      148
+.equ CTX_USR_CPSR,    152
+.equ CTX_SVC_SP_TOP,  156
 
     /* Registres generaux r0-r12 */
     // r0.         0,
@@ -63,7 +72,7 @@
 /* ARM32 Software Interrupt Handler - Point d'entree principal */
 swi_handler:
 
-    stmfd sp!, {r4-r5, r7-r12, lr}     /* Sauvegarder registres + LR */
+    stmfd sp!, {r4-r12, lr}            /* Sauvegarder registres preserves + LR */
     mrs r12, spsr               /* Recuperer SPSR */
     stmfd sp!, {r12}            /* Sauvegarder SPSR */
     
@@ -75,6 +84,7 @@ swi_handler:
     /* Validation du numero de syscall */
     cmp r7, #256                /* Verifier limite syscall */
     movhs r0, #-38              /* Si invalide: r0 = -ENOSYS */
+    subhs sp, sp, #12           /* Construire le meme cadre que le chemin normal */
     bhs syscall_return          /* Brancher vers retour direct */
     
     /* Arguments pour syscall_handler */
@@ -95,72 +105,92 @@ swi_handler:
     str     r5,  [r12, #(88 + 20)]
     str     r6,  [r12, #(88 + 24)]
     str     r7,  [r12, #(88 + 28)]
+    str     r8,  [r12, #(88 + 32)]
+    str     r9,  [r12, #(88 + 36)]
+    str     r10, [r12, #(88 + 40)]
     str     r11,  [r12, #(88 + 44)]
 
-    /* 1) Sauver IMMÉDIATEMENT les 4 args user AVANT toute modif */
-    mov   r8,  r0              /* a0 */
-    mov   r9,  r1              /* a1 */
-    mov   r10, r2              /* a2 */
-    mov   r6, r3              /* a3 (utilise r12 comme temp ici) */
+    /* Sauver les arguments avant de reutiliser r0 pour relire r12 user. */
+    mov     r8, r0
+    mov     r9, r1
+    mov     r10, r2
+    mov     r6, r3
+
+    ldr     r0, [sp, #36]
+    str     r0, [r12, #(88 + 48)]
 
     /* 2) Sauvegardes “banquées” essentielles (sans BL, donc pas de clobber imprévu) */
     mrs     r0, spsr
     str     r0,  [r12, #152]           /* CPSR du user */
     mov     r0,  lr
-    str     r0,  [r12, #148]          /* PC de retour user = LR_svc (ARM) */
-    str     r0,  [r12, #144]          /* PC de retour user = LR_svc (ARM) */
+    str     r0,  [r12, #148]          /* PC de retour user = LR_svc */
 
     cps     #0x1F                            /* passer en SYS pour lire SP_user */
     mov     r0,  sp
+    mov     r1,  lr
     cps     #0x13                            /* revenir en SVC */
     str     r0,  [r12, #140]
+    str     r1,  [r12, #144]
 
     mov     r0,  #1
     str     r0,  [r12, #84]         /* marquer retour vers USR */
 
-    /* Préparer les arguments sur la pile pour syscall_handler */
-    sub   sp, sp, #8           /* Allouer 8 octets pour 2 arguments sur pile */
-    str   r4, [sp, #0]        /* [sp+0] = a4 (5ème param de syscall_handler) */
-    str   r5, [sp, #4]         /* [sp+4] = a5 (6ème param de syscall_handler) */
+    mov   r0, sp
+    str   r0, [r12, #160]         /* sauvagarde SP SVC */
+    str   r0, [r12, #52]            /* sauvagarde SP SVC top */
 
-    //mov     r0,  sp
-    //str     r0,  [r12, #52]         /* sauvagarde SP SVC */
+    /* Préparer les arguments sur la pile pour syscall_handler */
+    sub   sp, sp, #12          /* 2 arguments + padding pour alignement AAPCS */
+    str   r6, [sp, #0]         /* arg4 C = 4eme argument user (r3) */
+    str   r4, [sp, #4]         /* arg5 C = 5eme argument user (r4) */
+
+    mov     r0,  sp
+    str     r0,  [r12, #52]         /* sauvagarde SP SVC */
+    str     r0,  [r12, #160]         /* sauvagarde SP SVC */
 
     //push {r0-r3, lr}
     //mov r0, r12
     //bl debug_print_sp
     //pop {r0-r3, lr}
 
+
     /* Préparer les 4 premiers arguments dans les registres */
     mov   r0, r7               /* r0 = num (1er param) */
     mov   r1, r8               /* r1 = a1  (2ème param) */
     mov   r2, r9               /* r2 = a2  (3ème param) */
     mov   r3, r10              /* r3 = a3  (4ème param) */
-    mov   r4, r6               /* r3 = a3  (5ème param) */
+
 
     /* Appeler le handler C */
     bl syscall_handler
+
+    /* Le handler C peut avoir prepare un retour user alternatif (signal). */
+    str r0, [sp, #8]
+    bl signal_consume_user_return_override
+    cmp r0, #0
+    bne signal_user_return
+    ldr r0, [sp, #8]
     
 syscall_return:
     /* r0 contient la valeur de retour du syscall.
        On la garde dans un temporaire pour restaurer proprement les registres. */
-    mov   r6, r0
+    mov   r3, r0
     /* Nettoyer la pile (arg4, arg5) */
-    add sp, sp, #8
+    add sp, sp, #12
 
     /* Récupérer SPSR sauvegardé juste après {r0-r12,lr} */
     ldr     r12, [sp], #4       /* r12 = spsr_sauvé ; sp avance de 4 */
     msr     spsr_cxsf, r12
 
     /* Restaurer tous les registres du caller, y compris l'ancien r0 */
-    ldmfd  sp!, {r4-r5, r7-r12, lr}
+    ldmfd  sp!, {r4-r12, lr}
 
     //push {r0-r3, lr}
     //bl debug_print_sp3
     //pop {r0-r3, lr}
 
     /* Remettre la valeur de retour dans r0 */
-    mov     r0, r6
+    mov     r0, r3
 
     /* Debug sortie de syscall */
     //push {r0-r3, lr}
@@ -169,6 +199,29 @@ syscall_return:
 
     /* Retourner en mode utilisateur */
     movs pc, lr
+
+signal_user_return:
+    ldr     r12, =current_task
+    ldr     r12, [r12]
+    add     r12, r12, #48
+
+    /* Abandonner la frame SVC courante; tout l'etat vient de ctx->usr_*. */
+    ldr     sp, [r12, #CTX_SVC_SP_TOP]
+    ldr     r2, [r12, #CTX_USR_CPSR]
+    msr     spsr_cxsf, r2
+
+    cps     #0x1F
+    ldr     sp, [r12, #CTX_USR_SP]
+    ldr     lr, [r12, #CTX_USR_LR]
+    cps     #0x13
+
+    add     r10, r12, #CTX_USR_R0
+    ldmia   r10, {r0-r9}
+    ldr     r10, [r12, #CTX_USR_R10]
+    ldr     lr, [r12, #CTX_USR_PC]
+    ldr     r11, [r12, #CTX_USR_R11]
+    ldr     r12, [r12, #CTX_USR_R12]
+    movs    pc, lr
 
 stack_panic:
     /* Gestion basique de stack overflow */
@@ -325,4 +378,3 @@ read_cycle_counter:
     bx lr
 
 .end
-

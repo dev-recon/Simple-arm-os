@@ -34,22 +34,14 @@ extern void *sbrk(void *addr);
 void *malloc(size_t size) {
 
     if (size == 0) return NULL;
-    
+
     size = ALIGN(size);
 
     struct block_header *block = NULL;
 
     // Calculer la taille totale nécessaire
     size_t total_size = HEADER_SIZE + size;
-
-    uint32_t left_size = (uint32_t)current_brk - (uint32_t)heap_start ;
-
-    //printf("malloc: left size in current allocated heap %u bytes\n", left_size);
-
-
-    //printf("malloc: current_brk 0x%08X \n", current_brk);
-    //printf("malloc: heap_start 0x%08X \n", heap_start);
-    //printf("malloc: heap_head 0x%08X \n", (uint32_t)heap_head);
+    uint32_t left_size = 0;
 
     if(!heap_start && !current_brk)
     {

@@ -80,6 +80,14 @@ SECTIONS
         __irq_stack_top = .;
     } > RAM
 
+    /* Pile pour le mode UND (Undefined instruction) */
+    .undpile : {
+        . = ALIGN(8);
+        __und_stack_bottom = .;
+        . += 1024;            /* 1KB */
+        __und_stack_top = .;
+    } > RAM
+
     /* Pile pour le mode SVC */
     .svcpile : {
         . = ALIGN(8);

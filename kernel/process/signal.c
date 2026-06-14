@@ -18,8 +18,8 @@ void wake_up_process_for_signal(task_t* proc);
 void deliver_signal(task_t* proc, int sig);
 static int find_highest_priority_signal(uint32_t signal_mask);
 static void handle_default_signal_action(task_t* proc, int sig);
-static void setup_signal_handler(task_t* proc, int sig, sigaction_t* action);
-static void setup_signal_frame(task_t* proc, int sig, uint32_t handler_addr, 
+static bool setup_signal_handler(task_t* proc, int sig, sigaction_t* action);
+static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
                                uint32_t signal_sp, uint32_t old_blocked);
 static void terminate_process(task_t* proc, int sig);
 static void dump_core(task_t* proc);
@@ -51,6 +51,16 @@ static sig_default_action_t default_signal_actions[MAX_SIGNALS] = {
 };
 
 extern void signal_return_trampoline(void);
+
+typedef struct {
+    uint32_t r[13];
+    uint32_t sp;
+    uint32_t lr;
+    uint32_t pc;
+    uint32_t cpsr;
+    uint32_t old_blocked;
+    uint32_t sig;
+} user_signal_frame_t;
 
 /* Gestionnaire global des signal stacks */
 typedef struct {
@@ -150,6 +160,7 @@ void init_process_signals(task_t* proc)
     sig->pending = 0;
     sig->blocked = 0;
     sig->in_handler = 0;
+    sig->return_override = 0;
     
     /* Allouer l'adresse de la signal stack - ACCeS CORRECT */
     proc->process->signal_stack_size = DEFAULT_SIGNAL_STACK_SIZE;
@@ -189,7 +200,13 @@ void init_process_signals(task_t* proc)
         //KDEBUG("SIGNAL NEW FLAGS = 0x%04X\n", proc->process->vm->vma_list->flags);
 
 
-        map_user_page(proc->process->vm->pgdir, vaddr, (uint32_t)stack_page, flags, proc->process->vm->asid);
+        if (map_user_page(proc->process->vm->pgdir, vaddr, (uint32_t)stack_page,
+                          flags, proc->process->vm->asid) < 0) {
+            free_page(stack_page);
+            proc->process->signal_stack_base = 0;
+            proc->process->signal_stack_size = 0;
+            return;
+        }
     }
     
     /* ACCeS CORRECT */
@@ -302,6 +319,9 @@ void wake_up_process_for_signal(task_t* proc)
         KDEBUG("[SIGNAL] Waking up blocked process PID=%u for signal\n", proc->process->pid);
         proc->state = TASK_READY;
         add_to_ready_queue(proc);
+    } else if (proc->state == TASK_INTERRUPTIBLE) {
+        proc->state = TASK_READY;
+        proc->wakeup_time = 0;
     }
     //KDEBUG("wake_up_process_for_signal: state %s\n", task_state_string(proc->state));
 }
@@ -357,7 +377,9 @@ void deliver_signal(task_t* proc, int sig)
     /* Handler utilisateur */
     //KDEBUG("[SIGNAL] Calling user handler 0x%08X for signal %d\n", 
     //       (uint32_t)action->sa_handler, sig);
-    setup_signal_handler(proc, sig, action);
+    if (!setup_signal_handler(proc, sig, action)) {
+        sig_state->pending |= (1u << sig);
+    }
 }
 
 /**
@@ -400,7 +422,7 @@ static void handle_default_signal_action(task_t* proc, int sig)
 /**
  * Configurer un handler de signal utilisateur - CORRIGe
  */
-static void setup_signal_handler(task_t* proc, int sig, sigaction_t* action)
+static bool setup_signal_handler(task_t* proc, int sig, sigaction_t* action)
 {
     signal_state_t* sig_state;
     uint32_t old_blocked;
@@ -408,135 +430,75 @@ static void setup_signal_handler(task_t* proc, int sig, sigaction_t* action)
     
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)  {
         KERROR("setup_signal_handler: NULL PROC\n");
-         return ;
+         return false;
     }
     
     sig_state = &proc->process->signals;
     
-    /* Sauvegarder le contexte actuel dans saved_context */
-    memcpy(&sig_state->saved_context, &proc->context, sizeof(task_context_t));
-    
-    /* Marquer en handler */
-    sig_state->in_handler |= (1 << sig);
-    
-    /* Bloquer les signaux selon sa_mask */
     old_blocked = sig_state->blocked;
-    sig_state->blocked |= action->sa_mask;
-    
-    /* Bloquer ce signal sauf si SA_NODEFER */
-    if (!(action->sa_flags & SA_NODEFER)) {
-        sig_state->blocked |= (1 << sig);
+    signal_sp = proc->process->signal_stack_base + proc->process->signal_stack_size - 16;
+
+    if (!setup_signal_frame(proc, sig, action, signal_sp, old_blocked)) {
+        return false;
     }
-    
-    /* Reset handler si SA_RESETHAND */
+
+    sig_state->in_handler |= (1u << sig);
+    sig_state->blocked |= action->sa_mask;
+    if (!(action->sa_flags & SA_NODEFER)) {
+        sig_state->blocked |= (1u << sig);
+    }
     if (action->sa_flags & SA_RESETHAND) {
         action->sa_handler = SIG_DFL;
     }
-    
-    /* Setup signal stack */
-    signal_sp = proc->process->signal_stack_base + proc->process->signal_stack_size - 16;
-    setup_signal_frame(proc, sig, (uint32_t)action->sa_handler, signal_sp, old_blocked);
-    
-    //KDEBUG("[SIGNAL] Signal handler setup complete for signal %d\n", sig);
+    sig_state->return_override = 1;
+    return true;
 }
 
 /**
  * Configurer la frame signal sur la pile - CORRIGe
  */
-static void setup_signal_frame(task_t* proc, int sig, uint32_t handler_addr, 
+static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
                                uint32_t signal_sp, uint32_t old_blocked)
 {
-    uint32_t page_addr;
-    uint32_t phys_addr;
-    uint32_t temp_mapping;
-    uint32_t offset;
-    uint32_t* stack_ptr;
-    //uint32_t final_sp;
-    int i;
+    user_signal_frame_t frame;
+    uint32_t final_sp;
     
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)  {
         KERROR("setup_signal_frame: NULL PROC\n");
-         return ;
+        return false;
     }
 
-    /* Mapper temporairement la pile signal */
-    page_addr = signal_sp & ~(PAGE_SIZE - 1);
-    phys_addr = get_physical_address(proc->process->vm->pgdir, page_addr);
-  
-    //KDEBUG("[SIGNAL] Proc %s Signal stack page for PID=%u, page_addr = 0x%08X\n", proc->name, proc->process->pid, page_addr);
-
-    if (phys_addr == 0) {
-        KERROR("[SIGNAL] Signal stack page not mapped for PID=%u, page_addr = 0x%08X\n", proc->process->pid, page_addr);
-        void *new_page = allocate_page();
-        if (page_addr < 0x40000000) {
-            KDEBUG("[SIGNAL] Mapping Signal stack at 0x%08X\n", page_addr);
-
-            map_user_page( proc->process->vm->pgdir, page_addr, (uint32_t)new_page, VMA_READ | VMA_WRITE, proc->process->vm->asid );
-        }
-        else{
-            map_kernel_page( page_addr, (uint32_t)new_page);
-        }
+    if (!action->sa_restorer) {
+        KERROR("[SIGNAL] No user restorer for signal %d\n", sig);
+        return false;
     }
-    
-    temp_mapping = map_temp_page(phys_addr);
-    offset = signal_sp & (PAGE_SIZE - 1);
-    stack_ptr = (uint32_t*)(temp_mapping + offset);
-    
-    /* Construire la frame signal sur la pile */
-    *(--stack_ptr) = old_blocked;
-    *(--stack_ptr) = sig;
-    *(--stack_ptr) = (uint32_t)signal_return_trampoline;
-    
-    /* Copier les registres sauvegardes depuis saved_context */
-    *(--stack_ptr) = proc->process->signals.saved_context.cpsr;
-    for (i = 15; i >= 0; i--) {
-        uint32_t reg_value;
-        switch (i) {
-            case 0: reg_value = proc->process->signals.saved_context.r0; break;
-            case 1: reg_value = proc->process->signals.saved_context.r1; break;
-            case 2: reg_value = proc->process->signals.saved_context.r2; break;
-            case 3: reg_value = proc->process->signals.saved_context.r3; break;
-            case 4: reg_value = proc->process->signals.saved_context.r4; break;
-            case 5: reg_value = proc->process->signals.saved_context.r5; break;
-            case 6: reg_value = proc->process->signals.saved_context.r6; break;
-            case 7: reg_value = proc->process->signals.saved_context.r7; break;
-            case 8: reg_value = proc->process->signals.saved_context.r8; break;
-            case 9: reg_value = proc->process->signals.saved_context.r9; break;
-            case 10: reg_value = proc->process->signals.saved_context.r10; break;
-            case 11: reg_value = proc->process->signals.saved_context.r11; break;
-            case 12: reg_value = proc->process->signals.saved_context.r12; break;
-            case 13: reg_value = proc->process->signals.saved_context.sp; break;
-            case 14: reg_value = proc->process->signals.saved_context.lr; break;
-            case 15: reg_value = proc->process->signals.saved_context.pc; break;
-            default: reg_value = 0; break;
-        }
-        *(--stack_ptr) = reg_value;
+
+    final_sp = (signal_sp - sizeof(frame)) & ~7u;
+    if (final_sp < proc->process->signal_stack_base) {
+        KERROR("[SIGNAL] Signal frame does not fit on signal stack\n");
+        return false;
     }
-    
-    //final_sp = signal_sp - ((uint32_t)stack_ptr - (temp_mapping + offset));
-    
-    unmap_temp_page((void*)temp_mapping);
-    
-    /* Modifier le contexte processus pour appeler le handler */
-    proc->context.r0 = sig;  /* Argument du signal */
-    proc->context.usr_r[0] = sig;  /* Argument du signal */
-    proc->context.usr_sp = signal_sp;
-    proc->context.lr = (uint32_t)signal_return_trampoline;
-    proc->context.usr_pc = handler_addr;
-    proc->context.usr_lr = handler_addr;
-    proc->context.cpsr = 0x10;  /* Mode utilisateur */
-    proc->context.is_first_run = 0;  /* Mode utilisateur */
-    proc->context.returns_to_user = 1;  /* Mode utilisateur */
-   
-    //KDEBUG("[SIGNAL] Signal frame setup: PGDIR = 0x%08X, handler=0x%08X, sp=0x%08X, sig=%d\n", (uint32_t)proc->process->vm->pgdir, 
-    //       handler_addr, final_sp, sig);
 
-    KDEBUG("[SIGNAL] Signal frame setup: Current Process = %s\n", current_task->name);
+    memcpy(frame.r, proc->context.usr_r, sizeof(frame.r));
+    frame.sp = proc->context.usr_sp;
+    frame.lr = proc->context.usr_lr;
+    frame.pc = proc->context.usr_pc;
+    frame.cpsr = proc->context.usr_cpsr;
+    frame.old_blocked = old_blocked;
+    frame.sig = (uint32_t)sig;
 
+    if (copy_to_user((void *)final_sp, &frame, sizeof(frame)) < 0) {
+        KERROR("[SIGNAL] Failed to copy signal frame to user stack\n");
+        return false;
+    }
 
-    schedule_to(proc);
-
-    //__task_switch(NULL, &proc->context);
+    proc->context.usr_r[0] = (uint32_t)sig;
+    proc->context.usr_sp = final_sp;
+    proc->context.usr_lr = (uint32_t)action->sa_restorer;
+    proc->context.usr_pc = (uint32_t)action->sa_handler;
+    proc->context.usr_cpsr = (frame.cpsr & ~0x1fu) | 0x10u;
+    proc->context.returns_to_user = 1;
+    return true;
 }
 
 /**
@@ -648,15 +610,7 @@ void sys_sigreturn(void)
 {
     task_t* proc = current_task;
     signal_state_t* sig_state;
-    uint32_t signal_sp;
-    uint32_t page_addr;
-    uint32_t phys_addr;
-    uint32_t temp_mapping;
-    uint32_t offset;
-    uint32_t* stack_ptr;
-    uint32_t saved_cpsr;
-    int sig;
-    int i;
+    user_signal_frame_t frame;
     
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         KERROR("[SIGNAL] sys_sigreturn: Invalid process\n");
@@ -664,63 +618,22 @@ void sys_sigreturn(void)
     }
     
     sig_state = &proc->process->signals;
-    
-    /* Recuperer la frame de la pile signal */
-    signal_sp = proc->context.sp;
-    
-    /* Mapper la pile signal */
-    page_addr = signal_sp & ~(PAGE_SIZE - 1);
-    phys_addr = get_physical_address(proc->process->vm->pgdir, page_addr);
-    
-    if (phys_addr == 0) {
-        KERROR("[SIGNAL] sys_sigreturn: Signal stack page not mapped\n");
+
+    if (copy_from_user(&frame, (void *)proc->context.usr_sp, sizeof(frame)) < 0) {
+        KERROR("[SIGNAL] sys_sigreturn: Invalid signal frame\n");
         return;
     }
-    
-    temp_mapping = map_temp_page(phys_addr);
-    offset = signal_sp & (PAGE_SIZE - 1);
-    stack_ptr = (uint32_t*)(temp_mapping + offset);
-    
-    /* Restaurer le contexte depuis la pile */
-    uint32_t regs[16];
-    for (i = 0; i < 16; i++) {
-        regs[i] = *(stack_ptr++);
-    }
-    saved_cpsr = *(stack_ptr++);
-    
-    /* Recuperer les infos signal */
-    /*uint32_t return_addr = *(stack_ptr++);*/  /* trampoline */
-    sig = *(stack_ptr++);
-    /*uint32_t old_blocked = *(stack_ptr++);*/
-    
-    unmap_temp_page((void*)temp_mapping);
-    
-    /* Restaurer le contexte dans la tache */
-    proc->context.r0 = regs[0];
-    proc->context.r1 = regs[1];
-    proc->context.r2 = regs[2];
-    proc->context.r3 = regs[3];
-    proc->context.r4 = regs[4];
-    proc->context.r5 = regs[5];
-    proc->context.r6 = regs[6];
-    proc->context.r7 = regs[7];
-    proc->context.r8 = regs[8];
-    proc->context.r9 = regs[9];
-    proc->context.r10 = regs[10];
-    proc->context.r11 = regs[11];
-    proc->context.r12 = regs[12];
-    proc->context.sp = regs[13];
-    proc->context.lr = regs[14];
-    proc->context.pc = regs[15];
-    proc->context.cpsr = saved_cpsr;
-    
-    /* Effacer le flag handler */
-    sig_state->in_handler &= ~(1 << sig);
-    
-    /* TODO: Restaurer correctement le masque signal */
-    
-    KDEBUG("[SIGNAL] sys_sigreturn: Restored context for signal %d, PC=0x%08X\n", 
-           sig, proc->context.pc);
+
+    memcpy(proc->context.usr_r, frame.r, sizeof(frame.r));
+    proc->context.usr_sp = frame.sp;
+    proc->context.usr_lr = frame.lr;
+    proc->context.usr_pc = frame.pc;
+    proc->context.usr_cpsr = (frame.cpsr & ~0x1fu) | 0x10u;
+    proc->context.returns_to_user = 1;
+
+    sig_state->blocked = frame.old_blocked;
+    sig_state->in_handler &= ~(1u << frame.sig);
+    sig_state->return_override = 1;
 }
 
 /**
@@ -743,6 +656,9 @@ void check_pending_signals(void)
     }
     
     sig = &proc->process->signals;
+
+    /* Une seule frame est supportee pour l'instant: pas de signal imbrique. */
+    if (sig->in_handler != 0) return;
     
     /* Trouver les signaux delivrables */
     deliverable = sig->pending & ~sig->blocked;
@@ -763,6 +679,21 @@ void check_pending_signals(void)
     //       signal_num, proc->process->pid);
     
     deliver_signal(proc, signal_num);
+}
+
+int signal_consume_user_return_override(void)
+{
+    task_t* proc = current_task;
+
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
+        return 0;
+    }
+    if (!proc->process->signals.return_override) {
+        return 0;
+    }
+
+    proc->process->signals.return_override = 0;
+    return 1;
 }
 
 /**

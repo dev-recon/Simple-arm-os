@@ -9,6 +9,15 @@ extern command_entry_t* find_command(const char* name);
 extern void list_commands(void);
 extern int command_init(void);
 
+static void shell_reap_background(void) {
+    int status = 0;
+    int pid;
+
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        printf("[bg] pid %d done status=%d\n", pid, status);
+    }
+}
+
 void my_handler(int sig) {
     const char msg[] = "Child: received SIGUSR1\n";
     /* write is async-signal-safe */
@@ -248,8 +257,17 @@ int shell_parse_line(char* line, char* argv[]) {
 
 // Execute a command
 int shell_execute(int argc, char* argv[]) {
+    int background = 0;
+
     if (argc == 0) {
         return SHELL_OK;
+    }
+
+    if (strcmp(argv[argc - 1], "&") == 0) {
+        background = 1;
+        argv[--argc] = NULL;
+        if (argc == 0)
+            return SHELL_OK;
     }
 
     // Command exit built-in
@@ -275,17 +293,27 @@ int shell_execute(int argc, char* argv[]) {
     int child_pid = fork();
     if (child_pid == 0) {
         //printf("                 ************ Child process running!\n");
-            
-        char* const argv[] = { cmd, NULL };
+        char* exec_argv[SHELL_MAX_ARGS];
         char* const envp[] = { NULL };
-            
-        int result = execve(cmd , argv, envp);
+        int i;
+
+        exec_argv[0] = cmd;
+        for (i = 1; i < argc && i < SHELL_MAX_ARGS - 1; i++)
+            exec_argv[i] = argv[i];
+        exec_argv[i] = NULL;
+
+        int result = execve(cmd , exec_argv, envp);
 
         // If we arrive here, exec failed
         printf("exec %s failed with %d\n", cmd, result);
         exit(-1);
         
     } else {
+
+        if (background) {
+            printf("[bg] pid %d\n", child_pid);
+            return SHELL_OK;
+        }
 
         int status = 0;
         int waited_pid = waitpid(child_pid, &status, 0);
@@ -309,12 +337,15 @@ void shell_run(void) {
     shell_running = 1;
     
     while (shell_running) {
+        shell_reap_background();
         shell_print_prompt();
         
         char* line = shell_read_line();
         if (!line || strlen(line) == 0) {
             continue;
         }
+
+        shell_reap_background();
         
         int argc = shell_parse_line(line, argv_buffer);
         if (argc > 0) {

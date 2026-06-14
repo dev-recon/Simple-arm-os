@@ -93,39 +93,47 @@ void* buddy_alloc(size_t num_block) {
     //kprintf("\n***********************************************************************\n");
     //kprintf("Allocation requested for %u pages\n", num_block);
 
-    size_t index = 0;
+    if (num_block == 0 || num_block > max_pages) {
+        return NULL;
+    }
 
-    while (index < max_pages ) {
-        bool ok = true;
+    size_t run_start = 0;
+    size_t run_length = 0;
 
-        for (size_t j = 0; j < num_block; ++j) {
-            if (page_infos[index + j].used || page_infos[index + j].reserved) {
-                ok = false;
-                break;
+    /*
+     * Rechercher une plage contigue libre. L'ancien code avancait avec
+     * page_infos[index].size lorsqu'une page occupee etait trouvee plus loin
+     * dans la plage candidate. Si la page a index etait libre, sa taille
+     * valait zero et la recherche bouclait indefiniment.
+     */
+    for (size_t index = 0; index < max_pages; ++index) {
+        if (!page_infos[index].used && !page_infos[index].reserved) {
+            if (run_length == 0) {
+                run_start = index;
             }
+            run_length++;
+        } else {
+            run_length = 0;
         }
 
-        if (!ok) {
-            index += page_infos[index].size;
-            continue;
+        if (run_length == num_block) {
+            uint32_t addr = buddy_base + run_start * PAGE_SIZE;
+
+            // Marque les pages comme utilisées
+            for (size_t j = 0; j < num_block; ++j) {
+                page_infos[run_start + j].used = 1;
+                page_infos[run_start + j].start = addr;
+                page_infos[run_start + j].size = num_block;
+            }
+
+            memset((void *)addr, 0, num_block * PAGE_SIZE);
+            //kprintf("Found block at 0x%08X\n", addr);
+            //kprintf("page_infos[%d].used = %u\n", run_start, page_infos[run_start].used);
+            //kprintf("page_infos[%d].start = 0x%08X\n", run_start, page_infos[run_start].start);
+            //kprintf("page_infos[%d].size = %u\n", run_start, page_infos[run_start].size);
+
+            return (void*)addr;
         }
-
-        uint32_t addr = buddy_base + index * PAGE_SIZE;
-
-        // Marque les pages comme utilisées
-        for (size_t j = 0; j < num_block; ++j) {
-            page_infos[index + j].used = 1;
-            page_infos[index + j].start = addr;
-            page_infos[index + j].size = num_block;    
-        }
-
-        memset((void *)addr, 0, num_block * PAGE_SIZE);
-        //kprintf("Found block at 0x%08X\n", addr);
-        //kprintf("page_infos[%d].used = %u\n", index, page_infos[index].used);
-        //kprintf("page_infos[%d].start = 0x%08X\n", index, page_infos[index].start);
-        //kprintf("page_infos[%d].size = %u\n", index, page_infos[index].size); 
-
-        return (void*)addr;
     }
 
     return NULL; // Aucun bloc disponible

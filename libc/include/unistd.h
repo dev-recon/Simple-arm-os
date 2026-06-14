@@ -20,6 +20,31 @@ int mkdir(const char* path, int flags);
 int rmdir(const char* path);
 int unlink(const char* pathname);
 
+/* Informations processus (temporaire — sera remplacé par /proc) */
+struct proc_info {
+    int      pid;
+    int      ppid;
+    unsigned priority;
+    unsigned switches;
+    unsigned cpu_pct_x10;
+    unsigned stack_kb;
+    unsigned heap_kb;
+    char     name[32];
+    char     state;
+    char     type;
+    char     _pad[2];
+};
+
+struct sysinfo_response {
+    unsigned         mem_total_kb;
+    unsigned         mem_free_kb;
+    int              proc_count;
+    unsigned         _pad;
+    struct proc_info procs[64];
+};
+
+int getsysinfo(struct sysinfo_response *resp);
+
 
 int dup(int oldfd);
 
@@ -42,6 +67,8 @@ int chown(const char* pathname, uid_t owner, gid_t group);
 
 
 /* Processus */
+#define WNOHANG 1
+
 int getpid(void);
 int getppid(void);
 int fork(void);

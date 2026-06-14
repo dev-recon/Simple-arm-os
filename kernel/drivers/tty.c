@@ -47,7 +47,10 @@ void tty_input_char(char c) {
         /* Réveiller le lecteur si mode ligne et '\n' reçu */
         if ((tty0.c_lflag & ICANON) && (c == '\n' || c == '\r')) {
             if (tty0.read_wait) {
-                wakeup_parent(tty0.read_wait);
+                task_t* reader = tty0.read_wait;
+                reader->state = TASK_READY;
+                if (reader->process)
+                    reader->process->state = (proc_state_t)PROC_READY;
                 tty0.read_wait = NULL;
             }
         }

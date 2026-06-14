@@ -127,6 +127,7 @@ void early_init(void)
         /* Phase 3: Setup MMU - AVANT tout allocateur */
         kprintf("Setting up MMU...\n");
         if (setup_mmu()) {
+            uart_use_kernel_mmio_alias();
             kprintf("MMU setup OK\n");
             debug_mmu_state();
         } else {
@@ -470,4 +471,3 @@ static uint32_t read_sctlr(void)
     __asm__ volatile("mrc p15, 0, %0, c1, c0, 0" : "=r"(sctlr));
     return sctlr;
 }
-

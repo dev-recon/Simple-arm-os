@@ -46,6 +46,7 @@ uint32_t get_current_asid(void);
 static void setup_ttbr_split(void);
 static void setup_kernel_space(void);
 static void setup_user_template(void);
+static void map_kernel_mmio_alias(uint32_t vaddr, uint32_t paddr);
 uint32_t allocate_l2_page(bool is_kernel);
 void check_address_content(uint32_t phys_addr, const char* step);
 
@@ -457,11 +458,36 @@ KDEBUG("All checks passed, proceeding with MMU activation...\n");
 
 
 
+static void map_kernel_mmio_alias(uint32_t vaddr, uint32_t paddr)
+{
+    uint32_t index = get_L1_index(vaddr);
+
+    if ((vaddr & (KERNEL_MMIO_SECTION_SIZE - 1)) ||
+        (paddr & (KERNEL_MMIO_SECTION_SIZE - 1)) ||
+        vaddr < get_split_boundary()) {
+        panic("Invalid kernel MMIO alias");
+    }
+
+    if (kernel_page_dir[index] != 0) {
+        panic("Kernel MMIO alias overlaps an existing mapping");
+    }
+
+    kernel_page_dir[index] = paddr |
+                             0x00000002 |  /* Section descriptor */
+                             0x00000400 |  /* AP[1:0] = 01: privileged RW */
+                             0x00000010 |  /* XN: never execute MMIO */
+                             0x00000004 |  /* TEX/C/B = 000/0/1: Device */
+                             0x00010000;   /* Shareable */
+}
+
+
 static void setup_kernel_space(void)
 {
     uint32_t split_boundary = get_split_boundary();  // 0x40000000 avec N=2
-    uint32_t initial_ram_size = 1024 * 1024 * 1024;
-    uint32_t ram_end = VIRT_RAM_START + initial_ram_size;  // 0x80000000
+    uint64_t ram_end = (uint64_t)VIRT_RAM_START + get_kernel_memory_size();
+    if (ram_end > 0x100000000ULL) {
+        ram_end = 0x100000000ULL;
+    }
     uint32_t mapped_sections = 0;
     uint32_t mapped_low = 0;
     uint32_t mapped_devices = 0;
@@ -522,7 +548,8 @@ static void setup_kernel_space(void)
     kprintf("Mapped devices sections (TTBR0-TTBR1): 0x0 - 0x40000000 - %u sections\n", mapped_devices);
     
     /* Map kernel/RAM space - seulement les sections >= split_boundary pour TTBR1 */
-    for (uint32_t addr = split_boundary; addr < ram_end; addr += 0x100000) {
+    for (uint64_t addr64 = split_boundary; addr64 < ram_end; addr64 += 0x100000) {
+        uint32_t addr = (uint32_t)addr64;
 
                 // TTBR1 pointe sur &kernel_page_dir[1024], donc :
         // - Index 0 de TTBR1 = kernel_page_dir[1024] = adresse 0x40000000
@@ -547,22 +574,18 @@ static void setup_kernel_space(void)
 
     kprintf("MMU: Kernel RAM sections mapped before temp area: %u\n", mapped_sections);
 
+    /*
+     * Alias MMIO prives dans TTBR1. Ils sont additifs pour l'instant:
+     * les pilotes continuent d'utiliser les adresses physiques basses.
+     */
+    map_kernel_mmio_alias(KERNEL_MMIO_GIC_BASE, VIRT_GIC_DIST_BASE);
+    map_kernel_mmio_alias(KERNEL_MMIO_UART_BASE, VIRT_UART_BASE);
+    map_kernel_mmio_alias(KERNEL_MMIO_VIRTIO_BASE, VIRT_VIRTIO_BASE);
+    kprintf("MMU: Kernel MMIO aliases mapped at 0xF0000000 - 0xF02FFFFF\n");
+
     /* 3. NOUVEAU: Pré-allouer et configurer les temp mappings ICI */
     kprintf("MMU: Setting up temporary mapping slots...\n");
     setup_temp_mapping_slots();
-    
-    /* 4. Map le reste de l'espace kernel après la zone temp */
-    for (uint32_t addr = TEMP_MAPPING_END; addr < ram_end; addr += 0x100000) {
-        uint32_t ttbr1_index = get_L1_index(addr);
-        
-        kernel_page_dir[ttbr1_index] = addr |           
-                        0x00000002 |      /* Section bit */
-                        0x00000C00 |      /* AP[11:10] = 11 (Kernel RW) */
-                        0x00000004 |      /* C - Cacheable */
-                        0x00000008;       /* B - Bufferable */
-        mapped_sections++;
-    }
-    
     
     kprintf("MMU: Total sections mapped in TTBR1: %u\n", mapped_sections);
 }
@@ -913,13 +936,6 @@ void check_address_content(uint32_t phys_addr, const char* step) {
 
 int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid)
 {
-    //KDEBUG("map_user_page: pgdir=0x%08X, vaddr=0x%08X, paddr=0x%08X, flags=0x%08X, asid=%u\n", pgdir,
-    //       vaddr, phys_addr, vma_flags, asid);
-    
-    uint32_t return_address ;
-    __asm__ volatile("mov %0, lr" : "=r"(return_address));
-    //KDEBUG("map_user_page: called from 0x%08X\n", return_address);
-
     if (!pgdir || !is_valid_vaddr(vaddr)) {
         KERROR("Invalid pgdir or vaddr\n");
         return -1;
@@ -942,216 +958,62 @@ int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t 
         return -1;
     }
 
-    uint32_t saved_asid = get_current_asid();
-    if(saved_asid != asid)
-        set_current_asid(asid);
-
-    uint32_t existing_paddr = get_physical_address(pgdir, vaddr);
-    if (existing_paddr == phys_addr) {
-        KDEBUG("map_user_page: Page already mapped correctly, skipping\n");
-        return 0;
-    } else if (existing_paddr != 0) {
-        KERROR("map_user_page: Page mapped to different physical address!\n");
-        KERROR("  vaddr=0x%08X, existing=0x%08X, requested=0x%08X\n", 
-               vaddr, existing_paddr, phys_addr);
-        return -1;
-    }
-
-    //KDEBUG("map_user_page: pgdir=0x%08X, vaddr=0x%08X, paddr=0x%08X, flags=0x%08X\n", 
-    //       pgdir, vaddr, phys_addr, vma_flags);
-    
-    //KDEBUG("map_user_page: VMA flags: R%s W%s X%s\n",
-    //       (vma_flags & VMA_READ) ? "+" : "-",
-    //       (vma_flags & VMA_WRITE) ? "+" : "-",
-    //       (vma_flags & VMA_EXEC) ? "+" : "-");
-    
-    // Utiliser des pages de 4KB
-    uint32_t l1_index = get_L1_index(vaddr);        // Bits 31-20
-    uint32_t l2_index = L2_INDEX(vaddr); // Bits 19-12
-    
-    //KDEBUG("map_user_page: L1 index: %u, L2 index: %u\n", l1_index, l2_index);
-    
-    // Vérifier/créer la table L2
+    uint32_t l1_index = get_L1_index(vaddr);
+    uint32_t l2_index = L2_INDEX(vaddr);
     uint32_t* l1_entry = &pgdir[l1_index];
-    uint32_t* l2_table = NULL;
-    
-    if (!(*l1_entry & 0x1)) {
+    uint32_t l1_type = *l1_entry & 0x3;
+    uint32_t* l2_table;
 
-        //check_address_content(phys_addr, "Before allocate_l2_page");
-        // Allouer une nouvelle table L2
-        uint32_t l2_page = (uint32_t)allocate_page() ;
-        //check_address_content(phys_addr, "After allocate_l2_page");
-        
-        // Configurer l'entrée L1 style Cortex-A15
-        *l1_entry = (l2_page & 0xFFFFFC00) | 0x01;  // Coarse page table
-
+    if (l1_type == 0x0) {
+        uint32_t l2_page = (uint32_t)allocate_page();
+        if (!l2_page) {
+            return -ENOMEM;
+        }
+        *l1_entry = (l2_page & 0xFFFFFC00) | 0x01;
         asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(l1_entry) : "memory"); // DCCMVAC
-        asm volatile("dsb ishst");
-        asm volatile("mcr p15,0,%0,c8,c3,1" :: "r"(vaddr & ~0xFFF) : "memory"); // TLBIMVAIS
-        asm volatile("dsb ish; isb");
-
-        //KDEBUG("map_user_page: L1 Entry Address=0x%08X, L1 Entry Value = 0x%08X\n", l1_entry, *l1_entry);
+        asm volatile("dsb ishst" ::: "memory");
+        invalidate_tlb_page_asid(vaddr, asid);
+    } else if (l1_type == 0x2) {
+        KERROR("map_user_page: refusing L1 section at user vaddr 0x%08X\n", vaddr);
+        return -EEXIST;
+    } else if (l1_type != 0x1) {
+        KERROR("map_user_page: Unsupported L1 type %u for vaddr 0x%08X\n",
+               l1_type, vaddr);
+        return -EINVAL;
     }
 
-    //KDEBUG("L1 test: !(*l1_entry & 0x1) failed\n");
-    
-    //check_address_content(phys_addr, "Before map_temp_page");
-
-    // Obtenir l'adresse de la table L2
-    uint32_t l2_phys = *l1_entry & 0xFFFFFC00;
-    uint32_t l2_temp = l2_phys;
-    //uint32_t l2_temp = map_temp_page_large(l2_phys, 12*1024);
-    if (l2_temp == 0) {
-        KERROR("map_user_page: Failed to map existing L2 table\n");
-        return -1;
+    l2_table = (uint32_t *)(*l1_entry & 0xFFFFFC00);
+    uint32_t existing_entry = l2_table[l2_index];
+    if ((existing_entry & 0x3) != 0) {
+        uint32_t existing_paddr = existing_entry & 0xFFFFF000;
+        if (existing_paddr == phys_addr) {
+            return 0;
+        }
+        KERROR("map_user_page: vaddr 0x%08X already maps 0x%08X, requested 0x%08X\n",
+               vaddr, existing_paddr, phys_addr);
+        return -EEXIST;
     }
-    
-    l2_table = (uint32_t*)l2_temp;
-    
-    // Déterminer les permissions ARM
-    uint32_t page_flags = 0x02;  // Small page type
 
-    // TOUJOURS mettre AP[2] = 1 pour accès user (bit [9])
-    //page_flags |= 0x200;  // AP[2] = 1 (bit [9])
-
+    uint32_t page_flags = 0x02;
     page_flags |= 0x0C;
-    
-    // Permissions d'accès
     if (vma_flags & VMA_WRITE) {
-        page_flags |= 0x30;  // AP[1:0] = 11 (user R/W)
+        page_flags |= 0x30;
     } else {
-        page_flags |= 0x20;  // AP[1:0] = 10 (user R/O) 
+        page_flags |= 0x20;
     }
-    
-    // Execute Never bit
     if (!(vma_flags & VMA_EXEC)) {
-        page_flags |= 0x01;  // XN bit
-        sync_icache_for_exec();
+        page_flags |= 0x01;
     }
-    
-    // Cache/Buffer pour RAM
-    //if (vaddr >= VIRT_RAM_START && vaddr < VIRT_RAM_END) {
-    //    page_flags |= 0x0C;  // Cacheable + Bufferable
-    //}
-    
-    //KDEBUG("map_user_page: ARM page flags: 0x%08X\n", page_flags);
-    
-    // Configurer l'entrée L2
+
     l2_table[l2_index] = (phys_addr & 0xFFFFF000) | page_flags;
-
-    // 1) Clean D-cache ligne contenant la PTE L2, par son **adresse VA de la PTE**
-    void *pte_l2_va = &l2_table[l2_index];
-    asm volatile("mcr p15, 0, %0, c7, c10, 1" :: "r"(pte_l2_va) : "memory"); // DCCMVAC
-
-    // 2) Barrière avant invalidation TLB
+    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(&l2_table[l2_index]) : "memory");
     asm volatile("dsb ishst" ::: "memory");
-
-    // 3) Invalider la traduction de vaddr dans le TLB (ASID courant = asid)
-    asm volatile("mcr p15, 0, %0, c8, c3, 1" :: "r"(vaddr & ~0xFFF) : "memory"); // TLBIMVAIS
-
-    // 4) Barrières de fin
-    asm volatile("dsb ish; isb" ::: "memory");
-
-    data_sync_barrier();    // Assure visibilité avant TLB flush
-    instruction_sync_barrier();
-
-    //KDEBUG("map_user_page: Final L2 flags: 0x%08X (vaddr=0x%08X)\n", page_flags, vaddr);
-    
-    //KDEBUG("map_user_page: L2[%u] = 0x%08X\n", l2_index, l2_table[l2_index]);
-    
-    // Unmap la table L2
-    //KDEBUG("map_user_page: Wrote L2[%d] = 0x%08X\n", l2_index, l2_table[l2_index]);
-    //unmap_temp_page((void*)l2_temp);
-    
-    // Invalider le TLB pour cette adresse avec ASID
-    if (get_current_asid() != asid) {
-        KERROR("map_user_page: !!! Invalidation TLB with wrong ASID !!!\n");
-    }
     invalidate_tlb_page_asid(vaddr, asid);
-    //invalidate_tlb_page_asid(vaddr, get_current_asid());
-
-    asm volatile("dsb ish" ::: "memory");
-    asm volatile("mcr p15, 0, %0, c8, c3, 0" :: "r"(0)); // TLBIALLIS
-    asm volatile("dsb ish; isb" ::: "memory");
-
-    uint32_t pa_out = 0;
-    uint32_t par_out = 0;
-    ats1cpr_probe(vaddr, &pa_out, &par_out);
-
-    //KINFO("map_user_page: ats1cpr_probe 0x%08X -> pa_out 0x%08X -> par_out 0x%08X\n", vaddr, pa_out, par_out);
-
-
-    data_sync_barrier();
-    instruction_sync_barrier();
-    if(saved_asid != asid)
-        set_current_asid(saved_asid);
-
-        // Si exécutable, purge I-cache PoU après les TLBIs
     if (vma_flags & VMA_EXEC) {
         asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0)); // ICIALLU
-        asm volatile("dsb ish; isb");
+        asm volatile("dsb ish; isb" ::: "memory");
     }
-    
-    //KINFO("map_user_page: Successfully mapped page 0x%08X -> 0x%08X -> asid %d\n", vaddr, phys_addr, asid);
     return 0;
-}
-
-void map_kernel_page(uint32_t vaddr, uint32_t phys_addr)
-{
-    if (!is_valid_vaddr(vaddr)) {
-        return;
-    }
-    
-    /* Vérifier que l'adresse est dans l'espace noyau TTBR1 (>=2GB) */
-    if (vaddr < 0x40000000) {
-        KERROR("Address 0x%08X is in user space, use user mapping functions\n", vaddr);
-        return;
-    }
-    
-    // Utiliser TTBR1 pour l'espace noyau
-    uint32_t* kernel_pgdir = get_kernel_pgdir();
-    
-    if (!kernel_pgdir) {
-        KERROR("map_kernel_page: No valid kernel page directory\n");
-        return;
-    }
-    
-    // Pour le kernel, utiliser des sections de 1MB
-    uint32_t section_index = get_L1_index(vaddr) - 0x800; // Ajuster pour TTBR1
-    uint32_t section_base = phys_addr & PDE_SECTION_BASE;
-    
-    // Vérifier l'index TTBR1
-    if (section_index >= 2048) {
-        KERROR("Kernel section index out of range: %u\n", section_index);
-        return;
-    }
-    
-    // Configuration kernel avec permissions privilégiées
-    uint32_t pde;
-    
-    if (vaddr >= DEVICE_START && vaddr < DEVICE_END) {
-        // Device memory: non-cacheable, non-bufferable
-        pde = section_base |
-              0x00000002 |      // Section bit
-              0x00000400;       // AP[1:0] = 01 (privileged access)
-    } else {
-        // Kernel RAM: cacheable, bufferable
-        pde = section_base |
-              0x00000002 |      // Section bit
-              0x00000400 |      // AP[1:0] = 01 (privileged access)
-              0x00000004 |      // Cacheable
-              0x00000008;       // Bufferable
-    }
-    
-    // Écrire l'entrée dans TTBR1
-    kernel_pgdir[section_index] = pde;
-    
-    // Invalider le TLB pour cette adresse (pas d'ASID pour le noyau)
-    invalidate_tlb_page(vaddr);
-    
-    // Barriers
-    asm volatile("dsb" ::: "memory");
-    asm volatile("isb" ::: "memory");
 }
 
 uint32_t get_L1_index(uint32_t vaddr){
@@ -1207,17 +1069,19 @@ void invalidate_tlb_page(uint32_t vaddr)
 void invalidate_tlb_page_asid(uint32_t vaddr, uint32_t asid)
 {
     vaddr &= ~(PAGE_SIZE - 1);
-    uint32_t tlbimvaa_val = vaddr | (asid & ASID_MASK);
+    (void)asid;
     
-    //KDEBUG("invalidate_tlb_page_asid: vaddr=0x%08X, asid=%u\n", vaddr, asid);
-    
+    /*
+     * c8,c7,3 est TLBIMVAA: invalidation par MVA pour tous les ASID.
+     * Les bits bas de l'operande sont reserves et doivent rester a zero.
+     */
     asm volatile(
         "dsb                            \n"
         "mcr p15, 0, %0, c8, c7, 3      \n"  // TLBIMVAA - invalidate by VA and ASID
         "dsb                            \n"
         "isb                            \n"
         :
-        : "r"(tlbimvaa_val)
+        : "r"(vaddr)
         : "memory"
     );
     

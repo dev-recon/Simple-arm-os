@@ -44,11 +44,12 @@ typedef void (*sig_handler)(int);
 #define SIG_IGN  ((sig_handler)1)
 
 /* Sigaction structure */
-typedef struct sigaction {
+struct sigaction {
     sig_handler sa_handler;
     uint32_t sa_mask;
     int sa_flags;
-} ;
+    void (*sa_restorer)(void);
+};
 
 
 int signal(int sig, sig_handler handler); 

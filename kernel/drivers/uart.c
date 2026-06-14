@@ -7,20 +7,28 @@
 #include <kernel/tty.h>
 #include <kernel/kprintf.h>
 
+/*
+ * Avant l'activation de la MMU, l'UART doit etre accedee par son adresse
+ * physique. early_init() bascule cette base vers l'alias prive TTBR1 des que
+ * setup_mmu() a termine.
+ */
+static uintptr_t uart_mmio_base = VIRT_UART_BASE;
+
 /* Registres PL011 UART */
-#define UART_DR         (*(volatile uint32_t*)(UART0_BASE + 0x00))  /* Data */
-#define UART_RSR        (*(volatile uint32_t*)(UART0_BASE + 0x04))  /* Receive Status */
-#define UART_FR         (*(volatile uint32_t*)(UART0_BASE + 0x18))  /* Flag */
-#define UART_ILPR       (*(volatile uint32_t*)(UART0_BASE + 0x20))  /* IrDA Low-power */
-#define UART_IBRD       (*(volatile uint32_t*)(UART0_BASE + 0x24))  /* Integer Baud Rate */
-#define UART_FBRD       (*(volatile uint32_t*)(UART0_BASE + 0x28))  /* Fractional Baud Rate */
-#define UART_LCRH       (*(volatile uint32_t*)(UART0_BASE + 0x2C))  /* Line Control */
-#define UART_CR         (*(volatile uint32_t*)(UART0_BASE + 0x30))  /* Control */
-#define UART_IFLS       (*(volatile uint32_t*)(UART0_BASE + 0x34))  /* Interrupt FIFO Level */
-#define UART_IMSC       (*(volatile uint32_t*)(UART0_BASE + 0x38))  /* Interrupt Mask */
-#define UART_RIS        (*(volatile uint32_t*)(UART0_BASE + 0x3C))  /* Raw Interrupt Status */
-#define UART_MIS        (*(volatile uint32_t*)(UART0_BASE + 0x40))  /* Masked Interrupt Status */
-#define UART_ICR        (*(volatile uint32_t*)(UART0_BASE + 0x44))  /* Interrupt Clear */
+#define UART_REG(offset) (*(volatile uint32_t*)(uart_mmio_base + (offset)))
+#define UART_DR         UART_REG(0x00)  /* Data */
+#define UART_RSR        UART_REG(0x04)  /* Receive Status */
+#define UART_FR         UART_REG(0x18)  /* Flag */
+#define UART_ILPR       UART_REG(0x20)  /* IrDA Low-power */
+#define UART_IBRD       UART_REG(0x24)  /* Integer Baud Rate */
+#define UART_FBRD       UART_REG(0x28)  /* Fractional Baud Rate */
+#define UART_LCRH       UART_REG(0x2C)  /* Line Control */
+#define UART_CR         UART_REG(0x30)  /* Control */
+#define UART_IFLS       UART_REG(0x34)  /* Interrupt FIFO Level */
+#define UART_IMSC       UART_REG(0x38)  /* Interrupt Mask */
+#define UART_RIS        UART_REG(0x3C)  /* Raw Interrupt Status */
+#define UART_MIS        UART_REG(0x40)  /* Masked Interrupt Status */
+#define UART_ICR        UART_REG(0x44)  /* Interrupt Clear */
 
 /* Bits de controle UART_FR (Flag Register) */
 #define UART_FR_TXFE    (1 << 7)  /* Transmit FIFO empty */
@@ -52,6 +60,12 @@
 
 /* Variable globale */
 DEFINE_SPINLOCK(uart_lock);
+
+void uart_use_kernel_mmio_alias(void)
+{
+    uart_mmio_base = KERNEL_MMIO_UART_BASE;
+    __asm__ volatile("dsb; isb" ::: "memory");
+}
 
 /*
  * Initialisation de l'UART PL011
@@ -330,7 +344,7 @@ void uart_flush(void)
 // Pour QEMU machine virt qui utilise PL011
 bool uart_has_data(void) {
     // PL011 Flag Register à offset 0x18
-    uint32_t uart_flags = GET32(UART0_BASE + 0x18);
+    uint32_t uart_flags = UART_FR;
     
     // Bit 4 (RXFE) = 1 si RX FIFO vide, 0 si données disponibles
     bool rx_fifo_empty = (uart_flags & (1 << 4)) != 0;
@@ -424,6 +438,7 @@ file_t* create_uart_console_file(const char* name, int flags) {
     file->flags = flags;
     file->pos = 0;
     file->inode = NULL;                 // Fichier virtuel
+    file->ref_count = 1;
     
     // Debug name
     if (name) {

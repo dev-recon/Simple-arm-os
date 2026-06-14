@@ -2271,8 +2271,11 @@ int copy_user_stack_pages(vm_space_t *parent_vm, vm_space_t *child_vm,
         memcpy(temp_child, (void *)temp_parent, PAGE_SIZE);
         
         // 5. Mapper la page dans l'espace enfant
-        map_user_page(child_vm->pgdir, current_addr, (uint32_t)child_phys_page, 
-                      VMA_READ | VMA_WRITE, child_vm->asid);
+        if (map_user_page(child_vm->pgdir, current_addr, (uint32_t)child_phys_page,
+                          VMA_READ | VMA_WRITE, child_vm->asid) < 0) {
+            free_page(child_phys_page);
+            return -ENOMEM;
+        }
 
         //hexdump((void*)temp_child + PAGE_SIZE - 640 , (size_t) 640 );
 
@@ -2388,4 +2391,3 @@ uint32_t read_l2_entry(uint32_t *pgdir, uintptr_t vaddr)
     kprintf("L1[%u] = 0x%08X (UNKNOWN)\n", l1_index, l1_desc);
     return 0;
 }
-

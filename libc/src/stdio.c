@@ -505,152 +505,124 @@ int vprintf2(const char* format, va_list args) {
     return written;
 }
 
-int snprintf(char* str, size_t size, const char* format, ...)
+int vsnprintf(char *str, size_t size, const char *format, va_list args)
+{
+    if (!str || size == 0) return 0;
+    if (!format) { str[0] = '\0'; return 0; }
+
+    char *out     = str;
+    char *out_end = str + size - 1;
+    int count = 0;
+    const char *fmt = format;
+
+#define SPUTC(c)    do { if (out < out_end) *out++ = (char)(c); count++; } while (0)
+#define SPAD(ch, n) do { int _n = (n); while (_n-- > 0) SPUTC(ch); } while (0)
+
+    while (*fmt) {
+        if (*fmt == '%' && *(fmt + 1)) {
+            fmt++;
+            int left_align = 0, zero_pad = 0;
+            while (*fmt == '-' || *fmt == '0' || *fmt == '+' || *fmt == ' ') {
+                if (*fmt == '-') left_align = 1;
+                else if (*fmt == '0') zero_pad = 1;
+                fmt++;
+            }
+            int width = 0;
+            while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); fmt++; }
+            int precision = -1;
+            if (*fmt == '.') {
+                fmt++; precision = 0;
+                while (*fmt >= '0' && *fmt <= '9') { precision = precision * 10 + (*fmt - '0'); fmt++; }
+            }
+            int is_long = 0, is_long_long = 0;
+            if (*fmt == 'l') {
+                is_long = 1; fmt++;
+                if (*fmt == 'l') { is_long_long = 1; fmt++; }
+            } else if (*fmt == 'z') { is_long = 1; fmt++; }
+
+            switch (*fmt) {
+                case 'd': case 'i': {
+                    long val = (is_long || is_long_long) ? va_arg(args, long) : (long)va_arg(args, int);
+                    char tmp[32]; int len = itoa(val, tmp);
+                    if (!left_align && width > len) SPAD(zero_pad ? '0' : ' ', width - len);
+                    for (int i = 0; i < len; i++) SPUTC(tmp[i]);
+                    if (left_align && width > len) SPAD(' ', width - len);
+                    break;
+                }
+                case 'u': {
+                    unsigned long val = (is_long || is_long_long) ? va_arg(args, unsigned long) : (unsigned long)va_arg(args, unsigned int);
+                    char tmp[32]; int len = utoa(val, tmp, 10);
+                    if (!left_align && width > len) SPAD(zero_pad ? '0' : ' ', width - len);
+                    for (int i = 0; i < len; i++) SPUTC(tmp[i]);
+                    if (left_align && width > len) SPAD(' ', width - len);
+                    break;
+                }
+                case 'x': case 'X': {
+                    unsigned long val = (is_long || is_long_long) ? va_arg(args, unsigned long) : (unsigned long)va_arg(args, unsigned int);
+                    char tmp[32]; int len = utoa(val, tmp, 16);
+                    if (*fmt == 'X') for (int i = 0; i < len; i++) if (tmp[i] >= 'a' && tmp[i] <= 'f') tmp[i] = tmp[i] - 'a' + 'A';
+                    if (!left_align && width > len) SPAD(zero_pad ? '0' : ' ', width - len);
+                    for (int i = 0; i < len; i++) SPUTC(tmp[i]);
+                    if (left_align && width > len) SPAD(' ', width - len);
+                    break;
+                }
+                case 'c': {
+                    char c = (char)va_arg(args, int);
+                    if (!left_align && width > 1) SPAD(' ', width - 1);
+                    SPUTC(c);
+                    if (left_align && width > 1) SPAD(' ', width - 1);
+                    break;
+                }
+                case 's': {
+                    char *s = va_arg(args, char *);
+                    if (!s) s = "(null)";
+                    int slen = 0; char *t = s; while (*t++) slen++;
+                    if (precision >= 0 && slen > precision) slen = precision;
+                    if (!left_align && width > slen) SPAD(' ', width - slen);
+                    for (int i = 0; i < slen; i++) SPUTC(s[i]);
+                    if (left_align && width > slen) SPAD(' ', width - slen);
+                    break;
+                }
+                case 'p': {
+                    void *ptr = va_arg(args, void *);
+                    char tmp[32]; int len = ptoa(ptr, tmp);
+                    for (int i = 0; i < len; i++) SPUTC(tmp[i]);
+                    break;
+                }
+                case '%': SPUTC('%'); break;
+                default:  SPUTC('%'); SPUTC(*fmt); break;
+            }
+        } else {
+            SPUTC(*fmt);
+        }
+        fmt++;
+    }
+
+    *out = '\0';
+#undef SPUTC
+#undef SPAD
+    return count;
+}
+
+int vsprintf(char *str, const char *format, va_list args)
+{
+    return vsnprintf(str, 0x7fffffff, format, args);
+}
+
+int sprintf(char *str, const char *format, ...)
 {
     va_list args;
-    const char* p;
-    char* out;
-    char* out_end;
-    int written = 0;
-    int temp_len;
-    char temp_buf[32];
-    const char* s;
-    int d;
-    unsigned int u;
-    char c;
-    
-    if (!str || size == 0) return 0;
-    
     va_start(args, format);
-    
-    out = str;
-    out_end = str + size - 1; /* Reserve space for null terminator */
-    
-    for (p = format; *p && out < out_end; p++) {
-        if (*p != '%') {
-            *out++ = *p;
-            written++;
-            continue;
-        }
-        
-        p++; /* Skip '%' */
-        
-        /* Handle format specifiers */
-        switch (*p) {
-            case 'c':
-                c = (char)va_arg(args, int);
-                if (out < out_end) {
-                    *out++ = c;
-                    written++;
-                }
-                break;
-                
-            case 's':
-                s = va_arg(args, const char*);
-                if (!s) s = "(null)";
-                while (*s && out < out_end) {
-                    *out++ = *s++;
-                    written++;
-                }
-                break;
-                
-            case 'd':
-            case 'i':
-                d = va_arg(args, int);
-                temp_len = itoa(d, temp_buf);
-                {
-                    int i; /* Declaration GNU89 */
-                    for (i = 0; i < temp_len && out < out_end; i++) {
-                        *out++ = temp_buf[i];
-                        written++;
-                    }
-                }
-                break;
-                
-            case 'u':
-                u = va_arg(args, unsigned int);
-                temp_len = utoa(u, temp_buf, 10);
-                {
-                    int i; /* Declaration GNU89 */
-                    for (i = 0; i < temp_len && out < out_end; i++) {
-                        *out++ = temp_buf[i];
-                        written++;
-                    }
-                }
-                break;
-                
-            case 'x':
-                u = va_arg(args, unsigned int);
-                temp_len = utoa(u, temp_buf, 16);
-                {
-                    int i; /* Declaration GNU89 */
-                    for (i = 0; i < temp_len && out < out_end; i++) {
-                        *out++ = temp_buf[i];
-                        written++;
-                    }
-                }
-                break;
-                
-            case 'X':
-                u = va_arg(args, unsigned int);
-                temp_len = utoa(u, temp_buf, 16);
-                {
-                    int i; /* Declaration GNU89 */
-                    for (i = 0; i < temp_len && out < out_end; i++) {
-                        char ch = temp_buf[i];
-                        *out++ = (ch >= 'a' && ch <= 'f') ? ch - 'a' + 'A' : ch;
-                        written++;
-                    }
-                }
-                break;
-                
-            case '%':
-                if (out < out_end) {
-                    *out++ = '%';
-                    written++;
-                }
-                break;
-                
-            case '.':
-                /* Handle precision specifier like %.*s */
-                if (*(p + 1) == '*' && *(p + 2) == 's') {
-                    int max_len = va_arg(args, int);
-                    s = va_arg(args, const char*);
-                    if (!s) s = "(null)";
-                    {
-                        int count = 0;
-                        while (*s && count < max_len && out < out_end) {
-                            *out++ = *s++;
-                            written++;
-                            count++;
-                        }
-                    }
-                    p += 2; /* Skip '*s' */
-                } else {
-                    /* Simple . handling - just copy the character */
-                    if (out < out_end) {
-                        *out++ = '.';
-                        written++;
-                    }
-                }
-                break;
-                
-            default:
-                /* Unknown format specifier, just copy it */
-                if (out < out_end) {
-                    *out++ = '%';
-                    written++;
-                }
-                if (out < out_end) {
-                    *out++ = *p;
-                    written++;
-                }
-                break;
-        }
-    }
-    
-    *out = '\0';
+    int r = vsprintf(str, format, args);
     va_end(args);
-    
-    return written;
+    return r;
+}
+
+int snprintf(char *str, size_t size, const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    int r = vsnprintf(str, size, format, args);
+    va_end(args);
+    return r;
 }

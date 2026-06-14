@@ -56,6 +56,10 @@ _start:
     cps #0x12         /* mode IRQ */
     ldr sp, =__irq_stack_top
 
+    /* Initialiser pile UND (sinon sp_und=0 -> data abort des le 1er str) */
+    cps #0x1B         /* mode UND */
+    ldr sp, =__und_stack_top
+
     /* Initialiser pile SVC */
     cps #0x13
     ldr r0, =__stack_top   /* Charge l'adresse */

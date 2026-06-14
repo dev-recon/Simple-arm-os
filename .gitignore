@@ -1,0 +1,38 @@
+# Build outputs
+*.a
+*.o
+kernel.bin
+kernel.dis
+kernel.elf
+kernel.map
+disk.img
+userfs.bin
+userfs.tar
+userfs/init.sh
+userfs/hello.txt
+userfs/test.txt
+userfs/tmp/
+userfs/etc/os.conf
+
+# Generated build/install trees
+build/
+userfs/bin/
+userland/*/*.o
+userland/*/hello
+userland/*/hello2
+userland/*/mash
+userland/*/malloc
+userland/*/readfile
+userland/*/term_demo
+userland/*/term_dmo
+userland/*/ansy_tty
+
+# Logs and local editor files
+*.log
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+
+# Third-party archives
+*.tar.gz

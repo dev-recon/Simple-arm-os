@@ -1855,6 +1855,8 @@ static inode_t* fat32_inode_lookup(inode_t* dir, const char* name)
         inode->f_op = &fat32_file_ops;
     }
     
+    //KDEBUG("[LOOKUP] '%s' cluster=%u mode=0x%04X f_op=%p\n",
+    //       name, inode->first_cluster, inode->mode, inode->f_op);
     kfree(entry);
     return inode;
 }
@@ -1975,8 +1977,7 @@ static int fat32_dir_readdir(file_t* file, dirent_t* dirent)
         return -ENOTDIR;
     }
     
-    // KDEBUG("[READDIR] Reading directory cluster %u, target entry %u\n", 
-    //       cluster, target_entry);
+    //KDEBUG("[READDIR] cluster=%u target=%u inode=%p\n", cluster, target_entry, dir_inode);
     
     /* Parcourir les clusters du repertoire */
     while (cluster && cluster >= 2 && cluster < 0x0FFFFFF8) {

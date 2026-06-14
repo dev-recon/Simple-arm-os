@@ -95,6 +95,7 @@ static void build_clean_kernel_stack(task_t *t)
     // SP noyau posé près du top (garde 512B pour sentinelles/debug si tu veux)
     t->context.svc_sp_top = (uint32_t)t->stack_top;
     t->context.svc_sp     = ((uint32_t)t->stack_top - 512) & ~7u;
+    t->context.sp         = t->context.svc_sp;
     t->context.sp         = t->context.svc_sp;  // sp = SP_svc dans ton design
 }
 
@@ -1105,17 +1106,18 @@ void switch_to_idle(void){
 
     spin_lock(&task_lock);
 
-        idle_task->state = TASK_RUNNING;
-        current_task = idle_task;
-
-        // Next task is idle, switching to idle stack
-        switch_to_idle_stack();
-        idle_task->context.pc = (uint32_t)idle_task->entry_point;
+    idle_task->state = TASK_RUNNING;
+    idle_task->switch_count++;
 
     spin_unlock(&task_lock);
 
-    // *** Commutation speciale : pas de sauvegarde pour zombie ***        
+    /*
+     * Ne pas sauvegarder une tache morte et ne jamais modifier manuellement
+     * le SP d'une tache suspendue.
+     */
     __task_switch(NULL, &idle_task->context);
+
+    __builtin_unreachable();
 }
 
 static void for_each_task(task_t* current)
@@ -1465,11 +1467,6 @@ void schedule_to(task_t *next_task)
  */
 void schedule_extended(void)
 {
-    /* Verifier les signaux en attente pour les processus */
-    if (current_task && current_task->type == TASK_TYPE_PROCESS) {
-        check_pending_signals();
-    }
-    
     /* Appeler votre schedule() existant */
     schedule();
 }
@@ -1486,26 +1483,28 @@ void sched_start(void)
         return;
     }
     
-    spin_lock(&task_lock);
+    //spin_lock(&task_lock);
     
     if (!task_list_head) {
-        spin_unlock(&task_lock);
+        //spin_unlock(&task_lock);
         KERROR("No tasks to run!\n");
         return;
     }
+
+    switch_to_idle();
         
-    /* La tache idle devient la tache courante */
+/*     // La tache idle devient la tache courante
     current_task = idle_task;
     current_task->state = TASK_RUNNING;
 
-    /* Switch vers la pile d'idle MAINTENANT */
+    // Switch vers la pile d'idle MAINTENANT
     switch_to_idle_stack();
     
     spin_unlock(&task_lock);
 
-    __task_switch(NULL, &current_task->context);
+    __task_switch(NULL, &current_task->context); */
     
-    /* On ne devrait jamais arriver ici */
+    // On ne devrait jamais arriver ici
     KERROR("FATAL: Returned from sched_start!\n");
     while (1) __asm__ volatile("wfe");
 }

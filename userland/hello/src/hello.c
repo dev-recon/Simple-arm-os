@@ -167,7 +167,11 @@ int test_execve(void) {
 int main() {
     int version = 99 ;
 
-    test_pipe();
+    //test_pipe();
+
+    //test_execve();
+
+    test_kill();
 
     printf("PROCESS HELLO EXITING ...\n");
 

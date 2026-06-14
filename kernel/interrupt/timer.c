@@ -235,7 +235,6 @@ void timer_irq_handler(void)
                 current_task->quantum_left = QUANTUM_TICKS;
                 //current_task->state = TASK_READY;
                 need_resched = 1;
-                check_pending_signals();
                 //KDEBUG("YIELDING BECAUSE OF TIMER\n");
                 //yield();
             }
@@ -377,10 +376,9 @@ void unix_to_datetime(uint32_t unix_time, datetime_t* dt) {
 
 /* Si vous avez un RTC sur votre board */
 uint32_t get_current_time(void) {
-    /* Pour QEMU virt, utiliser le PL031 RTC à 0x09010000 */
-    volatile uint32_t* rtc_base = (uint32_t*)0x09010000;
+    /* PL031 runtime via l'alias MMIO prive TTBR1. */
+    volatile uint32_t* rtc_base = (uint32_t*)KERNEL_MMIO_RTC_BASE;
     
     /* Le PL031 donne directement un timestamp Unix */
     return rtc_base[0];  /* RTC Data Register */
 }
-

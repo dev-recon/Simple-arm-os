@@ -9,11 +9,20 @@
 
 // Implémentez ces handlers
 void undefined_instruction_handler(void) {
-    kprintf("=== UNDEFINED INSTRUCTION ===\n");
-    uint32_t lr, spsr;
+    /* Capturer AVANT tout appel : bl ecrase lr.
+     * lr_und = adresse instruction fautive + 4.
+     * lr_svc/sp_svc (banques, virt ext A15) = etat SVC au moment du saut. */
+    uint32_t lr, spsr, lr_svc, sp_svc;
     asm volatile("mov %0, lr" : "=r"(lr));
     asm volatile("mrs %0, spsr" : "=r"(spsr));
-    kprintf("UND LR: 0x%08X, SPSR: 0x%08X\n", lr, spsr);
+    asm volatile("mrs %0, lr_svc" : "=r"(lr_svc));
+    asm volatile("mrs %0, sp_svc" : "=r"(sp_svc));
+
+    kprintf("=== UNDEFINED INSTRUCTION ===\n");
+    kprintf("UND LR: 0x%08X (PC fautif=0x%08X), SPSR: 0x%08X\n", lr, lr - 4, spsr);
+    kprintf("LR_svc: 0x%08X SP_svc: 0x%08X current_task=%p (%s)\n",
+            lr_svc, sp_svc, (void*)current_task,
+            current_task ? current_task->name : "?");
     while(1);
 }
 
@@ -150,11 +159,17 @@ static int smallpage_xn(uint32_t l2d) {
 
 __attribute__((noinline))
 void prefetch_abort_handler(void) {
-    uart_puts("=== PREFETCH ABORT ===\n");
-
-    uint32_t lr_svc, spsr_svc;
-    __asm__ volatile("mov %0, lr" : "=r"(lr_svc));
+    /* Capturer les registres banqués AVANT tout appel (bl écrase lr).
+     * MRS banked (lr_svc/sp_svc) dispo sur Cortex-A15 (virt extensions). */
+    uint32_t lr_svc, sp_svc, spsr_svc;
+    __asm__ volatile("mrs %0, lr_svc" : "=r"(lr_svc));
+    __asm__ volatile("mrs %0, sp_svc" : "=r"(sp_svc));
     __asm__ volatile("mrs %0, spsr" : "=r"(spsr_svc));
+
+    uart_puts("=== PREFETCH ABORT ===\n");
+    uart_puts("SP_svc="); uart_put_hex(sp_svc);
+    uart_puts(" current_task="); uart_put_hex((uint32_t)current_task);
+    uart_puts("\n");
 
     uint32_t ifsr = get_ifsr();
     uint32_t ifar = get_ifar();

@@ -36,14 +36,47 @@ bool is_valid_user_ptr(const void* ptr)
     __ret; \
 })
 
-void unmap_user_page(uint32_t* pgdir, uint32_t vaddr)
+int unmap_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
 {
-    uint32_t pd_index = get_L1_index(vaddr);
-    
-    /* Simplified implementation - just clear the page directory entry */
-    if (pd_index < 4096) {
-        pgdir[pd_index] = 0;
+    uint32_t l1_index;
+    uint32_t l2_index;
+    uint32_t *l1_entry;
+    uint32_t *l2_table;
+
+    if (!pgdir || vaddr >= get_split_boundary() || (vaddr & (PAGE_SIZE - 1))) {
+        return -EINVAL;
     }
+
+    l1_index = get_L1_index(vaddr);
+    l2_index = L2_INDEX(vaddr);
+    l1_entry = &pgdir[l1_index];
+
+    if ((*l1_entry & 0x3) != 0x1) {
+        return -EINVAL;
+    }
+
+    l2_table = (uint32_t *)(*l1_entry & 0xFFFFFC00);
+    if ((l2_table[l2_index] & 0x3) == 0) {
+        return 0;
+    }
+
+    l2_table[l2_index] = 0;
+    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(&l2_table[l2_index]) : "memory");
+    asm volatile("dsb ishst" ::: "memory");
+    invalidate_tlb_page_asid(vaddr, asid);
+
+    for (uint32_t i = 0; i < 256; i++) {
+        if ((l2_table[i] & 0x3) != 0) {
+            return 0;
+        }
+    }
+
+    *l1_entry = 0;
+    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(l1_entry) : "memory");
+    asm volatile("dsb ishst" ::: "memory");
+    invalidate_tlb_page_asid(vaddr, asid);
+    free_page(l2_table);
+    return 0;
 }
 
 int strnlen_user(const char* user_str, int max_len)
@@ -483,7 +516,11 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
 
     //stack_top_page = USER_STACK_TOP - PAGE_SIZE;
     stack_top_page = (USER_STACK_TOP - PAGE_SIZE) & ~0xFFF; 
-    map_user_page(vm->pgdir, stack_top_page, (uint32_t)stack_page, VMA_READ | VMA_WRITE, vm->asid);
+    if (map_user_page(vm->pgdir, stack_top_page, (uint32_t)stack_page,
+                      VMA_READ | VMA_WRITE, vm->asid) < 0) {
+        free_page(stack_page);
+        return -1;
+    }
 
     //KDEBUG("After map_user_page\n");
     

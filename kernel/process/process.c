@@ -147,9 +147,6 @@ void init_process_main(void* arg)
     int reaped_count = 0;
 
     while (1) {
-        /* Verifier les signaux */
-        check_pending_signals();
-
         bool has_children = (init_process->process->children != NULL);
         
         if (has_children) {
@@ -289,6 +286,5 @@ process_t* get_current_process(void)
     }
     return NULL;
 }
-
 
 

@@ -22,7 +22,6 @@ static int ata_submit_request_real(io_request_t* req);
 static int virtio_blk_rw(uint64_t lba, uint32_t count, void* buffer, bool write);
 static void cleanup_io_request(io_request_t* req);
 static void free_desc(uint16_t desc);
-static bool init_virtio_block_device(uint32_t base_addr);
 static uint16_t alloc_desc(void);
 
 /* Global device state */
@@ -53,14 +52,14 @@ static bool force_virtio_device_init(uint32_t addr)
     }
     
     /* Reset device completely */
-    KDEBUG("  Step 1: Reset device\n");
+    //KDEBUG("  Step 1: Reset device\n");
     regs[VIRTIO_STATUS/4] = 0;
     
     /* Wait for reset to complete */
     for (volatile int i = 0; i < 10000; i++);
     
     /* Acknowledge device */
-    KDEBUG("  Step 2: Acknowledge device\n");
+    //KDEBUG("  Step 2: Acknowledge device\n");
     regs[VIRTIO_STATUS/4] = VIRTIO_STATUS_ACK;
     
     /* Wait */
@@ -68,7 +67,7 @@ static bool force_virtio_device_init(uint32_t addr)
     
     /* Check if device ID changed */
     uint32_t device_id = regs[VIRTIO_DEVICE_ID/4];
-    KDEBUG("  Device ID after reset: %u\n", device_id);
+    //KDEBUG("  Device ID after reset: %u\n", device_id);
     
     if (device_id == 2) {
         KINFO("  OK Successfully initialized as Block device!\n");
@@ -76,7 +75,7 @@ static bool force_virtio_device_init(uint32_t addr)
     }
     
     /* Try driver status */
-    KDEBUG("  Step 3: Set driver status\n");
+    //KDEBUG("  Step 3: Set driver status\n");
     regs[VIRTIO_STATUS/4] |= VIRTIO_STATUS_DRIVER;
     
     /* Wait */
@@ -84,7 +83,7 @@ static bool force_virtio_device_init(uint32_t addr)
     
     /* Check again */
     device_id = regs[VIRTIO_DEVICE_ID/4];
-    KDEBUG("  Device ID after driver: %u\n", device_id);
+    //KDEBUG("  Device ID after driver: %u\n", device_id);
     
     if (device_id == 2) {
         KINFO("  OK Successfully initialized as Block device!\n");
@@ -92,19 +91,18 @@ static bool force_virtio_device_init(uint32_t addr)
     }
     
     /* Try selecting queue 0 to wake up the device */
-    KDEBUG("  Step 4: Select queue 0\n");
+    //KDEBUG("  Step 4: Select queue 0\n");
     regs[VIRTIO_QUEUE_SEL/4] = 0;
     
     /* Wait */
     for (volatile int i = 0; i < 10000; i++);
     
     /* Check device queue size to see if it responds */
-    uint32_t queue_size = regs[VIRTIO_QUEUE_SIZE/4];
-    KDEBUG("  Queue size: %u\n", queue_size);
+    //KDEBUG("  Queue size: %u\n", regs[VIRTIO_QUEUE_SIZE/4]);
     
     /* Check device ID one more time */
     device_id = regs[VIRTIO_DEVICE_ID/4];
-    KDEBUG("  Final device ID: %u\n", device_id);
+    //KDEBUG("  Final device ID: %u\n", device_id);
     
     return (device_id == 2);
 }
@@ -352,7 +350,7 @@ static bool init_virtio_block_device(uint32_t base_addr)
         return false;
     }
 
-    KDEBUG("VirtIO version =%u\n", version);
+    //KDEBUG("VirtIO version =%u\n", version);
     if (devid != 2) {
         KWARN("VirtIO device ID=%u (expected 2=blk), continuing but likely wrong base/DT\n", devid);
     }
@@ -406,7 +404,7 @@ static bool init_virtio_block_device(uint32_t base_addr)
     }
 
     /* Setup virtqueue */
-    KDEBUG("Setting up virtqueue...\n");
+    //KDEBUG("Setting up virtqueue...\n");
     if (!setup_virtqueue()) {
         KERROR("Failed to setup virtqueue\n");
         regs[VIRTIO_STATUS/4] = VIRTIO_STATUS_FAILED;
@@ -414,7 +412,7 @@ static bool init_virtio_block_device(uint32_t base_addr)
     }
     
     /* Enable IRQ */
-    KDEBUG("Configuring VirtIO IRQs...\n");
+    //KDEBUG("Configuring VirtIO IRQs...\n");
     enable_irq(VIRTIO_BLK_IRQ);
     KINFO("VirtIO IRQ %d enabled\n", VIRTIO_BLK_IRQ);
 
@@ -501,8 +499,8 @@ bool init_ata(void)
 
     virtio_addr = detect_virtmmio_from_dtb();
 
-    uint32_t addr = 0x0A003E00;
-    virtio_addr = addr;
+    uint32_t virtio_phys_addr = 0x0A003E00;
+    virtio_addr = KERNEL_MMIO_VIRTIO_ADDR(virtio_phys_addr);
     
     ata_device.regs = (volatile uint32_t*)virtio_addr;
     
@@ -510,7 +508,8 @@ bool init_ata(void)
     uint32_t device_id = mmio_read32(ata_device.regs, VIRTIO_MMIO_DEVICE_ID);
     //ata_device.regs[VIRTIO_DEVICE_ID/4];
     if (device_id == 2) {
-        KINFO("OK Confirmed VirtIO Block device (ID=2) at 0x%08X\n", virtio_addr);
+        KINFO("OK Confirmed VirtIO Block device (ID=2) phys=0x%08X mmio=0x%08X\n",
+              virtio_phys_addr, virtio_addr);
     } else {
         KWARN("WARNING VirtIO device has ID=%u (not 2), but proceeding anyway\n", device_id);
         KWARN("   Assuming this device can handle block operations\n");
@@ -543,34 +542,30 @@ bool init_ata(void)
 
 static bool init_virtio_block_device2(uint32_t base_addr)
 {
-    KDEBUG("Initializing VirtIO block device at 0x%08X\n", base_addr);
+    //KDEBUG("Initializing VirtIO block device at 0x%08X\n", base_addr);
     
     volatile uint32_t* regs = (volatile uint32_t*)base_addr;
     
     /* Read device information */
-    uint32_t version = regs[VIRTIO_VERSION/4];
-    uint32_t vendor_id = regs[VIRTIO_VENDOR_ID/4];
-    uint32_t device_features = regs[VIRTIO_DEVICE_FEATURES/4];
-    
-    KDEBUG("Device information:\n");
-    KDEBUG("  Version:  0x%08X\n", version);
-    KDEBUG("  Vendor:   0x%08X\n", vendor_id);
-    KDEBUG("  Features: 0x%08X\n", device_features);
+    //KDEBUG("Device information:\n");
+    //KDEBUG("  Version:  0x%08X\n", regs[VIRTIO_VERSION/4]);
+    //KDEBUG("  Vendor:   0x%08X\n", regs[VIRTIO_VENDOR_ID/4]);
+    //KDEBUG("  Features: 0x%08X\n", device_features);
     
     /* Reset device */
-    KDEBUG("Resetting device...\n");
+    //KDEBUG("Resetting device...\n");
     regs[VIRTIO_STATUS/4] = 0;
     
     /* Status: Acknowledge */
-    KDEBUG("Acknowledging device...\n");
+    //KDEBUG("Acknowledging device...\n");
     regs[VIRTIO_STATUS/4] = VIRTIO_STATUS_ACK;
     
     /* Status: Driver */
-    KDEBUG("Setting driver status...\n");
+    //KDEBUG("Setting driver status...\n");
     regs[VIRTIO_STATUS/4] |= VIRTIO_STATUS_DRIVER;
     
     /* Feature negotiation */
-    KDEBUG("Negotiating features...\n");
+    //KDEBUG("Negotiating features...\n");
     uint32_t guest_features = 0;  /* No special features needed */
     regs[VIRTIO_GUEST_FEATURES/4] = guest_features;
     
@@ -586,7 +581,7 @@ static bool init_virtio_block_device2(uint32_t base_addr)
     }
     
     /* Setup virtqueue */
-    KDEBUG("Setting up virtqueue...\n");
+    //KDEBUG("Setting up virtqueue...\n");
     if (!setup_virtqueue()) {
         KERROR("Failed to setup virtqueue\n");
         regs[VIRTIO_STATUS/4] = VIRTIO_STATUS_FAILED;
@@ -594,16 +589,16 @@ static bool init_virtio_block_device2(uint32_t base_addr)
     }
     
     /* Enable IRQ */
-    KDEBUG("Configuring VirtIO IRQs...\n");
+    //KDEBUG("Configuring VirtIO IRQs...\n");
     enable_irq(VIRTIO_BLK_IRQ);
     KINFO("VirtIO IRQ %d enabled\n", VIRTIO_BLK_IRQ);
     
     /* Driver OK */
-    KDEBUG("Setting driver OK...\n");
+    //KDEBUG("Setting driver OK...\n");
     regs[VIRTIO_STATUS/4] |= VIRTIO_STATUS_DRIVER_OK;
     
     /* Read device capacity */
-    KDEBUG("Reading device capacity...\n");
+    //KDEBUG("Reading device capacity...\n");
     volatile uint64_t* config_space = (volatile uint64_t*)(base_addr + 0x100);
     ata_device.capacity = *config_space;
     ata_device.sector_size = 512;
@@ -622,7 +617,7 @@ static bool init_virtio_block_device2(uint32_t base_addr)
 
 static bool setup_virtqueue(void)
 {
-    KDEBUG("Setting up virtqueue...\n");
+    //KDEBUG("Setting up virtqueue...\n");
     
     /* Select queue 0 */
     mmio_write32(ata_device.regs, VIRTIO_MMIO_QUEUE_SEL, 0);
@@ -630,7 +625,7 @@ static bool setup_virtqueue(void)
     
     /* Get queue size */
     uint32_t queue_size = ata_device.regs[VIRTIO_QUEUE_SIZE/4];
-    KDEBUG("Queue size from device: %u\n", queue_size);
+    //KDEBUG("Queue size from device: %u\n", queue_size);
     
     if (queue_size == 0) {
         KERROR("Queue size is 0\n");
@@ -647,14 +642,14 @@ static bool setup_virtqueue(void)
     uint32_t queue_pages = (queue_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
     
     /* Allocate contiguous memory */
-    KDEBUG("Allocating %u contiguous pages...\n", queue_pages);
+    //KDEBUG("Allocating %u contiguous pages...\n", queue_pages);
     void* queue_mem = allocate_pages(queue_pages);
     if (!queue_mem) {
         KERROR("Failed to allocate pages\n");
         return false;
     }
     
-    KDEBUG("Allocated virtqueue memory at %p\n", queue_mem);
+    //KDEBUG("Allocated virtqueue memory at %p\n", queue_mem);
     
     /* Clear memory */
     memset(queue_mem, 0, queue_pages * PAGE_SIZE);
@@ -668,7 +663,7 @@ static bool setup_virtqueue(void)
                                             PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1));
     
     /* Initialize descriptor free list */
-    KDEBUG("Initializing descriptor free list...\n");
+    //KDEBUG("Initializing descriptor free list...\n");
     for (uint16_t i = 0; i < queue_size - 1; i++) {
         ata_device.queue.desc[i].next = i + 1;
     }
@@ -680,10 +675,10 @@ static bool setup_virtqueue(void)
     
     /* Configure queue in device */
     uint32_t queue_pfn = (uint32_t)queue_mem / PAGE_SIZE;
-    KDEBUG("Setting queue PFN to 0x%08X\n", queue_pfn);
+    //KDEBUG("Setting queue PFN to 0x%08X\n", queue_pfn);
     ata_device.regs[VIRTIO_QUEUE_PFN/4] = queue_pfn;
     
-    KDEBUG("Virtqueue setup complete OK\n");
+    //KDEBUG("Virtqueue setup complete OK\n");
     return true;
 }
 
@@ -751,20 +746,24 @@ static int ata_rw_sector(uint64_t lba, void* buffer, bool write)
 
 void ata_irq_handler(void)
 {
-    KDEBUG("=== ATA IRQ HANDLER CALLED ===\n");
-    
+    //KDEBUG("=== ATA IRQ HANDLER CALLED ===\n");
+
+    /* ACK inconditionnellement pour éviter IRQ storm : si on ne répond pas,
+     * l'IRQ level-triggered reste assertée et bloque les polls VirtIO. */
+    uint32_t irq_status = 0;
+    if (ata_device.regs) {
+        irq_status = ata_device.regs[VIRTIO_INTERRUPT_STATUS/4];
+        if (irq_status) ata_device.regs[VIRTIO_INTERRUPT_ACK/4] = irq_status;
+    }
+
     if (!ata_device.initialized) {
-        KDEBUG("Device not initialized, ignoring IRQ\n");
+        //KDEBUG("Device not initialized, ignoring IRQ\n");
         return;
     }
-    
-    /* Acknowledge VirtIO interrupt */
-    uint32_t irq_status = ata_device.regs[VIRTIO_INTERRUPT_STATUS/4];
-    KDEBUG("VirtIO interrupt status: 0x%08X\n", irq_status);
-    
+
+    //KDEBUG("VirtIO interrupt status: 0x%08X\n", irq_status);
+
     if (irq_status & 1) {  /* Used ring notification */
-        /* Acknowledge interrupt */
-        ata_device.regs[VIRTIO_INTERRUPT_ACK/4] = irq_status;
         
         spin_lock(&ata_device.lock);
         
@@ -774,7 +773,7 @@ void ata_irq_handler(void)
             virtq_used_elem_t* used_ring = virtq_used_get_ring(ata_device.queue.used);
             uint32_t desc_id = used_ring[used_idx].id;
             
-            KDEBUG("Completing request: desc_id=%u\n", desc_id);
+            //KDEBUG("Completing request: desc_id=%u\n", desc_id);
             
             /* Find corresponding request */
             io_request_t* req = ata_device.desc_to_request[desc_id];
@@ -782,7 +781,7 @@ void ata_irq_handler(void)
                 req->completed = true;
                 req->result = 0;  /* Assume success for now */
                 
-                KDEBUG("Request %p marked as completed\n", req);
+                //KDEBUG("Request %p marked as completed\n", req);
                 
                 /* Wake up waiting process if needed */
                 if (req->waiting_process && req->waiting_process->state == TASK_BLOCKED) {
@@ -800,7 +799,7 @@ void ata_irq_handler(void)
         
         spin_unlock(&ata_device.lock);
         
-        KDEBUG("IRQ processing completed\n");
+        //KDEBUG("IRQ processing completed\n");
     }
 }
 
@@ -838,8 +837,8 @@ static int ata_submit_request(io_request_t* req)
 
 static int ata_submit_request_real(io_request_t* req)
 {
-    KDEBUG("Submitting REAL VirtIO request: LBA=%u, count=%u, write=%s\n", 
-           (uint32_t)req->lba, req->sector_count, req->write ? "YES" : "NO");
+    //KDEBUG("Submitting REAL VirtIO request: LBA=%u, count=%u, write=%s\n",
+    //       (uint32_t)req->lba, req->sector_count, req->write ? "YES" : "NO");
     
     if (!req || !req->buffer) {
         KERROR("Invalid request or buffer\n");
@@ -876,8 +875,8 @@ static int ata_submit_request_real(io_request_t* req)
 
 static int virtio_blk_rw(uint64_t lba, uint32_t count, void* buffer, bool write)
 {
-    KDEBUG("VirtIO: %s LBA=%u count=%u buffer=%p\n", 
-           write ? "WRITE" : "READ", (uint32_t)lba, count, buffer);
+    //KDEBUG("VirtIO: %s LBA=%u count=%u buffer=%p\n",
+    //       write ? "WRITE" : "READ", (uint32_t)lba, count, buffer);
     
     /* Allocate descriptors (header + data + status) */
     uint16_t desc_header = alloc_desc();
@@ -948,19 +947,14 @@ static int virtio_blk_rw(uint64_t lba, uint32_t count, void* buffer, bool write)
     mmio_write32(ata_device.regs, VIRTIO_MMIO_QUEUE_NOTIFY, 0); /* Queue 0 */
     //ata_device.regs[VIRTIO_QUEUE_NOTIFY/4] = 0; /* Queue 0 */
     
-    KDEBUG("VirtIO request submitted, waiting for completion...\n");
+    //KDEBUG("VirtIO request submitted, waiting for completion...\n");
     
     /* Wait for completion (polling) */
     uint32_t timeout = 1000000;
     while (timeout-- > 0) {
         if (ata_device.queue.used->idx != ata_device.queue.last_used_idx) {
             /* Response available */
-            virtq_used_elem_t* used_ring = virtq_used_get_ring(ata_device.queue.used);
-            uint16_t used_idx = ata_device.queue.last_used_idx % ata_device.queue.queue_size;
-            virtq_used_elem_t* used_elem = &used_ring[used_idx];
-            
-            KDEBUG("VirtIO completion: desc=%u len=%u status=%u\n", 
-                   used_elem->id, used_elem->len, *status);
+            //KDEBUG("VirtIO completion: desc=%u len=%u status=%u\n", ...);
             
             /* Free descriptors */
             free_desc(desc_header);
@@ -1006,7 +1000,7 @@ static int ata_submit_request_simulation(io_request_t* req)
     }
     
     if (req->write) {
-        KDEBUG("Write operation simulated\n");
+        //KDEBUG("Write operation simulated\n");
         req->completed = true;
         req->result = 0;
         return 0;
@@ -1021,7 +1015,7 @@ static int ata_submit_request_simulation(io_request_t* req)
         buffer[0] = 0xEB; buffer[1] = 0x58; buffer[2] = 0x90;
         memcpy(buffer + 3, "mkfs.fat", 8);
         buffer[510] = 0x55; buffer[511] = 0xAA;
-        KDEBUG("Generated simulated boot sector\n");
+        //KDEBUG("Generated simulated boot sector\n");
     }
     
     req->completed = true;

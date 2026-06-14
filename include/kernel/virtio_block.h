@@ -9,7 +9,7 @@
 #define VIRTIO_BLK_IRQ      17  /* IRQ 17 pour machine virt */
 
 /* Adresses VirtIO pour machine virt (depuis kernel.h) */
-#define VIRTIO_BLOCK_BASE       VIRT_VIRTIO_BLOCK       /* 0x0A000200 */
+#define VIRTIO_BLOCK_BASE       KERNEL_MMIO_VIRTIO_ADDR(VIRT_VIRTIO_BLOCK)
 #define VIRTIO_BLOCK_IRQ        VIRT_VIRTIO_BLOCK_IRQ   /* IRQ 17 */
 #define VIRTIO_BLOCK_SIZE       VIRT_VIRTIO_SIZE        /* 512 bytes */
 
