@@ -287,6 +287,8 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             child->process->exit_code = 0;
             child->process->uid = parent->process->uid;
             child->process->gid = parent->process->gid;
+            child->process->umask = parent->process->umask;
+            child->process->state = (proc_state_t)PROC_READY;
             strcpy(child->process->cwd, parent->process->cwd);    // Setting Current Working Directory
             
             /* Initialiser la table des fichiers (sera copiee plus tard) */
@@ -294,6 +296,12 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             
             /* La VM sera copiee avec COW dans sys_fork() */
             child->process->vm = NULL;
+
+            child->process->waitpid_pid = 0;
+            child->process->waitpid_status = NULL;
+            child->process->waitpid_options = 0;
+            child->process->waitpid_iteration = 0;
+            child->process->waitpid_caller_lr = 0;
 
         }
         else panic("Task Create Copy - cannot allocate Process Structure");
@@ -776,6 +784,7 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         task->process->exit_code = 0;
         task->process->uid = 0;
         task->process->gid = 0;
+        task->process->umask = 022;
         task->process->state = (proc_state_t)PROC_READY;
         
         /* Creer l'espace memoire */
@@ -1103,11 +1112,19 @@ void save_task_context_safe(task_t* task, uint32_t current_sp)
 }
 
 void switch_to_idle(void){
+    task_t *next_task = schedule_next_task();
+
+    if (!next_task ||
+        next_task == (task_t *)current_task ||
+        next_task->state == TASK_ZOMBIE ||
+        next_task->state == TASK_TERMINATED) {
+        next_task = idle_task;
+    }
 
     spin_lock(&task_lock);
 
-    idle_task->state = TASK_RUNNING;
-    idle_task->switch_count++;
+    next_task->state = TASK_RUNNING;
+    next_task->switch_count++;
 
     spin_unlock(&task_lock);
 
@@ -1115,7 +1132,7 @@ void switch_to_idle(void){
      * Ne pas sauvegarder une tache morte et ne jamais modifier manuellement
      * le SP d'une tache suspendue.
      */
-    __task_switch(NULL, &idle_task->context);
+    __task_switch(NULL, &next_task->context);
 
     __builtin_unreachable();
 }

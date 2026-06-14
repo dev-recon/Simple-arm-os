@@ -10,12 +10,16 @@
 #include <kernel/fat32.h>
 #include <kernel/timer.h>
 #include <kernel/dirent.h>
+#include <asm/mmu.h>
 
 
 /* Forward declarations de toutes les fonctions statiques */
 static bool check_file_permission(inode_t* inode, int flags);
 extern int fat32_file_exists_in_dir(inode_t* dir_inode, const char* filename);
 extern inode_t* fat32_create_file(const char* parent_path, const char* filename, mode_t mode);
+extern void fat32_free_cluster_chain(uint32_t start_cluster);
+extern int fat32_update_file_by_name(const char* filename, uint32_t parent_cluster, uint32_t new_cluster);
+extern int fat32_update_file_size_in_dir(const char* filename, uint32_t parent_cluster, uint32_t new_size);
 
 bool inode_permission(inode_t* inode, int mask) {
     /* Root peut tout faire */
@@ -65,10 +69,11 @@ int sys_write(int fd, const void* buf, size_t count)
 {
     file_t* file;
     ssize_t result = 0;
-
-    char *loc_string = NULL;
+    void *kbuf = NULL;
+    const void *write_buf = buf;
     
-    if(!buf || count == 0) return -EINVAL;
+    if (count == 0) return 0;
+    if (!buf) return -EFAULT;
 
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
     
@@ -76,36 +81,48 @@ int sys_write(int fd, const void* buf, size_t count)
     if (!file) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
 
+    if (IS_KERNEL_ADDR((uint32_t)buf)) {
+        write_buf = buf;
+    } else {
+        kbuf = kmalloc(count);
+        if (!kbuf) return -ENOMEM;
 
-    //KDEBUG("SYS_WRITE: buf is NOT NULL\n");
+        if (copy_from_user(kbuf, buf, count) < 0) {
+            kfree(kbuf);
+            return -EFAULT;
+        }
 
-    loc_string = (char *)kmalloc(count+1);
-    if(!loc_string) return -EINVAL;
+        write_buf = kbuf;
+    }
 
     uint32_t irq_flags = disable_interrupts_save();
     set_critical_section();
 
-    if(strncpy_from_user(loc_string, buf, count+1)>0)
-    {
-        //KDEBUG("SYS_WRITE USER: Called with parameters: fd=%d, buf='%s', count=%d\n", fd, loc_string, count );
-
-        //if(loc_string) kfree(loc_string);
-
-        result = file->f_op->write(file, loc_string, count);
-
-        kfree(loc_string);
-    }
-    else {
-        //KDEBUG("SYS_WRITE KERNEL: Called with parameters: fd=%d, buf='%s', count=%d\n", fd, (char *)buf, count );
-        result = file->f_op->write(file, buf, count);
-    }
+    result = file->f_op->write(file, write_buf, count);
 
     unset_critical_section();
     restore_interrupts(irq_flags);
 
-    //KDEBUG("SYS_WRITE: just after writing result = %d\n" , result);
+    if (kbuf) kfree(kbuf);
 
     return (int)result;
+}
+
+static int truncate_file_inode(inode_t *inode, const char *name)
+{
+    if (!inode || !name) return -EINVAL;
+    if (S_ISDIR(inode->mode)) return -EISDIR;
+
+    if (inode->first_cluster != 0) {
+        fat32_free_cluster_chain(inode->first_cluster);
+        inode->first_cluster = 0;
+        inode->blocks = 0;
+        fat32_update_file_by_name(name, inode->parent_cluster, 0);
+    }
+
+    inode->size = 0;
+    inode->mtime = get_current_time();
+    return fat32_update_file_size_in_dir(name, inode->parent_cluster, 0);
 }
 
 int sys_close(int fd)
@@ -229,6 +246,9 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
                 kfree(filename);
             } else {
                 /* Créer le nouveau fichier */
+                if (current_task && current_task->process)
+                    mode &= ~current_task->process->umask;
+
                 inode = fat32_create_file(parent_path, filename, mode);
                 if (parent) put_inode(parent);
                 kfree(parent_path);
@@ -249,6 +269,15 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
         if((flags & O_CREAT) && (flags & O_EXCL)) {
             kfree(kernel_path);
             return -EEXIST;
+        }
+
+        if ((flags & O_TRUNC) && ((flags & O_ACCMODE) != O_RDONLY)) {
+            int truncate_result = truncate_file_inode(inode, opened_name);
+            if (truncate_result < 0) {
+                put_inode(inode);
+                kfree(kernel_path);
+                return truncate_result;
+            }
         }
     }
     

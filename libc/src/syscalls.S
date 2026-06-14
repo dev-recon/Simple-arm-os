@@ -54,6 +54,10 @@ SYSCALL sys_mkdir, 39       /* __NR_mkdir */
 SYSCALL sys_rmdir, 40       /* __NR_rmdir */
 SYSCALL sys_unlink, 10      /* __NR_unlink */
 SYSCALL sys_chdir, 12       /* __NR_chdir */
+SYSCALL sys_access, 33      /* __NR_access */
+SYSCALL sys_umask, 60       /* __NR_umask */
+SYSCALL sys_chmod, 15       /* __NR_chmod */
+SYSCALL sys_chown, 16       /* __NR_chown / __NR_lchown */
 
 SYSCALL sys_dup, 41         /* __NR_dup2 */
 SYSCALL sys_dup2, 63        /* __NR_dup2 */
@@ -520,6 +524,66 @@ unlink:
     mov r0, #-1
     
 unlink_success:
+    pop {r7, lr}
+    bx lr
+
+.global access
+.type access, %function
+access:
+    push {r7, lr}
+    mov r7, #33             /* SYS_ACCESS */
+    swi #0
+
+    cmp r0, #0
+    bge access_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+access_success:
+    pop {r7, lr}
+    bx lr
+
+.global umask
+.type umask, %function
+umask:
+    push {r7, lr}
+    mov r7, #60             /* SYS_UMASK */
+    swi #0
+    pop {r7, lr}
+    bx lr
+
+.global chmod
+.type chmod, %function
+chmod:
+    push {r7, lr}
+    mov r7, #15             /* SYS_CHMOD */
+    swi #0
+
+    cmp r0, #0
+    bge chmod_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+chmod_success:
+    pop {r7, lr}
+    bx lr
+
+.global chown
+.type chown, %function
+chown:
+    push {r7, lr}
+    mov r7, #16             /* SYS_CHOWN / SYS_LCHOWN */
+    swi #0
+
+    cmp r0, #0
+    bge chown_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+chown_success:
     pop {r7, lr}
     bx lr
 

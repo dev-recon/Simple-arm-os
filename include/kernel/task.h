@@ -204,6 +204,7 @@ typedef struct {
     file_t* files[MAX_FILES];  /* Descripteurs */
     int exit_code;
     uid_t uid, gid;
+    mode_t umask;
 
     proc_state_t state;
 

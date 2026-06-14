@@ -28,6 +28,7 @@ struct process;
 #define __NR_mknod               14
 #define __NR_chmod               15
 #define __NR_lchown              16
+#define __NR_chown               __NR_lchown
 #define __NR_break               17
 #define __NR_oldstat             18
 #define __NR_lseek               19
@@ -62,6 +63,7 @@ struct process;
 #define __NR_signal              48
 #define __NR_geteuid             49
 #define __NR_getegid             50
+#define __NR_umask               60
 #define __NR_dup2                63      /* dup2 */
 #define __NR_sigaction           67
 #define __NR_stat               106
@@ -115,6 +117,10 @@ int sys_mkdir(const char* pathname, mode_t mode);
 int sys_rmdir(const char* pathname);
 int sys_unlink(const char* pathname);
 int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count);
+int sys_access(const char* pathname, int mode);
+int sys_umask(int mask);
+int sys_chmod(const char* pathname, mode_t mode);
+int sys_chown(const char* pathname, uid_t owner, gid_t group);
 
 /* Process syscalls */
 #define WNOHANG 1

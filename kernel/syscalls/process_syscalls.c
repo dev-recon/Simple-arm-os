@@ -520,18 +520,28 @@ int sys_getcwd(char* buf, size_t size)
 int sys_access(const char* pathname, int mode)
 {
     char* kernel_path;
+    char* full_path;
     inode_t* inode;
     
-    /* Suppression du warning unused parameter */
-    (void)mode;
+    if (mode & ~(MAY_READ | MAY_WRITE | MAY_EXEC)) return -EINVAL;
     
     kernel_path = copy_string_from_user(pathname);
     if (!kernel_path) return -EFAULT;
     
-    inode = path_lookup(kernel_path);
+    full_path = resolve_path(kernel_path);
     kfree(kernel_path);
+
+    if (!full_path) return -ENOENT;
+
+    inode = path_lookup(full_path);
+    kfree(full_path);
     
     if (!inode) return -ENOENT;
+
+    if (mode != 0 && !inode_permission(inode, mode)) {
+        put_inode(inode);
+        return -EACCES;
+    }
     
     put_inode(inode);
     return 0;
@@ -539,11 +549,14 @@ int sys_access(const char* pathname, int mode)
 
 int sys_umask(int mask)
 {
-    /* Suppression du warning unused parameter */
-    (void)mask;
+    process_t* proc = current_task ? current_task->process : NULL;
+    mode_t old_mask;
+
+    if (!proc) return -EINVAL;
     
-    /* TODO: Implement umask */
-    return 022; /* Default umask */
+    old_mask = proc->umask;
+    proc->umask = (mode_t)mask & 0777;
+    return (int)old_mask;
 }
 
 int sys_chmod(const char* pathname, mode_t mode)
