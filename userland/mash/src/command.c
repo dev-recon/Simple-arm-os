@@ -221,16 +221,21 @@ static int cmd_cd(int argc, char* argv[]) {
 }
 
 static int cmd_cat(int argc, char* argv[]) {
+    char buffer[256];
+    int n;
+
     if (argc < 2) {
-        printf("Usage: cat <file>\n");
-        return 1;
+        while ((n = read(STDIN_FILENO, buffer, sizeof(buffer))) > 0) {
+            if (write(STDOUT_FILENO, buffer, n) != n)
+                return 1;
+        }
+        return n < 0 ? 1 : 0;
     }
 
     int fd = open(argv[1], O_RDONLY , 0);
-    if(fd) {
+    if(fd >= 0) {
         struct stat st;
         fstat(fd, &st);
-        char car = 0;
         int i = 0;
         char *buffer = malloc(st.st_size+1);
         read(fd, buffer, st.st_size);

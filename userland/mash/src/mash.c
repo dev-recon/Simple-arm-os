@@ -27,6 +27,14 @@ typedef struct shell_redirs {
     int append;
 } shell_redirs_t;
 
+#define SHELL_MAX_PIPELINE 8
+
+typedef struct shell_command {
+    int argc;
+    char** argv;
+    shell_redirs_t redirs;
+} shell_command_t;
+
 static int token_is_special(char c) {
     return c == '<' || c == '>' || c == '&' || c == '|';
 }
@@ -140,6 +148,198 @@ static int apply_redirections(const shell_redirs_t* redirs) {
     }
 
     return 0;
+}
+
+static int argv_has_pipeline(int argc, char* argv[]) {
+    int i;
+
+    for (i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "|") == 0)
+            return 1;
+    }
+
+    return 0;
+}
+
+static void exec_external_or_die(int argc, char* argv[]) {
+    char* exec_argv[SHELL_MAX_ARGS];
+    char* const envp[] = { NULL };
+    char cmd[256];
+    int i;
+
+    build_exec_path(argv[0], cmd, sizeof(cmd), 0);
+    exec_argv[0] = cmd;
+    for (i = 1; i < argc && i < SHELL_MAX_ARGS - 1; i++)
+        exec_argv[i] = argv[i];
+    exec_argv[i] = NULL;
+
+    execve(cmd, exec_argv, envp);
+
+    if (!token_has_slash(argv[0])) {
+        build_exec_path(argv[0], cmd, sizeof(cmd), 1);
+        exec_argv[0] = cmd;
+        execve(cmd, exec_argv, envp);
+    }
+
+    printf("exec %s failed\n", argv[0]);
+    exit(-1);
+}
+
+static int split_pipeline(int argc, char* argv[], shell_command_t commands[], int* command_count) {
+    int start = 0;
+    int count = 0;
+    int i;
+
+    for (i = 0; i <= argc; i++) {
+        if (i == argc || strcmp(argv[i], "|") == 0) {
+            int segment_argc = i - start;
+
+            if (segment_argc == 0) {
+                printf("mash: empty command in pipeline\n");
+                return -1;
+            }
+
+            if (count >= SHELL_MAX_PIPELINE) {
+                printf("mash: pipeline too long\n");
+                return -1;
+            }
+
+            argv[i] = NULL;
+            commands[count].argc = segment_argc;
+            commands[count].argv = &argv[start];
+
+            if (parse_redirections(&commands[count].argc,
+                                   commands[count].argv,
+                                   &commands[count].redirs) < 0) {
+                return -1;
+            }
+
+            if (commands[count].argc == 0) {
+                printf("mash: empty command in pipeline\n");
+                return -1;
+            }
+
+            count++;
+            start = i + 1;
+        }
+    }
+
+    for (i = 0; i < count; i++) {
+        if (i > 0 && commands[i].redirs.input) {
+            printf("mash: input redirection is only supported on the first pipeline command\n");
+            return -1;
+        }
+        if (i < count - 1 && commands[i].redirs.output) {
+            printf("mash: output redirection is only supported on the last pipeline command\n");
+            return -1;
+        }
+    }
+
+    *command_count = count;
+    return 0;
+}
+
+static void close_pipeline_fds(int pipes[][2], int pipe_count) {
+    int i;
+
+    for (i = 0; i < pipe_count; i++) {
+        if (pipes[i][0] >= 0)
+            close(pipes[i][0]);
+        if (pipes[i][1] >= 0)
+            close(pipes[i][1]);
+    }
+}
+
+static int run_pipeline(int argc, char* argv[], int background) {
+    shell_command_t commands[SHELL_MAX_PIPELINE];
+    int pipes[SHELL_MAX_PIPELINE - 1][2];
+    int pids[SHELL_MAX_PIPELINE];
+    int command_count = 0;
+    int pipe_count;
+    int i;
+    int status = 0;
+    int last_status = 0;
+    int launched = 0;
+
+    for (i = 0; i < SHELL_MAX_PIPELINE - 1; i++) {
+        pipes[i][0] = -1;
+        pipes[i][1] = -1;
+    }
+
+    if (split_pipeline(argc, argv, commands, &command_count) < 0)
+        return SHELL_ERROR;
+
+    pipe_count = command_count - 1;
+    for (i = 0; i < pipe_count; i++) {
+        if (pipe(pipes[i]) < 0) {
+            printf("mash: pipe failed\n");
+            close_pipeline_fds(pipes, pipe_count);
+            return SHELL_ERROR;
+        }
+    }
+
+    for (i = 0; i < command_count; i++) {
+        int pid = fork();
+
+        if (pid < 0) {
+            printf("mash: fork failed\n");
+            close_pipeline_fds(pipes, pipe_count);
+            for (i = 0; i < launched; i++)
+                waitpid(pids[i], &status, 0);
+            return SHELL_ERROR;
+        }
+
+        if (pid == 0) {
+            command_entry_t *entry;
+
+            if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
+                printf("mash: cannot connect pipeline input\n");
+                exit(-1);
+            }
+
+            if (i < command_count - 1 && dup2(pipes[i][1], STDOUT_FILENO) < 0) {
+                printf("mash: cannot connect pipeline output\n");
+                exit(-1);
+            }
+
+            close_pipeline_fds(pipes, pipe_count);
+
+            if (apply_redirections(&commands[i].redirs) < 0)
+                exit(-1);
+
+            if (strcmp(commands[i].argv[0], "exit") == 0)
+                exit(0);
+
+            entry = find_command(commands[i].argv[0]);
+            if (entry) {
+                int result = entry->function(commands[i].argc, commands[i].argv);
+                pflush();
+                exit(result);
+            }
+
+            exec_external_or_die(commands[i].argc, commands[i].argv);
+        }
+
+        pids[i] = pid;
+        launched++;
+    }
+
+    close_pipeline_fds(pipes, pipe_count);
+
+    if (background) {
+        printf("[bg]");
+        for (i = 0; i < command_count; i++)
+            printf(" pid %d", pids[i]);
+        printf("\n");
+        return SHELL_OK;
+    }
+
+    for (i = 0; i < command_count; i++) {
+        if (waitpid(pids[i], &status, 0) == pids[i])
+            last_status = status;
+    }
+
+    return last_status;
 }
 
 static int run_builtin_with_redirs(command_entry_t* entry, int argc, char* argv[],
@@ -478,6 +678,9 @@ int shell_execute(int argc, char* argv[]) {
             return SHELL_OK;
     }
 
+    if (argv_has_pipeline(argc, argv))
+        return run_pipeline(argc, argv, background);
+
     if (parse_redirections(&argc, argv, &redirs) < 0)
         return SHELL_ERROR;
     if (argc == 0)
@@ -503,32 +706,10 @@ int shell_execute(int argc, char* argv[]) {
     
     int child_pid = fork();
     if (child_pid == 0) {
-        //printf("                 ************ Child process running!\n");
-        char* exec_argv[SHELL_MAX_ARGS];
-        char* const envp[] = { NULL };
-        char cmd[256];
-        int i;
-
         if (apply_redirections(&redirs) < 0)
             exit(-1);
 
-        build_exec_path(argv[0], cmd, sizeof(cmd), 0);
-        exec_argv[0] = cmd;
-        for (i = 1; i < argc && i < SHELL_MAX_ARGS - 1; i++)
-            exec_argv[i] = argv[i];
-        exec_argv[i] = NULL;
-
-        execve(cmd, exec_argv, envp);
-
-        if (!token_has_slash(argv[0])) {
-            build_exec_path(argv[0], cmd, sizeof(cmd), 1);
-            exec_argv[0] = cmd;
-            execve(cmd, exec_argv, envp);
-        }
-
-        // If we arrive here, exec failed
-        printf("exec %s failed\n", argv[0]);
-        exit(-1);
+        exec_external_or_die(argc, argv);
         
     } else {
 
