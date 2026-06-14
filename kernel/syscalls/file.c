@@ -172,7 +172,9 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     file_t* file;
     int fd;
     char* filename = NULL;
-    bool new_file = false;
+    char opened_name[256];
+
+    opened_name[0] = '\0';
     
     /* Suppression du warning unused parameter */
     (void)mode;
@@ -188,6 +190,13 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
         }
         return -ENOENT;
     } */
+
+    {
+        char* slash = strrchr(kernel_path, '/');
+        const char* base = slash ? slash + 1 : kernel_path;
+        strncpy(opened_name, base, sizeof(opened_name) - 1);
+        opened_name[sizeof(opened_name) - 1] = '\0';
+    }
 
     if (!inode) {
         //KDEBUG("kernel_open: INODE IS NULL for %s\n", kernel_path);
@@ -223,7 +232,6 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
                 inode = fat32_create_file(parent_path, filename, mode);
                 if (parent) put_inode(parent);
                 kfree(parent_path);
-                new_file = true;
                 
                 if (!inode) {
                     kfree(kernel_path);
@@ -279,11 +287,12 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
 
     file->f_op = inode->f_op;
 
-    if(new_file)
-    {
+    if (filename) {
         strcpy(file->name, filename);
-        //KDEBUG("kernel_open: File creation detected: file->name=%s\n", file->name);
         kfree(filename);
+    } else {
+        strncpy(file->name, opened_name, sizeof(file->name) - 1);
+        file->name[sizeof(file->name) - 1] = '\0';
     }
     
     /* Open file */

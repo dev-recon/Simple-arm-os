@@ -3,11 +3,14 @@
 #include <unistd.h>
 #include <signal.h>
 #include <string.h>
+#include <fcntl.h>
 #include "../include/mash.h"
 
 extern command_entry_t* find_command(const char* name);
 extern void list_commands(void);
 extern int command_init(void);
+
+static char token_buffer[SHELL_BUFFER_SIZE];
 
 static void shell_reap_background(void) {
     int status = 0;
@@ -16,6 +19,175 @@ static void shell_reap_background(void) {
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         printf("[bg] pid %d done status=%d\n", pid, status);
     }
+}
+
+typedef struct shell_redirs {
+    const char* input;
+    const char* output;
+    int append;
+} shell_redirs_t;
+
+static int token_is_special(char c) {
+    return c == '<' || c == '>' || c == '&' || c == '|';
+}
+
+static int token_has_slash(const char* s) {
+    while (*s) {
+        if (*s == '/')
+            return 1;
+        s++;
+    }
+    return 0;
+}
+
+static void build_exec_path(const char* name, char* out, size_t out_size, int index) {
+    const char* dirs[] = { "/bin/", "/usr/bin/" };
+
+    if (token_has_slash(name)) {
+        strncpy(out, name, out_size - 1);
+        out[out_size - 1] = '\0';
+        return;
+    }
+
+    out[0] = '\0';
+    strncat(out, dirs[index], out_size - 1);
+    strncat(out, name, out_size - strlen(out) - 1);
+}
+
+static int parse_redirections(int* argc, char* argv[], shell_redirs_t* redirs) {
+    int src = 0;
+    int dst = 0;
+
+    redirs->input = NULL;
+    redirs->output = NULL;
+    redirs->append = 0;
+
+    while (src < *argc) {
+        if (strcmp(argv[src], "<") == 0 ||
+            strcmp(argv[src], ">") == 0 ||
+            strcmp(argv[src], ">>") == 0) {
+            int is_input = strcmp(argv[src], "<") == 0;
+            int is_append = strcmp(argv[src], ">>") == 0;
+
+            if (src + 1 >= *argc) {
+                printf("mash: missing redirection target after %s\n", argv[src]);
+                return -1;
+            }
+
+            if (is_input) {
+                redirs->input = argv[src + 1];
+            } else {
+                redirs->output = argv[src + 1];
+                redirs->append = is_append;
+            }
+            src += 2;
+            continue;
+        }
+
+        argv[dst++] = argv[src++];
+    }
+
+    argv[dst] = NULL;
+    *argc = dst;
+    return 0;
+}
+
+static int open_redirect_output(const char* path, int append) {
+    int fd;
+
+    if (!append) {
+        unlink(path);
+        return open(path, O_CREAT | O_WRONLY, 0644);
+    }
+
+    fd = open(path, O_WRONLY, 0);
+    if (fd < 0)
+        fd = open(path, O_CREAT | O_WRONLY, 0644);
+    if (fd >= 0)
+        lseek(fd, 0, SEEK_END);
+    return fd;
+}
+
+static int apply_redirections(const shell_redirs_t* redirs) {
+    int fd;
+
+    if (redirs->input) {
+        fd = open(redirs->input, O_RDONLY, 0);
+        if (fd < 0) {
+            printf("mash: cannot open input %s\n", redirs->input);
+            return -1;
+        }
+        if (dup2(fd, STDIN_FILENO) < 0) {
+            close(fd);
+            printf("mash: cannot redirect stdin\n");
+            return -1;
+        }
+        close(fd);
+    }
+
+    if (redirs->output) {
+        fd = open_redirect_output(redirs->output, redirs->append);
+        if (fd < 0) {
+            printf("mash: cannot open output %s\n", redirs->output);
+            return -1;
+        }
+        if (dup2(fd, STDOUT_FILENO) < 0) {
+            close(fd);
+            printf("mash: cannot redirect stdout\n");
+            return -1;
+        }
+        close(fd);
+    }
+
+    return 0;
+}
+
+static int run_builtin_with_redirs(command_entry_t* entry, int argc, char* argv[],
+                                  const shell_redirs_t* redirs) {
+    int saved_stdin = -1;
+    int saved_stdout = -1;
+    int result;
+
+    if (redirs->input) {
+        saved_stdin = dup(STDIN_FILENO);
+        if (saved_stdin < 0)
+            return SHELL_ERROR;
+    }
+
+    if (redirs->output) {
+        saved_stdout = dup(STDOUT_FILENO);
+        if (saved_stdout < 0) {
+            if (saved_stdin >= 0)
+                close(saved_stdin);
+            return SHELL_ERROR;
+        }
+    }
+
+    if (apply_redirections(redirs) < 0) {
+        if (saved_stdin >= 0) {
+            dup2(saved_stdin, STDIN_FILENO);
+            close(saved_stdin);
+        }
+        if (saved_stdout >= 0) {
+            dup2(saved_stdout, STDOUT_FILENO);
+            close(saved_stdout);
+        }
+        return SHELL_ERROR;
+    }
+
+    result = entry->function(argc, argv);
+    pflush();
+
+    if (saved_stdin >= 0) {
+        dup2(saved_stdin, STDIN_FILENO);
+        close(saved_stdin);
+    }
+    if (saved_stdout >= 0) {
+        dup2(saved_stdout, STDOUT_FILENO);
+        close(saved_stdout);
+    }
+
+    return result;
 }
 
 void my_handler(int sig) {
@@ -227,27 +399,62 @@ char* shell_read_line(void) {
 // Parse a line into arguments
 int shell_parse_line(char* line, char* argv[]) {
     int argc = 0;
-    char* token = line;
+    char* readp = line;
+    char* writep = token_buffer;
+    char* endp = token_buffer + sizeof(token_buffer) - 1;
     
-    while (*token && argc < SHELL_MAX_ARGS - 1) {
-        // Ignore spaces
-        while (*token == ' ' || *token == '\t') {
-            token++;
+    while (*readp && argc < SHELL_MAX_ARGS - 1) {
+        while (*readp == ' ' || *readp == '\t') {
+            readp++;
         }
         
-        if (*token == '\0') {
+        if (*readp == '\0') {
             break;
         }
-        
-        argv[argc++] = token;
 
-        // Find the end of the token
-        while (*token && *token != ' ' && *token != '\t') {
-            token++;
+        argv[argc++] = writep;
+
+        if (*readp == '>' && readp[1] == '>') {
+            if (writep + 2 >= endp)
+                break;
+            *writep++ = *readp++;
+            *writep++ = *readp++;
+        } else if (token_is_special(*readp)) {
+            if (writep + 1 >= endp)
+                break;
+            *writep++ = *readp++;
+        } else {
+            char quote = 0;
+
+            while (*readp) {
+                if (quote) {
+                    if (*readp == quote) {
+                        quote = 0;
+                        readp++;
+                        continue;
+                    }
+                } else {
+                    if (*readp == '\'' || *readp == '"') {
+                        quote = *readp++;
+                        continue;
+                    }
+                    if (*readp == ' ' || *readp == '\t' || token_is_special(*readp))
+                        break;
+                }
+
+                if (*readp == '\\' && readp[1]) {
+                    readp++;
+                }
+                if (writep >= endp)
+                    break;
+                *writep++ = *readp++;
+            }
         }
-        
-        if (*token) {
-            *token++ = '\0';
+
+        *writep++ = '\0';
+
+        if (*readp == ' ' || *readp == '\t') {
+            readp++;
         }
     }
     
@@ -258,6 +465,7 @@ int shell_parse_line(char* line, char* argv[]) {
 // Execute a command
 int shell_execute(int argc, char* argv[]) {
     int background = 0;
+    shell_redirs_t redirs;
 
     if (argc == 0) {
         return SHELL_OK;
@@ -270,6 +478,11 @@ int shell_execute(int argc, char* argv[]) {
             return SHELL_OK;
     }
 
+    if (parse_redirections(&argc, argv, &redirs) < 0)
+        return SHELL_ERROR;
+    if (argc == 0)
+        return SHELL_OK;
+
     // Command exit built-in
     if (strcmp(argv[0], "exit") == 0) {
         printf("Au revoir!\n");
@@ -281,31 +494,40 @@ int shell_execute(int argc, char* argv[]) {
 
     if(entry)
     {
-        return entry->function(argc,argv);
+        if (background) {
+            printf("mash: background builtins are not supported\n");
+            return SHELL_ERROR;
+        }
+        return run_builtin_with_redirs(entry, argc, argv, &redirs);
     }
-
-    char *dir[] = { "/bin/" , "/usr/bin/"} ;
-    char cmd[256];
-
-    strcpy(cmd, dir[0]);
-    strcat(cmd, argv[0]);
     
     int child_pid = fork();
     if (child_pid == 0) {
         //printf("                 ************ Child process running!\n");
         char* exec_argv[SHELL_MAX_ARGS];
         char* const envp[] = { NULL };
+        char cmd[256];
         int i;
 
+        if (apply_redirections(&redirs) < 0)
+            exit(-1);
+
+        build_exec_path(argv[0], cmd, sizeof(cmd), 0);
         exec_argv[0] = cmd;
         for (i = 1; i < argc && i < SHELL_MAX_ARGS - 1; i++)
             exec_argv[i] = argv[i];
         exec_argv[i] = NULL;
 
-        int result = execve(cmd , exec_argv, envp);
+        execve(cmd, exec_argv, envp);
+
+        if (!token_has_slash(argv[0])) {
+            build_exec_path(argv[0], cmd, sizeof(cmd), 1);
+            exec_argv[0] = cmd;
+            execve(cmd, exec_argv, envp);
+        }
 
         // If we arrive here, exec failed
-        printf("exec %s failed with %d\n", cmd, result);
+        printf("exec %s failed\n", argv[0]);
         exit(-1);
         
     } else {
@@ -316,7 +538,7 @@ int shell_execute(int argc, char* argv[]) {
         }
 
         int status = 0;
-        int waited_pid = waitpid(child_pid, &status, 0);
+        waitpid(child_pid, &status, 0);
         //printf("SHELL waked up waited_pid %d, son status = %d\n", waited_pid, status);
 
         return(status);
