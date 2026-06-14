@@ -173,6 +173,9 @@ open_success:
 .global close
 .type close, %function
 close:
+    push {r0, r1, r7, lr}
+    bl pflush
+    pop {r0, r1, r7, lr}
     push {r7, lr}
     mov r7, #6              /* SYS_CLOSE */
     swi #0
@@ -192,6 +195,9 @@ close_success:
 .global exit
 .type exit, %function
 exit:
+    push {r0, r1, r7, lr}
+    bl pflush
+    pop {r0, r1, r7, lr}
     mov r7, #1              /* SYS_EXIT */
     swi #0
     /* Ne retourne jamais */
@@ -590,6 +596,9 @@ chown_success:
 .global dup
 .type dup, %function
 dup:
+    push {r0, r1, r7, lr}
+    bl pflush
+    pop {r0, r1, r7, lr}
     push {r7, lr}
     mov r7, #41            /* SYS_DUP */
     swi #0
@@ -608,6 +617,9 @@ dup_success:
 .global dup2
 .type dup2, %function
 dup2:
+    push {r0, r1, r7, lr}
+    bl pflush
+    pop {r0, r1, r7, lr}
     push {r7, lr}
     mov r7, #63             /* SYS_DUP2 */
     swi #0
