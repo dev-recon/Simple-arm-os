@@ -11,6 +11,9 @@ static void make_page_readonly(uint32_t *pgdir, uint32_t vaddr);
 static void map_user_page_cow(uint32_t *pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid);
 static void track_cow_page(uint32_t phys_addr);
 static uint32_t *allocate_pgdir(void);
+static bool vm_l1_entry_is_coarse(uint32_t entry);
+static uint32_t vm_l1_coarse_base(uint32_t entry);
+static bool vm_phys_page_is_freeable(uint32_t phys_addr, const char* owner);
 
 /* Fonctions ASID externes */
 extern uint32_t vm_allocate_asid(void);
@@ -118,6 +121,31 @@ static uint32_t *allocate_pgdir(void)
     return pgdir;
 }
 
+static bool vm_l1_entry_is_coarse(uint32_t entry)
+{
+    return (entry & 0x3) == 0x1;
+}
+
+static uint32_t vm_l1_coarse_base(uint32_t entry)
+{
+    return entry & 0xFFFFFC00;
+}
+
+static bool vm_phys_page_is_freeable(uint32_t phys_addr, const char* owner)
+{
+    if (!phys_addr) {
+        return false;
+    }
+
+    if (!IS_PAGE_ALIGNED(phys_addr) || !IS_VALID_RAM(phys_addr)) {
+        KERROR("destroy_vm_space: refusing to free invalid %s page 0x%08X\n",
+               owner, phys_addr);
+        return false;
+    }
+
+    return true;
+}
+
 void destroy_vm_space(vm_space_t *vm)
 {
     vma_t *vma;
@@ -140,7 +168,7 @@ void destroy_vm_space(vm_space_t *vm)
         for (vaddr = vma->start; vaddr < vma->end; vaddr += PAGE_SIZE)
         {
             phys_addr = get_physical_address(vm->pgdir, vaddr);
-            if (phys_addr)
+            if (vm_phys_page_is_freeable(phys_addr, "user"))
             {
                 //KDEBUG("destroy_vm_space: Freeing page 0x%08X\n", phys_addr);
                 free_page((void *)phys_addr);
@@ -155,11 +183,13 @@ void destroy_vm_space(vm_space_t *vm)
     for (uint32_t l1_index = 0; l1_index < 1024; l1_index++)
     {
         uint32_t l1_entry = vm->pgdir[l1_index];
-        if ((l1_entry & 0x3) == 0x1)
+        if (vm_l1_entry_is_coarse(l1_entry))
         {
-            uint32_t l2_phys = l1_entry & 0xFFFFFC00;
+            uint32_t l2_phys = vm_l1_coarse_base(l1_entry);
             vm->pgdir[l1_index] = 0;
-            free_page((void *)l2_phys);
+            if (vm_phys_page_is_freeable(l2_phys, "L2 table")) {
+                free_page((void *)l2_phys);
+            }
         }
     }
 

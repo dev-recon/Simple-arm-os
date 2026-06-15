@@ -2,6 +2,7 @@
 #include <kernel/vfs.h>
 #include <kernel/fat32.h>
 #include <kernel/ext2.h>
+#include <kernel/disk_layout.h>
 #include <kernel/kernel.h>
 #include <kernel/memory.h>
 #include <kernel/process.h>
@@ -66,22 +67,31 @@ uint32_t get_next_inode_number(void){
 
 bool init_vfs(void)
 {
+    const disk_partition_t* ext2_part;
+    const disk_partition_t* fat32_part;
+
     KINFO("[VFS] Starting VFS initialization...\n");
     
     init_spinlock(&vfs_lock);
+
+    ext2_part = disk_partition_get(DISK_PART_EXT2_ROOT);
+    fat32_part = disk_partition_get(DISK_PART_FAT32_MNT);
+    if (!ext2_part || !fat32_part) {
+        KERROR("[VFS] Disk layout is invalid\n");
+        return false;
+    }
     
     /* Initialiser FAT32 d'abord (partition secondaire, montee ensuite sous /mnt). */
     if (init_fat32() != 0) {
         KERROR("[VFS] Failed to initialize FAT32\n");
         return false;
     }
-    
-    #define EXT2_SIZE_MB    64ULL
-    #define FAT32_LBA_START (EXT2_SIZE_MB * 1024ULL * 1024ULL / 512ULL)
 
     /* Monter le systeme de fichiers */
-    if (mount_fat32_filesystem_at(FAT32_LBA_START) != 0) {
-        KERROR("[VFS] Failed to mount FAT32\n");
+    KINFO("[VFS] Mounting %s (%s) at LBA %u\n",
+          fat32_part->name, fat32_part->mountpoint, (uint32_t)fat32_part->lba_start);
+    if (mount_fat32_filesystem_at(fat32_part->lba_start) != 0) {
+        KERROR("[VFS] Failed to mount FAT32 from %s\n", fat32_part->name);
         return false;
     }
     
@@ -104,9 +114,11 @@ bool init_vfs(void)
     fat32_root->ctime = 0;
 
     /* Monter ext2 comme racine depuis le debut du disk.img. */
-    inode_t* ext2_root = ext2_mount(0);
+    KINFO("[VFS] Mounting %s (%s) at LBA %u\n",
+          ext2_part->name, ext2_part->mountpoint, (uint32_t)ext2_part->lba_start);
+    inode_t* ext2_root = ext2_mount(ext2_part->lba_start);
     if (!ext2_root) {
-        KERROR("[VFS] ext2 not found at LBA 0 — root unavailable\n");
+        KERROR("[VFS] ext2 not found on %s — root unavailable\n", ext2_part->name);
         put_inode(fat32_root);
         return false;
     }
@@ -130,8 +142,8 @@ bool init_vfs(void)
 
     //test_root_directory();
 
-    if (vfs_mount("/mnt", fat32_root) != 0) {
-        KERROR("[VFS] vfs_mount /mnt failed\n");
+    if (vfs_mount(fat32_part->mountpoint, fat32_root) != 0) {
+        KERROR("[VFS] vfs_mount %s failed\n", fat32_part->mountpoint);
         put_inode(fat32_root);
     }
 
