@@ -24,6 +24,7 @@ extern int fat32_update_file_size_in_dir(const char* filename, uint32_t parent_c
 extern file_operations_t fat32_file_ops;
 extern inode_operations_t fat32_inode_ops;
 extern file_operations_t ext2_file_ops;
+extern inode_operations_t ext2_inode_ops;
 
 bool inode_permission(inode_t* inode, int mask) {
     /* Root peut tout faire */
@@ -239,7 +240,7 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
                 return -ENOENT;
             }
 
-            if (parent->i_op != &fat32_inode_ops) {
+            if (parent->i_op != &fat32_inode_ops && parent->i_op != &ext2_inode_ops) {
                 put_inode(parent);
                 kfree(parent_path);
                 kfree(filename);
@@ -247,7 +248,7 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
                 return -EROFS;
             }
 
-            if (parent && fat32_file_exists_in_dir(parent, filename)) {
+            if (parent->i_op == &fat32_inode_ops && fat32_file_exists_in_dir(parent, filename)) {
                 if (flags & O_EXCL) {
                     /* O_CREAT | O_EXCL = échec si existe */
                     put_inode(parent);
@@ -269,7 +270,12 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
                 if (current_task && current_task->process)
                     mode &= ~current_task->process->umask;
 
-                inode = fat32_create_file(parent_path, filename, mode);
+                if (parent->i_op == &fat32_inode_ops) {
+                    inode = fat32_create_file(parent_path, filename, mode);
+                } else {
+                    inode = ext2_create_file(parent, filename, mode);
+                }
+
                 if (parent) put_inode(parent);
                 kfree(parent_path);
                 

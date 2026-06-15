@@ -173,6 +173,11 @@ static uint32_t ext2_min_u32(uint32_t a, uint32_t b)
     return a < b ? a : b;
 }
 
+static uint16_t ext2_dir_rec_len(uint8_t name_len)
+{
+    return (uint16_t)((sizeof(ext2_dir_entry_t) + name_len + 3) & ~3u);
+}
+
 static int ext2_alloc_block(uint32_t* out_block)
 {
     ext2_superblock_t sb;
@@ -341,6 +346,77 @@ static int ext2_free_block_list(const uint32_t* blocks, uint32_t count)
     }
 
     return 0;
+}
+
+static int ext2_alloc_inode(uint32_t* out_ino)
+{
+    ext2_superblock_t sb;
+
+    if (!out_ino) return -EINVAL;
+    if (ext2_read_superblock(&sb) < 0) return -EIO;
+    if (sb.s_free_inodes_count == 0) return -ENOSPC;
+
+    for (uint32_t group = 0; group < ext2_fs.groups_count; group++) {
+        ext2_group_desc_t gd;
+
+        if (ext2_read_group_desc(group, &gd) < 0)
+            return -EIO;
+        if (gd.bg_free_inodes_count == 0)
+            continue;
+
+        uint32_t group_first_ino = group * ext2_fs.inodes_per_group + 1;
+        if (group_first_ino > sb.s_inodes_count)
+            continue;
+
+        uint32_t group_inodes = ext2_min_u32(ext2_fs.inodes_per_group,
+                                             sb.s_inodes_count - group_first_ino + 1);
+
+        uint8_t* bitmap = kmalloc(ext2_fs.block_size);
+        if (!bitmap) return -ENOMEM;
+
+        if (ext2_read_block(gd.bg_inode_bitmap, bitmap) < 0) {
+            kfree(bitmap);
+            return -EIO;
+        }
+
+        for (uint32_t bit = 0; bit < group_inodes; bit++) {
+            if (ext2_bitmap_test(bitmap, bit))
+                continue;
+
+            uint32_t ino = group_first_ino + bit;
+            if (ino == 0 || ino > sb.s_inodes_count)
+                continue;
+
+            ext2_bitmap_set(bitmap, bit);
+            if (ext2_write_block(gd.bg_inode_bitmap, bitmap) < 0) {
+                kfree(bitmap);
+                return -EIO;
+            }
+
+            if (gd.bg_free_inodes_count > 0)
+                gd.bg_free_inodes_count--;
+            if (ext2_write_group_desc(group, &gd) < 0) {
+                kfree(bitmap);
+                return -EIO;
+            }
+
+            if (sb.s_free_inodes_count > 0)
+                sb.s_free_inodes_count--;
+            sb.s_wtime = get_current_time();
+            if (ext2_write_superblock(&sb) < 0) {
+                kfree(bitmap);
+                return -EIO;
+            }
+
+            kfree(bitmap);
+            *out_ino = ino;
+            return 0;
+        }
+
+        kfree(bitmap);
+    }
+
+    return -ENOSPC;
 }
 
 /* ---------- inode table ---------- */
@@ -518,6 +594,131 @@ static uint32_t ext2_get_or_alloc_block_at(ext2_inode_t* di, uint32_t idx, bool*
     return block;
 }
 
+static void ext2_init_dirent(ext2_dir_entry_t* de, uint32_t ino, uint16_t rec_len,
+                             const char* name, uint8_t name_len, uint8_t file_type)
+{
+    de->inode = ino;
+    de->rec_len = rec_len;
+    de->name_len = name_len;
+    de->file_type = file_type;
+    memcpy(de->name, name, name_len);
+}
+
+static int ext2_add_dir_entry(inode_t* dir, uint32_t ino, const char* name, uint8_t file_type)
+{
+    if (!dir || !name || !S_ISDIR(dir->mode)) return -EINVAL;
+
+    uint32_t name_len32 = strlen(name);
+    if (name_len32 == 0 || name_len32 > 255) return -EINVAL;
+
+    uint8_t name_len = (uint8_t)name_len32;
+    uint16_t needed = ext2_dir_rec_len(name_len);
+
+    ext2_inode_t di;
+    if (ext2_read_disk_inode(dir->first_cluster, &di) < 0)
+        return -EIO;
+
+    uint8_t* blkbuf = kmalloc(ext2_fs.block_size);
+    if (!blkbuf) return -ENOMEM;
+
+    uint32_t ptrs_per_block = ext2_fs.block_size / 4;
+    uint32_t max_blocks = 12 + ptrs_per_block;
+    uint32_t used_blocks = (di.i_size + ext2_fs.block_size - 1) / ext2_fs.block_size;
+
+    for (uint32_t idx = 0; idx < max_blocks; idx++) {
+        uint32_t blk = ext2_get_block_at(&di, idx);
+
+        if (blk == 0 || idx >= used_blocks) {
+            blk = ext2_get_or_alloc_block_at(&di, idx, NULL);
+            if (blk == 0) {
+                kfree(blkbuf);
+                return -ENOSPC;
+            }
+
+            memset(blkbuf, 0, ext2_fs.block_size);
+            ext2_init_dirent((ext2_dir_entry_t*)blkbuf, ino, ext2_fs.block_size,
+                             name, name_len, file_type);
+
+            if (di.i_size < (idx + 1) * ext2_fs.block_size)
+                di.i_size = (idx + 1) * ext2_fs.block_size;
+
+            di.i_mtime = get_current_time();
+            di.i_ctime = di.i_mtime;
+
+            if (ext2_write_block(blk, blkbuf) < 0 ||
+                ext2_write_disk_inode(dir->first_cluster, &di) < 0) {
+                kfree(blkbuf);
+                return -EIO;
+            }
+
+            dir->size = di.i_size;
+            dir->blocks = di.i_blocks;
+            dir->mtime = di.i_mtime;
+            dir->ctime = di.i_ctime;
+            kfree(blkbuf);
+            return 0;
+        }
+
+        if (ext2_read_block(blk, blkbuf) < 0) {
+            kfree(blkbuf);
+            return -EIO;
+        }
+
+        uint32_t offset = 0;
+        while (offset + sizeof(ext2_dir_entry_t) <= ext2_fs.block_size) {
+            ext2_dir_entry_t* de = (ext2_dir_entry_t*)(blkbuf + offset);
+            if (de->rec_len == 0)
+                break;
+
+            if (de->inode == 0 && de->rec_len >= needed) {
+                uint16_t old_len = de->rec_len;
+                ext2_init_dirent(de, ino, old_len, name, name_len, file_type);
+
+                di.i_mtime = get_current_time();
+                di.i_ctime = di.i_mtime;
+                if (ext2_write_block(blk, blkbuf) < 0 ||
+                    ext2_write_disk_inode(dir->first_cluster, &di) < 0) {
+                    kfree(blkbuf);
+                    return -EIO;
+                }
+
+                dir->mtime = di.i_mtime;
+                dir->ctime = di.i_ctime;
+                kfree(blkbuf);
+                return 0;
+            }
+
+            uint16_t actual_len = ext2_dir_rec_len(de->name_len);
+            if (de->inode != 0 && de->rec_len >= actual_len + needed) {
+                uint16_t old_len = de->rec_len;
+                de->rec_len = actual_len;
+
+                ext2_dir_entry_t* new_de = (ext2_dir_entry_t*)(blkbuf + offset + actual_len);
+                ext2_init_dirent(new_de, ino, old_len - actual_len,
+                                 name, name_len, file_type);
+
+                di.i_mtime = get_current_time();
+                di.i_ctime = di.i_mtime;
+                if (ext2_write_block(blk, blkbuf) < 0 ||
+                    ext2_write_disk_inode(dir->first_cluster, &di) < 0) {
+                    kfree(blkbuf);
+                    return -EIO;
+                }
+
+                dir->mtime = di.i_mtime;
+                dir->ctime = di.i_ctime;
+                kfree(blkbuf);
+                return 0;
+            }
+
+            offset += de->rec_len;
+        }
+    }
+
+    kfree(blkbuf);
+    return -ENOSPC;
+}
+
 /* ---------- create VFS inode from ext2 inode number ---------- */
 
 static inode_t* ext2_make_inode(uint32_t ino)
@@ -546,6 +747,46 @@ static inode_t* ext2_make_inode(uint32_t ino)
         inode->f_op = &ext2_file_ops;
     }
     return inode;
+}
+
+inode_t* ext2_create_file(inode_t* parent, const char* name, mode_t mode)
+{
+    if (!parent || !name) return NULL;
+    if (!S_ISDIR(parent->mode)) return NULL;
+
+    uint32_t name_len = strlen(name);
+    if (name_len == 0 || name_len > 255) return NULL;
+
+    inode_t* existing = ext2_inode_lookup(parent, name);
+    if (existing) {
+        put_inode(existing);
+        return NULL;
+    }
+
+    uint32_t ino;
+    if (ext2_alloc_inode(&ino) < 0)
+        return NULL;
+
+    uint32_t now = get_current_time();
+    ext2_inode_t di;
+    memset(&di, 0, sizeof(di));
+    di.i_mode = EXT2_S_IFREG | (mode & 0777);
+    di.i_uid = current_uid();
+    di.i_gid = current_gid();
+    di.i_size = 0;
+    di.i_atime = now;
+    di.i_ctime = now;
+    di.i_mtime = now;
+    di.i_links_count = 1;
+    di.i_blocks = 0;
+
+    if (ext2_write_disk_inode(ino, &di) < 0)
+        return NULL;
+
+    if (ext2_add_dir_entry(parent, ino, name, EXT2_FT_REG_FILE) < 0)
+        return NULL;
+
+    return ext2_make_inode(ino);
 }
 
 /* ---------- inode_operations ---------- */

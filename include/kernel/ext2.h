@@ -109,6 +109,7 @@ typedef struct {
 } ext2_fs_t;
 
 inode_t* ext2_mount(uint64_t lba_start);
+inode_t* ext2_create_file(inode_t* parent, const char* name, mode_t mode);
 int ext2_truncate_inode(inode_t* inode);
 
 #endif
