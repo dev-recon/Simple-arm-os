@@ -14,6 +14,7 @@
 
 static int failures = 0;
 static volatile int cow_shared_value = 11;
+static volatile int sleep_signal_seen = 0;
 
 static void pass(const char *name)
 {
@@ -321,6 +322,51 @@ static void test_process_groups(void)
     }
 
     expect(reaped == 2, "process group reaps killed children", reaped);
+}
+
+static void systest_sleep_signal_handler(int sig)
+{
+    (void)sig;
+    sleep_signal_seen = 1;
+}
+
+static void test_nanosleep_signal_interrupt(void)
+{
+    struct timespec req;
+    struct timespec rem;
+    int parent_pid;
+    int pid;
+    int status = -1;
+    int rc;
+
+    sleep_signal_seen = 0;
+    signal(SIGUSR1, systest_sleep_signal_handler);
+    parent_pid = getpid();
+
+    pid = fork();
+    if (pid == 0) {
+        usleep(200000);
+        kill(parent_pid, SIGUSR1);
+        exit(0);
+    }
+
+    if (expect(pid > 0, "nanosleep interrupt fork child", pid) < 0) {
+        signal(SIGUSR1, SIG_DFL);
+        return;
+    }
+
+    req.tv_sec = 2;
+    req.tv_nsec = 0;
+    rem.tv_sec = 0;
+    rem.tv_nsec = 0;
+    errno = 0;
+    rc = nanosleep(&req, &rem);
+
+    expect(rc < 0 && errno == EINTR, "nanosleep interrupted by signal", rc);
+    expect(sleep_signal_seen == 1, "nanosleep signal handler ran", sleep_signal_seen);
+    expect(rem.tv_sec > 0 || rem.tv_nsec > 0, "nanosleep reports remaining time", (int)rem.tv_sec);
+    expect(waitpid(pid, &status, 0) == pid && status == 0, "nanosleep signal child reaped", status);
+    signal(SIGUSR1, SIG_DFL);
 }
 
 static void test_cow_memory(void)
@@ -732,6 +778,7 @@ int main(void)
     test_ext2_write_edges();
     test_fork_wait_kill();
     test_process_groups();
+    test_nanosleep_signal_interrupt();
     test_cow_memory();
     test_shared_memory();
     test_cow_fork_stress();

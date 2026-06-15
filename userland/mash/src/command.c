@@ -50,6 +50,8 @@ int command_init(void) {
     register_command("fork", "Test fork()", cmd_fork_test);
     register_command("cd", "Change the current directory", cmd_cd);
     register_command("jobs", "List background jobs", jobs_builtin);
+    register_command("fg", "Bring a background job to the foreground", jobs_fg_builtin);
+    register_command("bg", "Resume a background job", jobs_bg_builtin);
 
     return SHELL_OK;
 }

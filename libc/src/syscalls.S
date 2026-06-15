@@ -832,6 +832,15 @@ nanosleep:
     push {r7, lr}
     mov r7, #162        /* __NR_nanosleep */
     swi #0
+
+    cmp r0, #0
+    bge nanosleep_success
+
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+nanosleep_success:
     pop {r7, lr}
     bx lr
 

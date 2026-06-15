@@ -1055,8 +1055,6 @@ void shell_run(void) {
             continue;
         }
 
-        jobs_reap_background();
-        
         int argc = shell_parse_line(line, argv_buffer);
         if (argc > 0) {
             int result = shell_execute_argv_line(argc, argv_buffer);
@@ -1080,6 +1078,7 @@ int main() {
     shell_line_edit_init();
     setpgid(0, 0);
     shell_pgid = getpgrp();
+    jobs_set_shell_pgid(shell_pgid);
     signal(SIGINT, SIG_IGN);
     shell_restore_foreground();
     command_init();
