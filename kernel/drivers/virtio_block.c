@@ -6,6 +6,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/interrupt.h>
 #include <kernel/task.h>
+#include <kernel/spinlock.h>
 #include <asm/arm.h>
 
 
@@ -36,6 +37,9 @@ void virtio_blk_read_capacity(volatile uint32_t *mmio_base,
 
 vq_legacy_t global_vq = {0};
 uint32_t ata_sector_size = 0;
+static uint64_t virtio_capacity_sectors = 0;
+static bool virtio_blk_failed = false;
+static spinlock_t virtio_blk_lock = SPINLOCK_INIT("virtio_blk");
 
 #define VIRTIO_PHY_ADDR 0x0A003E00u
 volatile uint32_t *virtio_mmio_base =
@@ -92,12 +96,42 @@ static bool vq_alloc_legacy(vq_legacy_t *vq, uint16_t qsize /*ex: 128*/) {
     vq->used_size = used_sz;
 
     vq->qsize = qsize;
+    vq->last_used_idx = 0;
 
     // Optionnel: zeroise
     memset((void *)vq->va_base, 0, npages * PAGE_SIZE);
 
     // Maintenance cache avant de donner au device
     clean_dcache_by_mva((void *)vq->va_base, npages * PAGE_SIZE);
+    return true;
+}
+
+static void virtio_blk_mark_failed(volatile uint32_t *mmio_base, const char *reason)
+{
+    virtio_blk_failed = true;
+    KERROR("virtio_blk: marking device failed: %s\n", reason ? reason : "unknown");
+    if (mmio_base)
+        mmio_write32(mmio_base, VIRTIO_MMIO_STATUS,
+                     mmio_read32(mmio_base, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_FAILED);
+}
+
+static void virtio_blk_ack_interrupts(volatile uint32_t *mmio_base)
+{
+    uint32_t irq_status = mmio_read32(mmio_base, VIRTIO_MMIO_INTERRUPT_STATUS);
+    if (irq_status)
+        mmio_write32(mmio_base, VIRTIO_MMIO_INTERRUPT_ACK, irq_status);
+}
+
+static bool virtio_blk_request_in_bounds(uint64_t sector, uint32_t nsectors)
+{
+    if (ata_sector_size != 512 || virtio_capacity_sectors == 0)
+        return false;
+    if (nsectors == 0)
+        return false;
+    if (sector >= virtio_capacity_sectors)
+        return false;
+    if ((uint64_t)nsectors > virtio_capacity_sectors - sector)
+        return false;
     return true;
 }
 
@@ -128,6 +162,8 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
 {
     
     volatile uint32_t *base = (volatile uint32_t *)base_addr;
+    virtio_blk_failed = false;
+    virtio_capacity_sectors = 0;
 
     virtio_mmio_dump32(base_addr);
 
@@ -144,8 +180,14 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
 
     KDEBUG("VirtIO version = %u\n", version);
 
+    if (version != 1) {
+        KERROR("VirtIO unsupported MMIO version=%u (legacy driver expects 1)\n", version);
+        return false;
+    }
+
     if (devid != 2) {
-        KWARN("VirtIO device ID=%u (expected 2=blk), continuing but likely wrong base/DT\n", devid);
+        KERROR("VirtIO device ID=%u (expected 2=blk)\n", devid);
+        return false;
     }
 
 
@@ -211,8 +253,19 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
     uint32_t sector_size;
 
     virtio_blk_read_capacity(base, &capacity, &sector_size);
-    //ata_device.capacity = capacity;
+    if (capacity == 0) {
+        KERROR("VirtIO block device reports zero capacity\n");
+        virtio_blk_mark_failed(base, "zero capacity");
+        return false;
+    }
+    if (sector_size != 512) {
+        KERROR("VirtIO block sector_size=%u unsupported by current block layer\n", sector_size);
+        virtio_blk_mark_failed(base, "unsupported sector size");
+        return false;
+    }
+
     ata_sector_size = sector_size;
+    virtio_capacity_sectors = capacity;
     
     KINFO("Device capacity: %u sectors (%u MB)\n", 
           (uint32_t)capacity, 
@@ -249,6 +302,12 @@ static inline uint32_t vblk_cntpct_lo(void) {
     return lo;
 }
 
+static inline uint64_t vblk_cntpct(void) {
+    uint32_t lo, hi;
+    asm volatile("mrrc p15, 0, %0, %1, c14" : "=r"(lo), "=r"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 /* Poll used ring avec un vrai timeout en ms basé sur CNTPCT. */
 static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms)
 {
@@ -256,8 +315,8 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
     asm volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(freq));
     if (freq == 0) freq = 62500000; /* 62.5 MHz défaut QEMU */
 
-    uint32_t timeout_ticks = timeout_ms * (freq / 1000);
-    uint32_t t0 = vblk_cntpct_lo();
+    uint64_t timeout_ticks = (uint64_t)timeout_ms * (uint64_t)(freq / 1000);
+    uint64_t t0 = vblk_cntpct();
 
     while (1) {
         invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
@@ -267,7 +326,7 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
         if (vq_used_ptr(vq)->idx != prev_idx)
             return 0;
 
-        if ((vblk_cntpct_lo() - t0) >= timeout_ticks) {
+        if ((vblk_cntpct() - t0) >= timeout_ticks) {
             KERROR("virtio_blk: timeout waiting used ring\n");
             return -1;
         }
@@ -283,7 +342,16 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
 {
     /* choix des descripteurs : on utilise 3 descripteurs fixes : 0,1,2 (simple) */
     const unsigned d0 = 0, d1 = 1, d2 = 2;
+    if (virtio_blk_failed) return -1;
     if (vq->qsize < 3) return -1;
+
+    uint32_t dev_status = mmio_read32(mmio_base, VIRTIO_MMIO_STATUS);
+    if (dev_status & VIRTIO_STATUS_DEVICE_NEEDS_RESET) {
+        virtio_blk_mark_failed(mmio_base, "device needs reset");
+        return -1;
+    }
+
+    *status_va = 0xFF;
 
     /* remplissage des descriptors (phys addrs) */
     struct vring_desc *desc0 = vq_desc_ptr(vq, d0);
@@ -321,6 +389,7 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
     asm volatile("dmb ish" ::: "memory");
 
     /* --- Publier avail entry de façon sûre --- */
+    uint16_t prev_used = vq->last_used_idx;
     uint16_t old_idx = vq_avail_ptr(vq)->idx;
     uint16_t slot = old_idx % vq->qsize;
     vq_avail_ptr(vq)->ring[slot] = d0;
@@ -341,27 +410,38 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
     asm volatile("isb" ::: "memory");
 
     /* wait for completion by polling used.idx (blocking) */
-    uint16_t prev_used = vq->last_used_idx;
-    if (wait_for_used(vq, prev_used, timeout_ms) != 0)
+    if (wait_for_used(vq, prev_used, timeout_ms) != 0) {
+        virtio_blk_mark_failed(mmio_base, "request timeout");
         return -1;
+    }
 
     /* read the used element (invalidate used memory then read) */
     invalidate_dcache_by_mva((void *)vq->va_used, sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
     struct vring_used *used = vq_used_ptr(vq);
     uint16_t new_used_idx = used->idx;
-    /* find the used element for our id (it should be at (new_used_idx-1) mod qsize) */
-    //uint16_t used_pos = (new_used_idx - 1) % vq->qsize;
-    //struct vring_used_elem *ue = &used->ring[used_pos];
+    uint16_t used_delta = (uint16_t)(new_used_idx - prev_used);
+    if (used_delta != 1) {
+        virtio_blk_mark_failed(mmio_base, "unexpected used ring advance");
+        return -1;
+    }
+
+    uint16_t used_pos = prev_used % vq->qsize;
+    struct vring_used_elem *ue = &used->ring[used_pos];
+    if (ue->id != d0) {
+        virtio_blk_mark_failed(mmio_base, "unexpected used descriptor id");
+        return -1;
+    }
 
     /* mark last seen */
     vq->last_used_idx = new_used_idx;
+    virtio_blk_ack_interrupts(mmio_base);
 
     /* read status */
     invalidate_dcache_by_mva(status_va, 1);
     uint8_t status = *status_va;
 
 
-    if (status != 0) {
+    if (status != VIRTIO_BLK_S_OK) {
         KERROR("virtio_blk: device returned status=0x%02X\n", status);
         return -1;
     }
@@ -380,15 +460,22 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
                             void *buf /* va kernel */,
                             unsigned timeout_ms)
 {
-    (void) timeout_ms;
     uint32_t sector_size = ata_sector_size;
+    if (!buf) return -1;
+    if (!virtio_blk_request_in_bounds(sector, nsectors)) return -1;
+    if (nsectors > 0xFFFFFFFFu / sector_size) return -1;
     uint32_t bytes = nsectors * sector_size;
     if (bytes == 0) return -1;
+
+    spin_lock(&virtio_blk_lock);
 
     /* allocation DMA pour header+status (1 page) */
     uint32_t hdr_pa = 0;
     void *hdr_va = alloc_dma_pages(1, &hdr_pa);
-    if (!hdr_va) return -1;
+    if (!hdr_va) {
+        spin_unlock(&virtio_blk_lock);
+        return -1;
+    }
     struct virtio_blk_req *hdr = (struct virtio_blk_req *)hdr_va;
     uint8_t *status_va = ((uint8_t*)hdr_va) + 512; /* statut à offset arbitraire dans la page */
     uint32_t status_pa = hdr_pa + 512;
@@ -399,6 +486,7 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
     void *data_va = alloc_dma_pages(npages, &data_pa);
     if (!data_va) {
         free_pages(hdr_va, 1);
+        spin_unlock(&virtio_blk_lock);
         return -1;
     }
 
@@ -417,6 +505,11 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
          * Ne pas liberer apres un timeout: sans annulation/reset du device,
          * il pourrait encore referencer ces buffers DMA.
          */
+        if (!virtio_blk_failed) {
+            free_pages(data_va, npages);
+            free_pages(hdr_va, 1);
+        }
+        spin_unlock(&virtio_blk_lock);
         return -1;
     }
 
@@ -426,6 +519,7 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
 
     free_pages(data_va, npages);
     free_pages(hdr_va, 1);
+    spin_unlock(&virtio_blk_lock);
     return 0;
 }
 
@@ -437,15 +531,22 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
                              const void *buf /* va kernel */,
                              unsigned timeout_ms)
 {
-    (void) timeout_ms;
     uint32_t sector_size = ata_sector_size;
+    if (!buf) return -1;
+    if (!virtio_blk_request_in_bounds(sector, nsectors)) return -1;
+    if (nsectors > 0xFFFFFFFFu / sector_size) return -1;
     uint32_t bytes = nsectors * sector_size;
     if (bytes == 0) return -1;
+
+    spin_lock(&virtio_blk_lock);
 
     /* allocation DMA pour header+status (1 page) */
     uint32_t hdr_pa = 0;
     void *hdr_va = alloc_dma_pages(1, &hdr_pa);
-    if (!hdr_va) return -1;
+    if (!hdr_va) {
+        spin_unlock(&virtio_blk_lock);
+        return -1;
+    }
     struct virtio_blk_req *hdr = (struct virtio_blk_req *)hdr_va;
     uint8_t *status_va = ((uint8_t*)hdr_va) + 512;
     uint32_t status_pa = hdr_pa + 512;
@@ -456,6 +557,7 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
     void *data_va = alloc_dma_pages(npages, &data_pa);
     if (!data_va) {
         free_pages(hdr_va, 1);
+        spin_unlock(&virtio_blk_lock);
         return -1;
     }
 
@@ -471,11 +573,17 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
     int r = virtio_blk_submit_one(vq, mmio_base, hdr, hdr_pa, data_va, data_pa, bytes, /*data_is_write=*/0, status_va, status_pa, timeout_ms);
     if (r != 0) {
         /* Voir le chemin read: un timeout ne prouve pas que le DMA est fini. */
+        if (!virtio_blk_failed) {
+            free_pages(data_va, npages);
+            free_pages(hdr_va, 1);
+        }
+        spin_unlock(&virtio_blk_lock);
         return -1;
     }
 
     free_pages(data_va, npages);
     free_pages(hdr_va, 1);
+    spin_unlock(&virtio_blk_lock);
     return 0;
 }
 
@@ -500,7 +608,7 @@ int blk_write_sector(uint64_t lba, void* buffer) {
 }
 
 bool blk_is_initialized(void) {
-    return ata_sector_size > 0;
+    return ata_sector_size > 0 && virtio_capacity_sectors > 0 && !virtio_blk_failed;
 }
 
 
