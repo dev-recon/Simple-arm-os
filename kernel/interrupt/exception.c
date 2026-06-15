@@ -338,12 +338,20 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
 
     if ((status == 0x05 || status == 0x07) && mode == 0x10) {
         if (handle_user_stack_fault(dfar) == 0) {
+            if (current_task) {
+                current_task->page_faults++;
+                current_task->stack_faults++;
+            }
             return 0;
         }
     }
 
     if (status == 0x0F && is_write && mode == 0x10) {
         if (handle_cow_fault(dfar) == 0) {
+            if (current_task) {
+                current_task->page_faults++;
+                current_task->cow_faults++;
+            }
             return 0;
         }
     }

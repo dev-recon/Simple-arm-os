@@ -76,6 +76,23 @@ extern void switch_to_idle_stack(void);
 extern void __task_switch_to_user(task_context_t* new_ctx);
 extern void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 
+static void rename_task_from_exec_path(task_t *task, const char *path)
+{
+    const char *base;
+
+    if (!task || !path || !path[0])
+        return;
+
+    base = path;
+    for (const char *p = path; *p; p++) {
+        if (*p == '/' && p[1])
+            base = p + 1;
+    }
+
+    strncpy(task->name, base, TASK_NAME_MAX - 1);
+    task->name[TASK_NAME_MAX - 1] = '\0';
+}
+
 void dump_svc_stack(task_t *task, uint32_t *sp) {
     kprintf("SVC stack @%08x:\n", (unsigned)sp);
     for (int i=0;i<12;i++) {
@@ -375,6 +392,8 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     //tlb_flush_all_debug();
     data_memory_barrier();
     instruction_sync_barrier();
+
+    rename_task_from_exec_path(proc, kernel_filename);
 
     /* Nettoyer les ressources temporaires */
     put_inode(exe_inode);

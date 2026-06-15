@@ -28,13 +28,22 @@ int rename(const char* oldpath, const char* newpath);
 
 /* Informations processus (temporaire — sera remplacé par /proc) */
 struct proc_info {
+    unsigned tid;
     int      pid;
     int      ppid;
+    unsigned uid;
+    unsigned gid;
     unsigned priority;
     unsigned switches;
     unsigned cpu_pct_x10;
     unsigned stack_kb;
     unsigned heap_kb;
+    unsigned vm_kb;
+    unsigned rss_kb;
+    unsigned l2_tables;
+    unsigned page_faults;
+    unsigned cow_faults;
+    unsigned stack_faults;
     char     name[32];
     char     state;
     char     type;

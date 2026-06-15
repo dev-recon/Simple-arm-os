@@ -878,6 +878,59 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     return 0;
 }
 
+static process_t *task_process_for_sysinfo(task_t *task)
+{
+    if (!task) return NULL;
+    if (task->type == TASK_TYPE_PROCESS)
+        return task->process;
+    if (task->type == TASK_TYPE_THREAD && task->thread.process &&
+        task->thread.process->type == TASK_TYPE_PROCESS)
+        return task->thread.process->process;
+    return NULL;
+}
+
+static uint32_t vm_virtual_kb(vm_space_t *vm)
+{
+    uint32_t bytes = 0;
+    for (vma_t *vma = vm ? vm->vma_list : NULL; vma; vma = vma->next) {
+        if (vma->end > vma->start)
+            bytes += vma->end - vma->start;
+    }
+    return bytes / 1024;
+}
+
+static uint32_t vm_rss_kb(vm_space_t *vm)
+{
+    uint32_t pages = 0;
+    if (!vm || !vm->pgdir) return 0;
+
+    for (uint32_t i = 0; i < 1024; i++) {
+        uint32_t l1_entry = vm->pgdir[i];
+        if ((l1_entry & 0x3) != 0x1)
+            continue;
+
+        uint32_t *l2_table = (uint32_t *)(l1_entry & 0xFFFFFC00);
+        for (uint32_t j = 0; j < 256; j++) {
+            if ((l2_table[j] & 0x3) != 0)
+                pages++;
+        }
+    }
+
+    return (pages * PAGE_SIZE) / 1024;
+}
+
+static uint32_t vm_l2_table_count(vm_space_t *vm)
+{
+    uint32_t count = 0;
+    if (!vm || !vm->pgdir) return 0;
+
+    for (uint32_t i = 0; i < 1024; i++) {
+        if ((vm->pgdir[i] & 0x3) == 0x1)
+            count++;
+    }
+    return count;
+}
+
 int sys_sysinfo(struct sysinfo_response *resp)
 {
     if (!resp) return -EINVAL;
@@ -912,11 +965,18 @@ int sys_sysinfo(struct sysinfo_response *resp)
     do {
         if (count >= 64) break;
         struct proc_info *p = &local->procs[count];
+        process_t *proc = task_process_for_sysinfo(task);
 
-        p->pid      = task->process ? task->process->pid : (int)task->task_id;
-        p->ppid     = task->process ? task->process->ppid : 0;
+        p->tid      = task->task_id;
+        p->pid      = proc ? proc->pid : 0;
+        p->ppid     = proc ? proc->ppid : 0;
+        p->uid      = proc ? proc->uid : 0;
+        p->gid      = proc ? proc->gid : 0;
         p->priority = task->priority;
         p->switches = task->switch_count;
+        p->page_faults = task->page_faults;
+        p->cow_faults = task->cow_faults;
+        p->stack_faults = task->stack_faults;
         /* Division 64-bit évitée : on scale down en uint32 avant de diviser */
         uint32_t rt32 = (task->total_runtime >= (uint64_t)uptime)
                         ? uptime : (uint32_t)task->total_runtime;
@@ -932,10 +992,13 @@ int sys_sysinfo(struct sysinfo_response *resp)
             default:                p->type = 'K'; break;
         }
 
-        if (task->process && task->process->vm) {
-            vm_space_t *vm = task->process->vm;
+        if (proc && proc->vm) {
+            vm_space_t *vm = proc->vm;
             uint32_t used = (vm->brk > vm->heap_start) ? (vm->brk - vm->heap_start) : 0;
             p->heap_kb = used / 1024;
+            p->vm_kb = vm_virtual_kb(vm);
+            p->rss_kb = vm_rss_kb(vm);
+            p->l2_tables = vm_l2_table_count(vm);
         }
 
         int i;

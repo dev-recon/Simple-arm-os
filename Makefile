@@ -22,6 +22,7 @@ CFLAGS = -std=gnu99 $(ARCH_FLAGS) $(FPU_FLAGS) $(MATH_FLAGS) $(ARM_MATH_FLAGS) \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
          -Wall -Wextra -Werror -g -O0 -fno-omit-frame-pointer -Wformat -Wformat-security \
          -fno-builtin -fstack-protector -Wno-error=unused-function \
+         -MMD -MP \
          -fno-pic -fno-pie \
          -Iinclude \
          -DARMV7A_KERNEL
@@ -80,6 +81,7 @@ KERNEL_OBJS = \
 
 # Tous les objets
 ALL_OBJS = $(KERNEL_OBJS) $(LIB_OBJ) $(TASK_OBJS)
+DEPFILES = $(ALL_OBJS:.o=.d)
 
 # Configuration du disque
 DISK_IMG     = disk.img
@@ -331,7 +333,7 @@ boot-disk: $(KERNEL_BIN) $(USERFS_DIR)
 	@echo "Bootable disk created as boot_$(DISK_IMG)"
 
 clean:
-	rm -f $(ALL_OBJS) $(KERNEL_ELF) $(KERNEL_BIN)
+	rm -f $(ALL_OBJS) $(DEPFILES) $(KERNEL_ELF) $(KERNEL_BIN)
 
 clean-all: clean
 	rm -f $(DISK_IMG) boot_$(DISK_IMG)
@@ -477,3 +479,5 @@ test-simple:
 
 # Mise a jour de la cible .PHONY
 .PHONY: all clean clean-all run debug check-disk disk-simple extract-disk boot-disk help test-kernel debug-verbose debug-monitor debug-trace info disasm symbols test-versatile test-simple
+
+-include $(DEPFILES)

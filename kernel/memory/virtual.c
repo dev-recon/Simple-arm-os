@@ -40,8 +40,12 @@ vm_space_t *create_vm_space(void)
         return NULL;
     }
 
-    /* Allouer le page directory utilisateur (TTBR0 - 8KB pour 2GB) */
-    vm->pgdir = allocate_pgdir();
+    /* Allouer le page directory utilisateur et garder sa base brute.
+     * TTBR0 exige un alignement 16 KB ; vm->pgdir peut donc pointer plus loin
+     * que la base retournee par l'allocateur.
+     */
+    vm->pgdir_alloc = allocate_pgdir();
+    vm->pgdir = vm->pgdir_alloc;
 
     if (!vm->pgdir)
     {
@@ -73,7 +77,7 @@ vm_space_t *create_vm_space(void)
         {
             KERROR("create_vm_space: Aligned address out of bounds!\n");
             vm_free_asid(asid);
-            free_pages(vm->pgdir, PGDIR_SIZE);
+            free_pages(vm->pgdir_alloc, PGDIR_SIZE);
             kfree(vm);
             return NULL;
         }
@@ -106,7 +110,7 @@ vm_space_t *create_vm_space(void)
 
 static uint32_t *allocate_pgdir(void)
 {
-    /* Allouer 2 pages contiguës pour TTBR0 (couvre 0-2GB = 2048 entrées * 4 octets = 8KB) */
+    /* Allouer assez de pages pour pouvoir choisir une base TTBR0 alignee 16 KB. */
     uint32_t *pgdir = (uint32_t *)allocate_pages(PGDIR_SIZE);
     if (!pgdir)
     {
@@ -193,8 +197,8 @@ void destroy_vm_space(vm_space_t *vm)
     vm_free_asid(vm->asid);
     // KDEBUG("destroy_vm_space: Freed ASID %u\n", vm->asid);
 
-    /* Free user page directory (2 pages pour TTBR0) */
-    free_pages(vm->pgdir, PGDIR_SIZE);
+    /* Free user page directory from the original allocation base. */
+    free_pages(vm->pgdir_alloc ? vm->pgdir_alloc : vm->pgdir, PGDIR_SIZE);
     kfree(vm);
 }
 

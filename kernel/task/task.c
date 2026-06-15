@@ -704,6 +704,9 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     task->created_time = 0;
     task->total_runtime = 0;
     task->switch_count = 0;
+    task->page_faults = 0;
+    task->cow_faults = 0;
+    task->stack_faults = 0;
 
     task->type = TASK_TYPE_PROCESS;  /* Nouvelle ligne */
     //task->process->pid = task->task_id;  /* Nouvelle ligne */

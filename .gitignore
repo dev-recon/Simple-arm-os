@@ -1,11 +1,14 @@
 # Build outputs
 *.a
+*.d
 *.o
 kernel.bin
 kernel.dis
 kernel.elf
 kernel.map
 disk.img
+ext2.img
+fat32.img
 userfs.bin
 userfs.tar
 userfs/init.sh
@@ -26,6 +29,23 @@ userland/*/readfile
 userland/*/term_demo
 userland/*/term_dmo
 userland/*/ansy_tty
+userland/coreutils/cat
+userland/coreutils/cp
+userland/coreutils/echo
+userland/coreutils/false
+userland/coreutils/kill
+userland/coreutils/ls
+userland/coreutils/mkdir
+userland/coreutils/mv
+userland/coreutils/ps
+userland/coreutils/pwd
+userland/coreutils/rm
+userland/coreutils/rmdir
+userland/coreutils/sleep
+userland/coreutils/touch
+userland/coreutils/true
+userland/coreutils/write
+userland/systest/systest
 
 # Logs and local editor files
 *.log

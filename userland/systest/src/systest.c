@@ -306,6 +306,83 @@ static void test_cow_memory(void)
     }
 }
 
+static int read_free_mem_kb(unsigned *free_kb)
+{
+    struct sysinfo_response info;
+
+    if (getsysinfo(&info) < 0)
+        return -1;
+
+    *free_kb = info.mem_free_kb;
+    return 0;
+}
+
+static void test_cow_fork_stress(void)
+{
+    enum { STRESS_ITERS = 64 };
+    unsigned char *heap;
+    volatile unsigned char stack_area[12288];
+    unsigned before_kb = 0;
+    unsigned after_kb = 0;
+    int loop_ok = 1;
+    int leak_kb;
+    int pid;
+    int status;
+    int waited;
+
+    heap = malloc(16384);
+    if (expect(heap != NULL, "COW stress heap allocation", 0) < 0)
+        return;
+
+    heap[0] = 0x10;
+    heap[4096] = 0x20;
+    heap[8192] = 0x30;
+    heap[12288] = 0x40;
+    stack_area[0] = 0x50;
+    stack_area[4096] = 0x60;
+    stack_area[8192] = 0x70;
+
+    if (expect(read_free_mem_kb(&before_kb) == 0, "COW stress baseline memory", 0) < 0) {
+        free(heap);
+        return;
+    }
+
+    for (int i = 0; i < STRESS_ITERS; i++) {
+        status = -1;
+        pid = fork();
+        if (pid == 0) {
+            heap[0] = (unsigned char)(0x80 + (i & 0x3F));
+            heap[8192] = (unsigned char)(0x40 + (i & 0x3F));
+            stack_area[0] = (unsigned char)(0x20 + (i & 0x3F));
+            stack_area[8192] = (unsigned char)(0x10 + (i & 0x3F));
+            exit(heap[0] != 0 && heap[8192] != 0 &&
+                 stack_area[0] != 0 && stack_area[8192] != 0 ? 0 : 1);
+        }
+
+        if (pid <= 0) {
+            loop_ok = 0;
+            break;
+        }
+
+        heap[4096] = (unsigned char)(0xA0 + (i & 0x1F));
+        heap[12288] = (unsigned char)(0xB0 + (i & 0x1F));
+        stack_area[4096] = (unsigned char)(0xC0 + (i & 0x1F));
+
+        waited = waitpid(pid, &status, 0);
+        if (waited != pid || status != 0) {
+            loop_ok = 0;
+            break;
+        }
+    }
+
+    expect(loop_ok, "COW stress fork/write/wait loop", loop_ok);
+    expect(read_free_mem_kb(&after_kb) == 0, "COW stress final memory", 0);
+    leak_kb = before_kb > after_kb ? (int)(before_kb - after_kb) : 0;
+    expect(leak_kb <= 512, "COW stress no page-table leak", leak_kb);
+
+    free(heap);
+}
+
 static void test_identity(void)
 {
     expect(getuid() == 1000, "shell runs as user uid", getuid());
@@ -322,6 +399,7 @@ int main(void)
     test_pipe_dup2();
     test_fork_wait_kill();
     test_cow_memory();
+    test_cow_fork_stress();
 
     if (failures == 0) {
         printf("systest: all tests passed\n");

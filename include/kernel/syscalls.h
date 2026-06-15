@@ -78,13 +78,22 @@ struct process;
 
 /* Informations sur un processus */
 struct proc_info {
+    uint32_t tid;
     int      pid;
     int      ppid;
+    uint32_t uid;
+    uint32_t gid;
     uint32_t priority;
     uint32_t switches;
     uint32_t cpu_pct_x10;   /* %CPU * 10  (ex: 875 = 87.5%) */
     uint32_t stack_kb;
     uint32_t heap_kb;
+    uint32_t vm_kb;
+    uint32_t rss_kb;
+    uint32_t l2_tables;
+    uint32_t page_faults;
+    uint32_t cow_faults;
+    uint32_t stack_faults;
     char     name[32];
     char     state;          /* R=run S=sleep Z=zombie T=term D=uninterruptible */
     char     type;           /* P=process K=kernel T=thread */

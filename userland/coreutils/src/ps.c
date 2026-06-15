@@ -2,6 +2,46 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+static const char *state_name(char state)
+{
+    switch (state) {
+        case 'R': return "run";
+        case 'Z': return "zombie";
+        case 'T': return "term";
+        case 'D': return "wait";
+        default:  return "sleep";
+    }
+}
+
+static const char *state_color(char state)
+{
+    switch (state) {
+        case 'R': return "\033[1;32m";
+        case 'Z': return "\033[1;31m";
+        case 'T': return "\033[0;31m";
+        case 'D': return "\033[1;33m";
+        default:  return "\033[0;37m";
+    }
+}
+
+static const char *kind_name(char type)
+{
+    switch (type) {
+        case 'P': return "proc";
+        case 'T': return "thread";
+        default:  return "kthr";
+    }
+}
+
+static const char *kind_color(char type)
+{
+    switch (type) {
+        case 'P': return "\033[1;36m";
+        case 'T': return "\033[1;35m";
+        default:  return "\033[0;36m";
+    }
+}
+
 int main(void)
 {
     struct sysinfo_response *info = malloc(sizeof(struct sysinfo_response));
@@ -22,33 +62,30 @@ int main(void)
            pct > 80 ? "1;31" : pct > 60 ? "1;33" : "1;32", pct);
 
     /* Header */
-    printf("\033[1m%5s %5s %4s %6s %7s %7s %6s  %-8s  %s\033[0m\n",
-           "PID", "PPID", "PRI", "%CPU", "STACK", "HEAP", "CTXSW", "STATE", "NAME");
-    printf("----------------------------------------------------------------\n");
+    printf("\033[1m%4s %4s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %4s %4s %4s %-6s %s\033[0m\n",
+           "TID", "PID", "PPID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",
+           "VM", "RSS", "L2", "PF", "COW", "STK", "STATE", "NAME");
+    printf("------------------------------------------------------------------------------------------------\n");
 
     for (int i = 0; i < n; i++) {
         struct proc_info *p = &info->procs[i];
-
-        const char *color, *sstr;
-        switch (p->state) {
-            case 'R': color = "\033[1;32m"; sstr = "running"; break;
-            case 'Z': color = "\033[1;31m"; sstr = "zombie";  break;
-            case 'T': color = "\033[0;31m"; sstr = "term";    break;
-            case 'D': color = "\033[1;33m"; sstr = "wait";    break;
-            default:  color = "\033[0;37m"; sstr = "sleep";   break;
-        }
 
         unsigned ci = p->cpu_pct_x10 / 10;
         unsigned cf = p->cpu_pct_x10 % 10;
         const char *cpucolor = ci >= 50 ? "\033[1;31m" :
                                ci >= 20 ? "\033[1;33m" : "\033[0m";
+        const char *pfcolor = p->page_faults ? "\033[1;35m" : "\033[0m";
 
-        printf("%5d %5d %4u %s%3u.%u%%\033[0m %5uKB %5uKB %6u  %s%-8s\033[0m  %s\n",
-               p->pid, p->ppid, p->priority,
+        printf("%4u %4d %4d %s%-6s\033[0m %3u %s%3u.%u\033[0m %4uK %4uK %4uK %4uK %2u %s%4u\033[0m %4u %4u %s%-6s\033[0m %s\n",
+               p->tid, p->pid, p->ppid,
+               kind_color(p->type), kind_name(p->type),
+               p->priority,
                cpucolor, ci, cf,
-               p->stack_kb, p->heap_kb,
-               p->switches,
-               color, sstr,
+               p->stack_kb, p->heap_kb, p->vm_kb, p->rss_kb,
+               p->l2_tables,
+               pfcolor, p->page_faults,
+               p->cow_faults, p->stack_faults,
+               state_color(p->state), state_name(p->state),
                p->name);
     }
 

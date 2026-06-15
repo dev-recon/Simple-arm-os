@@ -257,7 +257,10 @@ typedef struct task {
     uint64_t created_time;                  /* Timestamp de creation */
     uint64_t total_runtime;                 /* Temps total d'execution */
     uint32_t switch_count;                  /* Nombre de commutations */
-    uint32_t wakeup_time;                  /* Temps de reveil (ms) */
+    uint32_t page_faults;                   /* Fautes user resolues */
+    uint32_t cow_faults;                    /* Fautes COW resolues */
+    uint32_t stack_faults;                  /* Croissances de pile user */
+    uint32_t wakeup_time;                   /* Temps de reveil (ms) */
     
     /* === EXTENSIONS PROCESSUS === */
     task_type_t type;               /* Type de tache */

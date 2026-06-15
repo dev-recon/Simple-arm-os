@@ -24,7 +24,8 @@ typedef struct vma {
 /* Taille: 24 bytes - alignée sur 8 OK */
 
 typedef struct vm_space {
-    uint32_t* pgdir;       /* 4 bytes - TTBR0 seulement */
+    uint32_t* pgdir;       /* 4 bytes - TTBR0 aligne pour le CPU */
+    uint32_t* pgdir_alloc; /* 4 bytes - base brute a liberer */
     vma_t* vma_list;       /* 4 bytes */
     uint32_t heap_start;   /* 4 bytes */
     uint32_t heap_end;     /* 4 bytes */
@@ -33,7 +34,6 @@ typedef struct vm_space {
     uint32_t asid;         /* 4 bytes - NOUVEAU: ASID du processus */
     uint32_t padding;      /* 4 bytes pour aligner sur 8 */
 } __attribute__((aligned(8))) vm_space_t;
-/* Taille: 32 bytes - alignée sur 8 OK */
 
 /* VMA flags */
 #define VMA_READ    (1 << 0)
