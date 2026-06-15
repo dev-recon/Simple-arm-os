@@ -8,6 +8,8 @@
 #include <kernel/userspace.h>
 #include <kernel/shm.h>
 #include <kernel/power.h>
+#include <kernel/tty.h>
+#include <kernel/signal.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 #include <kernel/timer.h>
@@ -56,6 +58,8 @@ static syscall_func_t syscall_table[256] = {
     [__NR_stat] = (syscall_func_t)sys_stat,
     [__NR_fstat] = (syscall_func_t)sys_fstat,
     [__NR_getdents] = (syscall_func_t)sys_getdents,
+    [__NR_stty]     = (syscall_func_t)sys_stty,
+    [__NR_gtty]     = (syscall_func_t)sys_gtty,
     [__NR_nanosleep] = (syscall_func_t)sys_nanosleep,
     [__NR_sysinfo]   = (syscall_func_t)sys_sysinfo,
     [__NR_shm_open]  = (syscall_func_t)sys_shm_open,
@@ -118,6 +122,26 @@ static void cleanup_failed_fork_child(task_t* parent, task_t* child)
 
     kfree(child);
     kernel_lifecycle_stats.tasks_destroyed++;
+}
+
+int sys_stty(int cmd, uint32_t arg)
+{
+    switch (cmd) {
+    case TTY_STTY_SET_FOREGROUND_PGID:
+        return tty_set_foreground_pgid((pid_t)arg);
+    default:
+        return -EINVAL;
+    }
+}
+
+int sys_gtty(int cmd)
+{
+    switch (cmd) {
+    case TTY_GTTY_GET_FOREGROUND_PGID:
+        return tty_get_foreground_pgid();
+    default:
+        return -EINVAL;
+    }
 }
 
 static void rename_task_from_exec_path(task_t *task, const char *path)
@@ -395,9 +419,17 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         return -ENOEXEC;
     }
     
+    /*
+     * La signal stack est mappee dans le TTBR0 courant mais n'est pas une VMA.
+     * Elle doit donc etre liberee avant de detruire l'ancien espace, puis
+     * recreee dans le nouveau vm_space apres exec.
+     */
+    cleanup_process_signals(proc);
+
     /* Remplacer l'espace memoire - ACCeS CORRECT */
     destroy_vm_space(old_vm);
     proc->process->vm = new_vm;
+    init_process_signals(proc);
 
     /* Reinitialiser le contexte CPU - ADAPTe a VOTRE STRUCTURE */
     memset(&proc->context, 0, sizeof(task_context_t));

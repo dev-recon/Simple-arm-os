@@ -28,7 +28,7 @@ void shell_line_edit_init(void);
 // Codes de retour des commandes
 #define SHELL_OK            0
 #define SHELL_ERROR         1
-#define SHELL_EXIT          2
+#define SHELL_EXIT          (-1000)
 
 extern char input_buffer[SHELL_BUFFER_SIZE];
 extern char* argv_buffer[SHELL_MAX_ARGS];

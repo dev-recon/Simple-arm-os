@@ -41,6 +41,8 @@ SYSCALL sys_getuid, 24      /* __NR_getuid */
 SYSCALL sys_getgid, 47      /* __NR_getgid */
 SYSCALL sys_setpgid, 57     /* __NR_setpgid */
 SYSCALL sys_getpgrp, 65     /* __NR_getpgrp */
+SYSCALL sys_stty, 31        /* __NR_stty */
+SYSCALL sys_gtty, 32        /* __NR_gtty */
 SYSCALL sys_waitpid, 7      /* __NR_waitpid */
 SYSCALL sys_brk, 45         /* __NR_brk */
 
@@ -288,6 +290,44 @@ getpgrp:
     mov r0, #-1
 
 getpgrp_success:
+    pop {r7, lr}
+    bx lr
+
+//   STTY -> SYS_STTY
+.global stty
+.type stty, %function
+stty:
+    push {r7, lr}
+    mov r7, #31             /* SYS_STTY */
+    swi #0
+
+    cmp r0, #0
+    bge stty_success
+
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+stty_success:
+    pop {r7, lr}
+    bx lr
+
+//   GTTY -> SYS_GTTY
+.global gtty
+.type gtty, %function
+gtty:
+    push {r7, lr}
+    mov r7, #32             /* SYS_GTTY */
+    swi #0
+
+    cmp r0, #0
+    bge gtty_success
+
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+gtty_success:
     pop {r7, lr}
     bx lr
 

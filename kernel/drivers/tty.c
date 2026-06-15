@@ -5,6 +5,7 @@
 #include <kernel/string.h>
 #include <kernel/process.h>
 #include <kernel/vfs.h>
+#include <kernel/signal.h>
 
 struct tty_struct tty0;
 
@@ -12,16 +13,78 @@ void tty_init(void) {
     memset(&tty0, 0, sizeof(tty0));
     
     /* mash echoe deja les caracteres lus ; le TTY garde le buffering ligne. */
-    tty0.c_lflag = ICANON;
+    tty0.c_lflag = ICANON | ISIG;
+    tty0.foreground_pgid = 0;
     
     init_spinlock(&tty0.lock);
+}
+
+static int tty_signal_process_group(pid_t pgid, int sig)
+{
+    task_t* task;
+    int delivered = 0;
+    int count = 0;
+
+    if (pgid <= 0 || !task_list_head)
+        return 0;
+
+    task = task_list_head;
+    do {
+        if (task->type == TASK_TYPE_PROCESS && task->process &&
+            task->process->pgid == pgid &&
+            task->state != TASK_ZOMBIE &&
+            task->state != TASK_TERMINATED) {
+            if (send_signal(task, sig) == 0)
+                delivered++;
+        }
+
+        task = task->next;
+        count++;
+    } while (task && task != task_list_head && count < MAX_TASKS);
+
+    return delivered;
+}
+
+int tty_set_foreground_pgid(pid_t pgid)
+{
+    unsigned long flags;
+
+    if (pgid < 0)
+        return -EINVAL;
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    tty0.foreground_pgid = pgid;
+    spin_unlock_irqrestore(&tty0.lock, flags);
+    return 0;
+}
+
+pid_t tty_get_foreground_pgid(void)
+{
+    unsigned long flags;
+    pid_t pgid;
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    pgid = tty0.foreground_pgid;
+    spin_unlock_irqrestore(&tty0.lock, flags);
+    return pgid;
 }
 
 /* Appelé par l'IRQ UART (ou polling) */
 void tty_input_char(char c) {
     task_t* reader = NULL;
+    pid_t signal_pgid = 0;
+    int signal_num = 0;
     unsigned long flags;
     spin_lock_irqsave(&tty0.lock, &flags);
+
+    if ((tty0.c_lflag & ISIG) && c == 0x03) {
+        signal_pgid = tty0.foreground_pgid;
+        signal_num = SIGINT;
+        spin_unlock_irqrestore(&tty0.lock, flags);
+        uart_puts("^C\n");
+        tty_signal_process_group(signal_pgid, signal_num);
+        return;
+    }
     
     /* In raw/no-echo mode, pass editing keys to userland. mash owns line editing. */
     if ((tty0.c_lflag & ECHO) && (c == '\b' || c == 127)) {

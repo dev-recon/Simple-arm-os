@@ -24,6 +24,16 @@ static shell_env_t shell_env[SHELL_MAX_ENV];
 static int shell_env_count = 0;
 static char shell_env_strings[SHELL_MAX_ENV][SHELL_ENV_NAME_LEN + SHELL_ENV_VALUE_LEN + 1];
 static char* shell_envp[SHELL_MAX_ENV + 1];
+static int shell_pgid = 0;
+
+static void shell_set_foreground_pgid(int pgid) {
+    if (pgid >= 0)
+        stty(TTY_STTY_SET_FOREGROUND_PGID, pgid);
+}
+
+static void shell_restore_foreground(void) {
+    shell_set_foreground_pgid(shell_pgid);
+}
 
 static void shell_reap_background(void) {
     int status = 0;
@@ -495,6 +505,8 @@ static int run_pipeline(int argc, char* argv[], int background) {
             else if (pgid > 0)
                 setpgid(0, pgid);
 
+            signal(SIGINT, SIG_DFL);
+
             if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
                 printf("mash: cannot connect pipeline input\n");
                 exit(-1);
@@ -543,10 +555,12 @@ static int run_pipeline(int argc, char* argv[], int background) {
         return SHELL_OK;
     }
 
+    shell_set_foreground_pgid(pgid);
     for (i = 0; i < command_count; i++) {
         if (waitpid(pids[i], &status, 0) == pids[i])
             last_status = status;
     }
+    shell_restore_foreground();
 
     return last_status;
 }
@@ -933,6 +947,7 @@ int shell_execute(int argc, char* argv[]) {
     int child_pid = fork();
     if (child_pid == 0) {
         setpgid(0, 0);
+        signal(SIGINT, SIG_DFL);
         if (apply_redirections(&redirs) < 0)
             exit(-1);
 
@@ -948,7 +963,9 @@ int shell_execute(int argc, char* argv[]) {
         }
 
         int status = 0;
+        shell_set_foreground_pgid(child_pid);
         waitpid(child_pid, &status, 0);
+        shell_restore_foreground();
         //printf("SHELL waked up waited_pid %d, son status = %d\n", waited_pid, status);
 
         return(status);
@@ -1060,6 +1077,10 @@ int main() {
     shell_init_env();
     shell_load_startup_files();
     shell_line_edit_init();
+    setpgid(0, 0);
+    shell_pgid = getpgrp();
+    signal(SIGINT, SIG_IGN);
+    shell_restore_foreground();
     command_init();
     shell_run();
 

@@ -517,7 +517,6 @@ int sys_kill(pid_t pid, int sig)
     if (pid > 0) {
         target = find_process_by_pid(pid);
         if (!target) {
-            KDEBUG("[SYSCALL] sys_kill: Process PID=%d not found\n", pid);
             return -ESRCH;
         }
         

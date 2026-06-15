@@ -920,8 +920,10 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     //KDEBUG("sys_nanosleep: woke up\n");
 
     /* Vérifier si réveillé par signal */
-    if (current_task->state == TASK_RUNNING &&
-        get_system_ticks() < current_task->wakeup_time) {
+    if (has_pending_signals(current_task) ||
+        (current_task->state == TASK_RUNNING &&
+         current_task->wakeup_time > 0 &&
+         get_system_ticks() < current_task->wakeup_time)) {
         /* Réveillé prématurément par un signal */
         if (rem) {
             elapsed_time = get_system_ticks() - start_time;

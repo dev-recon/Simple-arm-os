@@ -100,10 +100,15 @@ int getuid(void);
 int getgid(void);
 int setpgid(pid_t pid, pid_t pgid);
 int getpgrp(void);
+int stty(int cmd, int arg);
+int gtty(int cmd);
 int fork(void);
 int execve(const char* filename, char* const argv[], char* const envp[]);
 int waitpid(int pid, int* status, int options);
 int kill(pid_t pid, int sig);
+
+#define TTY_STTY_SET_FOREGROUND_PGID 1
+#define TTY_GTTY_GET_FOREGROUND_PGID 1
 
 /* Syscall générique */
 long syscall(long number, ...);

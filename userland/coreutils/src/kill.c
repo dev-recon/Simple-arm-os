@@ -13,6 +13,17 @@ static int parse_signal(const char *arg)
     return -1;
 }
 
+static const char *signal_name(int sig)
+{
+    switch (sig) {
+        case SIGKILL: return "SIGKILL";
+        case SIGTERM: return "SIGTERM";
+        case SIGUSR1: return "SIGUSR1";
+        case SIGUSR2: return "SIGUSR2";
+        default:      return "signal";
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
@@ -43,6 +54,8 @@ int main(int argc, char **argv)
         if (kill(pid, sig) < 0) {
             printf("kill: failed to signal pid %d\n", pid);
             status = 1;
+        } else {
+            printf("kill: sent %s to pid %d\n", signal_name(sig), pid);
         }
     }
     return status;
