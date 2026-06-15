@@ -181,12 +181,12 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
 	$(DEBUGFS) -R 'ls -l /bin' $(EXT2_IMG) >/dev/null
 	@echo "ext2 image created"
 
-# Disque final = FAT32 + ext2 concaténés
+# Disque final = ext2 + FAT32 concaténés
 $(DISK_IMG): $(FAT32_IMG) $(EXT2_IMG)
-	@echo "=== Assembling $(DISK_IMG) (FAT32 + ext2) ==="
+	@echo "=== Assembling $(DISK_IMG) (ext2 + FAT32) ==="
 	dd if=/dev/zero of=$(DISK_IMG) bs=1m count=$(DISK_SIZE_MB) 2>/dev/null
-	dd if=$(FAT32_IMG) of=$(DISK_IMG) bs=1m seek=0 conv=notrunc 2>/dev/null
-	dd if=$(EXT2_IMG) of=$(DISK_IMG) bs=1m seek=$(FAT32_SIZE_MB) conv=notrunc 2>/dev/null
+	dd if=$(EXT2_IMG) of=$(DISK_IMG) bs=1m seek=0 conv=notrunc 2>/dev/null
+	dd if=$(FAT32_IMG) of=$(DISK_IMG) bs=1m seek=$(EXT2_SIZE_MB) conv=notrunc 2>/dev/null
 	@echo "Disk image $(DISK_IMG) created ($(DISK_SIZE_MB) MB)"
 
 # Creer le repertoire userfs avec des fichiers de test

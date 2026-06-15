@@ -117,6 +117,7 @@ typedef struct {
     
     /* Champs 4 bytes groupes pour alignement */
     uint32_t* fat_table;                /* 4 bytes */
+    uint64_t lba_start;                 /* Partition start on the block device */
     uint32_t fat_start_sector;          /* 4 bytes */
     uint32_t data_start_sector;         /* 4 bytes */
     uint32_t root_dir_cluster;          /* 4 bytes */
@@ -131,9 +132,11 @@ typedef struct {
 
 int init_fat32(void);
 int mount_fat32_filesystem(void);
+int mount_fat32_filesystem_at(uint64_t lba_start);
 
 /* FAT32 functions - INCHANGeES */
 bool fat32_mount(void);
+bool fat32_mount_at(uint64_t lba_start);
 uint32_t get_fat32_root_cluster(void);
 uint32_t cluster_to_sector(uint32_t cluster);
 uint32_t fat32_get_next_cluster(uint32_t cluster);

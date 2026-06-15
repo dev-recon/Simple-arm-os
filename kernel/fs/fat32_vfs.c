@@ -1195,7 +1195,8 @@ uint32_t fat32_get_total_clusters(void) {
         total_sectors = fat32_fs.boot_sector.total_sectors_16;
     }
     
-    uint32_t data_sectors = total_sectors - fat32_fs.data_start_sector;
+    uint32_t data_start_rel = fat32_fs.data_start_sector - (uint32_t)fat32_fs.lba_start;
+    uint32_t data_sectors = total_sectors - data_start_rel;
     return data_sectors / fat32_fs.sectors_per_cluster;
 }
 

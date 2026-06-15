@@ -70,14 +70,17 @@ bool init_vfs(void)
     
     init_spinlock(&vfs_lock);
     
-    /* Initialiser FAT32 d'abord (partition 0, montee ensuite sous /mnt). */
+    /* Initialiser FAT32 d'abord (partition secondaire, montee ensuite sous /mnt). */
     if (init_fat32() != 0) {
         KERROR("[VFS] Failed to initialize FAT32\n");
         return false;
     }
     
+    #define EXT2_SIZE_MB    64ULL
+    #define FAT32_LBA_START (EXT2_SIZE_MB * 1024ULL * 1024ULL / 512ULL)
+
     /* Monter le systeme de fichiers */
-    if (mount_fat32_filesystem() != 0) {
+    if (mount_fat32_filesystem_at(FAT32_LBA_START) != 0) {
         KERROR("[VFS] Failed to mount FAT32\n");
         return false;
     }
@@ -100,14 +103,10 @@ bool init_vfs(void)
     fat32_root->mtime = 0;
     fat32_root->ctime = 0;
 
-    /* Monter ext2 comme racine (second 64 Mo du disk.img, apres la FAT32). */
-    #define FAT32_SIZE_MB   64ULL
-    #define EXT2_LBA_START  (FAT32_SIZE_MB * 1024ULL * 1024ULL / 512ULL)
-
-    inode_t* ext2_root = ext2_mount(EXT2_LBA_START);
+    /* Monter ext2 comme racine depuis le debut du disk.img. */
+    inode_t* ext2_root = ext2_mount(0);
     if (!ext2_root) {
-        KERROR("[VFS] ext2 not found at LBA %llu — root unavailable\n",
-               (unsigned long long)EXT2_LBA_START);
+        KERROR("[VFS] ext2 not found at LBA 0 — root unavailable\n");
         put_inode(fat32_root);
         return false;
     }
@@ -369,4 +368,3 @@ void close_cloexec_files(task_t* proc)
         }
     }
 }
-

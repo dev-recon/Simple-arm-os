@@ -166,9 +166,15 @@ int ata_read_sectors_debug(uint64_t lba, uint32_t count, void* buffer)
 extern int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer);
 extern int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer);
 
-bool fat32_mount(){
+bool fat32_mount(void)
+{
+    return fat32_mount_at(0);
+}
 
-    KDEBUG("Mounting FAT32 from VIRTIO MMIO BLK DEVICE...\n");
+bool fat32_mount_at(uint64_t lba_start){
+
+    KDEBUG("Mounting FAT32 from VIRTIO MMIO BLK DEVICE at LBA %u...\n",
+           (uint32_t)lba_start);
     
     /* Verifier que RAMFS est initialise */
 /*     if (!ramfs_is_initialized()) {
@@ -192,10 +198,11 @@ bool fat32_mount(){
         return false;
     }
     
-    /* Lire le boot sector depuis RAMFS */
-    KDEBUG("Reading boot sector from RAMFS sector 0...\n");
-    if (blk_read_sectors(0, 1, raw->data) < 0) {
-        KERROR("Failed to read boot sector from RAMFS\n");
+    /* Lire le boot sector depuis le debut de la partition FAT32 */
+    KDEBUG("Reading FAT32 boot sector from LBA %u...\n",
+           (uint32_t)lba_start);
+    if (blk_read_sectors(lba_start, 1, raw->data) < 0) {
+        KERROR("Failed to read FAT32 boot sector\n");
         kfree(bs);
         kfree(raw);
         return false;
@@ -230,14 +237,16 @@ bool fat32_mount(){
     KINFO("  FAT size: %u sectors\n", fat32_fs.boot_sector.fat_size_32);
     KINFO("  Root cluster: %u\n", fat32_fs.boot_sector.root_cluster);
     
-    /* CORRECTION: Calculer correctement les offsets */
-    fat32_fs.fat_start_sector = fat32_fs.boot_sector.reserved_sectors;
-    fat32_fs.data_start_sector = fat32_fs.boot_sector.reserved_sectors + (fat32_fs.boot_sector.num_fats * fat32_fs.boot_sector.fat_size_32);
+    /* Calculer les secteurs absolus dans le disque. */
+    fat32_fs.lba_start = lba_start;
+    fat32_fs.fat_start_sector = (uint32_t)(lba_start + fat32_fs.boot_sector.reserved_sectors);
+    fat32_fs.data_start_sector = (uint32_t)(lba_start + fat32_fs.boot_sector.reserved_sectors + (fat32_fs.boot_sector.num_fats * fat32_fs.boot_sector.fat_size_32));
     fat32_fs.root_dir_cluster = fat32_fs.boot_sector.root_cluster;
     fat32_fs.sectors_per_cluster = fat32_fs.boot_sector.sectors_per_cluster;
     fat32_fs.bytes_per_cluster = fat32_fs.boot_sector.sectors_per_cluster * fat32_fs.boot_sector.bytes_per_sector;
     
     KINFO("FAT32 layout calculated:\n");
+    KINFO("  LBA start: sector %u\n", (uint32_t)fat32_fs.lba_start);
     KINFO("  FAT start: sector %u\n", fat32_fs.fat_start_sector);
     KINFO("  Data start: sector %u\n", fat32_fs.data_start_sector);
     KINFO("  Root cluster: %u\n", fat32_fs.root_dir_cluster);
@@ -822,10 +831,15 @@ int init_fat32(void)
  */
 int mount_fat32_filesystem(void)
 {
-    KINFO("[FAT32] Montage du systeme de fichiers...\n");
+    return mount_fat32_filesystem_at(0);
+}
+
+int mount_fat32_filesystem_at(uint64_t lba_start)
+{
+    KINFO("[FAT32] Montage du systeme de fichiers a LBA %u...\n",
+          (uint32_t)lba_start);
     
-    /* Appeler fat32_mount() existant */
-    if (!fat32_mount()) {
+    if (!fat32_mount_at(lba_start)) {
         KERROR("[FAT32] echec du montage\n");
         return -1;
     }
