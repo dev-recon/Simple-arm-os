@@ -52,17 +52,24 @@ SYSCALL sys_brk, 45         /* __NR_brk */
 SYSCALL sys_read, 3         /* __NR_read */
 SYSCALL sys_write, 4        /* __NR_write */
 SYSCALL sys_open, 5         /* __NR_open */
+SYSCALL sys_creat, 8        /* __NR_creat */
 SYSCALL sys_close, 6        /* __NR_close */
+SYSCALL sys_link, 9         /* __NR_link */
 SYSCALL sys_lseek, 19       /* __NR_lseek */
+SYSCALL sys_time, 13        /* __NR_time */
 SYSCALL sys_rename, 38      /* __NR_rename */
 SYSCALL sys_mkdir, 39       /* __NR_mkdir */
 SYSCALL sys_rmdir, 40       /* __NR_rmdir */
 SYSCALL sys_unlink, 10      /* __NR_unlink */
+SYSCALL sys_symlink, 83     /* __NR_symlink */
+SYSCALL sys_readlink, 85    /* __NR_readlink */
 SYSCALL sys_chdir, 12       /* __NR_chdir */
 SYSCALL sys_access, 33      /* __NR_access */
 SYSCALL sys_umask, 60       /* __NR_umask */
 SYSCALL sys_chmod, 15       /* __NR_chmod */
 SYSCALL sys_chown, 16       /* __NR_chown / __NR_lchown */
+SYSCALL sys_ioctl, 54       /* __NR_ioctl */
+SYSCALL sys_fcntl, 55       /* __NR_fcntl */
 
 SYSCALL sys_dup, 41         /* __NR_dup2 */
 SYSCALL sys_dup2, 63        /* __NR_dup2 */
@@ -70,8 +77,10 @@ SYSCALL sys_getcwd, 183     /* __NR_getcwd */
 
 SYSCALL sys_pipe, 42        /* __NR_pipe */
 SYSCALL sys_stat, 106       /* __NR_stat */
+SYSCALL sys_lstat, 107      /* __NR_lstat */
 SYSCALL sys_fstat, 108      /* __NR_fstat */
 SYSCALL sys_getdents, 141   /* __NR_getdents */
+SYSCALL sys_gettimeofday, 78 /* __NR_gettimeofday */
 
 
 /* Signaux */
@@ -170,6 +179,23 @@ open:
     mov r0, #-1
     
 open_success:
+    pop {r7, lr}
+    bx lr
+
+.global creat
+.type creat, %function
+creat:
+    push {r7, lr}
+    mov r7, #8              /* SYS_CREAT */
+    swi #0
+
+    cmp r0, #0
+    bge creat_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+creat_success:
     pop {r7, lr}
     bx lr
 
@@ -749,6 +775,40 @@ chown_success:
     pop {r7, lr}
     bx lr
 
+.global fcntl
+.type fcntl, %function
+fcntl:
+    push {r7, lr}
+    mov r7, #55             /* SYS_FCNTL */
+    swi #0
+
+    cmp r0, #0
+    bge fcntl_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+fcntl_success:
+    pop {r7, lr}
+    bx lr
+
+.global ioctl
+.type ioctl, %function
+ioctl:
+    push {r7, lr}
+    mov r7, #54             /* SYS_IOCTL */
+    swi #0
+
+    cmp r0, #0
+    bge ioctl_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+ioctl_success:
+    pop {r7, lr}
+    bx lr
+
 .global dup
 .type dup, %function
 dup:
@@ -843,6 +903,23 @@ stat_success:
     pop {r7, lr}
     bx lr
 
+.global lstat
+.type lstat, %function
+lstat:
+    push {r7, lr}
+    mov r7, #107            /* SYS_LSTAT */
+    swi #0
+
+    cmp r0, #0
+    bge lstat_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+lstat_success:
+    pop {r7, lr}
+    bx lr
+
 .global fstat
 .type fstat, %function
 fstat:
@@ -899,6 +976,91 @@ nanosleep:
     mov r0, #-1
 
 nanosleep_success:
+    pop {r7, lr}
+    bx lr
+
+.global time
+.type time, %function
+time:
+    push {r7, lr}
+    mov r7, #13             /* SYS_TIME */
+    swi #0
+
+    cmp r0, #0
+    bge time_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+time_success:
+    pop {r7, lr}
+    bx lr
+
+.global gettimeofday
+.type gettimeofday, %function
+gettimeofday:
+    push {r7, lr}
+    mov r7, #78             /* SYS_GETTIMEOFDAY */
+    swi #0
+
+    cmp r0, #0
+    bge gettimeofday_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+gettimeofday_success:
+    pop {r7, lr}
+    bx lr
+
+.global link
+.type link, %function
+link:
+    push {r7, lr}
+    mov r7, #9              /* SYS_LINK */
+    swi #0
+
+    cmp r0, #0
+    bge link_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+link_success:
+    pop {r7, lr}
+    bx lr
+
+.global symlink
+.type symlink, %function
+symlink:
+    push {r7, lr}
+    mov r7, #83             /* SYS_SYMLINK */
+    swi #0
+
+    cmp r0, #0
+    bge symlink_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+symlink_success:
+    pop {r7, lr}
+    bx lr
+
+.global readlink
+.type readlink, %function
+readlink:
+    push {r7, lr}
+    mov r7, #85             /* SYS_READLINK */
+    swi #0
+
+    cmp r0, #0
+    bge readlink_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+readlink_success:
     pop {r7, lr}
     bx lr
 

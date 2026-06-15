@@ -17,13 +17,17 @@
 int write(int fd, const void* buf, size_t count);
 int read(int fd, void* buf, size_t count);
 int open(const char* path, int flags, mode_t mode);
+int creat(const char* pathname, mode_t mode);
 off_t lseek(int fd, off_t offset, int whence);
 int close(int fd);
 void exit(int status) __attribute__((noreturn));
 
 int mkdir(const char* path, int flags);
 int rmdir(const char* path);
+int link(const char* oldpath, const char* newpath);
 int unlink(const char* pathname);
+int symlink(const char* target, const char* linkpath);
+int readlink(const char* pathname, char* buf, size_t bufsiz);
 int rename(const char* oldpath, const char* newpath);
 
 /* Informations processus (temporaire — sera remplacé par /proc) */
@@ -80,6 +84,9 @@ int getsysinfo(struct sysinfo_response *resp);
 int dup(int oldfd);
 
 int dup2(int oldfd, int newfd);
+
+int fcntl(int fd, int cmd, ...);
+int ioctl(int fd, unsigned long request, ...);
 
 int pipe(int pipefd[2]);
 

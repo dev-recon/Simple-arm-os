@@ -62,6 +62,21 @@
 #define O_CLOEXEC   0x40000     /* FD fermé au exec */
 #endif
 
+#ifndef FD_CLOEXEC
+#define FD_CLOEXEC  1
+#endif
+
+#define F_DUPFD     0
+#define F_GETFD     1
+#define F_SETFD     2
+#define F_GETFL     3
+#define F_SETFL     4
+
+#define TCGETS      0x5401
+#define TCSETS      0x5402
+#define TCSETSW     0x5403
+#define TCSETSF     0x5404
+
 /* Modes (mode_t) — permissions POSIX */
 #ifndef S_IRUSR
 #define S_IRUSR     0400        /* owner read */

@@ -510,6 +510,11 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     return fd;
 }
 
+int sys_creat(const char* pathname, mode_t mode)
+{
+    return sys_open(pathname, O_CREAT | O_WRONLY | O_TRUNC, mode);
+}
+
 off_t sys_lseek(int fd, off_t offset, int whence)
 {
     file_t* file;
@@ -594,6 +599,15 @@ int sys_stat(const char* pathname, struct stat* statbuf)
     
     put_inode(inode);
     return 0;
+}
+
+int sys_lstat(const char* pathname, struct stat* statbuf)
+{
+    /*
+     * Symlinks are not implemented yet, so lstat() is equivalent to stat().
+     * Keeping a real entry point improves POSIX compatibility for toolchains.
+     */
+    return sys_stat(pathname, statbuf);
 }
 
 int sys_fstat(int fd, struct stat* statbuf)

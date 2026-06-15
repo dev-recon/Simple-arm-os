@@ -500,6 +500,145 @@ int sys_dup2(int oldfd, int newfd)
     return newfd;
 }
 
+int sys_fcntl(int fd, int cmd, uint32_t arg)
+{
+    file_t* file;
+    int newfd;
+
+    if (!current_task || !current_task->process)
+        return -EINVAL;
+    if (fd < 0 || fd >= MAX_FILES)
+        return -EBADF;
+
+    file = current_task->process->files[fd];
+    if (!file)
+        return -EBADF;
+
+    switch (cmd) {
+    case F_DUPFD:
+        if ((int)arg < 0 || arg >= MAX_FILES)
+            return -EINVAL;
+        for (newfd = (int)arg; newfd < MAX_FILES; newfd++) {
+            if (!current_task->process->files[newfd]) {
+                file->ref_count++;
+                current_task->process->files[newfd] = file;
+                current_task->process->fd_flags[newfd] = 0;
+                return newfd;
+            }
+        }
+        return -EMFILE;
+
+    case F_GETFD:
+        return (current_task->process->fd_flags[fd] & O_CLOEXEC) ? FD_CLOEXEC : 0;
+
+    case F_SETFD:
+        if (arg & FD_CLOEXEC)
+            current_task->process->fd_flags[fd] |= O_CLOEXEC;
+        else
+            current_task->process->fd_flags[fd] &= ~O_CLOEXEC;
+        return 0;
+
+    case F_GETFL:
+        return file->flags;
+
+    case F_SETFL:
+        file->flags = (file->flags & O_ACCMODE) |
+                      (arg & (O_APPEND | O_NONBLOCK | O_SYNC | O_DSYNC | O_RSYNC));
+        return 0;
+
+    default:
+        return -EINVAL;
+    }
+}
+
+int sys_ioctl(int fd, uint32_t request, uint32_t arg)
+{
+    file_t* file;
+    bool is_tty;
+
+    (void)arg;
+
+    if (!current_task || !current_task->process)
+        return -EINVAL;
+    if (fd < 0 || fd >= MAX_FILES)
+        return -EBADF;
+
+    file = current_task->process->files[fd];
+    if (!file)
+        return -EBADF;
+
+    is_tty = (file->inode == NULL) &&
+             (strcmp(file->name, "stdin") == 0 ||
+              strcmp(file->name, "stdout") == 0 ||
+              strcmp(file->name, "stderr") == 0 ||
+              strcmp(file->name, "tty0") == 0);
+
+    switch (request) {
+    case TCGETS:
+    case TCSETS:
+    case TCSETSW:
+    case TCSETSF:
+        return is_tty ? 0 : -ENOTTY;
+    default:
+        return -ENOTTY;
+    }
+}
+
+int sys_time(time_t* tloc)
+{
+    time_t now = get_current_time();
+
+    if (tloc && copy_to_user(tloc, &now, sizeof(now)) < 0)
+        return -EFAULT;
+
+    return (int)now;
+}
+
+int sys_gettimeofday(struct timeval* tv, struct timezone* tz)
+{
+    struct timeval ktv;
+    struct timezone ktz;
+    uint32_t ticks;
+
+    ticks = get_system_ticks();
+    ktv.tv_sec = get_current_time();
+    ktv.tv_usec = (ticks % TIMER_FREQ) * (1000000u / TIMER_FREQ);
+
+    if (tv && copy_to_user(tv, &ktv, sizeof(ktv)) < 0)
+        return -EFAULT;
+
+    if (tz) {
+        ktz.tz_minuteswest = 0;
+        ktz.tz_dsttime = 0;
+        if (copy_to_user(tz, &ktz, sizeof(ktz)) < 0)
+            return -EFAULT;
+    }
+
+    return 0;
+}
+
+int sys_link(const char* oldpath, const char* newpath)
+{
+    (void)oldpath;
+    (void)newpath;
+    return -ENOSYS;
+}
+
+int sys_symlink(const char* target, const char* linkpath)
+{
+    (void)target;
+    (void)linkpath;
+    return -ENOSYS;
+}
+
+int sys_readlink(const char* pathname, char* buf, size_t bufsiz)
+{
+    (void)pathname;
+    (void)buf;
+    (void)bufsiz;
+    return -ENOSYS;
+}
+
 int sys_chdir(const char* path)
 {
     char* kernel_path;

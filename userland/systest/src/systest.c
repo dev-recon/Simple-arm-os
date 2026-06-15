@@ -5,7 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <sys/time.h>
 #include <time.h>
+#include <termios.h>
 #include <unistd.h>
 
 #define COLOR_GREEN "\033[32m"
@@ -208,6 +211,72 @@ static void test_stat_syscalls(void)
     expect(stat("/", &st) == 0, "stat root directory", 0);
     expect(S_ISDIR(st.st_mode), "stat reports directory", st.st_mode);
     expect(stat("/bin/does-not-exist", &st) < 0, "stat missing file fails", 0);
+}
+
+static void test_posix_compat_syscalls(void)
+{
+    const char *path = "/tmp/compat-syscalls.txt";
+    struct stat st;
+    struct timeval tv;
+    struct timezone tz;
+    struct termios tio;
+    time_t now = 0;
+    int fd;
+    int dupfd;
+    int flags;
+
+    unlink(path);
+
+    fd = creat(path, 0644);
+    if (expect(fd >= 0, "creat creates file", fd) >= 0) {
+        expect(write(fd, "compat", 6) == 6, "creat fd is writable", fd);
+        close(fd);
+    }
+
+    expect(lstat(path, &st) == 0, "lstat existing file", 0);
+    expect(S_ISREG(st.st_mode), "lstat reports regular file", st.st_mode);
+
+    fd = open(path, O_RDWR, 0);
+    if (expect(fd >= 0, "fcntl test open", fd) >= 0) {
+        expect(fcntl(fd, F_GETFD, 0) == 0, "fcntl F_GETFD default", fd);
+        expect(fcntl(fd, F_SETFD, FD_CLOEXEC) == 0, "fcntl F_SETFD cloexec", fd);
+        expect((fcntl(fd, F_GETFD, 0) & FD_CLOEXEC) != 0,
+               "fcntl F_GETFD observes cloexec", fd);
+
+        flags = fcntl(fd, F_GETFL, 0);
+        expect((flags & O_ACCMODE) == O_RDWR, "fcntl F_GETFL access mode", flags);
+        expect(fcntl(fd, F_SETFL, flags | O_APPEND) == 0, "fcntl F_SETFL append", flags);
+        expect((fcntl(fd, F_GETFL, 0) & O_APPEND) != 0,
+               "fcntl F_GETFL observes append", fd);
+
+        dupfd = fcntl(fd, F_DUPFD, 10);
+        if (expect(dupfd >= 10, "fcntl F_DUPFD min fd", dupfd) >= 0)
+            close(dupfd);
+
+        expect(ioctl(fd, TCGETS, &tio) < 0 && errno == ENOTTY,
+               "ioctl TCGETS rejects regular file", errno);
+        close(fd);
+    }
+
+    expect(ioctl(STDIN_FILENO, TCGETS, &tio) == 0, "ioctl TCGETS accepts tty", 0);
+    expect(tcgetattr(STDIN_FILENO, &tio) == 0, "tcgetattr accepts tty", 0);
+
+    errno = 0;
+    expect(link(path, "/tmp/compat-hardlink.txt") < 0 && errno == ENOSYS,
+           "link reports ENOSYS", errno);
+    errno = 0;
+    expect(symlink(path, "/tmp/compat-symlink.txt") < 0 && errno == ENOSYS,
+           "symlink reports ENOSYS", errno);
+    errno = 0;
+    expect(readlink("/tmp/compat-symlink.txt", (char*)&tio, sizeof(tio)) < 0 &&
+           errno == ENOSYS, "readlink reports ENOSYS", errno);
+
+    expect(time(&now) != (time_t)-1 && now != 0, "time returns timestamp", (int)now);
+    expect(gettimeofday(&tv, &tz) == 0, "gettimeofday succeeds", 0);
+    expect(tv.tv_sec != 0 && tv.tv_usec < 1000000,
+           "gettimeofday reports sane value", (int)tv.tv_usec);
+
+    unlink(path);
 }
 
 static void test_ext2_write_edges(void)
@@ -1099,6 +1168,7 @@ int main(void)
     test_pipe_dup2();
     test_fd_access_modes();
     test_stat_syscalls();
+    test_posix_compat_syscalls();
     test_ext2_write_edges();
     test_fork_wait_kill();
     test_process_groups();

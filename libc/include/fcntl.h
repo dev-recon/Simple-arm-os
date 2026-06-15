@@ -1,6 +1,8 @@
 #ifndef _FCNTL_H
 #define _FCNTL_H
 
+#include <stddef.h>
+
 /* Flags pour open() */
 
 #define O_RDONLY    0           
@@ -22,6 +24,14 @@
 #define O_DIRECTORY 0x200000    /* _FDIRECTORY */
 #define O_DIRECT    0x80000     /* _FDIRECT */
 
+#define FD_CLOEXEC  1
+
+#define F_DUPFD     0
+#define F_GETFD     1
+#define F_SETFD     2
+#define F_GETFL     3
+#define F_SETFL     4
+
 /* Flags pour lseek() */
 #define SEEK_SET    0   /* Seek from beginning */
 #define SEEK_CUR    1   /* Seek from current position */
@@ -42,5 +52,8 @@
 #define S_IROTH     0004    /* Others read */
 #define S_IWOTH     0002    /* Others write */
 #define S_IXOTH     0001    /* Others execute */
+
+int creat(const char* pathname, mode_t mode);
+int fcntl(int fd, int cmd, ...);
 
 #endif /* _FCNTL_H */

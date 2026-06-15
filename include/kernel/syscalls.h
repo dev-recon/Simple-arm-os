@@ -63,12 +63,18 @@ struct process;
 #define __NR_signal              48
 #define __NR_geteuid             49
 #define __NR_getegid             50
+#define __NR_ioctl               54
+#define __NR_fcntl               55
 #define __NR_setpgid             57
 #define __NR_umask               60
 #define __NR_dup2                63      /* dup2 */
 #define __NR_getpgrp             65
 #define __NR_sigaction           67
+#define __NR_gettimeofday        78
+#define __NR_symlink             83
+#define __NR_readlink            85
 #define __NR_stat               106
+#define __NR_lstat              107
 #define __NR_fstat              108
 #define __NR_getppid            119  /* Moved to avoid conflicts */
 #define __NR_print              121
@@ -132,6 +138,16 @@ struct sysinfo_response {
     struct proc_info procs[64];
 };
 
+struct timeval {
+    time_t tv_sec;
+    uint32_t tv_usec;
+};
+
+struct timezone {
+    int tz_minuteswest;
+    int tz_dsttime;
+};
+
 /* Syscall handler */
 int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2, 
                    uint32_t arg3, uint32_t arg4, uint32_t arg5);
@@ -140,14 +156,21 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
 int sys_read(int fd, void* buf, size_t count);
 int sys_write(int fd, const void* buf, size_t count);
 int sys_open(const char* pathname, int flags, mode_t mode);
+int sys_creat(const char* pathname, mode_t mode);
 int sys_close(int fd);
+int sys_fcntl(int fd, int cmd, uint32_t arg);
+int sys_ioctl(int fd, uint32_t request, uint32_t arg);
 off_t sys_lseek(int fd, off_t offset, int whence);
 int sys_stat(const char* pathname, struct stat* statbuf);
+int sys_lstat(const char* pathname, struct stat* statbuf);
 int sys_fstat(int fd, struct stat* statbuf);
 int sys_print(const char* msg);
 int sys_mkdir(const char* pathname, mode_t mode);
 int sys_rmdir(const char* pathname);
+int sys_link(const char* oldpath, const char* newpath);
 int sys_unlink(const char* pathname);
+int sys_symlink(const char* target, const char* linkpath);
+int sys_readlink(const char* pathname, char* buf, size_t bufsiz);
 int sys_rename(const char* oldpath, const char* newpath);
 int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count);
 int sys_access(const char* pathname, int mode);
@@ -173,6 +196,8 @@ int sys_getpid(void);
 int sys_getppid(void);
 int sys_getuid(void);
 int sys_getgid(void);
+int sys_time(time_t* tloc);
+int sys_gettimeofday(struct timeval* tv, struct timezone* tz);
 int sys_setpgid(pid_t pid, pid_t pgid);
 int sys_getpgrp(void);
 

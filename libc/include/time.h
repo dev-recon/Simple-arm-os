@@ -20,7 +20,19 @@ typedef struct {
     int second; /* Seconde 0-59 */
 } datetime_t;
 
+struct timeval {
+    time_t tv_sec;
+    long tv_usec;
+};
 
+struct timezone {
+    int tz_minuteswest;
+    int tz_dsttime;
+};
+
+
+time_t time(time_t* tloc);
+int gettimeofday(struct timeval* tv, struct timezone* tz);
 int nanosleep(const struct timespec* req, struct timespec* rem);
 unsigned int sleep(unsigned int seconds);
 int usleep(useconds_t usec);
