@@ -932,7 +932,12 @@ static void test_terminal_process_group(void)
     current = tcgetpgrp(STDIN_FILENO);
     expect(current == self_pgrp, "tcgetpgrp observes tcsetpgrp", current);
 
-    if (old_pgrp > 0 && old_pgrp != self_pgrp)
+    errno = 0;
+    expect(tcgetpgrp(99) < 0 && errno == ENOTTY, "tcgetpgrp rejects non-tty fd", errno);
+    errno = 0;
+    expect(tcsetpgrp(99, self_pgrp) < 0 && errno == ENOTTY, "tcsetpgrp rejects non-tty fd", errno);
+
+    if (old_pgrp >= 0)
         tcsetpgrp(STDIN_FILENO, old_pgrp);
 }
 
