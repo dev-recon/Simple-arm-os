@@ -70,7 +70,7 @@ bool init_vfs(void)
     
     init_spinlock(&vfs_lock);
     
-    /* Initialiser FAT32 d'abord */
+    /* Initialiser FAT32 d'abord (partition 0, montee ensuite sous /mnt). */
     if (init_fat32() != 0) {
         KERROR("[VFS] Failed to initialize FAT32\n");
         return false;
@@ -82,57 +82,58 @@ bool init_vfs(void)
         return false;
     }
     
-    /* Creer l'inode racine */
-    root_inode = create_inode();
-    if (!root_inode) {
-        KERROR("[VFS] Failed to create root inode\n");
+    inode_t* fat32_root = create_inode();
+    if (!fat32_root) {
+        KERROR("[VFS] Failed to create FAT32 root inode\n");
         return false;
     }
     
-    /* CORRECTION: Configuration correcte de l'inode racine */
-    root_inode->ino = 1;
-    root_inode->mode = S_IFDIR | 0755;
-    root_inode->uid = 0;
-    root_inode->gid = 0;
-    root_inode->size = 0;
-    root_inode->first_cluster = get_fat32_root_cluster();
-    root_inode->i_op = &fat32_inode_ops;
-    root_inode->f_op = &fat32_dir_ops;
-    
-    /* Timestamps */
-    root_inode->atime = 0;
-    root_inode->mtime = 0;
-    root_inode->ctime = 0;
-    
-    KINFO("[VFS] Root inode created:\n");
-    KINFO("[VFS]   Inode number: %u\n", root_inode->ino);
-    KINFO("[VFS]   Mode: 0x%04X (%s)\n", root_inode->mode,
-          S_ISDIR(root_inode->mode) ? "directory" : "other");
-    KINFO("[VFS]   First cluster: %u\n", root_inode->first_cluster);
-    KINFO("[VFS]   Operations: i_op=%p, f_op=%p\n", root_inode->i_op, root_inode->f_op);
-    
-    /* Test de l'inode racine */
-    if (root_inode->f_op && root_inode->f_op->readdir) {
-        KINFO("[VFS] OK Root inode has readdir operation\n");
-    } else {
-        KERROR("[VFS] KO Root inode missing readdir operation\n");
-    }
+    fat32_root->ino = 1;
+    fat32_root->mode = S_IFDIR | 0755;
+    fat32_root->uid = 0;
+    fat32_root->gid = 0;
+    fat32_root->size = 0;
+    fat32_root->first_cluster = get_fat32_root_cluster();
+    fat32_root->i_op = &fat32_inode_ops;
+    fat32_root->f_op = &fat32_dir_ops;
+    fat32_root->atime = 0;
+    fat32_root->mtime = 0;
+    fat32_root->ctime = 0;
 
-    //test_root_directory();
-    
-    /* Monter ext2 sur /mnt (second 64 Mo du disk.img, après la FAT32) */
+    /* Monter ext2 comme racine (second 64 Mo du disk.img, apres la FAT32). */
     #define FAT32_SIZE_MB   64ULL
     #define EXT2_LBA_START  (FAT32_SIZE_MB * 1024ULL * 1024ULL / 512ULL)
 
     inode_t* ext2_root = ext2_mount(EXT2_LBA_START);
-    if (ext2_root) {
-        if (vfs_mount("/mnt", ext2_root) != 0) {
-            KERROR("[VFS] vfs_mount /mnt failed\n");
-            put_inode(ext2_root);
-        }
-    } else {
-        KERROR("[VFS] ext2 not found at LBA %llu — /mnt unavailable\n",
+    if (!ext2_root) {
+        KERROR("[VFS] ext2 not found at LBA %llu — root unavailable\n",
                (unsigned long long)EXT2_LBA_START);
+        put_inode(fat32_root);
+        return false;
+    }
+
+    root_inode = ext2_root;
+
+    KINFO("[VFS] Root inode created from ext2:\n");
+    KINFO("[VFS]   Inode number: %u\n", root_inode->ino);
+    KINFO("[VFS]   Mode: 0x%04X (%s)\n", root_inode->mode,
+          S_ISDIR(root_inode->mode) ? "directory" : "other");
+    KINFO("[VFS]   First cluster/inode: %u\n", root_inode->first_cluster);
+    KINFO("[VFS]   Operations: i_op=%p, f_op=%p\n", root_inode->i_op, root_inode->f_op);
+
+    if (root_inode->f_op && root_inode->f_op->readdir) {
+        KINFO("[VFS] OK ext2 root inode has readdir operation\n");
+    } else {
+        KERROR("[VFS] KO ext2 root inode missing readdir operation\n");
+        put_inode(fat32_root);
+        return false;
+    }
+
+    //test_root_directory();
+
+    if (vfs_mount("/mnt", fat32_root) != 0) {
+        KERROR("[VFS] vfs_mount /mnt failed\n");
+        put_inode(fat32_root);
     }
 
     KINFO("[VFS] OK VFS initialized successfully\n");
@@ -368,5 +369,4 @@ void close_cloexec_files(task_t* proc)
         }
     }
 }
-
 

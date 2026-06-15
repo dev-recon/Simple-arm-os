@@ -135,7 +135,7 @@ $(FAT32_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
 	fi
 	@echo "FAT32 image created"
 
-# Partition ext2 (64 Mo) — peuplée avec userfs/bin via mke2fs + debugfs
+# Partition ext2 (64 Mo) — peuplée avec tout userfs via mke2fs + debugfs
 E2FSPROGS_PREFIX ?= $(shell \
 	if command -v brew >/dev/null 2>&1; then \
 		brew --prefix e2fsprogs 2>/dev/null; \
@@ -147,7 +147,7 @@ E2FSPROGS_PREFIX ?= $(shell \
 MKE2FS  := $(E2FSPROGS_PREFIX)/sbin/mke2fs
 DEBUGFS := $(E2FSPROGS_PREFIX)/sbin/debugfs
 
-$(EXT2_IMG): $(USERFS_DIR)/bin $(USERFS_BIN_FILES)
+$(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
 	@echo "=== Creating ext2 image ($(EXT2_SIZE_MB) MB) ==="
 	@if [ ! -x "$(MKE2FS)" ] || [ ! -x "$(DEBUGFS)" ]; then \
 		echo "Error: e2fsprogs not found — run: brew install e2fsprogs"; \
@@ -157,12 +157,25 @@ $(EXT2_IMG): $(USERFS_DIR)/bin $(USERFS_BIN_FILES)
 	fi
 	dd if=/dev/zero of=$(EXT2_IMG) bs=1m count=$(EXT2_SIZE_MB) 2>/dev/null
 	$(MKE2FS) -q -t ext2 -F -L OS_EXT2 $(EXT2_IMG)
-	@( printf 'mkdir /bin\n'; \
-	   for f in $(USERFS_DIR)/bin/*; do \
-	       printf 'write %s /bin/%s\n' "$$f" "$${f##*/}"; \
-	       printf 'set_inode_field /bin/%s mode 0100755\n' "$${f##*/}"; \
-	       printf 'set_inode_field /bin/%s uid 0\n' "$${f##*/}"; \
-	       printf 'set_inode_field /bin/%s gid 0\n' "$${f##*/}"; \
+	@( find $(USERFS_DIR) -type d | sort | while read dir; do \
+	       if [ "$$dir" != "$(USERFS_DIR)" ]; then \
+	           relpath=$$(echo "$$dir" | sed 's|$(USERFS_DIR)/||'); \
+	           printf 'mkdir /%s\n' "$$relpath"; \
+	           printf 'set_inode_field /%s mode 040755\n' "$$relpath"; \
+	           printf 'set_inode_field /%s uid 0\n' "$$relpath"; \
+	           printf 'set_inode_field /%s gid 0\n' "$$relpath"; \
+	       fi; \
+	   done; \
+	   find $(USERFS_DIR) -type f | sort | while read f; do \
+	       relpath=$$(echo "$$f" | sed 's|$(USERFS_DIR)/||'); \
+	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
+	       case "$$relpath" in \
+	           bin/*|usr/bin/*|init.sh) mode=0100755 ;; \
+	           *) mode=0100644 ;; \
+	       esac; \
+	       printf 'set_inode_field /%s mode %s\n' "$$relpath" "$$mode"; \
+	       printf 'set_inode_field /%s uid 0\n' "$$relpath"; \
+	       printf 'set_inode_field /%s gid 0\n' "$$relpath"; \
 	   done; \
 	   printf 'quit\n' ) | $(DEBUGFS) -w -f - $(EXT2_IMG) >/dev/null
 	$(DEBUGFS) -R 'ls -l /bin' $(EXT2_IMG) >/dev/null
