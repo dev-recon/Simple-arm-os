@@ -60,6 +60,38 @@ static int read_file(const char *path, char *buf, int size)
     return n;
 }
 
+static int run_command(char *const argv[])
+{
+    char *const envp[] = { NULL };
+    int status = -1;
+    int pid = fork();
+
+    if (pid == 0) {
+        execve(argv[0], argv, envp);
+        exit(127);
+    }
+
+    if (pid < 0)
+        return -1;
+
+    if (waitpid(pid, &status, 0) != pid)
+        return -1;
+
+    return status;
+}
+
+static int run_rm1(const char *arg)
+{
+    char *argv[] = { "/bin/rm", (char *)arg, NULL };
+    return run_command(argv);
+}
+
+static int run_rm2(const char *opt, const char *arg)
+{
+    char *argv[] = { "/bin/rm", (char *)opt, (char *)arg, NULL };
+    return run_command(argv);
+}
+
 static void test_file_io(void)
 {
     const char *path = "/tmp/systest.txt";
@@ -213,6 +245,44 @@ static void test_stat_syscalls(void)
     expect(stat("/bin/does-not-exist", &st) < 0, "stat missing file fails", 0);
 }
 
+static void test_chmod_chown_syscalls(void)
+{
+    const char *path = "/tmp/chmod-chown.txt";
+    struct stat st;
+    uid_t original_uid = 0;
+    int fd;
+
+    unlink(path);
+    fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (expect(fd >= 0, "chmod/chown create test file", fd) < 0)
+        return;
+    close(fd);
+
+    expect(chmod(path, 0600) == 0, "chmod octal syscall", 0);
+    if (expect(stat(path, &st) == 0, "chmod octal stat", 0) == 0)
+        expect((st.st_mode & 0777) == 0600, "chmod octal mode visible", st.st_mode & 0777);
+
+    expect(chmod(path, 0755) == 0, "chmod 755 syscall", 0);
+    if (expect(stat(path, &st) == 0, "chmod 755 stat", 0) == 0) {
+        expect((st.st_mode & 0777) == 0755, "chmod 755 mode visible", st.st_mode & 0777);
+        original_uid = st.st_uid;
+    }
+
+    expect(chown(path, (uid_t)-1, 789) == 0, "chown gid-only syscall", 0);
+    if (expect(stat(path, &st) == 0, "chown gid-only stat", 0) == 0) {
+        expect(st.st_gid == 789, "chown gid-only updates gid", st.st_gid);
+        expect(st.st_uid == original_uid, "chown gid-only keeps uid", st.st_uid);
+    }
+
+    expect(chown(path, 123, 456) == 0, "chown uid/gid syscall", 0);
+    if (expect(stat(path, &st) == 0, "chown stat", 0) == 0) {
+        expect(st.st_uid == 123, "chown uid visible", st.st_uid);
+        expect(st.st_gid == 456, "chown gid visible", st.st_gid);
+    }
+
+    unlink(path);
+}
+
 static void test_posix_compat_syscalls(void)
 {
     const char *path = "/tmp/compat-syscalls.txt";
@@ -325,6 +395,30 @@ static void test_ext2_write_edges(void)
     expect(n == 3 && strcmp(buf, "xyz") == 0, "ext2 read truncate+append result", n);
     expect(unlink("/tmp/ext2-renamed.txt") == 0, "ext2 unlink renamed file", 0);
     expect(open("/tmp/ext2-renamed.txt", O_RDONLY, 0) < 0, "ext2 unlinked file missing", 0);
+}
+
+static void test_rm_recursive_utility(void)
+{
+    struct stat st;
+    int fd;
+
+    unlink("/tmp/rm-tree/sub/file.txt");
+    rmdir("/tmp/rm-tree/sub");
+    rmdir("/tmp/rm-tree");
+
+    expect(mkdir("/tmp/rm-tree", 0755) == 0, "rm -r mkdir root", 0);
+    expect(mkdir("/tmp/rm-tree/sub", 0755) == 0, "rm -r mkdir child", 0);
+
+    fd = open("/tmp/rm-tree/sub/file.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (expect(fd >= 0, "rm -r create nested file", fd) >= 0) {
+        expect(write(fd, "x", 1) == 1, "rm -r write nested file", fd);
+        close(fd);
+    }
+
+    expect(run_rm1("/tmp/rm-tree") != 0, "rm refuses directory without -r", 0);
+    expect(stat("/tmp/rm-tree/sub/file.txt", &st) == 0, "rm refusal preserves tree", 0);
+    expect(run_rm2("-rf", "/tmp/rm-tree") == 0, "rm -rf removes directory tree", 0);
+    expect(stat("/tmp/rm-tree", &st) < 0, "rm -rf removed root directory", 0);
 }
 
 static void test_fork_wait_kill(void)
@@ -1168,8 +1262,10 @@ int main(void)
     test_pipe_dup2();
     test_fd_access_modes();
     test_stat_syscalls();
+    test_chmod_chown_syscalls();
     test_posix_compat_syscalls();
     test_ext2_write_edges();
+    test_rm_recursive_utility();
     test_fork_wait_kill();
     test_process_groups();
     test_waitpid_process_group();

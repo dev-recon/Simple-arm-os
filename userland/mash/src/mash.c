@@ -4,6 +4,8 @@
 #include <signal.h>
 #include <string.h>
 #include <fcntl.h>
+#include <dirent.h>
+#include <errno.h>
 #include "../include/mash.h"
 #include "../include/jobs.h"
 
@@ -12,6 +14,19 @@ char* argv_buffer[SHELL_MAX_ARGS];
 int shell_running = 0;
 
 static char token_buffer[SHELL_BUFFER_SIZE];
+static int shell_status = 0;
+
+#define SHELL_SCRIPT_ARG_MAX 10
+#define SHELL_SCRIPT_STACK_MAX 4
+
+typedef struct shell_script_frame {
+    const char* name;
+    int argc;
+    const char* argv[SHELL_SCRIPT_ARG_MAX];
+} shell_script_frame_t;
+
+static shell_script_frame_t script_frames[SHELL_SCRIPT_STACK_MAX];
+static int script_frame_depth = 1;
 
 #define SHELL_MAX_ENV       16
 #define SHELL_ENV_NAME_LEN  32
@@ -65,6 +80,8 @@ static int token_has_slash(const char* s) {
     return 0;
 }
 
+static const char* shell_last_char(const char* s, char c);
+
 static int shell_var_start(char c) {
     return (c >= 'A' && c <= 'Z') ||
            (c >= 'a' && c <= 'z') ||
@@ -86,7 +103,7 @@ const char* shell_getenv(const char* name) {
     return NULL;
 }
 
-static int shell_setenv(const char* name, const char* value) {
+int shell_setenv(const char* name, const char* value) {
     int i;
 
     if (!name || !value || !*name)
@@ -111,6 +128,87 @@ static int shell_setenv(const char* name, const char* value) {
     return 0;
 }
 
+int shell_unsetenv(const char* name) {
+    int i;
+
+    if (!name || !*name)
+        return -1;
+
+    for (i = 0; i < shell_env_count; i++) {
+        if (strcmp(shell_env[i].name, name) == 0) {
+            int j;
+
+            for (j = i; j < shell_env_count - 1; j++)
+                shell_env[j] = shell_env[j + 1];
+            shell_env_count--;
+            return 0;
+        }
+    }
+
+    return 0;
+}
+
+int shell_env_count_registered(void) {
+    return shell_env_count;
+}
+
+const char* shell_env_name_at(int index) {
+    if (index < 0 || index >= shell_env_count)
+        return NULL;
+    return shell_env[index].name;
+}
+
+const char* shell_env_value_at(int index) {
+    if (index < 0 || index >= shell_env_count)
+        return NULL;
+    return shell_env[index].value;
+}
+
+int shell_last_status(void) {
+    return shell_status;
+}
+
+int shell_push_script_args(const char* name, int argc, char* argv[]) {
+    int i;
+    shell_script_frame_t* frame;
+
+    if (script_frame_depth >= SHELL_SCRIPT_STACK_MAX)
+        return -1;
+
+    frame = &script_frames[script_frame_depth++];
+    frame->name = name ? name : "";
+    frame->argc = argc;
+    if (frame->argc > SHELL_SCRIPT_ARG_MAX - 1)
+        frame->argc = SHELL_SCRIPT_ARG_MAX - 1;
+
+    for (i = 0; i < frame->argc; i++)
+        frame->argv[i] = argv[i];
+    for (; i < SHELL_SCRIPT_ARG_MAX; i++)
+        frame->argv[i] = NULL;
+
+    return 0;
+}
+
+void shell_pop_script_args(void) {
+    if (script_frame_depth > 1)
+        script_frame_depth--;
+}
+
+static const char* shell_script_arg_value(int index) {
+    shell_script_frame_t* frame;
+
+    if (script_frame_depth <= 0)
+        return "";
+
+    frame = &script_frames[script_frame_depth - 1];
+    if (index == 0)
+        return frame->name ? frame->name : "";
+    if (index < 0 || index > frame->argc)
+        return "";
+
+    return frame->argv[index - 1] ? frame->argv[index - 1] : "";
+}
+
 static char** shell_build_envp(void) {
     int i;
 
@@ -126,6 +224,8 @@ static char** shell_build_envp(void) {
 }
 
 static void shell_init_env(void) {
+    script_frames[0].name = "mash";
+    script_frames[0].argc = 0;
     shell_setenv("PATH", "/bin:/usr/bin");
     shell_setenv("HOME", "/home/user");
     shell_setenv("USER", "user");
@@ -153,6 +253,42 @@ static int starts_with(const char* s, const char* prefix) {
             return 0;
     }
     return 1;
+}
+
+static int shell_is_valid_name(const char* name) {
+    if (!name || !shell_var_start(*name))
+        return 0;
+
+    name++;
+    while (*name) {
+        if (!shell_var_char(*name))
+            return 0;
+        name++;
+    }
+
+    return 1;
+}
+
+static int shell_apply_assignment(const char* token) {
+    char name[SHELL_ENV_NAME_LEN];
+    const char* eq;
+    size_t name_len;
+
+    eq = strchr(token, '=');
+    if (!eq)
+        return -1;
+
+    name_len = (size_t)(eq - token);
+    if (name_len == 0 || name_len >= sizeof(name))
+        return -1;
+
+    memcpy(name, token, name_len);
+    name[name_len] = '\0';
+
+    if (!shell_is_valid_name(name))
+        return -1;
+
+    return shell_setenv(name, eq + 1);
 }
 
 static void shell_apply_rc_line(char* line) {
@@ -245,6 +381,50 @@ static int build_exec_path_from_dir(const char* dir, int dir_len,
 
     strcpy(out + pos, name);
     return 0;
+}
+
+static int shell_file_looks_text(const char* path) {
+    unsigned char buf[64];
+    int fd;
+    int n;
+    int i;
+
+    fd = open(path, O_RDONLY, 0);
+    if (fd < 0)
+        return 0;
+
+    n = read(fd, buf, sizeof(buf));
+    close(fd);
+
+    if (n < 0)
+        return 0;
+    if (n == 0)
+        return 1;
+    if (n >= 4 && buf[0] == 0x7f && buf[1] == 'E' &&
+        buf[2] == 'L' && buf[3] == 'F')
+        return 0;
+
+    for (i = 0; i < n; i++) {
+        if (buf[i] == 0)
+            return 0;
+    }
+
+    return 1;
+}
+
+static void exec_script_or_die_if_text(const char* path, int argc, char* argv[]) {
+    if (access(path, 0) == 0 && access(path, X_OK) < 0) {
+        printf("mash: permission denied: %s\n", path);
+        exit(126);
+    }
+
+    if (errno == ENOEXEC || shell_file_looks_text(path)) {
+        int status = shell_source_file(path, argc - 1, &argv[1]);
+
+        if (status == SHELL_EXIT)
+            status = 0;
+        exit(status);
+    }
 }
 
 static int parse_redirections(int* argc, char* argv[], shell_redirs_t* redirs) {
@@ -398,6 +578,7 @@ static void exec_external_or_die(int argc, char* argv[]) {
         build_exec_path_from_dir(NULL, 0, argv[0], cmd, sizeof(cmd));
         exec_argv[0] = cmd;
         execve(cmd, exec_argv, envp);
+        exec_script_or_die_if_text(cmd, argc, argv);
     } else {
         path = shell_getenv("PATH");
         if (!path || !*path)
@@ -411,6 +592,7 @@ static void exec_external_or_die(int argc, char* argv[]) {
             if (build_exec_path_from_dir(entry, len, argv[0], cmd, sizeof(cmd)) == 0) {
                 exec_argv[0] = cmd;
                 execve(cmd, exec_argv, envp);
+                exec_script_or_die_if_text(cmd, argc, argv);
             }
 
             if (!next)
@@ -905,12 +1087,12 @@ void shell_print_prompt(void) {
     pflush();
 }
 
-// Parse a line into arguments
-int shell_parse_line(char* line, char* argv[]) {
+static int shell_parse_line_into(char* line, char* argv[],
+                                 char* tokens, size_t tokens_size) {
     int argc = 0;
     char* readp = line;
-    char* writep = token_buffer;
-    char* endp = token_buffer + sizeof(token_buffer) - 1;
+    char* writep = tokens;
+    char* endp = tokens + tokens_size - 1;
     
     while (*readp && argc < SHELL_MAX_ARGS - 1) {
         while (*readp == ' ' || *readp == '\t') {
@@ -975,8 +1157,71 @@ int shell_parse_line(char* line, char* argv[]) {
                     char var_name[SHELL_ENV_NAME_LEN];
                     int var_len = 0;
                     const char* value;
+                    char status_buf[16];
 
                     readp++;
+                    if (*readp == '{') {
+                        int basename = 0;
+
+                        readp++;
+                        while (shell_var_char(*readp) && var_len < SHELL_ENV_NAME_LEN - 1)
+                            var_name[var_len++] = *readp++;
+                        while (shell_var_char(*readp))
+                            readp++;
+                        var_name[var_len] = '\0';
+
+                        if (readp[0] == '#' && readp[1] == '#' &&
+                            readp[2] == '*' && readp[3] == '/') {
+                            basename = 1;
+                            readp += 4;
+                        }
+
+                        if (*readp == '}') {
+                            readp++;
+                            value = shell_getenv(var_name);
+                            if (!value)
+                                value = "";
+                            if (basename) {
+                                const char* slash = shell_last_char(value, '/');
+                                if (slash)
+                                    value = slash + 1;
+                            }
+                            while (*value && writep < endp)
+                                *writep++ = *value++;
+                            continue;
+                        }
+
+                        if (writep >= endp)
+                            break;
+                        *writep++ = '$';
+                        *writep++ = '{';
+                        continue;
+                    }
+                    if (*readp == '?') {
+                        snprintf(status_buf, sizeof(status_buf), "%d", shell_status);
+                        value = status_buf;
+                        readp++;
+                        while (*value && writep < endp)
+                            *writep++ = *value++;
+                        continue;
+                    }
+                    if (*readp == '#') {
+                        shell_script_frame_t* frame = &script_frames[script_frame_depth - 1];
+
+                        snprintf(status_buf, sizeof(status_buf), "%d", frame->argc);
+                        value = status_buf;
+                        readp++;
+                        while (*value && writep < endp)
+                            *writep++ = *value++;
+                        continue;
+                    }
+                    if (*readp >= '0' && *readp <= '9') {
+                        value = shell_script_arg_value(*readp - '0');
+                        readp++;
+                        while (*value && writep < endp)
+                            *writep++ = *value++;
+                        continue;
+                    }
                     if (!shell_var_start(*readp)) {
                         if (writep >= endp)
                             break;
@@ -1015,6 +1260,11 @@ int shell_parse_line(char* line, char* argv[]) {
     return argc;
 }
 
+// Parse a line into arguments
+int shell_parse_line(char* line, char* argv[]) {
+    return shell_parse_line_into(line, argv, token_buffer, sizeof(token_buffer));
+}
+
 // Execute a command
 int shell_execute(int argc, char* argv[]) {
     int background = 0;
@@ -1037,6 +1287,9 @@ int shell_execute(int argc, char* argv[]) {
     if (parse_redirections(&argc, argv, &redirs) < 0)
         return SHELL_ERROR;
     if (argc == 0)
+        return SHELL_OK;
+
+    if (argc == 1 && shell_apply_assignment(argv[0]) == 0)
         return SHELL_OK;
 
     // Command exit built-in
@@ -1124,6 +1377,345 @@ static int shell_should_execute_segment(const char* previous_op, int last_status
     return 1;
 }
 
+static int shell_execute_argv_line(int argc, char* argv[]);
+
+static int shell_token_is_word(const char* token, const char* word) {
+    return token && strcmp(token, word) == 0;
+}
+
+static int shell_execute_arg_range(char* argv[], int start, int end) {
+    char* local_argv[SHELL_MAX_ARGS];
+    int argc = 0;
+
+    while (start < end && shell_is_sequence_operator(argv[start]))
+        start++;
+    while (end > start && shell_is_sequence_operator(argv[end - 1]))
+        end--;
+
+    if (start >= end)
+        return SHELL_OK;
+
+    while (start < end && argc < SHELL_MAX_ARGS - 1)
+        local_argv[argc++] = argv[start++];
+    local_argv[argc] = NULL;
+
+    if (start < end) {
+        printf("mash: command too long in if block\n");
+        return SHELL_ERROR;
+    }
+
+    return shell_execute_argv_line(argc, local_argv);
+}
+
+static int shell_find_then(int argc, char* argv[]) {
+    int depth = 0;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (shell_token_is_word(argv[i], "if")) {
+            depth++;
+        } else if (shell_token_is_word(argv[i], "fi")) {
+            if (depth > 0)
+                depth--;
+        } else if (depth == 0 && shell_token_is_word(argv[i], "then")) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+static int shell_find_else_or_fi(int argc, char* argv[], int start,
+                                 int* else_index, int* fi_index) {
+    int depth = 0;
+    int i;
+
+    *else_index = -1;
+    *fi_index = -1;
+
+    for (i = start; i < argc; i++) {
+        if (shell_token_is_word(argv[i], "if")) {
+            depth++;
+        } else if (shell_token_is_word(argv[i], "fi")) {
+            if (depth == 0) {
+                *fi_index = i;
+                return 0;
+            }
+            depth--;
+        } else if (depth == 0 && shell_token_is_word(argv[i], "else")) {
+            *else_index = i;
+        }
+    }
+
+    return -1;
+}
+
+static int shell_execute_if(int argc, char* argv[]) {
+    int then_index;
+    int else_index;
+    int fi_index;
+    int cond_status;
+    int result;
+
+    then_index = shell_find_then(argc, argv);
+    if (then_index < 0) {
+        printf("mash: if: missing then\n");
+        return SHELL_ERROR;
+    }
+
+    if (shell_find_else_or_fi(argc, argv, then_index + 1,
+                              &else_index, &fi_index) < 0) {
+        printf("mash: if: missing fi\n");
+        return SHELL_ERROR;
+    }
+
+    cond_status = shell_execute_arg_range(argv, 1, then_index);
+    if (cond_status == SHELL_EXIT)
+        return SHELL_EXIT;
+
+    if (cond_status == 0) {
+        result = shell_execute_arg_range(argv, then_index + 1,
+                                        else_index >= 0 ? else_index : fi_index);
+    } else if (else_index >= 0) {
+        result = shell_execute_arg_range(argv, else_index + 1, fi_index);
+    } else {
+        result = SHELL_OK;
+    }
+
+    return result;
+}
+
+#define SHELL_FOR_MAX_ITEMS 32
+#define SHELL_FOR_ITEM_LEN  160
+
+static int shell_token_has_glob(const char* token) {
+    while (token && *token) {
+        if (*token == '*')
+            return 1;
+        token++;
+    }
+    return 0;
+}
+
+static int shell_glob_match(const char* pattern, const char* text) {
+    if (!*pattern)
+        return !*text;
+
+    if (*pattern == '*') {
+        while (pattern[1] == '*')
+            pattern++;
+        pattern++;
+        if (!*pattern)
+            return 1;
+        while (*text) {
+            if (shell_glob_match(pattern, text))
+                return 1;
+            text++;
+        }
+        return shell_glob_match(pattern, text);
+    }
+
+    if (*text && *pattern == *text)
+        return shell_glob_match(pattern + 1, text + 1);
+
+    return 0;
+}
+
+static int shell_add_for_item(char items[][SHELL_FOR_ITEM_LEN],
+                              int* count, const char* value) {
+    if (*count >= SHELL_FOR_MAX_ITEMS)
+        return -1;
+    strncpy(items[*count], value, SHELL_FOR_ITEM_LEN - 1);
+    items[*count][SHELL_FOR_ITEM_LEN - 1] = '\0';
+    (*count)++;
+    return 0;
+}
+
+static const char* shell_last_char(const char* s, char c) {
+    const char* last = NULL;
+
+    while (*s) {
+        if (*s == c)
+            last = s;
+        s++;
+    }
+
+    return last;
+}
+
+static int shell_split_glob_token(const char* token, char* dir,
+                                  char* prefix, char* pattern) {
+    const char* slash = shell_last_char(token, '/');
+
+    if (!slash) {
+        strcpy(dir, ".");
+        prefix[0] = '\0';
+        strncpy(pattern, token, SHELL_FOR_ITEM_LEN - 1);
+        pattern[SHELL_FOR_ITEM_LEN - 1] = '\0';
+        return 0;
+    }
+
+    if (slash == token) {
+        strcpy(dir, "/");
+        strcpy(prefix, "/");
+    } else {
+        int dir_len = slash - token;
+
+        if (dir_len >= SHELL_FOR_ITEM_LEN - 1)
+            return -1;
+        memcpy(dir, token, dir_len);
+        dir[dir_len] = '\0';
+        memcpy(prefix, token, dir_len);
+        prefix[dir_len] = '/';
+        prefix[dir_len + 1] = '\0';
+    }
+
+    strncpy(pattern, slash + 1, SHELL_FOR_ITEM_LEN - 1);
+    pattern[SHELL_FOR_ITEM_LEN - 1] = '\0';
+    return 0;
+}
+
+static int shell_expand_glob_for_item(const char* token,
+                                      char items[][SHELL_FOR_ITEM_LEN],
+                                      int* count) {
+    char dir[SHELL_FOR_ITEM_LEN];
+    char prefix[SHELL_FOR_ITEM_LEN];
+    char pattern[SHELL_FOR_ITEM_LEN];
+    char buf[1024];
+    int matched = 0;
+    int fd;
+    int n;
+
+    if (!shell_token_has_glob(token))
+        return shell_add_for_item(items, count, token);
+
+    if (shell_split_glob_token(token, dir, prefix, pattern) < 0)
+        return shell_add_for_item(items, count, token);
+
+    fd = open(dir, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0)
+        return shell_add_for_item(items, count, token);
+
+    while ((n = getdents(fd, buf, sizeof(buf))) > 0) {
+        int pos = 0;
+
+        while (pos < n) {
+            struct linux_dirent* entry = (struct linux_dirent*)(buf + pos);
+            char full[SHELL_FOR_ITEM_LEN];
+
+            if (entry->d_reclen == 0)
+                break;
+
+            if (strcmp(entry->d_name, ".") != 0 &&
+                strcmp(entry->d_name, "..") != 0 &&
+                (pattern[0] == '.' || entry->d_name[0] != '.') &&
+                shell_glob_match(pattern, entry->d_name)) {
+                snprintf(full, sizeof(full), "%s%s", prefix, entry->d_name);
+                if (shell_add_for_item(items, count, full) < 0) {
+                    close(fd);
+                    return -1;
+                }
+                matched = 1;
+            }
+
+            pos += entry->d_reclen;
+        }
+    }
+
+    close(fd);
+
+    if (!matched)
+        return shell_add_for_item(items, count, token);
+
+    return 0;
+}
+
+static int shell_collect_for_items(char* argv[], int start, int end,
+                                   char items[][SHELL_FOR_ITEM_LEN],
+                                   int* count) {
+    int i;
+
+    *count = 0;
+    for (i = start; i < end; i++) {
+        if (shell_is_sequence_operator(argv[i]))
+            continue;
+        if (shell_expand_glob_for_item(argv[i], items, count) < 0) {
+            printf("mash: for: too many items\n");
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static int shell_find_for_in_do_done(int argc, char* argv[],
+                                     int* in_index, int* do_index,
+                                     int* done_index) {
+    int depth = 0;
+    int i;
+
+    *in_index = -1;
+    *do_index = -1;
+    *done_index = -1;
+
+    for (i = 2; i < argc; i++) {
+        if (shell_token_is_word(argv[i], "for")) {
+            depth++;
+        } else if (shell_token_is_word(argv[i], "done")) {
+            if (depth == 0) {
+                *done_index = i;
+                return *in_index >= 0 && *do_index >= 0 ? 0 : -1;
+            }
+            depth--;
+        } else if (depth == 0 && shell_token_is_word(argv[i], "in")) {
+            if (*in_index < 0)
+                *in_index = i;
+        } else if (depth == 0 && shell_token_is_word(argv[i], "do")) {
+            *do_index = i;
+        }
+    }
+
+    return -1;
+}
+
+static int shell_execute_for(int argc, char* argv[]) {
+    char items[SHELL_FOR_MAX_ITEMS][SHELL_FOR_ITEM_LEN];
+    int item_count = 0;
+    int in_index;
+    int do_index;
+    int done_index;
+    int i;
+    int result = SHELL_OK;
+
+    if (argc < 6 || !shell_is_valid_name(argv[1])) {
+        printf("mash: for: expected 'for NAME in ...; do ...; done'\n");
+        return SHELL_ERROR;
+    }
+
+    if (shell_find_for_in_do_done(argc, argv, &in_index,
+                                  &do_index, &done_index) < 0) {
+        printf("mash: for: missing in/do/done\n");
+        return SHELL_ERROR;
+    }
+
+    if (shell_collect_for_items(argv, in_index + 1, do_index,
+                                items, &item_count) < 0)
+        return SHELL_ERROR;
+
+    for (i = 0; i < item_count; i++) {
+        if (shell_setenv(argv[1], items[i]) < 0) {
+            printf("mash: for: cannot set %s\n", argv[1]);
+            return SHELL_ERROR;
+        }
+
+        result = shell_execute_arg_range(argv, do_index + 1, done_index);
+        if (result == SHELL_EXIT)
+            return result;
+    }
+
+    return result;
+}
+
 static int shell_execute_argv_line(int argc, char* argv[]) {
     int start = 0;
     int last_status = SHELL_OK;
@@ -1133,9 +1725,30 @@ static int shell_execute_argv_line(int argc, char* argv[]) {
         int end = start;
         const char* next_op = NULL;
         int segment_argc;
+        int depth = 0;
 
-        while (end < argc && !shell_is_sequence_operator(argv[end]))
+        while (end < argc) {
+            if (shell_token_is_word(argv[end], "if")) {
+                depth++;
+            } else if (shell_token_is_word(argv[end], "for")) {
+                depth++;
+            } else if (shell_token_is_word(argv[end], "fi") && depth > 0) {
+                depth--;
+                end++;
+                if (depth == 0)
+                    break;
+                continue;
+            } else if (shell_token_is_word(argv[end], "done") && depth > 0) {
+                depth--;
+                end++;
+                if (depth == 0)
+                    break;
+                continue;
+            }
+            if (depth == 0 && shell_is_sequence_operator(argv[end]))
+                break;
             end++;
+        }
 
         if (end < argc)
             next_op = argv[end];
@@ -1148,7 +1761,14 @@ static int shell_execute_argv_line(int argc, char* argv[]) {
 
         if (shell_should_execute_segment(previous_op, last_status)) {
             argv[end] = NULL;
-            last_status = shell_execute(segment_argc, &argv[start]);
+            if (shell_token_is_word(argv[start], "if"))
+                last_status = shell_execute_if(segment_argc, &argv[start]);
+            else if (shell_token_is_word(argv[start], "for"))
+                last_status = shell_execute_for(segment_argc, &argv[start]);
+            else
+                last_status = shell_execute(segment_argc, &argv[start]);
+            if (last_status != SHELL_EXIT)
+                shell_status = last_status;
             if (last_status == SHELL_EXIT)
                 return SHELL_EXIT;
         }
@@ -1160,12 +1780,212 @@ static int shell_execute_argv_line(int argc, char* argv[]) {
         start = end + 1;
 
         if (start >= argc) {
+            if (strcmp(previous_op, ";") == 0)
+                break;
             printf("mash: expected command after '%s'\n", previous_op);
             return SHELL_ERROR;
         }
     }
 
     return last_status;
+}
+
+static int shell_is_word_boundary_char(char c) {
+    return !shell_var_char(c);
+}
+
+static int shell_word_equals_at(const char* p, const char* word, int word_len) {
+    int i;
+
+    for (i = 0; i < word_len; i++) {
+        if (p[i] != word[i])
+            return 0;
+    }
+
+    return 1;
+}
+
+static char* shell_find_control_word(char* s, const char* word) {
+    int word_len = strlen(word);
+    char quote = 0;
+    char* p = s;
+
+    while (*p) {
+        if (quote) {
+            if (*p == quote)
+                quote = 0;
+            p++;
+            continue;
+        }
+
+        if (*p == '\'' || *p == '"') {
+            quote = *p++;
+            continue;
+        }
+
+        if ((p == s || shell_is_word_boundary_char(p[-1])) &&
+            shell_word_equals_at(p, word, word_len) &&
+            shell_is_word_boundary_char(p[word_len])) {
+            return p;
+        }
+
+        p++;
+    }
+
+    return NULL;
+}
+
+static char* shell_skip_separators(char* s) {
+    while (*s == ' ' || *s == '\t' || *s == ';')
+        s++;
+    return s;
+}
+
+static void shell_trim_trailing_separators(char* s) {
+    char* end = s + strlen(s);
+
+    while (end > s && (end[-1] == ' ' || end[-1] == '\t' ||
+                       end[-1] == ';')) {
+        *--end = '\0';
+    }
+}
+
+static int shell_execute_for_line(char* line) {
+    char list_copy[SHELL_BUFFER_SIZE];
+    char body_copy[SHELL_BUFFER_SIZE];
+    char list_tokens[SHELL_BUFFER_SIZE];
+    char* list_argv[SHELL_MAX_ARGS];
+    char items[SHELL_FOR_MAX_ITEMS][SHELL_FOR_ITEM_LEN];
+    char var_name[SHELL_ENV_NAME_LEN];
+    char* p;
+    char* in_word;
+    char* do_word;
+    char* done_word;
+    char* list_start;
+    char* body_start;
+    int var_len = 0;
+    int list_argc;
+    int item_count = 0;
+    int i;
+    int result = SHELL_OK;
+
+    p = trim_spaces(line + 3);
+    while (shell_var_char(*p) && var_len < SHELL_ENV_NAME_LEN - 1) {
+        var_name[var_len++] = *p++;
+    }
+    var_name[var_len] = '\0';
+
+    if (!shell_is_valid_name(var_name)) {
+        printf("mash: for: invalid variable name\n");
+        return SHELL_ERROR;
+    }
+
+    in_word = shell_find_control_word(p, "in");
+    if (!in_word) {
+        printf("mash: for: missing in\n");
+        return SHELL_ERROR;
+    }
+
+    list_start = in_word + 2;
+    do_word = shell_find_control_word(list_start, "do");
+    if (!do_word) {
+        printf("mash: for: missing do\n");
+        return SHELL_ERROR;
+    }
+
+    body_start = do_word + 2;
+    done_word = shell_find_control_word(body_start, "done");
+    if (!done_word) {
+        printf("mash: for: missing done\n");
+        return SHELL_ERROR;
+    }
+
+    *do_word = '\0';
+    *done_word = '\0';
+    list_start = shell_skip_separators(trim_spaces(list_start));
+    body_start = shell_skip_separators(trim_spaces(body_start));
+    shell_trim_trailing_separators(list_start);
+    shell_trim_trailing_separators(body_start);
+
+    strncpy(list_copy, list_start, sizeof(list_copy) - 1);
+    list_copy[sizeof(list_copy) - 1] = '\0';
+
+    list_argc = shell_parse_line_into(list_copy, list_argv,
+                                      list_tokens, sizeof(list_tokens));
+    if (list_argc <= 0)
+        return SHELL_OK;
+
+    if (shell_collect_for_items(list_argv, 0, list_argc,
+                                items, &item_count) < 0)
+        return SHELL_ERROR;
+
+    for (i = 0; i < item_count; i++) {
+        if (shell_setenv(var_name, items[i]) < 0) {
+            printf("mash: for: cannot set %s\n", var_name);
+            return SHELL_ERROR;
+        }
+
+        strncpy(body_copy, body_start, sizeof(body_copy) - 1);
+        body_copy[sizeof(body_copy) - 1] = '\0';
+        result = shell_execute_line(body_copy);
+        if (result == SHELL_EXIT)
+            return result;
+    }
+
+    return result;
+}
+
+static void shell_strip_comment(char* line) {
+    char quote = 0;
+    char* p = line;
+    char previous = '\0';
+
+    while (*p) {
+        if (quote) {
+            if (*p == quote)
+                quote = 0;
+        } else {
+            if (*p == '\'' || *p == '"') {
+                quote = *p;
+            } else if (*p == '#' &&
+                       (p == line || previous == ' ' || previous == '\t')) {
+                *p = '\0';
+                return;
+            }
+        }
+
+        previous = *p;
+        p++;
+    }
+}
+
+int shell_execute_line(char* line) {
+    char local_tokens[SHELL_BUFFER_SIZE];
+    char* local_argv[SHELL_MAX_ARGS];
+    char* trimmed;
+    int argc;
+    int result;
+
+    if (!line)
+        return SHELL_OK;
+
+    shell_strip_comment(line);
+    trimmed = trim_spaces(line);
+    if (!*trimmed)
+        return SHELL_OK;
+
+    if (starts_with(trimmed, "for "))
+        return shell_execute_for_line(trimmed);
+
+    argc = shell_parse_line_into(trimmed, local_argv,
+                                 local_tokens, sizeof(local_tokens));
+    if (argc <= 0)
+        return SHELL_OK;
+
+    result = shell_execute_argv_line(argc, local_argv);
+    if (result != SHELL_EXIT)
+        shell_status = result;
+    return result;
 }
 
 
@@ -1183,12 +2003,9 @@ void shell_run(void) {
             continue;
         }
 
-        int argc = shell_parse_line(line, argv_buffer);
-        if (argc > 0) {
-            int result = shell_execute_argv_line(argc, argv_buffer);
-            if (result == SHELL_EXIT) {
-                break;
-            }
+        int result = shell_execute_line(line);
+        if (result == SHELL_EXIT) {
+            break;
         }
     }
     

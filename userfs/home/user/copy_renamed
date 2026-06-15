@@ -1,0 +1,12 @@
+#!/bin/mash
+# Copy regular files from a directory into DIR/copied with a copy_ prefix.
+
+DIR=$1
+DEST=$DIR/copied
+
+mkdir $DEST
+for f in $DIR/*; do
+if test -f $f; then
+cp $f $DEST/copy_${f##*/}
+fi
+done

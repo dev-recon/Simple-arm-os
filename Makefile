@@ -186,6 +186,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
 	       case "$$relpath" in \
 	           bin/*|usr/bin/*|init.sh) mode=0100755 ;; \
+	           home/user/copy_renamed) mode=0100755 ;; \
 	           *) mode=0100644 ;; \
 	       esac; \
 	       case "$$relpath" in \

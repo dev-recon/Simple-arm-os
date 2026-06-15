@@ -1,6 +1,6 @@
 # Minimal userland command set
 
-PROGRAMS = cat echo pwd true false rm touch write mkdir rmdir sleep kill ls cp mv ps stat shutdown memstress
+PROGRAMS = cat echo pwd true false rm touch write mkdir rmdir sleep kill ls cp mv ps stat shutdown memstress chmod chown
 ARCH = arm-none-eabi-
 CC = $(ARCH)gcc
 LD = $(ARCH)ld

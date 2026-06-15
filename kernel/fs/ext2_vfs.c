@@ -595,6 +595,26 @@ static int ext2_write_disk_inode(uint32_t ino, const ext2_inode_t* in)
     return 0;
 }
 
+int ext2_update_inode_metadata(inode_t* inode)
+{
+    ext2_inode_t disk;
+
+    if (!inode) return -EINVAL;
+    if (!ext2_fs.mounted) return -ENODEV;
+    if (ext2_read_disk_inode(inode->first_cluster, &disk) < 0) return -EIO;
+
+    disk.i_mode = inode->mode;
+    disk.i_uid = inode->uid;
+    disk.i_gid = inode->gid;
+    disk.i_ctime = inode->ctime ? inode->ctime : get_current_time();
+
+    if (ext2_write_disk_inode(inode->first_cluster, &disk) < 0)
+        return -EIO;
+
+    inode->ctime = disk.i_ctime;
+    return 0;
+}
+
 /* Resolve logical block index → physical block number.
    Handles direct (0-11) and single-indirect (12). */
 static uint32_t ext2_get_block_at(ext2_inode_t* di, uint32_t idx)

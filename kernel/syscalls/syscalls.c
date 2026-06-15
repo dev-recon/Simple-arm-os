@@ -10,6 +10,7 @@
 #include <kernel/power.h>
 #include <kernel/tty.h>
 #include <kernel/signal.h>
+#include <kernel/file.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 #include <kernel/timer.h>
@@ -387,6 +388,12 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         //KDEBUG("sys_execve: File not found: %s\n", kernel_filename);
         cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
         return -ENOENT;
+    }
+
+    if (!inode_permission(exe_inode, MAY_EXEC)) {
+        put_inode(exe_inode);
+        cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
+        return -EACCES;
     }
 
     

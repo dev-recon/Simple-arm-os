@@ -26,6 +26,11 @@ static int cmd_load(int argc, char* argv[]);
 static int cmd_yield(int argc, char* argv[]);
 static int cmd_fork_test(int argc, char* argv[]);
 static int cmd_cd(int argc, char *argv[]);
+static int cmd_export(int argc, char* argv[]);
+static int cmd_env(int argc, char* argv[]);
+static int cmd_unset(int argc, char* argv[]);
+static int cmd_source(int argc, char* argv[]);
+static int cmd_test(int argc, char* argv[]);
 
 int register_command(const char* name, const char* desc, command_func_t function);
 
@@ -49,6 +54,12 @@ int command_init(void) {
     register_command("yield", "Yield the CPU", cmd_yield);
     register_command("fork", "Test fork()", cmd_fork_test);
     register_command("cd", "Change the current directory", cmd_cd);
+    register_command("export", "Set or print shell environment", cmd_export);
+    register_command("env", "Print shell environment", cmd_env);
+    register_command("unset", "Remove shell environment variables", cmd_unset);
+    register_command("source", "Execute commands from a file", cmd_source);
+    register_command(".", "Execute commands from a file", cmd_source);
+    register_command("test", "Evaluate simple file tests", cmd_test);
     register_command("jobs", "List background jobs", jobs_builtin);
     register_command("fg", "Bring a background job to the foreground", jobs_fg_builtin);
     register_command("bg", "Resume a background job", jobs_bg_builtin);
@@ -116,13 +127,325 @@ void list_commands(void) {
 // === Implementation of commands ===
 
 static int cmd_cd(int argc, char* argv[]) {
+    const char* target;
+
     if (argc < 2) {
-        printf("Usage: cd <directory>\n");
+        target = shell_getenv("HOME");
+        if (!target || !*target)
+            target = "/";
+    } else if (strcmp(argv[1], "-") == 0) {
+        target = shell_getenv("OLDPWD");
+        if (!target || !*target) {
+            printf("cd: OLDPWD not set\n");
+            return 1;
+        }
+        printf("%s\n", target);
+    } else {
+        target = argv[1];
+    }
+
+    return chdir(target);
+
+}
+
+static int shell_name_start(char c) {
+    return (c >= 'A' && c <= 'Z') ||
+           (c >= 'a' && c <= 'z') ||
+           c == '_';
+}
+
+static int shell_name_char(char c) {
+    return shell_name_start(c) || (c >= '0' && c <= '9');
+}
+
+static int command_valid_env_name(const char* name) {
+    if (!name || !shell_name_start(*name))
+        return 0;
+
+    name++;
+    while (*name) {
+        if (!shell_name_char(*name))
+            return 0;
+        name++;
+    }
+
+    return 1;
+}
+
+static int cmd_export(int argc, char* argv[]) {
+    int i;
+
+    if (argc == 1)
+        return cmd_env(argc, argv);
+
+    for (i = 1; i < argc; i++) {
+        char* eq = strchr(argv[i], '=');
+
+        if (eq) {
+            *eq = '\0';
+            if (!command_valid_env_name(argv[i])) {
+                printf("export: invalid name '%s'\n", argv[i]);
+                *eq = '=';
+                return 1;
+            }
+            if (shell_setenv(argv[i], eq + 1) < 0) {
+                printf("export: environment is full\n");
+                *eq = '=';
+                return 1;
+            }
+            *eq = '=';
+        } else {
+            if (!command_valid_env_name(argv[i])) {
+                printf("export: invalid name '%s'\n", argv[i]);
+                return 1;
+            }
+            if (!shell_getenv(argv[i]) && shell_setenv(argv[i], "") < 0) {
+                printf("export: environment is full\n");
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static int cmd_env(int argc, char* argv[]) {
+    int i;
+
+    (void)argc;
+    (void)argv;
+
+    for (i = 0; i < shell_env_count_registered(); i++) {
+        const char* name = shell_env_name_at(i);
+        const char* value = shell_env_value_at(i);
+
+        if (name)
+            printf("%s=%s\n", name, value ? value : "");
+    }
+
+    return 0;
+}
+
+static int cmd_unset(int argc, char* argv[]) {
+    int i;
+
+    for (i = 1; i < argc; i++)
+        shell_unsetenv(argv[i]);
+
+    return 0;
+}
+
+static int cmd_test(int argc, char* argv[]) {
+    struct stat st;
+
+    if (argc == 2)
+        return stat(argv[1], &st) == 0 ? 0 : 1;
+
+    if (argc == 3 && strcmp(argv[1], "-f") == 0) {
+        if (stat(argv[2], &st) < 0)
+            return 1;
+        return S_ISREG(st.st_mode) ? 0 : 1;
+    }
+
+    if (argc == 3 && strcmp(argv[1], "-d") == 0) {
+        if (stat(argv[2], &st) < 0)
+            return 1;
+        return S_ISDIR(st.st_mode) ? 0 : 1;
+    }
+
+    printf("Usage: test [-f|-d] path\n");
+    return 1;
+}
+
+static int source_is_word_char(char c) {
+    return (c >= 'A' && c <= 'Z') ||
+           (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') ||
+           c == '_';
+}
+
+static int source_word_is(const char* start, int len, const char* word) {
+    int i;
+
+    for (i = 0; i < len && word[i]; i++) {
+        if (start[i] != word[i])
+            return 0;
+    }
+
+    return i == len && word[i] == '\0';
+}
+
+static int source_if_depth_delta(const char* line) {
+    int delta = 0;
+    char quote = 0;
+    const char* p = line;
+
+    while (*p) {
+        if (quote) {
+            if (*p == quote)
+                quote = 0;
+            p++;
+            continue;
+        }
+
+        if (*p == '\'' || *p == '"') {
+            quote = *p++;
+            continue;
+        }
+
+        if (*p == '#')
+            break;
+
+        if (source_is_word_char(*p)) {
+            const char* start = p;
+            int len = 0;
+
+            while (source_is_word_char(*p)) {
+                len++;
+                p++;
+            }
+
+            if (source_word_is(start, len, "if") ||
+                source_word_is(start, len, "for"))
+                delta++;
+            else if (source_word_is(start, len, "fi") ||
+                     source_word_is(start, len, "done"))
+                delta--;
+            continue;
+        }
+
+        p++;
+    }
+
+    return delta;
+}
+
+static int source_append_line(char* block, int* block_len, const char* line) {
+    int len = strlen(line);
+
+    if (*block_len + len + 3 >= SHELL_BUFFER_SIZE)
+        return -1;
+
+    memcpy(block + *block_len, line, len);
+    *block_len += len;
+    block[(*block_len)++] = ';';
+    block[(*block_len)++] = ' ';
+    block[*block_len] = '\0';
+    return 0;
+}
+
+int shell_source_file(const char* path, int argc, char* argv[]) {
+    char buffer[512];
+    char line[SHELL_BUFFER_SIZE];
+    char block[SHELL_BUFFER_SIZE];
+    int fd;
+    int n;
+    int line_len = 0;
+    int block_len = 0;
+    int if_depth = 0;
+    int status = 0;
+    int i;
+
+    fd = open(path, O_RDONLY, 0);
+    if (fd < 0) {
+        printf("source: cannot open %s\n", path);
         return 1;
     }
 
-    return chdir(argv[1]);
+    if (shell_push_script_args(path, argc, argv) < 0) {
+        printf("source: script nesting too deep\n");
+        close(fd);
+        return 1;
+    }
 
+    block[0] = '\0';
+
+    while ((n = read(fd, buffer, sizeof(buffer))) > 0) {
+        for (i = 0; i < n; i++) {
+            if (buffer[i] == '\r')
+                continue;
+
+            if (buffer[i] == '\n') {
+                line[line_len] = '\0';
+                if (if_depth > 0 || source_if_depth_delta(line) > 0) {
+                    if (source_append_line(block, &block_len, line) < 0) {
+                        printf("source: block too long\n");
+                        close(fd);
+                        shell_pop_script_args();
+                        return 1;
+                    }
+                    if_depth += source_if_depth_delta(line);
+                    if (if_depth <= 0) {
+                        status = shell_execute_line(block);
+                        if (status == SHELL_EXIT) {
+                            close(fd);
+                            shell_pop_script_args();
+                            return status;
+                        }
+                        block_len = 0;
+                        block[0] = '\0';
+                        if_depth = 0;
+                    }
+                } else {
+                    status = shell_execute_line(line);
+                    if (status == SHELL_EXIT) {
+                        close(fd);
+                        shell_pop_script_args();
+                        return status;
+                    }
+                }
+                line_len = 0;
+                continue;
+            }
+
+            if (line_len >= SHELL_BUFFER_SIZE - 1) {
+                printf("source: line too long\n");
+                close(fd);
+                shell_pop_script_args();
+                return 1;
+            }
+            line[line_len++] = buffer[i];
+        }
+    }
+
+    if (line_len > 0) {
+        line[line_len] = '\0';
+        if (if_depth > 0 || source_if_depth_delta(line) > 0) {
+            if (source_append_line(block, &block_len, line) < 0) {
+                printf("source: block too long\n");
+                close(fd);
+                shell_pop_script_args();
+                return 1;
+            }
+            if_depth += source_if_depth_delta(line);
+        } else {
+            status = shell_execute_line(line);
+        }
+    }
+
+    if (if_depth > 0) {
+        printf("source: missing fi/done\n");
+        close(fd);
+        shell_pop_script_args();
+        return 1;
+    }
+
+    if (block_len > 0) {
+        status = shell_execute_line(block);
+    }
+
+    close(fd);
+    shell_pop_script_args();
+    return status;
+}
+
+static int cmd_source(int argc, char* argv[]) {
+    if (argc < 2) {
+        printf("%s: missing file operand\n", argv[0]);
+        return 1;
+    }
+
+    return shell_source_file(argv[1], argc - 2, &argv[2]);
 }
 
 

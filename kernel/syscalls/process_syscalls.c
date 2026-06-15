@@ -9,6 +9,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/file.h>
 #include <kernel/timer.h>
+#include <kernel/ext2.h>
 
 #define PIPE_BUF_SIZE 4096
 
@@ -42,6 +43,7 @@ static file_operations_t pipe_write_fops = {
 };
 
 extern char* resolve_path(const char* path);
+extern inode_operations_t ext2_inode_ops;
 
 static int pipe_wait_interruptible(void)
 {
@@ -787,23 +789,84 @@ int sys_umask(int mask)
 
 int sys_chmod(const char* pathname, mode_t mode)
 {
-    /* Suppression des warnings unused parameter */
-    (void)pathname;
-    (void)mode;
-    
-    /* TODO: Implement chmod */
-    return -ENOSYS;
+    char* kernel_path;
+    char* full_path;
+    inode_t* inode;
+    int ret = 0;
+
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path) return -EFAULT;
+
+    full_path = resolve_path(kernel_path);
+    kfree(kernel_path);
+    if (!full_path) return -ENOENT;
+
+    inode = path_lookup(full_path);
+    kfree(full_path);
+    if (!inode) return -ENOENT;
+
+    if (current_uid() != 0 && current_uid() != inode->uid) {
+        put_inode(inode);
+        return -EPERM;
+    }
+
+    if (inode->i_op != &ext2_inode_ops) {
+        put_inode(inode);
+        return -EROFS;
+    }
+
+    inode->mode = (inode->mode & S_IFMT) | (mode & 07777);
+    inode->ctime = get_current_time();
+    ret = ext2_update_inode_metadata(inode);
+
+    put_inode(inode);
+    return ret;
 }
 
 int sys_chown(const char* pathname, uid_t owner, gid_t group)
 {
-    /* Suppression des warnings unused parameter */
-    (void)pathname;
-    (void)owner;
-    (void)group;
-    
-    /* TODO: Implement chown */
-    return -ENOSYS;
+    char* kernel_path;
+    char* full_path;
+    inode_t* inode;
+    int ret = 0;
+
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path) return -EFAULT;
+
+    full_path = resolve_path(kernel_path);
+    kfree(kernel_path);
+    if (!full_path) return -ENOENT;
+
+    inode = path_lookup(full_path);
+    kfree(full_path);
+    if (!inode) return -ENOENT;
+
+    if (current_uid() != 0 && current_uid() != inode->uid) {
+        put_inode(inode);
+        return -EPERM;
+    }
+
+    if (inode->i_op != &ext2_inode_ops) {
+        put_inode(inode);
+        return -EROFS;
+    }
+
+    if ((owner != (uid_t)-1 && owner > 0xFFFFu) ||
+        (group != (gid_t)-1 && group > 0xFFFFu)) {
+        put_inode(inode);
+        return -EINVAL;
+    }
+
+    if (owner != (uid_t)-1)
+        inode->uid = owner;
+    if (group != (gid_t)-1)
+        inode->gid = group;
+
+    inode->ctime = get_current_time();
+    ret = ext2_update_inode_metadata(inode);
+
+    put_inode(inode);
+    return ret;
 }
 
 int sys_unlink(const char* pathname)
