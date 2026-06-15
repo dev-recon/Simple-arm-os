@@ -525,7 +525,8 @@ void virtio_block_irq_handler(void)
         virtio_blk_pending.completed = true;
         if (virtio_blk_pending.waiter &&
             (virtio_blk_pending.waiter->state == TASK_BLOCKED ||
-             virtio_blk_pending.waiter->state == TASK_INTERRUPTIBLE)) {
+             virtio_blk_pending.waiter->state == TASK_INTERRUPTIBLE ||
+             virtio_blk_pending.waiter->state == TASK_UNINTERRUPTIBLE)) {
             virtio_blk_pending.waiter->wakeup_time = 0;
             add_to_ready_queue(virtio_blk_pending.waiter);
         }
@@ -605,7 +606,12 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
             return 0;
         }
 
-        current_task->state = TASK_INTERRUPTIBLE;
+        /*
+         * A submitted block request cannot be safely aborted in this simple
+         * single-request virtqueue. Wait non-interruptibly until completion or
+         * timeout; pending signals will be handled when the syscall returns.
+         */
+        task_set_uninterruptible(current_task);
         current_task->wakeup_time = wake_deadline;
         restore_interrupts(irq_flags);
 

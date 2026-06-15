@@ -67,6 +67,10 @@ struct sysinfo_response {
     unsigned         stack_pages_allocated;
     unsigned         stack_pages_freed;
     unsigned         asid_rollovers;
+    unsigned         state_sync_repairs;
+    unsigned         blocked_signal_wakeups;
+    unsigned         tty_stale_waiters;
+    unsigned         uninterruptible_timeouts;
     struct proc_info procs[64];
 };
 

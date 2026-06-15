@@ -726,8 +726,7 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
             
             /* Nettoyer le processus zombie */
             //task_set_state(zombie, TASK_TERMINATED);
-            zombie->state = TASK_TERMINATED;
-            zombie->process->state = (proc_state_t)PROC_DEAD;
+            task_set_terminated(zombie);
             kernel_lifecycle_stats.zombies_reaped++;
             destroy_process(zombie);
 
@@ -768,8 +767,7 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
         
         /* Bloquer le parent en attente - ACCeS CORRECT */
         //task_set_state(parent, TASK_BLOCKED);
-        parent->state = TASK_BLOCKED;
-        parent->process->state = (proc_state_t)PROC_BLOCKED;
+        task_set_blocked(parent);
 
         remove_from_ready_queue(parent);
 

@@ -1250,13 +1250,18 @@ static void for_each_task(task_t* current)
     
     /* Chercher la prochaine tache READY avec la meme priorite */
     do {
-        if (task->state == TASK_INTERRUPTIBLE && 
+        if ((task->state == TASK_INTERRUPTIBLE ||
+             task->state == TASK_UNINTERRUPTIBLE) &&
             task->wakeup_time > 0 &&
             current_time >= task->wakeup_time) {
 
             //KDEBUG("Waking up task %s from sleep\n", task->name);
             
+            if (task->state == TASK_UNINTERRUPTIBLE)
+                kernel_lifecycle_stats.uninterruptible_timeouts++;
             task->state = TASK_READY;
+            if (task->type == TASK_TYPE_PROCESS && task->process)
+                task->process->state = (proc_state_t)PROC_READY;
             task->wakeup_time = 0;
         }
         task = task->next;
@@ -1899,13 +1904,69 @@ uint32_t task_get_priority(task_t* task)
 /**
  * Definir l'etat d'une tache
  */
+static proc_state_t task_state_to_proc_state(task_state_t state)
+{
+    switch (state) {
+        case TASK_READY:           return (proc_state_t)PROC_READY;
+        case TASK_RUNNING:         return (proc_state_t)PROC_RUNNING;
+        case TASK_BLOCKED:         return (proc_state_t)PROC_BLOCKED;
+        case TASK_ZOMBIE:          return (proc_state_t)PROC_ZOMBIE;
+        case TASK_TERMINATED:      return (proc_state_t)PROC_DEAD;
+        case TASK_INTERRUPTIBLE:   return (proc_state_t)PROC_INTERRUPTIBLE;
+        case TASK_UNINTERRUPTIBLE: return (proc_state_t)PROC_UNINTERRUPTIBLE;
+        case TASK_STOPPED:         return (proc_state_t)PROC_STOPPED;
+    }
+    return (proc_state_t)PROC_DEAD;
+}
+
 void task_set_state(task_t* task, task_state_t state)
 {
     if (!task) return;
     
     spin_lock(&task_lock);
     task->state = state;
+    if (task->type == TASK_TYPE_PROCESS && task->process) {
+        proc_state_t proc_state = task_state_to_proc_state(state);
+        if (task->process->state != proc_state)
+            kernel_lifecycle_stats.state_sync_repairs++;
+        task->process->state = proc_state;
+    }
     spin_unlock(&task_lock);
+}
+
+void task_set_ready(task_t* task)
+{
+    task_set_state(task, TASK_READY);
+}
+
+void task_set_blocked(task_t* task)
+{
+    task_set_state(task, TASK_BLOCKED);
+}
+
+void task_set_interruptible(task_t* task)
+{
+    task_set_state(task, TASK_INTERRUPTIBLE);
+}
+
+void task_set_uninterruptible(task_t* task)
+{
+    task_set_state(task, TASK_UNINTERRUPTIBLE);
+}
+
+void task_set_stopped(task_t* task)
+{
+    task_set_state(task, TASK_STOPPED);
+}
+
+void task_set_zombie(task_t* task)
+{
+    task_set_state(task, TASK_ZOMBIE);
+}
+
+void task_set_terminated(task_t* task)
+{
+    task_set_state(task, TASK_TERMINATED);
 }
 
 /**

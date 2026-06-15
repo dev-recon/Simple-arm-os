@@ -336,8 +336,10 @@ static void test_waitpid_process_group(void)
     for (int i = 0; i < 2; i++) {
         int pid = fork();
         if (pid == 0) {
-            if (i == 0)
+            if (i == 0) {
+                usleep(50000); /* Let the parent set the target process group. */
                 exit(61);
+            }
             while (1)
                 usleep(50000);
         }

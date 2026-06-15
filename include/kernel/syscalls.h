@@ -125,6 +125,10 @@ struct sysinfo_response {
     uint32_t        stack_pages_allocated;
     uint32_t        stack_pages_freed;
     uint32_t        asid_rollovers;
+    uint32_t        state_sync_repairs;
+    uint32_t        blocked_signal_wakeups;
+    uint32_t        tty_stale_waiters;
+    uint32_t        uninterruptible_timeouts;
     struct proc_info procs[64];
 };
 

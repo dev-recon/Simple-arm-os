@@ -128,6 +128,7 @@ void tty_input_char(char c) {
                        tty0.read_wait->state == TASK_TERMINATED ||
                        tty0.read_wait->state == TASK_READY ||
                        tty0.read_wait->state == TASK_RUNNING) {
+                kernel_lifecycle_stats.tty_stale_waiters++;
                 tty0.read_wait = NULL;
             }
         }
@@ -164,9 +165,7 @@ ssize_t tty_read(char *buf, size_t count) {
             }
 
             tty0.read_wait = current_task;
-            current_task->state = TASK_INTERRUPTIBLE;
-            if (current_task->process)
-                current_task->process->state = (proc_state_t)PROC_INTERRUPTIBLE;
+            task_set_interruptible(current_task);
             spin_unlock_irqrestore(&tty0.lock, flags);
 
             schedule();

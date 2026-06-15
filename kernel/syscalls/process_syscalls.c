@@ -926,6 +926,8 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     spin_lock(&task_lock);
         /* Mettre le processus en sommeil */
     current_task->state = TASK_INTERRUPTIBLE;
+    if (current_task->process)
+        current_task->process->state = (proc_state_t)PROC_INTERRUPTIBLE;
     current_task->wakeup_time = start_time + sleep_ticks;
     spin_unlock(&task_lock);
     
@@ -1043,6 +1045,10 @@ int sys_sysinfo(struct sysinfo_response *resp)
     local->stack_pages_allocated = kernel_lifecycle_stats.stack_pages_allocated;
     local->stack_pages_freed = kernel_lifecycle_stats.stack_pages_freed;
     local->asid_rollovers = kernel_lifecycle_stats.asid_rollovers;
+    local->state_sync_repairs = kernel_lifecycle_stats.state_sync_repairs;
+    local->blocked_signal_wakeups = kernel_lifecycle_stats.blocked_signal_wakeups;
+    local->tty_stale_waiters = kernel_lifecycle_stats.tty_stale_waiters;
+    local->uninterruptible_timeouts = kernel_lifecycle_stats.uninterruptible_timeouts;
 
     /* Uptime pour %CPU */
     uint32_t uptime = get_system_ticks();

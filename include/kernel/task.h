@@ -29,6 +29,10 @@ typedef struct kernel_lifecycle_stats {
     uint32_t stack_pages_allocated;
     uint32_t stack_pages_freed;
     uint32_t asid_rollovers;
+    uint32_t state_sync_repairs;
+    uint32_t blocked_signal_wakeups;
+    uint32_t tty_stale_waiters;
+    uint32_t uninterruptible_timeouts;
 } kernel_lifecycle_stats_t;
 
 extern volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
@@ -338,6 +342,13 @@ uint32_t task_get_priority(task_t* task);
 
 /* etats des taches */
 void task_set_state(task_t* task, task_state_t state);
+void task_set_ready(task_t* task);
+void task_set_blocked(task_t* task);
+void task_set_interruptible(task_t* task);
+void task_set_uninterruptible(task_t* task);
+void task_set_stopped(task_t* task);
+void task_set_zombie(task_t* task);
+void task_set_terminated(task_t* task);
 task_state_t task_get_state(task_t* task);
 const char* task_state_string(task_state_t state);
 const char* proc_state_string(proc_state_t state);

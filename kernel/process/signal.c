@@ -284,8 +284,7 @@ int send_signal(task_t* target, int sig)
     if (sig == SIGKILL || sig == SIGSTOP) {
         target->process->signals.pending |= (1 << sig);
         if (sig == SIGKILL && target->state == TASK_STOPPED) {
-            target->state = TASK_READY;
-            target->process->state = (proc_state_t)PROC_READY;
+            task_set_ready(target);
             target->process->stop_signal = 0;
             target->process->stop_reported = 0;
             add_to_ready_queue(target);
@@ -326,10 +325,12 @@ void wake_up_process_for_signal(task_t* proc)
     
     if (proc->state == TASK_BLOCKED) {
         KDEBUG("[SIGNAL] Waking up blocked process PID=%u for signal\n", proc->process->pid);
-        proc->state = TASK_READY;
+        kernel_lifecycle_stats.blocked_signal_wakeups++;
+        task_set_ready(proc);
         add_to_ready_queue(proc);
     } else if (proc->state == TASK_INTERRUPTIBLE) {
-        proc->state = TASK_READY;
+        kernel_lifecycle_stats.blocked_signal_wakeups++;
+        task_set_ready(proc);
         proc->wakeup_time = 0;
         add_to_ready_queue(proc);
     }
@@ -796,8 +797,7 @@ static void stop_process(task_t* proc, int sig)
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
     
     KINFO("[SIGNAL] Stopping process PID=%u\n", proc->process->pid);
-    proc->state = TASK_STOPPED;
-    proc->process->state = (proc_state_t)PROC_STOPPED;
+    task_set_stopped(proc);
     proc->process->stop_signal = sig;
     proc->process->stop_reported = 0;
     wakeup_parent(proc);
@@ -812,8 +812,7 @@ static void continue_process(task_t* proc)
     
     if (proc->state == TASK_STOPPED) {
         KINFO("[SIGNAL] Continuing process PID=%u\n", proc->process->pid);
-        proc->state = TASK_READY;
-        proc->process->state = (proc_state_t)PROC_READY;
+        task_set_ready(proc);
         proc->process->stop_signal = 0;
         proc->process->stop_reported = 0;
         add_to_ready_queue(proc);

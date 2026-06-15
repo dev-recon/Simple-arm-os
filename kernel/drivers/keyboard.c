@@ -8,11 +8,6 @@
 #include <kernel/kernel.h>
 #include <kernel/process.h>
 
-/* Forward declarations de toutes les fonctions statiques */
-static void add_to_wait_queue(task_t** queue, task_t* proc);
-static void remove_from_wait_queue(task_t** queue, task_t* proc);
-static void wake_up_wait_queue(task_t** queue);
-
 /* Scancode to ASCII mapping for Mac FR (AZERTY) - version ASCII pure */
 static char scancode_to_ascii_mac_fr[55] = {
     0,   27,  '&', 'e', '"', '\'', '(', '-', 'e', '_', 'c', 'a', ')', '=', '\b',
@@ -177,8 +172,15 @@ void add_to_keyboard_buffer(char c)
         kbd_state.buffer[kbd_state.head] = c;
         kbd_state.head = next_head;
         
-        /* Wake up waiting processes */
-        wake_up_wait_queue(&kbd_state.waiters);
+        /* Wake up the console reader without touching task->next. */
+        if (kbd_state.waiters &&
+            (kbd_state.waiters->state == TASK_BLOCKED ||
+             kbd_state.waiters->state == TASK_INTERRUPTIBLE)) {
+            task_t *waiter = kbd_state.waiters;
+            kbd_state.waiters = NULL;
+            task_set_ready(waiter);
+            add_to_ready_queue(waiter);
+        }
     }
 }
 
@@ -188,13 +190,14 @@ char keyboard_getchar(void)
     
     /* Wait for character */
     while (kbd_state.head == kbd_state.tail) {
-        add_to_wait_queue(&kbd_state.waiters, current_task);
-        current_task->state = TASK_BLOCKED;
+        kbd_state.waiters = current_task;
+        task_set_interruptible(current_task);
         schedule();
         
         /* Check for signals */
         if (has_pending_signals(current_task)) {
-            remove_from_wait_queue(&kbd_state.waiters, current_task);
+            if (kbd_state.waiters == current_task)
+                kbd_state.waiters = NULL;
             return -1;
         }
     }
@@ -204,44 +207,4 @@ char keyboard_getchar(void)
     kbd_state.tail = (kbd_state.tail + 1) % 256;
     
     return c;
-}
-
-/* Wait queue helper functions */
-static void add_to_wait_queue(task_t** queue, task_t* proc)
-{
-    proc->next = *queue;
-    *queue = proc;
-}
-
-static void remove_from_wait_queue(task_t** queue, task_t* proc)
-{
-    task_t* current;
-    
-    if (*queue == proc) {
-        *queue = proc->next;
-    } else {
-        current = *queue;
-        while (current && current->next != proc) {
-            current = current->next;
-        }
-        if (current) {
-            current->next = proc->next;
-        }
-    }
-}
-
-static void wake_up_wait_queue(task_t** queue)
-{
-    task_t* proc = *queue;
-    task_t* next;
-    
-    while (proc) {
-        next = proc->next;
-        if (proc->state == TASK_BLOCKED) {
-            proc->state = TASK_READY;
-            add_to_ready_queue(proc);
-        }
-        proc = next;
-    }
-    *queue = NULL;
 }
