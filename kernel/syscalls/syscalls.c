@@ -76,9 +76,6 @@ extern void switch_to_idle_stack(void);
 extern void __task_switch_to_user(task_context_t* new_ctx);
 extern void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 
-extern int copy_user_stack_pages(vm_space_t *parent_vm, vm_space_t *child_vm, 
-                          uint32_t stack_start, uint32_t stack_size);
-
 void dump_svc_stack(task_t *task, uint32_t *sp) {
     kprintf("SVC stack @%08x:\n", (unsigned)sp);
     for (int i=0;i<12;i++) {

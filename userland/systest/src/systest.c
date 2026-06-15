@@ -2,21 +2,26 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#define COLOR_GREEN "\033[32m"
+#define COLOR_RED   "\033[31m"
+#define COLOR_RESET "\033[0m"
 
 static int failures = 0;
 static volatile int cow_shared_value = 11;
 
 static void pass(const char *name)
 {
-    printf("[OK] %s\n", name);
+    printf(COLOR_GREEN "[OK]" COLOR_RESET " %s\n", name);
 }
 
 static void fail(const char *name, int value)
 {
-    printf("[FAIL] %s (%d, errno=%d)\n", name, value, errno);
+    printf(COLOR_RED "[KO]" COLOR_RESET " %s (%d, errno=%d)\n", name, value, errno);
     failures++;
 }
 
@@ -187,6 +192,7 @@ static void test_cow_memory(void)
     int status = -1;
     int waited;
     unsigned char *heap;
+    volatile unsigned char stack_area[8192];
 
     cow_shared_value = 11;
     pid = fork();
@@ -260,6 +266,44 @@ static void test_cow_memory(void)
     }
 
     free(heap);
+
+    stack_area[0] = 0x12;
+    stack_area[4095] = 0x23;
+    stack_area[4096] = 0x34;
+    stack_area[8191] = 0x45;
+
+    pid = fork();
+    if (pid == 0) {
+        stack_area[0] = 0xAB;
+        stack_area[4096] = 0xBC;
+        exit(stack_area[0] == 0xAB && stack_area[4096] == 0xBC ? 0 : 1);
+    }
+
+    if (expect(pid > 0, "COW stack child writer", pid) >= 0) {
+        waited = waitpid(pid, &status, 0);
+        expect(waited == pid && status == 0, "COW stack child writes private pages", waited);
+        expect(stack_area[0] == 0x12 && stack_area[4095] == 0x23 &&
+               stack_area[4096] == 0x34 && stack_area[8191] == 0x45,
+               "COW stack parent unchanged", stack_area[0]);
+    }
+
+    stack_area[0] = 0x12;
+    stack_area[4096] = 0x34;
+
+    pid = fork();
+    if (pid == 0) {
+        usleep(20000);
+        exit(stack_area[0] == 0x12 && stack_area[4096] == 0x34 ? 0 : 1);
+    }
+
+    if (expect(pid > 0, "COW stack parent writer", pid) >= 0) {
+        stack_area[0] = 0xCD;
+        stack_area[4096] = 0xDE;
+        waited = waitpid(pid, &status, 0);
+        expect(waited == pid && status == 0, "COW stack child unchanged", waited);
+        expect(stack_area[0] == 0xCD && stack_area[4096] == 0xDE,
+               "COW stack parent keeps own writes", stack_area[0]);
+    }
 }
 
 static void test_identity(void)

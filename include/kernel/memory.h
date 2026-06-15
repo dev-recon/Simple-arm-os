@@ -122,6 +122,7 @@ vm_space_t* fork_vm_space(vm_space_t* parent_vm);
 vma_t* create_vma(vm_space_t* vm, uint32_t start, uint32_t size, uint32_t flags);
 vma_t* find_vma(vm_space_t* vm, uint32_t addr);
 int handle_cow_fault(uint32_t fault_addr);
+int handle_user_stack_fault(uint32_t fault_addr);
 
 /* Nouvelles fonctions pour ASID */
 void switch_to_vm_space(vm_space_t *vm);

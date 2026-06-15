@@ -18,8 +18,6 @@ extern uint32_t vm_allocate_asid(void);
 extern void vm_free_asid(uint32_t asid);
 extern uint32_t vm_get_current_asid(void);
 extern void switch_address_space_with_asid(uint32_t *pgdir, uint32_t asid);
-extern int copy_user_stack_pages(vm_space_t *parent_vm, vm_space_t *child_vm,
-                                 uint32_t stack_start, uint32_t stack_size);
 
 extern bool asid_map[]; /* Déclaré dans mmu.c */
 
@@ -321,14 +319,6 @@ vm_space_t *fork_vm_space(vm_space_t *parent_vm)
     child_vm->stack_start = parent_vm->stack_start;
     child_vm->brk = parent_vm->brk;
 
-    if (copy_user_stack_pages(parent_vm, child_vm,
-                              (USER_STACK_TOP - PAGE_SIZE) & ~0xFFF, PAGE_SIZE) < 0)
-    {
-        destroy_vm_space(child_vm);
-        return NULL;
-    }
-    //copy_user_stack_pages(parent_vm, child_vm, ALIGN_DOWN(USER_STACK_BOTTOM, PAGE_SIZE), USER_STACK_SIZE);
-
      //KDEBUG("fork_vm_space: Fork completed - Child Heap Start 0x%08X, Child Heap End 0x%08X, Child Stack Start 0x%08X\n",
      //       child_vm->heap_start, child_vm->heap_end, child_vm->stack_start);
 
@@ -341,9 +331,6 @@ static int cow_copy_vma(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma)
 
     for (vaddr = vma->start; vaddr < vma->end; vaddr += PAGE_SIZE)
     {
-        if (vaddr == USER_STACK_TOP - PAGE_SIZE)
-            continue;
-
         uint32_t phys_addr = get_physical_address(parent_vm->pgdir, vaddr);
         if (!phys_addr) {
             continue;
@@ -422,6 +409,41 @@ int handle_cow_fault(uint32_t fault_addr)
     }
 
     free_page((void*)old_phys);
+    return 0;
+}
+
+int handle_user_stack_fault(uint32_t fault_addr)
+{
+    if (!current_task || current_task->type != TASK_TYPE_PROCESS ||
+        !current_task->process || !current_task->process->vm) {
+        return -EINVAL;
+    }
+
+    if (fault_addr < USER_STACK_BOTTOM || fault_addr >= USER_STACK_TOP) {
+        return -EINVAL;
+    }
+
+    vm_space_t* vm = current_task->process->vm;
+    uint32_t vaddr = fault_addr & ~(PAGE_SIZE - 1);
+    vma_t* vma = find_vma(vm, fault_addr);
+    if (!vma || !(vma->flags & VMA_WRITE)) {
+        return -EACCES;
+    }
+
+    if (get_physical_address(vm->pgdir, vaddr) != 0) {
+        return -EEXIST;
+    }
+
+    void* page = allocate_page();
+    if (!page) {
+        return -ENOMEM;
+    }
+
+    if (map_user_page(vm->pgdir, vaddr, (uint32_t)page, vma->flags, vm->asid) < 0) {
+        free_page(page);
+        return -ENOMEM;
+    }
+
     return 0;
 }
 
