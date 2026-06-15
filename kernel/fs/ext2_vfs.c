@@ -23,6 +23,8 @@ static inode_t* ext2_inode_lookup(inode_t* dir, const char* name);
 static int      ext2_inode_mkdir(inode_t* dir, const char* name, uint16_t mode);
 static int      ext2_inode_unlink(inode_t* dir, const char* name);
 static int      ext2_inode_rmdir(inode_t* dir, const char* name);
+static int      ext2_inode_rename(inode_t* old_dir, const char* old_name,
+                                  inode_t* new_dir, const char* new_name);
 static int      ext2_truncate_inode_data(inode_t* inode, bool allow_dir);
 static ssize_t  ext2_file_read(file_t* file, void* buffer, size_t count);
 static ssize_t  ext2_file_write(file_t* file, const void* buffer, size_t count);
@@ -55,7 +57,7 @@ inode_operations_t ext2_inode_ops = {
     .mkdir  = ext2_inode_mkdir,
     .unlink = ext2_inode_unlink,
     .rmdir  = ext2_inode_rmdir,
-    .rename = NULL,
+    .rename = ext2_inode_rename,
 };
 
 static bool ext2_valid_disk_inode_ptr(const ext2_inode_t* di)
@@ -184,6 +186,12 @@ static uint32_t ext2_min_u32(uint32_t a, uint32_t b)
 static uint16_t ext2_dir_rec_len(uint8_t name_len)
 {
     return (uint16_t)((sizeof(ext2_dir_entry_t) + name_len + 3) & ~3u);
+}
+
+static uint8_t ext2_file_type_from_mode(mode_t mode)
+{
+    if (S_ISDIR(mode)) return EXT2_FT_DIR;
+    return EXT2_FT_REG_FILE;
 }
 
 static int ext2_alloc_block(uint32_t* out_block)
@@ -1111,6 +1119,71 @@ static bool ext2_directory_is_empty(inode_t* dir)
     return true;
 }
 
+static int ext2_update_dotdot(inode_t* dir, uint32_t new_parent_ino)
+{
+    ext2_inode_t disk;
+    if (!dir || !S_ISDIR(dir->mode)) return -EINVAL;
+    if (ext2_read_disk_inode(dir->first_cluster, &disk) < 0) return -EIO;
+
+    uint8_t* blkbuf = kmalloc(ext2_fs.block_size);
+    if (!blkbuf) return -ENOMEM;
+
+    for (uint32_t idx = 0; idx < 12 + ext2_fs.block_size / 4; idx++) {
+        uint32_t blk = ext2_get_block_at(&disk, idx);
+        if (blk == 0) break;
+
+        if (ext2_read_block(blk, blkbuf) < 0) {
+            kfree(blkbuf);
+            return -EIO;
+        }
+
+        uint32_t offset = 0;
+        while (offset + sizeof(ext2_dir_entry_t) <= ext2_fs.block_size) {
+            ext2_dir_entry_t* de = (ext2_dir_entry_t*)(blkbuf + offset);
+            if (de->rec_len == 0) break;
+
+            if (de->inode != 0 &&
+                de->name_len == 2 &&
+                de->name[0] == '.' &&
+                de->name[1] == '.') {
+                de->inode = new_parent_ino;
+                if (ext2_write_block(blk, blkbuf) < 0) {
+                    kfree(blkbuf);
+                    return -EIO;
+                }
+
+                kfree(blkbuf);
+                return 0;
+            }
+
+            offset += de->rec_len;
+        }
+    }
+
+    kfree(blkbuf);
+    return -ENOENT;
+}
+
+static int ext2_adjust_link_count(inode_t* inode, int delta)
+{
+    ext2_inode_t disk;
+    if (!inode) return -EINVAL;
+    if (ext2_read_disk_inode(inode->first_cluster, &disk) < 0) return -EIO;
+
+    if (delta > 0) {
+        disk.i_links_count++;
+    } else if (delta < 0 && disk.i_links_count > 0) {
+        disk.i_links_count--;
+    }
+
+    disk.i_ctime = get_current_time();
+    if (ext2_write_disk_inode(inode->first_cluster, &disk) < 0)
+        return -EIO;
+
+    inode->ctime = disk.i_ctime;
+    return 0;
+}
+
 static int ext2_inode_unlink(inode_t* dir, const char* name)
 {
     if (!dir || !name) return -EINVAL;
@@ -1176,6 +1249,60 @@ static int ext2_inode_rmdir(inode_t* dir, const char* name)
 
         dir->mtime = parent_disk.i_mtime;
         dir->ctime = parent_disk.i_ctime;
+    }
+
+    put_inode(target);
+    return ret;
+}
+
+static int ext2_inode_rename(inode_t* old_dir, const char* old_name,
+                             inode_t* new_dir, const char* new_name)
+{
+    if (!old_dir || !new_dir || !old_name || !new_name) return -EINVAL;
+    if (!S_ISDIR(old_dir->mode) || !S_ISDIR(new_dir->mode)) return -ENOTDIR;
+
+    uint32_t old_len = strlen(old_name);
+    uint32_t new_len = strlen(new_name);
+    if (old_len == 0 || old_len > 255 || new_len == 0 || new_len > 255)
+        return -EINVAL;
+
+    if (old_dir->first_cluster == new_dir->first_cluster &&
+        strcmp(old_name, new_name) == 0)
+        return 0;
+
+    inode_t* target = ext2_inode_lookup(old_dir, old_name);
+    if (!target) return -ENOENT;
+
+    inode_t* existing = ext2_inode_lookup(new_dir, new_name);
+    if (existing) {
+        put_inode(existing);
+        put_inode(target);
+        return -EEXIST;
+    }
+
+    uint8_t file_type = ext2_file_type_from_mode(target->mode);
+    int ret = ext2_add_dir_entry(new_dir, target->first_cluster, new_name, file_type);
+    if (ret == 0)
+        ret = ext2_remove_dir_entry(old_dir, old_name);
+
+    bool moved_dir = ret == 0 &&
+                     S_ISDIR(target->mode) &&
+                     old_dir->first_cluster != new_dir->first_cluster;
+    if (moved_dir)
+        ret = ext2_update_dotdot(target, new_dir->first_cluster);
+
+    if (moved_dir && ret == 0)
+        ret = ext2_adjust_link_count(old_dir, -1);
+    if (moved_dir && ret == 0)
+        ret = ext2_adjust_link_count(new_dir, 1);
+
+    if (ret == 0) {
+        ext2_inode_t disk;
+        if (ext2_read_disk_inode(target->first_cluster, &disk) == 0) {
+            disk.i_ctime = get_current_time();
+            ext2_write_disk_inode(target->first_cluster, &disk);
+            target->ctime = disk.i_ctime;
+        }
     }
 
     put_inode(target);

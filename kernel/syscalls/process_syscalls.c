@@ -696,8 +696,12 @@ int sys_rename(const char* oldpath, const char* newpath)
     new_parent = path_lookup(new_parent_path);
     if (!new_parent) { put_inode(old_parent); result = -ENOENT; goto out; }
 
-    if (!old_parent->i_op || !old_parent->i_op->rename) {
+    if (old_parent->i_op != new_parent->i_op) {
+        result = -EXDEV;
+    } else if (!old_parent->i_op || !old_parent->i_op->rename) {
         result = -ENOSYS;
+    } else if (!inode_permission(old_parent, MAY_WRITE)) {
+        result = -EACCES;
     } else if (!inode_permission(new_parent, MAY_WRITE)) {
         result = -EACCES;
     } else {
