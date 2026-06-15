@@ -63,6 +63,7 @@ int sys_read(int fd, void* buf, size_t count)
     
     file = current_task->process->files[fd];
     if (!file) return -EBADF;
+    if (!can_read(file)) return -EBADF;
     
     if (!file->f_op || !file->f_op->read) return -ENOSYS;
     
@@ -84,6 +85,7 @@ int sys_write(int fd, const void* buf, size_t count)
     
     file = current_task->process->files[fd];
     if (!file) return -EBADF;
+    if (!can_write(file)) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
 
     if (IS_KERNEL_ADDR((uint32_t)buf)) {
@@ -143,6 +145,7 @@ int sys_close(int fd)
     
     close_file(file);
     current_task->process->files[fd] = NULL;
+    current_task->process->fd_flags[fd] = 0;
     
     return 0;
 }
@@ -339,7 +342,7 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     }
     
     file->inode = inode;
-    file->flags = flags;
+    file->flags = flags & ~O_CLOEXEC;
 
     if (flags & O_APPEND) {
         //KDEBUG("APPEND FLAG DETECTED offset = %d...\n", inode->size);
@@ -371,6 +374,7 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     }
     
     current_task->process->files[fd] = file;
+    current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
     return fd;
 }
 
@@ -521,7 +525,7 @@ static void fill_stat_from_inode(struct stat* kstat, inode_t* inode)
     kstat->st_dev = 0;      /* TODO: expose VFS mount/device id */
     kstat->st_ino = inode->ino;
     kstat->st_mode = inode->mode;
-    kstat->st_nlink = 1;
+    kstat->st_nlink = inode->nlink ? inode->nlink : 1;
     kstat->st_uid = inode->uid;
     kstat->st_gid = inode->gid;
     kstat->st_rdev = 0;

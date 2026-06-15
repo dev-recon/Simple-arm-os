@@ -157,6 +157,31 @@ static void test_pipe_dup2(void)
     expect(n == 8 && strcmp(buf, "dup2-ok\n") == 0, "dup2 redirected write", n);
 }
 
+static void test_fd_access_modes(void)
+{
+    const char *path = "/tmp/fd-modes.txt";
+    char c = 0;
+    int fd;
+
+    unlink(path);
+
+    fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (expect(fd >= 0, "fd mode open write-only", fd) < 0)
+        return;
+
+    expect(write(fd, "x", 1) == 1, "fd mode write to write-only", fd);
+    expect(read(fd, &c, 1) < 0, "fd mode read from write-only fails", fd);
+    close(fd);
+
+    fd = open(path, O_RDONLY, 0);
+    if (expect(fd >= 0, "fd mode open read-only", fd) < 0)
+        return;
+
+    expect(read(fd, &c, 1) == 1 && c == 'x', "fd mode read from read-only", c);
+    expect(write(fd, "y", 1) < 0, "fd mode write to read-only fails", fd);
+    close(fd);
+}
+
 static void test_stat_syscalls(void)
 {
     struct stat st;
@@ -181,6 +206,54 @@ static void test_stat_syscalls(void)
     expect(stat("/", &st) == 0, "stat root directory", 0);
     expect(S_ISDIR(st.st_mode), "stat reports directory", st.st_mode);
     expect(stat("/bin/does-not-exist", &st) < 0, "stat missing file fails", 0);
+}
+
+static void test_ext2_write_edges(void)
+{
+    char buf[64];
+    struct stat st;
+    int fd;
+    int n;
+
+    unlink("/tmp/ext2-renamed.txt");
+    unlink("/tmp/ext2-edge.txt");
+    rmdir("/tmp/ext2-edge-dir");
+
+    expect(mkdir("/tmp/ext2-edge-dir", 0755) == 0, "ext2 mkdir edge dir", 0);
+    if (expect(stat("/tmp/ext2-edge-dir", &st) == 0, "ext2 stat new dir", 0) == 0)
+        expect(S_ISDIR(st.st_mode) && st.st_nlink >= 2,
+               "ext2 new dir link count", (int)st.st_nlink);
+
+    fd = open("/tmp/ext2-edge-dir/file.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (expect(fd >= 0, "ext2 create file in new dir", fd) >= 0) {
+        expect(write(fd, "abcdef", 6) == 6, "ext2 write new file", fd);
+        close(fd);
+    }
+    if (expect(stat("/tmp/ext2-edge-dir/file.txt", &st) == 0, "ext2 stat new file", 0) == 0)
+        expect(S_ISREG(st.st_mode) && st.st_nlink == 1,
+               "ext2 new file link count", (int)st.st_nlink);
+
+    expect(rmdir("/tmp/ext2-edge-dir") < 0, "ext2 rmdir non-empty fails", 0);
+    expect(rename("/tmp/ext2-edge-dir/file.txt", "/tmp/ext2-renamed.txt") == 0,
+           "ext2 rename file out of dir", 0);
+    expect(rmdir("/tmp/ext2-edge-dir") == 0, "ext2 rmdir empty dir", 0);
+
+    fd = open("/tmp/ext2-renamed.txt", O_WRONLY | O_TRUNC, 0);
+    if (expect(fd >= 0, "ext2 open existing with trunc", fd) >= 0) {
+        expect(write(fd, "xy", 2) == 2, "ext2 write after trunc", fd);
+        close(fd);
+    }
+
+    fd = open("/tmp/ext2-renamed.txt", O_WRONLY | O_APPEND, 0);
+    if (expect(fd >= 0, "ext2 open existing with append", fd) >= 0) {
+        expect(write(fd, "z", 1) == 1, "ext2 append write", fd);
+        close(fd);
+    }
+
+    n = read_file("/tmp/ext2-renamed.txt", buf, sizeof(buf));
+    expect(n == 3 && strcmp(buf, "xyz") == 0, "ext2 read truncate+append result", n);
+    expect(unlink("/tmp/ext2-renamed.txt") == 0, "ext2 unlink renamed file", 0);
+    expect(open("/tmp/ext2-renamed.txt", O_RDONLY, 0) < 0, "ext2 unlinked file missing", 0);
 }
 
 static void test_fork_wait_kill(void)
@@ -211,6 +284,43 @@ static void test_fork_wait_kill(void)
     expect(kill(pid, SIGKILL) == 0, "kill SIGKILL", 0);
     waited = waitpid(pid, &status, 0);
     expect(waited == pid, "waitpid collects killed child", waited);
+}
+
+static void test_process_groups(void)
+{
+    int pids[2] = {-1, -1};
+    int pgid = 0;
+    int status = -1;
+    int reaped = 0;
+
+    for (int i = 0; i < 2; i++) {
+        int pid = fork();
+        if (pid == 0) {
+            while (1)
+                usleep(50000);
+        }
+
+        if (pid < 0)
+            break;
+
+        if (i == 0)
+            pgid = pid;
+        pids[i] = pid;
+        setpgid(pid, pgid);
+    }
+
+    if (expect(pids[0] > 0 && pids[1] > 0, "process group fork children", pids[1]) < 0)
+        return;
+
+    expect(kill(-pgid, SIGKILL) == 0, "process group kill -pgid", pgid);
+
+    for (int i = 0; i < 2; i++) {
+        status = -1;
+        if (waitpid(pids[i], &status, 0) == pids[i])
+            reaped++;
+    }
+
+    expect(reaped == 2, "process group reaps killed children", reaped);
 }
 
 static void test_cow_memory(void)
@@ -572,8 +682,11 @@ int main(void)
     test_file_io();
     test_access_umask();
     test_pipe_dup2();
+    test_fd_access_modes();
     test_stat_syscalls();
+    test_ext2_write_edges();
     test_fork_wait_kill();
+    test_process_groups();
     test_cow_memory();
     test_cow_fork_stress();
     test_asid_churn();

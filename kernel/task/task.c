@@ -358,6 +358,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             child->type = TASK_TYPE_PROCESS;
             child->process->pid = next_pid++;
             child->process->ppid = parent->process->pid;
+            child->process->pgid = parent->process->pgid;
             child->process->parent = parent;
             child->process->children = NULL;
             child->process->sibling_next = NULL;
@@ -370,6 +371,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             
             /* Initialiser la table des fichiers (sera copiee plus tard) */
             memset(child->process->files, 0, sizeof(child->process->files));
+            memset(child->process->fd_flags, 0, sizeof(child->process->fd_flags));
             
             /* La VM sera copiee avec COW dans sys_fork() */
             child->process->vm = NULL;
@@ -821,12 +823,15 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
 void init_standard_files(process_t* process) {
     // stdin (fd = 0) - lecture UART
     process->files[STDIN_FILENO] = create_uart_console_file("stdin", O_RDONLY);
+    process->fd_flags[STDIN_FILENO] = 0;
     
     // stdout (fd = 1) - écriture UART
     process->files[STDOUT_FILENO] = create_uart_console_file("stdout", O_WRONLY);
+    process->fd_flags[STDOUT_FILENO] = 0;
     
     // stderr (fd = 2) - écriture UART (même que stdout)
     process->files[STDERR_FILENO] = create_uart_console_file("stderr", O_WRONLY);
+    process->fd_flags[STDERR_FILENO] = 0;
 }
 
 
@@ -855,6 +860,7 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         task->process->pid = next_pid++;
         task->process->ppid = (current_task && current_task->type == TASK_TYPE_PROCESS) ? 
                              current_task->process->pid : 0;
+        task->process->pgid = task->process->pid;
         task->process->parent = (current_task && current_task->type == TASK_TYPE_PROCESS) ? 
                                current_task : NULL;
         task->process->children = NULL;
@@ -878,6 +884,7 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         
         /* Initialiser les fichiers */
         memset(task->process->files, 0, sizeof(task->process->files));
+        memset(task->process->fd_flags, 0, sizeof(task->process->fd_flags));
 
         init_standard_files(task->process);
 

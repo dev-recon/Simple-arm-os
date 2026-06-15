@@ -39,6 +39,8 @@ SYSCALL sys_getpid, 20      /* __NR_getpid */
 SYSCALL sys_getppid, 119    /* __NR_getppid */
 SYSCALL sys_getuid, 24      /* __NR_getuid */
 SYSCALL sys_getgid, 47      /* __NR_getgid */
+SYSCALL sys_setpgid, 57     /* __NR_setpgid */
+SYSCALL sys_getpgrp, 65     /* __NR_getpgrp */
 SYSCALL sys_waitpid, 7      /* __NR_waitpid */
 SYSCALL sys_brk, 45         /* __NR_brk */
 
@@ -248,6 +250,44 @@ getgid:
     push {r7, lr}
     mov r7, #47             /* SYS_GETGID */
     swi #0
+    pop {r7, lr}
+    bx lr
+
+//   SETPGID -> SYS_SETPGID
+.global setpgid
+.type setpgid, %function
+setpgid:
+    push {r7, lr}
+    mov r7, #57             /* SYS_SETPGID */
+    swi #0
+
+    cmp r0, #0
+    bge setpgid_success
+
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+setpgid_success:
+    pop {r7, lr}
+    bx lr
+
+//   GETPGRP -> SYS_GETPGRP
+.global getpgrp
+.type getpgrp, %function
+getpgrp:
+    push {r7, lr}
+    mov r7, #65             /* SYS_GETPGRP */
+    swi #0
+
+    cmp r0, #0
+    bge getpgrp_success
+
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+
+getpgrp_success:
     pop {r7, lr}
     bx lr
 

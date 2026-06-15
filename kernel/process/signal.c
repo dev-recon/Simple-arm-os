@@ -110,22 +110,19 @@ static uint32_t allocate_signal_stack_address(uint32_t size)
                size, MIN_SIGNAL_STACK_SIZE, MAX_SIGNAL_STACK_SIZE);
         return 0;
     }
-    
-    /* Verifier l'espace disponible */
-    if (sig_allocator.next_base + size > USER_SIGNAL_REGION_END) {
-        KERROR("[SIGNAL] No space left for signal stack (need %u bytes)\n", size);
+
+    /*
+     * Chaque processus a son propre TTBR0: la meme adresse virtuelle peut donc
+     * servir de signal stack pour tous les processus. L'ancien allocateur
+     * monotone epuisait USER_SIGNAL_REGION_START..END apres beaucoup de fork/exec
+     * alors que les piles des anciens processus etaient deja liberees.
+     */
+    if (USER_SIGNAL_REGION_START + size > USER_SIGNAL_REGION_END) {
+        KERROR("[SIGNAL] Signal stack does not fit in reserved user region\n");
         return 0;
     }
-    
-    /* Allouer l'adresse */
-    uint32_t allocated_base = sig_allocator.next_base;
-    sig_allocator.next_base += size;
-    sig_allocator.total_allocated += size;
-    
-    //KDEBUG("[SIGNAL] Allocated signal stack: 0x%08X - 0x%08X (%u KB)\n",
-    //       allocated_base, allocated_base + size, size / 1024);
-    
-    return allocated_base;
+
+    return USER_SIGNAL_REGION_START;
 }
 
 /**
@@ -507,6 +504,7 @@ static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
 int sys_kill(pid_t pid, int sig)
 {
     task_t* target;
+    int delivered = 0;
     
     if (sig < 0 || sig >= MAX_SIGNALS) return -EINVAL;
     
@@ -523,16 +521,46 @@ int sys_kill(pid_t pid, int sig)
         return send_signal(target, sig);
         
     } else if (pid == 0) {
-        /* Signal au groupe de processus */
-        /* TODO: Implementer les groupes de processus */
-        KDEBUG("[SYSCALL] sys_kill: Process groups not implemented\n");
-        return -ENOSYS;
+        pid_t pgid;
+
+        if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+            return -EINVAL;
+
+        pgid = current_task->process->pgid;
+        target = task_list_head;
+        if (!target) return -ESRCH;
+
+        do {
+            if (target->type == TASK_TYPE_PROCESS && target->process &&
+                target->process->pgid == pgid &&
+                target->state != TASK_ZOMBIE &&
+                target->state != TASK_TERMINATED) {
+                if (send_signal(target, sig) == 0)
+                    delivered++;
+            }
+            target = target->next;
+        } while (target && target != task_list_head);
+
+        return delivered ? 0 : -ESRCH;
         
     } else {
-        /* Signal au groupe de processus |pid| */
-        /* TODO: Implementer les groupes de processus */
-        KDEBUG("[SYSCALL] sys_kill: Process groups not implemented\n");
-        return -ENOSYS;
+        pid_t pgid = -pid;
+
+        target = task_list_head;
+        if (!target) return -ESRCH;
+
+        do {
+            if (target->type == TASK_TYPE_PROCESS && target->process &&
+                target->process->pgid == pgid &&
+                target->state != TASK_ZOMBIE &&
+                target->state != TASK_TERMINATED) {
+                if (send_signal(target, sig) == 0)
+                    delivered++;
+            }
+            target = target->next;
+        } while (target && target != task_list_head);
+
+        return delivered ? 0 : -ESRCH;
     }
 }
 

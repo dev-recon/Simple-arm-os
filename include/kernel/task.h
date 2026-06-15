@@ -50,6 +50,7 @@ struct inode {
     uint32_t mtime;
     uint32_t ctime;
     uint32_t blocks;
+    nlink_t nlink;
     uint32_t ref_count;
     
     /* Filesystem specific */
@@ -215,11 +216,13 @@ typedef struct {
 typedef struct {
     pid_t pid;              /* PID POSIX */
     pid_t ppid;             /* Parent PID */
+    pid_t pgid;             /* Process group ID */
     struct task* parent;    /* Processus parent */
     struct task* children;  /* Enfants */
     struct task* sibling_next;
     vm_space_t* vm;         /* Espace memoire */
     file_t* files[MAX_FILES];  /* Descripteurs */
+    uint32_t fd_flags[MAX_FILES]; /* Flags propres au descripteur (FD_CLOEXEC, etc.) */
     int exit_code;
     uid_t uid, gid;
     mode_t umask;

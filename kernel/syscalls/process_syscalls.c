@@ -44,13 +44,19 @@ static file_operations_t pipe_write_fops = {
 extern char* resolve_path(const char* path);
 
 bool can_read(file_t* file) {
-    /* Méthode 1: Exclusion - si pas write-only, alors readable */
-    return (file->flags & O_ACCMODE) != O_WRONLY;
+    int access_mode;
+
+    if (!file) return false;
+    access_mode = file->flags & O_ACCMODE;
+    return access_mode == O_RDONLY || access_mode == O_RDWR;
 }
 
 bool can_write(file_t* file) {
-    /* Si contient O_WRONLY ou O_RDWR */
-    return (file->flags & O_ACCMODE) != O_RDONLY;
+    int access_mode;
+
+    if (!file) return false;
+    access_mode = file->flags & O_ACCMODE;
+    return access_mode == O_WRONLY || access_mode == O_RDWR;
 }
 
 /* Lecture depuis un pipe */
@@ -64,7 +70,7 @@ ssize_t pipe_read(file_t* file, void* buf, size_t count) {
     //KDEBUG("file->flags = 0x%08X\n", file->flags);
 
     /* Vérifier que c'est ouvert en lecture */
-    if (can_write(file)) {
+    if (!can_read(file)) {
         return -EBADF;
     }
 
@@ -100,7 +106,7 @@ ssize_t pipe_write(file_t* file, const void* buf, size_t count) {
     
 
     /* Vérifier que c'est ouvert en écriture */
-    if (can_read(file)) {
+    if (!can_write(file)) {
         return -EBADF;
     }
     
@@ -135,14 +141,16 @@ int pipe_close(file_t* file) {
     //KDEBUG("CLOSING PIPE\n");
 
     /* Déterminer si c'était un lecteur ou écrivain */
-    if (file->flags & (O_RDONLY | O_RDWR)) {
+    int access_mode = file->flags & O_ACCMODE;
+
+    if (access_mode == O_RDONLY || access_mode == O_RDWR) {
         buffer->readers--;
         if (buffer->readers == 0) {
             buffer->closed_read = 1;
         }
     }
     
-    if (file->flags & (O_WRONLY | O_RDWR)) {
+    if (access_mode == O_WRONLY || access_mode == O_RDWR) {
         buffer->writers--;
         if (buffer->writers == 0) {
             buffer->closed_write = 1;
@@ -181,6 +189,7 @@ int sys_pipe(int pipefd[2])
     if (fd_read < 0) return fd_read;
 
     task->process->files[fd_read] = (file_t *)1;   //FIX ME -> Set to a non NULL value
+    task->process->fd_flags[fd_read] = 0;
     
     fd_write = allocate_fd(task);
     if (fd_write < 0) {
@@ -253,6 +262,7 @@ int sys_pipe(int pipefd[2])
     strcpy(write_file->name, "pipe:[write]");
     write_file->pos = 0;
     write_file->inode = inode;
+    inode->ref_count++;
     write_file->offset = 0;
     write_file->flags = O_WRONLY;       /* ← Utilise le champ flags */
     write_file->ref_count = 1;
@@ -262,6 +272,8 @@ int sys_pipe(int pipefd[2])
     /* Associer aux descripteurs */
     task->process->files[fd_read] = read_file;
     task->process->files[fd_write] = write_file;
+    task->process->fd_flags[fd_read] = 0;
+    task->process->fd_flags[fd_write] = 0;
     
     /* Préparer les fd pour l'userspace */
     fds[0] = fd_read;
@@ -422,6 +434,7 @@ int sys_dup(int oldfd)
     
     file->ref_count++;
     current_task->process->files[newfd] = file;
+    current_task->process->fd_flags[newfd] = 0;
     
     return newfd;
 }
@@ -442,11 +455,13 @@ int sys_dup2(int oldfd, int newfd)
     if (current_task->process->files[newfd]) {
         file_t* old_newfd = current_task->process->files[newfd];
         current_task->process->files[newfd] = NULL;
+        current_task->process->fd_flags[newfd] = 0;
         close_file(old_newfd);
     }
     
     file->ref_count++;
     current_task->process->files[newfd] = file;
+    current_task->process->fd_flags[newfd] = 0;
     
     return newfd;
 }
@@ -487,6 +502,46 @@ int sys_chdir(const char* path)
 
     put_inode(inode);
     kfree(abs_path);
+    return 0;
+}
+
+int sys_getpgrp(void)
+{
+    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+        return -EINVAL;
+
+    return current_task->process->pgid;
+}
+
+int sys_setpgid(pid_t pid, pid_t pgid)
+{
+    task_t *caller = current_task;
+    task_t *target;
+
+    if (!caller || caller->type != TASK_TYPE_PROCESS || !caller->process)
+        return -EINVAL;
+
+    if (pid < 0 || pgid < 0)
+        return -EINVAL;
+
+    if (pid == 0)
+        target = caller;
+    else
+        target = find_process_by_pid(pid);
+
+    if (!target || target->type != TASK_TYPE_PROCESS || !target->process)
+        return -ESRCH;
+
+    if (target != caller && target->process->parent != caller)
+        return -EPERM;
+
+    if (target->state == TASK_ZOMBIE || target->state == TASK_TERMINATED)
+        return -ESRCH;
+
+    if (pgid == 0)
+        pgid = target->process->pid;
+
+    target->process->pgid = pgid;
     return 0;
 }
 

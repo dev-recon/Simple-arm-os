@@ -150,6 +150,7 @@ bool init_vfs2(void)
     root_inode->uid = 0;
     root_inode->gid = 0;
     root_inode->size = 0;
+    root_inode->nlink = 1;
     root_inode->first_cluster = get_fat32_root_cluster();
     root_inode->i_op = &fat32_inode_ops;
     root_inode->f_op = &fat32_dir_ops;
@@ -173,6 +174,7 @@ inode_t* create_inode(void)
     spin_unlock(&vfs_lock);
     
     inode->ref_count = 1;
+    inode->nlink = 1;
     
     /* Add to hash table */
     hash = inode->ino % MAX_INODES;
@@ -323,6 +325,7 @@ void free_fd(task_t* proc, int fd)
  
     if (fd >= 0 && fd < MAX_FILES) {
         proc->process->files[fd] = NULL;
+        proc->process->fd_flags[fd] = 0;
     }
 }
 
@@ -346,9 +349,10 @@ void close_cloexec_files(task_t* proc)
 
     
     for (i = 0; i < MAX_FILES; i++) {
-        if (proc->process->files[i] && (proc->process->files[i]->flags & O_CLOEXEC)) {
+        if (proc->process->files[i] && (proc->process->fd_flags[i] & O_CLOEXEC)) {
             close_file(proc->process->files[i]);
             proc->process->files[i] = NULL;
+            proc->process->fd_flags[i] = 0;
         }
     }
 }

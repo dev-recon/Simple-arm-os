@@ -571,6 +571,7 @@ void fat32_init_new_inode(inode_t* inode, fat32_dir_entry_t* entry,
     inode->gid = current_gid();
     inode->size = 0;
     inode->blocks = 0;
+    inode->nlink = 1;
     inode->ref_count = 1;
     
     /* Timestamps */
@@ -1903,6 +1904,7 @@ static inode_t* fat32_inode_lookup(inode_t* dir, const char* name)
     inode->uid = 0;
     inode->gid = 0;
     inode->size = entry->file_size;
+    inode->nlink = 1;
     inode->first_cluster = first_cluster;
     inode->parent_cluster = dir->first_cluster;
     

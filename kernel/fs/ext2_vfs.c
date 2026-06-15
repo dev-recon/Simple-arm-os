@@ -834,6 +834,7 @@ static inode_t* ext2_make_inode(uint32_t ino)
     inode->mtime  = disk.i_mtime;
     inode->ctime  = disk.i_ctime;
     inode->blocks = disk.i_blocks;
+    inode->nlink  = disk.i_links_count;
 
     if (S_ISDIR(disk.i_mode)) {
         inode->i_op = &ext2_inode_ops;
@@ -876,11 +877,15 @@ inode_t* ext2_create_file(inode_t* parent, const char* name, mode_t mode)
     di.i_links_count = 1;
     di.i_blocks = 0;
 
-    if (ext2_write_disk_inode(ino, &di) < 0)
+    if (ext2_write_disk_inode(ino, &di) < 0) {
+        ext2_free_inode(ino);
         return NULL;
+    }
 
-    if (ext2_add_dir_entry(parent, ino, name, EXT2_FT_REG_FILE) < 0)
+    if (ext2_add_dir_entry(parent, ino, name, EXT2_FT_REG_FILE) < 0) {
+        ext2_free_inode(ino);
         return NULL;
+    }
 
     return ext2_make_inode(ino);
 }
@@ -979,6 +984,7 @@ static int ext2_inode_mkdir(inode_t* dir, const char* name, uint16_t mode)
 
     dir->mtime = parent_disk.i_mtime;
     dir->ctime = parent_disk.i_ctime;
+    dir->nlink = parent_disk.i_links_count;
 
     return 0;
 }
@@ -1181,6 +1187,7 @@ static int ext2_adjust_link_count(inode_t* inode, int delta)
         return -EIO;
 
     inode->ctime = disk.i_ctime;
+    inode->nlink = disk.i_links_count;
     return 0;
 }
 
@@ -1249,6 +1256,7 @@ static int ext2_inode_rmdir(inode_t* dir, const char* name)
 
         dir->mtime = parent_disk.i_mtime;
         dir->ctime = parent_disk.i_ctime;
+        dir->nlink = parent_disk.i_links_count;
     }
 
     put_inode(target);

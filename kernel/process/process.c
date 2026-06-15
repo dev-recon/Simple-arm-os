@@ -225,6 +225,7 @@ void destroy_process(task_t* process)
         if (process->process->files[i]) {
             close_file(process->process->files[i]); 
             process->process->files[i] = NULL;
+            process->process->fd_flags[i] = 0;
         }
     }
 

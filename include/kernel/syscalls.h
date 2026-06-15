@@ -63,8 +63,10 @@ struct process;
 #define __NR_signal              48
 #define __NR_geteuid             49
 #define __NR_getegid             50
+#define __NR_setpgid             57
 #define __NR_umask               60
 #define __NR_dup2                63      /* dup2 */
+#define __NR_getpgrp             65
 #define __NR_sigaction           67
 #define __NR_stat               106
 #define __NR_fstat              108
@@ -157,6 +159,8 @@ int sys_getpid(void);
 int sys_getppid(void);
 int sys_getuid(void);
 int sys_getgid(void);
+int sys_setpgid(pid_t pid, pid_t pgid);
+int sys_getpgrp(void);
 
 /* Signal syscalls */
 int sys_kill(pid_t pid, int sig);

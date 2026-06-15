@@ -38,13 +38,17 @@ void copy_process_files(task_t* parent, task_t* child)
         if (child->process->files[i]) {
             close_file(child->process->files[i]);
             child->process->files[i] = NULL;
+            child->process->fd_flags[i] = 0;
         }
     }
 
     for (i = 0; i < MAX_FILES; i++) {
         if (parent->process->files[i]) {
             child->process->files[i] = parent->process->files[i];
+            child->process->fd_flags[i] = parent->process->fd_flags[i];
             parent->process->files[i]->ref_count++;
+        } else {
+            child->process->fd_flags[i] = 0;
         }
     }
 }
@@ -61,6 +65,7 @@ void close_all_process_files(task_t* proc) {
         if (proc->process->files[i]) {
             close_file(proc->process->files[i]);
             proc->process->files[i] = NULL;
+            proc->process->fd_flags[i] = 0;
         }
     }
 }

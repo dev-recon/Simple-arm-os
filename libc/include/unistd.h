@@ -98,6 +98,8 @@ int getpid(void);
 int getppid(void);
 int getuid(void);
 int getgid(void);
+int setpgid(pid_t pid, pid_t pgid);
+int getpgrp(void);
 int fork(void);
 int execve(const char* filename, char* const argv[], char* const envp[]);
 int waitpid(int pid, int* status, int options);

@@ -458,6 +458,7 @@ static int run_pipeline(int argc, char* argv[], int background) {
     int status = 0;
     int last_status = 0;
     int launched = 0;
+    int pgid = 0;
 
     for (i = 0; i < SHELL_MAX_PIPELINE - 1; i++) {
         pipes[i][0] = -1;
@@ -490,6 +491,11 @@ static int run_pipeline(int argc, char* argv[], int background) {
         if (pid == 0) {
             command_entry_t *entry;
 
+            if (i == 0)
+                setpgid(0, 0);
+            else if (pgid > 0)
+                setpgid(0, pgid);
+
             if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
                 printf("mash: cannot connect pipeline input\n");
                 exit(-1);
@@ -519,6 +525,12 @@ static int run_pipeline(int argc, char* argv[], int background) {
         }
 
         pids[i] = pid;
+        if (i == 0) {
+            pgid = pid;
+            setpgid(pid, pgid);
+        } else {
+            setpgid(pid, pgid);
+        }
         launched++;
     }
 
@@ -948,12 +960,15 @@ int shell_execute(int argc, char* argv[]) {
     
     int child_pid = fork();
     if (child_pid == 0) {
+        setpgid(0, 0);
         if (apply_redirections(&redirs) < 0)
             exit(-1);
 
         exec_external_or_die(argc, argv);
         
     } else {
+
+        setpgid(child_pid, child_pid);
 
         if (background) {
             printf("[bg] pid %d\n", child_pid);
