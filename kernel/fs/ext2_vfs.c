@@ -20,6 +20,7 @@ static int ext2_write_disk_inode(uint32_t ino, const ext2_inode_t* in);
 
 /* Forward declarations */
 static inode_t* ext2_inode_lookup(inode_t* dir, const char* name);
+static int      ext2_inode_mkdir(inode_t* dir, const char* name, uint16_t mode);
 static int      ext2_inode_unlink(inode_t* dir, const char* name);
 static ssize_t  ext2_file_read(file_t* file, void* buffer, size_t count);
 static ssize_t  ext2_file_write(file_t* file, const void* buffer, size_t count);
@@ -49,7 +50,7 @@ file_operations_t ext2_dir_ops = {
 inode_operations_t ext2_inode_ops = {
     .lookup = ext2_inode_lookup,
     .create = NULL,
-    .mkdir  = NULL,
+    .mkdir  = ext2_inode_mkdir,
     .unlink = ext2_inode_unlink,
     .rename = NULL,
 };
@@ -479,6 +480,30 @@ static int ext2_free_inode(uint32_t ino)
     return 0;
 }
 
+static int ext2_adjust_used_dirs(uint32_t ino, int delta)
+{
+    ext2_superblock_t sb;
+    if (ext2_read_superblock(&sb) < 0) return -EIO;
+    if (ino == 0 || ino > sb.s_inodes_count) return -EINVAL;
+
+    uint32_t group = (ino - 1) / ext2_fs.inodes_per_group;
+    if (group >= ext2_fs.groups_count) return -EINVAL;
+
+    ext2_group_desc_t gd;
+    if (ext2_read_group_desc(group, &gd) < 0) return -EIO;
+
+    if (delta > 0) {
+        gd.bg_used_dirs_count++;
+    } else if (delta < 0 && gd.bg_used_dirs_count > 0) {
+        gd.bg_used_dirs_count--;
+    }
+
+    if (ext2_write_group_desc(group, &gd) < 0)
+        return -EIO;
+
+    return 0;
+}
+
 /* ---------- inode table ---------- */
 
 static int ext2_inode_location(uint32_t ino, uint32_t* block, uint32_t* offset)
@@ -847,6 +872,104 @@ inode_t* ext2_create_file(inode_t* parent, const char* name, mode_t mode)
         return NULL;
 
     return ext2_make_inode(ino);
+}
+
+static int ext2_inode_mkdir(inode_t* dir, const char* name, uint16_t mode)
+{
+    if (!dir || !name) return -EINVAL;
+    if (!S_ISDIR(dir->mode)) return -ENOTDIR;
+
+    uint32_t name_len = strlen(name);
+    if (name_len == 0 || name_len > 255) return -EINVAL;
+
+    inode_t* existing = ext2_inode_lookup(dir, name);
+    if (existing) {
+        put_inode(existing);
+        return -EEXIST;
+    }
+
+    uint32_t ino;
+    int ret = ext2_alloc_inode(&ino);
+    if (ret < 0)
+        return ret;
+
+    uint32_t data_block;
+    ret = ext2_alloc_block(&data_block);
+    if (ret < 0) {
+        ext2_free_inode(ino);
+        return ret;
+    }
+
+    uint8_t* blkbuf = kmalloc(ext2_fs.block_size);
+    if (!blkbuf) {
+        ext2_free_block_list(&data_block, 1);
+        ext2_free_inode(ino);
+        return -ENOMEM;
+    }
+
+    memset(blkbuf, 0, ext2_fs.block_size);
+    uint16_t dot_len = ext2_dir_rec_len(1);
+    ext2_init_dirent((ext2_dir_entry_t*)blkbuf, ino, dot_len,
+                     ".", 1, EXT2_FT_DIR);
+    ext2_init_dirent((ext2_dir_entry_t*)(blkbuf + dot_len), dir->first_cluster,
+                     ext2_fs.block_size - dot_len, "..", 2, EXT2_FT_DIR);
+
+    if (ext2_write_block(data_block, blkbuf) < 0) {
+        kfree(blkbuf);
+        ext2_free_block_list(&data_block, 1);
+        ext2_free_inode(ino);
+        return -EIO;
+    }
+    kfree(blkbuf);
+
+    uint32_t now = get_current_time();
+    ext2_inode_t child;
+    memset(&child, 0, sizeof(child));
+    child.i_mode = EXT2_S_IFDIR | (mode & 0777);
+    child.i_uid = current_uid();
+    child.i_gid = current_gid();
+    child.i_size = ext2_fs.block_size;
+    child.i_atime = now;
+    child.i_ctime = now;
+    child.i_mtime = now;
+    child.i_links_count = 2;
+    child.i_blocks = ext2_fs.sectors_per_block;
+    child.i_block[0] = data_block;
+
+    if (ext2_write_disk_inode(ino, &child) < 0) {
+        ext2_free_block_list(&data_block, 1);
+        ext2_free_inode(ino);
+        return -EIO;
+    }
+
+    if (ext2_adjust_used_dirs(ino, 1) < 0) {
+        ext2_free_block_list(&data_block, 1);
+        ext2_free_inode(ino);
+        return -EIO;
+    }
+
+    ret = ext2_add_dir_entry(dir, ino, name, EXT2_FT_DIR);
+    if (ret < 0) {
+        ext2_adjust_used_dirs(ino, -1);
+        ext2_free_block_list(&data_block, 1);
+        ext2_free_inode(ino);
+        return ret;
+    }
+
+    ext2_inode_t parent_disk;
+    if (ext2_read_disk_inode(dir->first_cluster, &parent_disk) < 0)
+        return -EIO;
+
+    parent_disk.i_links_count++;
+    parent_disk.i_mtime = now;
+    parent_disk.i_ctime = now;
+    if (ext2_write_disk_inode(dir->first_cluster, &parent_disk) < 0)
+        return -EIO;
+
+    dir->mtime = parent_disk.i_mtime;
+    dir->ctime = parent_disk.i_ctime;
+
+    return 0;
 }
 
 /* ---------- inode_operations ---------- */
