@@ -91,11 +91,11 @@ void init_gic(void)
     /* === PHASE 5: CONFIGURATION IRQ IMPORTANTES === */
     
     //KDEBUG("[GIC] Enabling important IRQs...\n");
-    /* IRQs pour machine virt : UART=1, Timer=30, VirtIO=16-31 */
+    /* IRQs coeur. Les drivers MMIO activent ensuite leurs IRQ propres. */
 #if 1
-    uint32_t important_irqs[] = {1, 33, 30, 16, 17, 18, 19, 48, 79};
+    uint32_t important_irqs[] = {1, 33, 30};
     
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < (int)(sizeof(important_irqs) / sizeof(important_irqs[0])); i++) {
         uint32_t irq = important_irqs[i];
         
         /* 1. Configurer comme edge-triggered si IRQ >= 16 */
