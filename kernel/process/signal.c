@@ -15,6 +15,7 @@
 
 /* Forward declarations de TOUTES les fonctions */
 void wake_up_process_for_signal(task_t* proc);
+extern void wakeup_parent(task_t *proc);
 signal_check_result_t deliver_signal(task_t* proc, int sig);
 static int find_highest_priority_signal(uint32_t signal_mask);
 static signal_check_result_t handle_default_signal_action(task_t* proc, int sig);
@@ -23,7 +24,7 @@ static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
                                uint32_t signal_sp, uint32_t old_blocked);
 static void terminate_process(task_t* proc, int sig);
 static void dump_core(task_t* proc);
-static void stop_process(task_t* proc);
+static void stop_process(task_t* proc, int sig);
 static void continue_process(task_t* proc);
 
 /* Actions par defaut pour chaque signal */
@@ -282,10 +283,21 @@ int send_signal(task_t* target, int sig)
     /* SIGKILL et SIGSTOP ne peuvent pas etre bloques */
     if (sig == SIGKILL || sig == SIGSTOP) {
         target->process->signals.pending |= (1 << sig);
+        if (sig == SIGKILL && target->state == TASK_STOPPED) {
+            target->state = TASK_READY;
+            target->process->state = (proc_state_t)PROC_READY;
+            target->process->stop_signal = 0;
+            target->process->stop_reported = 0;
+            add_to_ready_queue(target);
+        }
         wake_up_process_for_signal(target);
         return 0;
     }
     
+    if (sig == SIGCONT && target->state == TASK_STOPPED) {
+        continue_process(target);
+    }
+
     /* Verifier si le signal est bloque */
     if (target->process->signals.blocked & (1 << sig)) {
         target->process->signals.pending |= (1 << sig);
@@ -404,7 +416,7 @@ static signal_check_result_t handle_default_signal_action(task_t* proc, int sig)
             return SIGNAL_CHECK_EXITED;
             
         case SIG_ACT_STOP:
-            stop_process(proc);
+            stop_process(proc, sig);
             return SIGNAL_CHECK_STOPPED;
             
         case SIG_ACT_CONT:
@@ -778,13 +790,16 @@ static void dump_core(task_t* proc)
 /**
  * Arreter un processus - CORRIGe
  */
-static void stop_process(task_t* proc)
+static void stop_process(task_t* proc, int sig)
 {
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
     
     KINFO("[SIGNAL] Stopping process PID=%u\n", proc->process->pid);
-    proc->state = TASK_BLOCKED;
-    proc->process->state = (proc_state_t)PROC_BLOCKED;
+    proc->state = TASK_STOPPED;
+    proc->process->state = (proc_state_t)PROC_STOPPED;
+    proc->process->stop_signal = sig;
+    proc->process->stop_reported = 0;
+    wakeup_parent(proc);
 }
 
 /**
@@ -794,11 +809,12 @@ static void continue_process(task_t* proc)
 {
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
     
-    KINFO("[SIGNAL] Continuing process PID=%u\n", proc->process->pid);
-    
-    if (proc->state == TASK_BLOCKED) {
+    if (proc->state == TASK_STOPPED) {
+        KINFO("[SIGNAL] Continuing process PID=%u\n", proc->process->pid);
         proc->state = TASK_READY;
         proc->process->state = (proc_state_t)PROC_READY;
+        proc->process->stop_signal = 0;
+        proc->process->stop_reported = 0;
         add_to_ready_queue(proc);
     }
 }

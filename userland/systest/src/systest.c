@@ -324,6 +324,109 @@ static void test_process_groups(void)
     expect(reaped == 2, "process group reaps killed children", reaped);
 }
 
+static void test_waitpid_process_group(void)
+{
+    int pids[2] = {-1, -1};
+    int pgid = 0;
+    int status = -1;
+    int waited;
+    int reaped = 0;
+
+    for (int i = 0; i < 2; i++) {
+        int pid = fork();
+        if (pid == 0) {
+            if (i == 0)
+                exit(61);
+            while (1)
+                usleep(50000);
+        }
+
+        if (pid < 0)
+            break;
+
+        if (i == 0)
+            pgid = pid;
+        pids[i] = pid;
+        setpgid(pid, pgid);
+    }
+
+    if (expect(pids[0] > 0 && pids[1] > 0, "waitpid -pgid fork children", pids[1]) < 0)
+        return;
+
+    waited = waitpid(-pgid, &status, 0);
+    expect(waited == pids[0] && status == 61, "waitpid -pgid reaps group child", waited);
+
+    expect(kill(-pgid, SIGKILL) == 0, "waitpid -pgid kill remaining group", pgid);
+    for (int i = 0; i < 2; i++) {
+        if (pids[i] == waited)
+            continue;
+        status = -1;
+        if (waitpid(pids[i], &status, 0) == pids[i])
+            reaped++;
+    }
+
+    expect(reaped == 1, "waitpid -pgid reaps remaining child", reaped);
+}
+
+static void test_waitpid_wuntraced_continue(void)
+{
+    int pid;
+    int status = -1;
+    int waited;
+
+    pid = fork();
+    if (pid == 0) {
+        while (1)
+            usleep(50000);
+    }
+
+    if (expect(pid > 0, "WUNTRACED fork child", pid) < 0)
+        return;
+
+    setpgid(pid, pid);
+    expect(kill(pid, SIGSTOP) == 0, "kill SIGSTOP", pid);
+    waited = waitpid(-pid, &status, WUNTRACED);
+    expect(waited == pid, "waitpid WUNTRACED reports stopped child", waited);
+    expect(WIFSTOPPED(status) && WSTOPSIG(status) == SIGSTOP,
+           "waitpid stopped status encodes SIGSTOP", status);
+
+    expect(kill(pid, SIGCONT) == 0, "kill SIGCONT stopped child", pid);
+    expect(kill(pid, SIGKILL) == 0, "kill SIGKILL continued child", pid);
+    waited = waitpid(pid, &status, 0);
+    expect(waited == pid, "waitpid reaps continued killed child", waited);
+}
+
+static void test_sleep_survives_stop_continue(void)
+{
+    int pid;
+    int status = -1;
+    int waited;
+
+    pid = fork();
+    if (pid == 0) {
+        sleep(8);
+        exit(77);
+    }
+
+    if (expect(pid > 0, "sleep stop/continue fork child", pid) < 0)
+        return;
+
+    setpgid(pid, pid);
+    usleep(1000000);
+    expect(kill(pid, SIGSTOP) == 0, "sleep stop/continue SIGSTOP", pid);
+    waited = waitpid(-pid, &status, WUNTRACED);
+    expect(waited == pid && WIFSTOPPED(status), "sleep stop/continue wait stopped", waited);
+
+    expect(kill(pid, SIGCONT) == 0, "sleep stop/continue SIGCONT", pid);
+    usleep(500000);
+    waited = waitpid(pid, &status, WNOHANG);
+    expect(waited == 0, "sleep continues after SIGCONT", waited);
+
+    expect(kill(pid, SIGKILL) == 0, "sleep stop/continue cleanup kill", pid);
+    waited = waitpid(pid, &status, 0);
+    expect(waited == pid, "sleep stop/continue cleanup reap", waited);
+}
+
 static void systest_sleep_signal_handler(int sig)
 {
     (void)sig;
@@ -778,6 +881,9 @@ int main(void)
     test_ext2_write_edges();
     test_fork_wait_kill();
     test_process_groups();
+    test_waitpid_process_group();
+    test_waitpid_wuntraced_continue();
+    test_sleep_survives_stop_continue();
     test_nanosleep_signal_interrupt();
     test_cow_memory();
     test_shared_memory();

@@ -92,7 +92,13 @@ int chown(const char* pathname, uid_t owner, gid_t group);
 
 
 /* Processus */
-#define WNOHANG 1
+#define WNOHANG    1
+#define WUNTRACED  2
+
+#define WIFSTOPPED(status) (((status) & 0xff) == 0x7f)
+#define WSTOPSIG(status)   (((status) >> 8) & 0xff)
+#define WIFEXITED(status)  (!WIFSTOPPED(status))
+#define WEXITSTATUS(status) (status)
 
 int getpid(void);
 int getppid(void);

@@ -150,7 +150,8 @@ int sys_chmod(const char* pathname, mode_t mode);
 int sys_chown(const char* pathname, uid_t owner, gid_t group);
 
 /* Process syscalls */
-#define WNOHANG 1
+#define WNOHANG    1
+#define WUNTRACED  2
 
 int sys_fork(void);
 int sys_execve(const char* filename, char* const argv[], char* const envp[]);

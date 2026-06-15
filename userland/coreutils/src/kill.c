@@ -10,6 +10,9 @@ static int parse_signal(const char *arg)
     if (strcmp(arg, "-15")      == 0 || strcmp(arg, "-TERM")    == 0 || strcmp(arg, "-SIGTERM") == 0) return SIGTERM;
     if (strcmp(arg, "-10")      == 0 || strcmp(arg, "-USR1")    == 0 || strcmp(arg, "-SIGUSR1") == 0) return SIGUSR1;
     if (strcmp(arg, "-12")      == 0 || strcmp(arg, "-USR2")    == 0 || strcmp(arg, "-SIGUSR2") == 0) return SIGUSR2;
+    if (strcmp(arg, "-18")      == 0 || strcmp(arg, "-CONT")    == 0 || strcmp(arg, "-SIGCONT") == 0) return SIGCONT;
+    if (strcmp(arg, "-19")      == 0 || strcmp(arg, "-STOP")    == 0 || strcmp(arg, "-SIGSTOP") == 0) return SIGSTOP;
+    if (strcmp(arg, "-20")      == 0 || strcmp(arg, "-TSTP")    == 0 || strcmp(arg, "-SIGTSTP") == 0) return SIGTSTP;
     return -1;
 }
 
@@ -20,6 +23,9 @@ static const char *signal_name(int sig)
         case SIGTERM: return "SIGTERM";
         case SIGUSR1: return "SIGUSR1";
         case SIGUSR2: return "SIGUSR2";
+        case SIGCONT: return "SIGCONT";
+        case SIGSTOP: return "SIGSTOP";
+        case SIGTSTP: return "SIGTSTP";
         default:      return "signal";
     }
 }
@@ -27,7 +33,7 @@ static const char *signal_name(int sig)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        printf("Usage: kill [-9|-KILL|-TERM|-USR1|-USR2] <pid>...\n");
+        printf("Usage: kill [-9|-KILL|-TERM|-USR1|-USR2|-STOP|-TSTP|-CONT] <pid>...\n");
         return 1;
     }
 

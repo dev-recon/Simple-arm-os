@@ -656,9 +656,36 @@ void sys_exit(int status)
 
 
 
+static task_t* find_stopped_child(task_t* parent, pid_t pid)
+{
+    task_t* child;
+
+    if (!parent || parent->type != TASK_TYPE_PROCESS || !parent->process)
+        return NULL;
+
+    child = parent->process->children;
+    while (child) {
+        int matches = (pid == -1) ||
+                      (pid > 0 && child->process->pid == pid) ||
+                      (pid == 0 && child->process->pgid == parent->process->pgid) ||
+                      (pid < -1 && child->process->pgid == -pid);
+
+        if (matches &&
+            child->state == TASK_STOPPED &&
+            child->process->state == (proc_state_t)PROC_STOPPED &&
+            !child->process->stop_reported) {
+            return child;
+        }
+        child = child->process->sibling_next;
+    }
+
+    return NULL;
+}
+
 int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
 {
     task_t* zombie = NULL;
+    task_t* stopped = NULL;
     //uint32_t iteration = 1;
 
     if (!parent || parent->type != TASK_TYPE_PROCESS || !parent->process) {
@@ -666,7 +693,7 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
         return -EINVAL;
     }
 
-    if (options & ~WNOHANG) {
+    if (options & ~(WNOHANG | WUNTRACED)) {
         return -EINVAL;
     }
         
@@ -698,6 +725,18 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
             destroy_process(zombie);
 
             return child_pid;
+        }
+
+        if (options & WUNTRACED) {
+            stopped = find_stopped_child(parent, pid);
+            if (stopped) {
+                int stop_status = 0x7f | ((stopped->process->stop_signal & 0xff) << 8);
+                stopped->process->stop_reported = 1;
+                if (status) {
+                    *status = stop_status;
+                }
+                return stopped->process->pid;
+            }
         }
         
         //KDEBUG("NO ZOMBIE CHILD FOUND...\n");
@@ -946,6 +985,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
         proc->state == TASK_BLOCKED ||
         proc->state == TASK_INTERRUPTIBLE ||
         proc->state == TASK_UNINTERRUPTIBLE ||
+        proc->state == TASK_STOPPED ||
         proc->state == TASK_ZOMBIE ||
         proc->state == TASK_TERMINATED) {
         yield();

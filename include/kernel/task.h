@@ -130,7 +130,8 @@ typedef enum {
     TASK_ZOMBIE,            /* Terminee, en attente de nettoyage */
     TASK_TERMINATED,        /* Completement terminee */
     TASK_INTERRUPTIBLE,     /* Bloquee mais peut etre reveillee par un signal */
-    TASK_UNINTERRUPTIBLE    /* Bloquee, ne peut pas etre reveillee */
+    TASK_UNINTERRUPTIBLE,   /* Bloquee, ne peut pas etre reveillee */
+    TASK_STOPPED            /* Stoppee par SIGSTOP/SIGTSTP */
 } task_state_t;
 
 typedef enum {
@@ -140,7 +141,8 @@ typedef enum {
     PROC_ZOMBIE,
     PROC_DEAD,
     PROC_INTERRUPTIBLE,
-    PROC_UNINTERRUPTIBLE
+    PROC_UNINTERRUPTIBLE,
+    PROC_STOPPED
 } proc_state_t;
 
 typedef enum {
@@ -224,6 +226,8 @@ typedef struct {
     file_t* files[MAX_FILES];  /* Descripteurs */
     uint32_t fd_flags[MAX_FILES]; /* Flags propres au descripteur (FD_CLOEXEC, etc.) */
     int exit_code;
+    int stop_signal;
+    int stop_reported;
     uid_t uid, gid;
     mode_t umask;
 

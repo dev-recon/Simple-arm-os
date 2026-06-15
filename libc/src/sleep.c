@@ -1,5 +1,6 @@
 #include <unistd.h>
 #include <time.h>
+#include <errno.h>
 
 extern int nanosleep(const struct timespec *req, struct timespec *rem);
 
@@ -9,9 +10,14 @@ unsigned int sleep(unsigned int seconds) {
     req.tv_sec = seconds;
     req.tv_nsec = 0;
     
-    if (nanosleep(&req, &rem) < 0) {
-        /* Interrompu par un signal */
-        return rem.tv_sec;
+    while (nanosleep(&req, &rem) < 0) {
+        if (errno != EINTR)
+            return req.tv_sec;
+
+        if (rem.tv_sec == 0 && rem.tv_nsec == 0)
+            return 0;
+
+        req = rem;
     }
     
     return 0;

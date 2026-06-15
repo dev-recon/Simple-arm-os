@@ -374,6 +374,8 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             child->process->children = NULL;
             child->process->sibling_next = NULL;
             child->process->exit_code = 0;
+            child->process->stop_signal = 0;
+            child->process->stop_reported = 0;
             child->process->uid = parent->process->uid;
             child->process->gid = parent->process->gid;
             child->process->umask = parent->process->umask;
@@ -875,6 +877,8 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         task->process->children = NULL;
         task->process->sibling_next = NULL;
         task->process->exit_code = 0;
+        task->process->stop_signal = 0;
+        task->process->stop_reported = 0;
         task->process->uid = 0;
         task->process->gid = 0;
         task->process->umask = 022;
@@ -1919,6 +1923,9 @@ const char* task_state_string(task_state_t state)
         case TASK_BLOCKED: return "BLOCKED";
         case TASK_ZOMBIE: return "ZOMBIE";
         case TASK_TERMINATED: return "TERMINATED";
+        case TASK_INTERRUPTIBLE: return "INTERRUPTIBLE";
+        case TASK_UNINTERRUPTIBLE: return "UNINTERRUPTIBLE";
+        case TASK_STOPPED: return "STOPPED";
         default: return "UNKNOWN";
     }
 }
@@ -1932,6 +1939,9 @@ const char* proc_state_string(proc_state_t state)
         case PROC_BLOCKED: return "BLOCKED";
         case PROC_ZOMBIE: return "ZOMBIE";
         case PROC_DEAD: return "DEAD";
+        case PROC_INTERRUPTIBLE: return "INTERRUPTIBLE";
+        case PROC_UNINTERRUPTIBLE: return "UNINTERRUPTIBLE";
+        case PROC_STOPPED: return "STOPPED";
         default: return "UNKNOWN";
     }
 }

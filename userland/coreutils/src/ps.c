@@ -8,6 +8,7 @@ static const char *state_name(char state)
         case 'R': return "run";
         case 'Z': return "zombie";
         case 'T': return "term";
+        case 't': return "stop";
         case 'D': return "wait";
         default:  return "sleep";
     }
@@ -19,6 +20,7 @@ static const char *state_color(char state)
         case 'R': return "\033[1;32m";
         case 'Z': return "\033[1;31m";
         case 'T': return "\033[0;31m";
+        case 't': return "\033[1;33m";
         case 'D': return "\033[1;33m";
         default:  return "\033[0;37m";
     }

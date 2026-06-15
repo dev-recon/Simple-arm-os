@@ -85,6 +85,15 @@ void tty_input_char(char c) {
         tty_signal_process_group(signal_pgid, signal_num);
         return;
     }
+
+    if ((tty0.c_lflag & ISIG) && c == 0x1A) {
+        signal_pgid = tty0.foreground_pgid;
+        signal_num = SIGTSTP;
+        spin_unlock_irqrestore(&tty0.lock, flags);
+        uart_puts("^Z\n");
+        tty_signal_process_group(signal_pgid, signal_num);
+        return;
+    }
     
     /* In raw/no-echo mode, pass editing keys to userland. mash owns line editing. */
     if ((tty0.c_lflag & ECHO) && (c == '\b' || c == 127)) {

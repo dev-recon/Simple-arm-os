@@ -156,6 +156,21 @@ void clean_children_list(task_t* parent)
 }
 
 
+static bool child_matches_waitpid(task_t* parent, task_t* child, pid_t pid)
+{
+    if (!parent || !parent->process || !child || !child->process)
+        return false;
+
+    if (pid == -1)
+        return true;
+    if (pid > 0)
+        return child->process->pid == pid;
+    if (pid == 0)
+        return child->process->pgid == parent->process->pgid;
+
+    return child->process->pgid == -pid;
+}
+
 task_t* find_zombie_child(task_t* parent, pid_t pid)
 {
     if (!parent) {
@@ -186,7 +201,7 @@ task_t* find_zombie_child(task_t* parent, pid_t pid)
     while (child) {
         /* CORRIGER: Utiliser TASK_ZOMBIE au lieu de TASK_TERMINATED */
 
-        if ((pid == -1 || child->process->pid == pid) && 
+        if (child_matches_waitpid(parent, child, pid) &&
             child->state == TASK_ZOMBIE && child->process->state == (proc_state_t)PROC_ZOMBIE) {
             zombie = child;
             break;
@@ -220,7 +235,7 @@ bool has_children(task_t* parent, pid_t pid)
     task_t* child = parent->process->children;
 
     while (child) {
-        if (pid == -1 || child->process->pid == pid) {
+        if (child_matches_waitpid(parent, child, pid)) {
             has_children = true;
             break;
         }
@@ -362,7 +377,7 @@ void wakeup_parent(task_t *proc){
             
             /* Verifier si le parent attend ce processus specifiquement */
             pid_t wait_pid = parent->process->waitpid_pid;
-            if (wait_pid == -1 || wait_pid == proc->process->pid) {
+            if (child_matches_waitpid(parent, proc, wait_pid)) {
                 //KINFO("sys_exit: Waking up parent PID=%u\n", parent->process->pid);
                 
                 spin_lock(&task_lock); 
@@ -376,9 +391,6 @@ void wakeup_parent(task_t *proc){
                 //    parent->name, parent->process->pid, proc->name, proc->process->pid, *parent->process->waitpid_status);
                 //debug_print_ctx(&parent->context, "SYS_EXIT");
 
-            } else {
-                KINFO("sys_exit: Parent waiting for different PID (%d vs %u)\n", 
-                       wait_pid, proc->process->pid);
             }
         } else {
             //KINFO("sys_exit: Parent not blocked (state=%s proc_state=%s)\n", 

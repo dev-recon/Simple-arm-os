@@ -1006,7 +1006,7 @@ int sys_sysinfo(struct sysinfo_response *resp)
 {
     if (!resp) return -EINVAL;
 
-    static const char state_char[7] = {
+    static const char state_char[8] = {
         'S', /* TASK_READY           */
         'R', /* TASK_RUNNING         */
         'S', /* TASK_BLOCKED         */
@@ -1014,6 +1014,7 @@ int sys_sysinfo(struct sysinfo_response *resp)
         'T', /* TASK_TERMINATED      */
         'S', /* TASK_INTERRUPTIBLE   */
         'D', /* TASK_UNINTERRUPTIBLE */
+        't', /* TASK_STOPPED         */
     };
 
     struct sysinfo_response *local = kmalloc(sizeof(struct sysinfo_response));
@@ -1065,7 +1066,7 @@ int sys_sysinfo(struct sysinfo_response *resp)
         while (u > 0x00100000u) { u >>= 1; r >>= 1; }
         p->cpu_pct_x10 = u ? (r * 1000u) / u : 0u;
         p->stack_kb = task->stack_size / 1024;
-        p->state    = (task->state < 7) ? state_char[task->state] : '?';
+        p->state    = (task->state < 8) ? state_char[task->state] : '?';
 
         switch (task->type) {
             case TASK_TYPE_PROCESS: p->type = 'P'; break;

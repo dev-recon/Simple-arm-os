@@ -449,10 +449,29 @@ static void close_pipeline_fds(int pipes[][2], int pipe_count) {
     }
 }
 
+static void remember_stopped_job(int pid, int pgid, const char* command, int status)
+{
+    jobs_add(pid, pgid, command);
+    jobs_note_status(pid, status);
+    printf("\n[stopped] pid %d signal=%d  %s\n",
+           pid, WSTOPSIG(status), command ? command : "");
+}
+
+static int pipeline_pid_index(const int pids[], int count, int pid)
+{
+    for (int i = 0; i < count; i++) {
+        if (pids[i] == pid)
+            return i;
+    }
+    return -1;
+}
+
 static int run_pipeline(int argc, char* argv[], int background) {
     shell_command_t commands[SHELL_MAX_PIPELINE];
     int pipes[SHELL_MAX_PIPELINE - 1][2];
     int pids[SHELL_MAX_PIPELINE];
+    int wait_statuses[SHELL_MAX_PIPELINE];
+    int wait_seen[SHELL_MAX_PIPELINE];
     int command_count = 0;
     int pipe_count;
     int i;
@@ -460,11 +479,20 @@ static int run_pipeline(int argc, char* argv[], int background) {
     int last_status = 0;
     int launched = 0;
     int pgid = 0;
+    int stopped = 0;
+    int finished = 0;
+    char command[JOBS_COMMAND_LEN];
 
     for (i = 0; i < SHELL_MAX_PIPELINE - 1; i++) {
         pipes[i][0] = -1;
         pipes[i][1] = -1;
     }
+    for (i = 0; i < SHELL_MAX_PIPELINE; i++) {
+        wait_statuses[i] = 0;
+        wait_seen[i] = 0;
+    }
+
+    jobs_build_command(argc, argv, command, sizeof(command));
 
     if (split_pipeline(argc, argv, commands, &command_count) < 0)
         return SHELL_ERROR;
@@ -498,6 +526,7 @@ static int run_pipeline(int argc, char* argv[], int background) {
                 setpgid(0, pgid);
 
             signal(SIGINT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
 
             if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
                 printf("mash: cannot connect pipeline input\n");
@@ -538,11 +567,7 @@ static int run_pipeline(int argc, char* argv[], int background) {
     }
 
     close_pipeline_fds(pipes, pipe_count);
-
     if (background) {
-        char command[JOBS_COMMAND_LEN];
-
-        jobs_build_command(argc, argv, command, sizeof(command));
         printf("[bg]");
         for (i = 0; i < command_count; i++) {
             jobs_add(pids[i], pgid, command);
@@ -553,11 +578,37 @@ static int run_pipeline(int argc, char* argv[], int background) {
     }
 
     shell_set_foreground_pgid(pgid);
-    for (i = 0; i < command_count; i++) {
-        if (waitpid(pids[i], &status, 0) == pids[i])
-            last_status = status;
+    while (finished < command_count && !stopped) {
+        int waited = waitpid(-pgid, &status, WUNTRACED);
+        int idx;
+
+        if (waited <= 0)
+            break;
+
+        idx = pipeline_pid_index(pids, command_count, waited);
+        if (idx < 0)
+            continue;
+
+        wait_statuses[idx] = status;
+        wait_seen[idx] = 1;
+        last_status = status;
+        if (WIFSTOPPED(status)) {
+            stopped = 1;
+        } else {
+            finished++;
+        }
     }
     shell_restore_foreground();
+
+    if (stopped) {
+        for (i = 0; i < command_count; i++)
+            jobs_add(pids[i], pgid, command);
+        for (i = 0; i < command_count; i++) {
+            if (wait_seen[i])
+                jobs_note_status(pids[i], wait_statuses[i]);
+        }
+        printf("\n[stopped] pgid %d  %s\n", pgid, command);
+    }
 
     return last_status;
 }
@@ -945,6 +996,7 @@ int shell_execute(int argc, char* argv[]) {
     if (child_pid == 0) {
         setpgid(0, 0);
         signal(SIGINT, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL);
         if (apply_redirections(&redirs) < 0)
             exit(-1);
 
@@ -964,9 +1016,20 @@ int shell_execute(int argc, char* argv[]) {
         }
 
         int status = 0;
+        int stopped_status = 0;
+        int was_stopped = 0;
+        char command[JOBS_COMMAND_LEN];
+
+        jobs_build_command(argc, argv, command, sizeof(command));
         shell_set_foreground_pgid(child_pid);
-        waitpid(child_pid, &status, 0);
+        if (waitpid(child_pid, &status, WUNTRACED) == child_pid &&
+            WIFSTOPPED(status)) {
+            stopped_status = status;
+            was_stopped = 1;
+        }
         shell_restore_foreground();
+        if (was_stopped)
+            remember_stopped_job(child_pid, child_pid, command, stopped_status);
         //printf("SHELL waked up waited_pid %d, son status = %d\n", waited_pid, status);
 
         return(status);
@@ -1080,6 +1143,7 @@ int main() {
     shell_pgid = getpgrp();
     jobs_set_shell_pgid(shell_pgid);
     signal(SIGINT, SIG_IGN);
+    signal(SIGTSTP, SIG_IGN);
     shell_restore_foreground();
     command_init();
     shell_run();
