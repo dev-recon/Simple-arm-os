@@ -76,6 +76,7 @@ KERNEL_OBJS = \
 	kernel/syscalls/syscall.o \
 	kernel/syscalls/syscalls.o \
 	kernel/syscalls/file.o \
+	kernel/syscalls/shm.o \
 	kernel/syscalls/process_syscalls.o \
 	kernel/user/userspace.o
 

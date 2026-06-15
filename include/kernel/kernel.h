@@ -249,7 +249,8 @@ extern uint32_t __stack_svc_top;
  * 
  * 0x00000000 - 0x00010000  : Reserve systeme
  * 0x00010000 - 0x08000000  : Code et donnees utilisateur (127MB)
- * 0x08000000 - 0x37000000  : Heap utilisateur (votre taille actuelle)
+ * 0x08000000 - 0x30000000  : Heap utilisateur
+ * 0x30000000 - 0x34000000  : Shared memory mappings
  * 0x37000000 - 0x3F000000  : Stack utilisateur (8MB - votre taille)
  * 0x3F000000 - 0x40000000  : Zone libre pour signal stacks (16MB)
  * 0x40000000+              : Kernel space (machine virt)
@@ -264,7 +265,9 @@ extern uint32_t __stack_svc_top;
 //#define USER_STACK_SIZE         (8*1024u)                       /* 8KB de pile */
 #define USER_STACK_BOTTOM       (USER_STACK_TOP - USER_STACK_SIZE)  /* 0x37000000 */
 #define USER_HEAP_START         0x08000000u                    /* Debut heap utilisateur */
-#define USER_HEAP_END           USER_STACK_BOTTOM             /* 0x37000000 */
+#define USER_SHM_START          0x30000000u
+#define USER_SHM_END            0x34000000u
+#define USER_HEAP_END           USER_SHM_START
 #define USER_SPACE_END          USER_STACK_TOP                /* 0x3F000000 */
 
 /* Heap utilisateur - taille actuelle preservee */

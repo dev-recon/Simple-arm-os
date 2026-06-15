@@ -6,6 +6,7 @@
 #include <kernel/task.h>
 #include <kernel/elf32.h>
 #include <kernel/userspace.h>
+#include <kernel/shm.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 #include <kernel/timer.h>
@@ -56,6 +57,10 @@ static syscall_func_t syscall_table[256] = {
     [__NR_getdents] = (syscall_func_t)sys_getdents,
     [__NR_nanosleep] = (syscall_func_t)sys_nanosleep,
     [__NR_sysinfo]   = (syscall_func_t)sys_sysinfo,
+    [__NR_shm_open]  = (syscall_func_t)sys_shm_open,
+    [__NR_shm_unlink] = (syscall_func_t)sys_shm_unlink,
+    [__NR_shm_map]   = (syscall_func_t)sys_shm_map,
+    [__NR_shm_unmap] = (syscall_func_t)sys_shm_unmap,
 
 };
 

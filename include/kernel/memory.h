@@ -17,7 +17,7 @@ typedef struct vma {
     uint32_t start;        /* 4 bytes */
     uint32_t end;          /* 4 bytes */
     uint32_t flags;        /* 4 bytes */
-    uint32_t padding1;     /* 4 bytes - pour aligner sur 8 */
+    uint32_t shm_id;       /* ID SHM si VMA_SHARED */
     struct vma* next;      /* 4 bytes */
     uint32_t padding2;     /* 4 bytes - pour compléter 8 */
 } __attribute__((aligned(8))) vma_t;
@@ -40,6 +40,7 @@ typedef struct vm_space {
 #define VMA_WRITE   (1 << 1)
 #define VMA_EXEC    (1 << 2)
 #define VMA_KERNEL  (1 << 3)
+#define VMA_SHARED  (1 << 4)
 
 /* ASID constants */
 #define ASID_KERNEL     254       /* ASID réservé pour le noyau */
@@ -120,6 +121,7 @@ vm_space_t* create_vm_space(void);
 void destroy_vm_space(vm_space_t* vm);
 vm_space_t* fork_vm_space(vm_space_t* parent_vm);
 vma_t* create_vma(vm_space_t* vm, uint32_t start, uint32_t size, uint32_t flags);
+int remove_vma(vm_space_t* vm, uint32_t start, uint32_t end);
 vma_t* find_vma(vm_space_t* vm, uint32_t addr);
 int handle_cow_fault(uint32_t fault_addr);
 int handle_user_stack_fault(uint32_t fault_addr);

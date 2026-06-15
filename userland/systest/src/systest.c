@@ -443,6 +443,51 @@ static void test_cow_memory(void)
     }
 }
 
+static void test_shared_memory(void)
+{
+    const char *name = "systest-shm";
+    int id;
+    int pid;
+    int status = -1;
+    int waited;
+    volatile int *shared;
+
+    shm_unlink(name);
+    id = shm_open(name, 4096, SHM_O_CREAT | SHM_O_EXCL);
+    if (expect(id >= 0, "shm create", id) < 0)
+        return;
+
+    shared = (volatile int *)shm_map(id, NULL, SHM_RDWR);
+    if (expect(shared != NULL, "shm map parent", id) < 0) {
+        shm_unlink(name);
+        return;
+    }
+
+    shared[0] = 1234;
+    shared[1] = 0;
+
+    pid = fork();
+    if (pid == 0) {
+        if (shared[0] != 1234)
+            exit(2);
+        shared[0] = 5678;
+        shared[1] = 42;
+        exit(0);
+    }
+
+    if (expect(pid > 0, "shm fork child", pid) < 0) {
+        shm_unmap((void *)shared, 4096);
+        shm_unlink(name);
+        return;
+    }
+
+    waited = waitpid(pid, &status, 0);
+    expect(waited == pid && status == 0, "shm child sees parent data", waited);
+    expect(shared[0] == 5678 && shared[1] == 42, "shm parent sees child writes", shared[0]);
+    expect(shm_unmap((void *)shared, 4096) == 0, "shm unmap parent", 0);
+    expect(shm_unlink(name) == 0, "shm unlink", 0);
+}
+
 static int read_free_mem_kb(unsigned *free_kb)
 {
     struct sysinfo_response info;
@@ -688,6 +733,7 @@ int main(void)
     test_fork_wait_kill();
     test_process_groups();
     test_cow_memory();
+    test_shared_memory();
     test_cow_fork_stress();
     test_asid_churn();
     test_asid_live_saturation();

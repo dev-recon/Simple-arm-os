@@ -795,6 +795,66 @@ nanosleep:
     pop {r7, lr}
     bx lr
 
+.global shm_open
+.type shm_open, %function
+shm_open:
+    push {r7, lr}
+    mov r7, #190        /* __NR_shm_open */
+    swi #0
+    cmp r0, #0
+    bge shm_open_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+shm_open_success:
+    pop {r7, lr}
+    bx lr
+
+.global shm_unlink
+.type shm_unlink, %function
+shm_unlink:
+    push {r7, lr}
+    mov r7, #191        /* __NR_shm_unlink */
+    swi #0
+    cmp r0, #0
+    bge shm_unlink_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+shm_unlink_success:
+    pop {r7, lr}
+    bx lr
+
+.global shm_map
+.type shm_map, %function
+shm_map:
+    push {r7, lr}
+    mov r7, #192        /* __NR_shm_map */
+    swi #0
+    cmp r0, #0
+    bge shm_map_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #0
+shm_map_success:
+    pop {r7, lr}
+    bx lr
+
+.global shm_unmap
+.type shm_unmap, %function
+shm_unmap:
+    push {r7, lr}
+    mov r7, #193        /* __NR_shm_unmap */
+    swi #0
+    cmp r0, #0
+    bge shm_unmap_success
+    rsb r0, r0, #0
+    bl __set_errno
+    mov r0, #-1
+shm_unmap_success:
+    pop {r7, lr}
+    bx lr
+
 /* ========================================
  * Gestion d'errno (simple)
  * ======================================== */

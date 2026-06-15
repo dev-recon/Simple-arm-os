@@ -76,6 +76,10 @@ struct process;
 #define __NR_nanosleep          162
 #define __NR_rt_sigreturn       173
 #define __NR_getcwd             183     /* getcwd */
+#define __NR_shm_open           190
+#define __NR_shm_unlink         191
+#define __NR_shm_map            192
+#define __NR_shm_unmap          193
 #define __NR_sysinfo            116     /* reused for getprocs — remplacer par /proc plus tard */
 
 /* Informations sur un processus */
@@ -171,6 +175,10 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem);
 
 /* Memory syscalls */
 int sys_brk(void* addr);
+int sys_shm_open(const char *name, size_t size, int flags);
+int sys_shm_unlink(const char *name);
+void *sys_shm_map(int id, void *addr, int flags);
+int sys_shm_unmap(void *addr, size_t size);
 
 /* Additional process syscalls */
 int sys_dup(int oldfd);

@@ -3,6 +3,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/task.h>
 #include <kernel/process.h>
+#include <kernel/shm.h>
 #include <asm/arm.h>
 #include <asm/mmu.h>
 
@@ -175,6 +176,8 @@ void destroy_vm_space(vm_space_t *vm)
             }
         }
 
+        if (vma->flags & VMA_SHARED)
+            shm_release_mapping(vma->shm_id);
         kfree(vma);
         vma = next;
     }
@@ -235,6 +238,7 @@ vma_t *create_vma(vm_space_t *vm, uint32_t start, uint32_t size, uint32_t flags)
     vma->start = start;
     vma->end = end;
     vma->flags = flags;
+    vma->shm_id = 0;
     vma->next = NULL;
 
     // KDEBUG("create_vma: Creating VMA 0x%08X-0x%08X (size=%u) in ASID %u\n",
@@ -264,6 +268,31 @@ vma_t *create_vma(vm_space_t *vm, uint32_t start, uint32_t size, uint32_t flags)
     return vma;
 }
 
+int remove_vma(vm_space_t *vm, uint32_t start, uint32_t end)
+{
+    vma_t *prev = NULL;
+    vma_t *current;
+
+    if (!vm)
+        return -EINVAL;
+
+    current = vm->vma_list;
+    while (current) {
+        if (current->start == start && current->end == end) {
+            if (prev)
+                prev->next = current->next;
+            else
+                vm->vma_list = current->next;
+            kfree(current);
+            return 0;
+        }
+        prev = current;
+        current = current->next;
+    }
+
+    return -ENOENT;
+}
+
 vm_space_t *fork_vm_space(vm_space_t *parent_vm)
 {
     vm_space_t *child_vm = create_vm_space();
@@ -290,6 +319,7 @@ vm_space_t *fork_vm_space(vm_space_t *parent_vm)
             destroy_vm_space(child_vm);
             return NULL;
         }
+        child_vma->shm_id = parent_vma->shm_id;
 
         /* Copy pages with COW if writable */
         if (parent_vma->flags & VMA_WRITE)
@@ -345,15 +375,23 @@ static int cow_copy_vma(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma)
             return -ENOMEM;
         }
 
-        if (vma->flags & VMA_WRITE) {
+        if ((vma->flags & VMA_WRITE) && !(vma->flags & VMA_SHARED)) {
             if (set_user_page_readonly(parent_vm->pgdir, vaddr, parent_vm->asid) < 0) {
                 free_page((void*)phys_addr);
                 return -EFAULT;
             }
         }
 
-        if (map_user_page_readonly(child_vm->pgdir, vaddr, phys_addr,
-                                   vma->flags, child_vm->asid) < 0) {
+        int map_ret;
+        if (vma->flags & VMA_SHARED) {
+            map_ret = map_user_page(child_vm->pgdir, vaddr, phys_addr,
+                                    vma->flags, child_vm->asid);
+        } else {
+            map_ret = map_user_page_readonly(child_vm->pgdir, vaddr, phys_addr,
+                                             vma->flags, child_vm->asid);
+        }
+
+        if (map_ret < 0) {
             free_page((void*)phys_addr);
             if ((vma->flags & VMA_WRITE) && page_ref_count((void*)phys_addr) == 1) {
                 set_user_page_writable(parent_vm->pgdir, vaddr, parent_vm->asid);
@@ -361,6 +399,9 @@ static int cow_copy_vma(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma)
             return -ENOMEM;
         }
     }
+
+    if (vma->flags & VMA_SHARED)
+        shm_retain_mapping(vma->shm_id);
 
     return 0;
 }
