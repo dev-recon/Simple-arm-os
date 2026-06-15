@@ -4,6 +4,7 @@
 #include <kernel/timer.h>
 #include <kernel/keyboard.h>
 #include <kernel/ata.h>
+#include <kernel/virtio_block.h>
 #include <kernel/uart.h>
 #include <kernel/ide.h>
 #include <kernel/kprintf.h>
@@ -187,17 +188,20 @@ void irq_c_handler(void)
             ide_irq_handler();
             break;
             
-        /* VirtIO IRQs pour machine virt */
-        case VIRT_VIRTIO_NET_IRQ:
         case VIRT_VIRTIO_BLOCK_IRQ:
+            //kprintf("[IRQ] - VirtIO IRQ %u - SUCCESS!\n", int_id);
+            virtio_block_irq_handler();
+            break;
+
+        /* VirtIO IRQs non utilises pour l'instant. Les laisser visibles plutot
+         * que les router dans l'ancien handler ATA, qui manipule un etat de
+         * queue different du driver virtio_block.c. */
+        case VIRT_VIRTIO_NET_IRQ:
         case VIRT_VIRTIO_CONSOLE_IRQ:
         case VIRT_VIRTIO_RNG_IRQ:
         case 79:
         case 48:
-            //kprintf("[IRQ] - VirtIO IRQ %u - SUCCESS!\n", int_id);
-            //uart_puts("[IRQ] - VirtIO IRQ - SUCCESS!\n");
-            /*virtio_irq_handler(int_id); */
-            ata_irq_handler();
+            //kprintf("[IRQ] Ignoring unused VirtIO IRQ %u\n", int_id);
             break;
             
         case 1023:

@@ -236,11 +236,9 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
     // IMPORTANT: legacy → on programme la PFN (= base_phys >> 12)
     mmio_write32(base, VIRTIO_MMIO_QUEUE_PFN, global_vq.pa_base >> 12);
 
-        /* Enable IRQ */
+    /* Enable IRQ */
     KDEBUG("Configuring VirtIO IRQs...\n");
     enable_irq(VIRTIO_BLK_IRQ);
-    enable_irq(48);
-    enable_irq(79);
     KINFO("VirtIO IRQ %d enabled\n", VIRTIO_BLK_IRQ);
 
     // DRIVER_OK
@@ -295,17 +293,23 @@ static inline struct vring_used *vq_used_ptr(vq_legacy_t *vq) {
 }
 
 /* Lit le compteur physique 64-bit du generic timer ARM (toujours actif sur A15). */
-static inline uint32_t vblk_cntpct_lo(void) {
-    uint32_t lo, hi;
-    asm volatile("mrrc p15, 0, %0, %1, c14" : "=r"(lo), "=r"(hi));
-    (void)hi;
-    return lo;
-}
-
 static inline uint64_t vblk_cntpct(void) {
     uint32_t lo, hi;
     asm volatile("mrrc p15, 0, %0, %1, c14" : "=r"(lo), "=r"(hi));
     return ((uint64_t)hi << 32) | lo;
+}
+
+void virtio_block_irq_handler(void)
+{
+    if (!ata_sector_size)
+        return;
+
+    /*
+     * Le driver block est encore synchrone/polling: l'IRQ sert uniquement a
+     * deassert le niveau cote device. La completion reste lue dans used ring
+     * par wait_for_used().
+     */
+    virtio_blk_ack_interrupts(virtio_mmio_base);
 }
 
 /* Poll used ring avec un vrai timeout en ms basé sur CNTPCT. */
