@@ -39,6 +39,7 @@ vq_legacy_t global_vq = {0};
 uint32_t ata_sector_size = 0;
 static uint64_t virtio_capacity_sectors = 0;
 static bool virtio_blk_failed = false;
+static bool virtio_blk_readonly = false;
 static spinlock_t virtio_blk_lock = SPINLOCK_INIT("virtio_blk");
 
 #define VIRTIO_PHY_ADDR 0x0A003E00u
@@ -124,7 +125,7 @@ static void virtio_blk_ack_interrupts(volatile uint32_t *mmio_base)
 
 static bool virtio_blk_request_in_bounds(uint64_t sector, uint32_t nsectors)
 {
-    if (ata_sector_size != 512 || virtio_capacity_sectors == 0)
+    if (virtio_blk_failed || ata_sector_size != 512 || virtio_capacity_sectors == 0)
         return false;
     if (nsectors == 0)
         return false;
@@ -163,6 +164,7 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
     
     volatile uint32_t *base = (volatile uint32_t *)base_addr;
     virtio_blk_failed = false;
+    virtio_blk_readonly = false;
     virtio_capacity_sectors = 0;
 
     virtio_mmio_dump32(base_addr);
@@ -198,6 +200,16 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
     mmio_write32(base, VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACK);
     mmio_write32(base, VIRTIO_MMIO_STATUS, mmio_read32(base, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_DRIVER);
 
+    uint32_t device_features = mmio_read32(base, VIRTIO_MMIO_DEVICE_FEATURES);
+    virtio_blk_readonly = (device_features & (1u << VIRTIO_BLK_F_RO)) != 0;
+    if (virtio_blk_readonly)
+        KINFO("VirtIO block device is read-only\n");
+
+    /*
+     * Le driver legacy utilise le profil minimal: pas de feature optionnelle
+     * négociée. Ecrire explicitement 0 évite de dépendre d'un état résiduel.
+     */
+    mmio_write32(base, VIRTIO_MMIO_DRIVER_FEATURES, 0);
 
     // FEATURES_OK
     mmio_write32(base, VIRTIO_MMIO_STATUS, mmio_read32(base, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_FEATURES_OK);
@@ -472,6 +484,10 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
     if (bytes == 0) return -1;
 
     spin_lock(&virtio_blk_lock);
+    if (virtio_blk_failed) {
+        spin_unlock(&virtio_blk_lock);
+        return -1;
+    }
 
     /* allocation DMA pour header+status (1 page) */
     uint32_t hdr_pa = 0;
@@ -541,8 +557,13 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
     if (nsectors > 0xFFFFFFFFu / sector_size) return -1;
     uint32_t bytes = nsectors * sector_size;
     if (bytes == 0) return -1;
+    if (virtio_blk_readonly) return -1;
 
     spin_lock(&virtio_blk_lock);
+    if (virtio_blk_failed) {
+        spin_unlock(&virtio_blk_lock);
+        return -1;
+    }
 
     /* allocation DMA pour header+status (1 page) */
     uint32_t hdr_pa = 0;
