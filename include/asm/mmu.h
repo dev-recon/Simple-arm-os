@@ -25,7 +25,6 @@
 #define PTE_CACHE      (1 << 3)
 #define PTE_BUFFER     (1 << 2)
 #define PTE_ACCESS     (3 << 4)
-#define PTE_COW        (1 << 9)
 
 /* Page directory entry flags */
 #define PDE_PRESENT    0x00000001
