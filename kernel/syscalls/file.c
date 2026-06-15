@@ -78,6 +78,7 @@ int sys_write(int fd, const void* buf, size_t count)
     ssize_t result = 0;
     void *kbuf = NULL;
     const void *write_buf = buf;
+    bool is_fifo = false;
     
     if (count == 0) return 0;
     if (!buf) return -EFAULT;
@@ -88,6 +89,7 @@ int sys_write(int fd, const void* buf, size_t count)
     if (!file) return -EBADF;
     if (!can_write(file)) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
+    is_fifo = file->inode && S_ISFIFO(file->inode->mode);
 
     if (IS_KERNEL_ADDR((uint32_t)buf)) {
         write_buf = buf;
@@ -103,13 +105,17 @@ int sys_write(int fd, const void* buf, size_t count)
         write_buf = kbuf;
     }
 
-    uint32_t irq_flags = disable_interrupts_save();
-    set_critical_section();
+    if (is_fifo) {
+        result = file->f_op->write(file, write_buf, count);
+    } else {
+        uint32_t irq_flags = disable_interrupts_save();
+        set_critical_section();
 
-    result = file->f_op->write(file, write_buf, count);
+        result = file->f_op->write(file, write_buf, count);
 
-    unset_critical_section();
-    restore_interrupts(irq_flags);
+        unset_critical_section();
+        restore_interrupts(irq_flags);
+    }
 
     if (kbuf) kfree(kbuf);
 

@@ -43,6 +43,22 @@ static file_operations_t pipe_write_fops = {
 
 extern char* resolve_path(const char* path);
 
+static int pipe_wait_interruptible(void)
+{
+    if (!current_task)
+        return -EINTR;
+
+    task_set_interruptible(current_task);
+    current_task->wakeup_time = get_system_ticks() + 1;
+    yield();
+    current_task->wakeup_time = 0;
+
+    if (has_pending_signals(current_task))
+        return -EINTR;
+
+    return 0;
+}
+
 bool can_read(file_t* file) {
     int access_mode;
 
@@ -65,6 +81,7 @@ ssize_t pipe_read(file_t* file, void* buf, size_t count) {
     struct pipe_buffer *buffer = pipe->buffer;
     char *user_buf = (char*)buf;
     size_t bytes_read = 0;
+    uint32_t irq_flags;
 
     //KDEBUG("ENTERING READING FROM PIPE\n");
     //KDEBUG("file->flags = 0x%08X\n", file->flags);
@@ -74,27 +91,31 @@ ssize_t pipe_read(file_t* file, void* buf, size_t count) {
         return -EBADF;
     }
 
-    /* Si pas de données et plus d'écrivains -> EOF */
-    if (buffer->count == 0 && (buffer->writers == 0 || buffer->closed_write)) {
-        return 0;  /* EOF */
-    }
-    
-    /* Si pas de données, retourner EAGAIN */
-    if (buffer->count == 0) {
-        return -EAGAIN;
-    }
+    while (1) {
+        irq_flags = disable_interrupts_save();
 
+        /* Si pas de données et plus d'écrivains -> EOF */
+        if (buffer->count == 0 && (buffer->writers == 0 || buffer->closed_write)) {
+            restore_interrupts(irq_flags);
+            return 0;  /* EOF */
+        }
 
-    
-    /* Lire les données disponibles */
-    while (bytes_read < count && buffer->count > 0) {
-        user_buf[bytes_read] = buffer->data[buffer->read_pos];
-        buffer->read_pos = (buffer->read_pos + 1) % PIPE_BUF_SIZE;
-        buffer->count--;
-        bytes_read++;
+        /* Lire les données disponibles */
+        while (bytes_read < count && buffer->count > 0) {
+            user_buf[bytes_read] = buffer->data[buffer->read_pos];
+            buffer->read_pos = (buffer->read_pos + 1) % PIPE_BUF_SIZE;
+            buffer->count--;
+            bytes_read++;
+        }
+
+        restore_interrupts(irq_flags);
+
+        if (bytes_read > 0)
+            return bytes_read;
+
+        if (pipe_wait_interruptible() < 0)
+            return -EINTR;
     }
-    
-    return bytes_read;
 }
 
 /* Écriture vers un pipe */
@@ -103,6 +124,7 @@ ssize_t pipe_write(file_t* file, const void* buf, size_t count) {
     struct pipe_buffer *buffer = pipe->buffer;
     const char *user_buf = (const char*)buf;
     size_t bytes_written = 0;
+    uint32_t irq_flags;
     
 
     /* Vérifier que c'est ouvert en écriture */
@@ -110,26 +132,34 @@ ssize_t pipe_write(file_t* file, const void* buf, size_t count) {
         return -EBADF;
     }
     
-    /* Si pas de lecteurs -> SIGPIPE */
-    if (buffer->readers == 0 || buffer->closed_read) {
-        return -EPIPE;
-    }
-    
-    /* Si buffer plein, retourner EAGAIN */
-    if (buffer->count == PIPE_BUF_SIZE) {
-        return -EAGAIN;
+    while (bytes_written < count) {
+        irq_flags = disable_interrupts_save();
+
+        /* Si pas de lecteurs -> SIGPIPE */
+        if (buffer->readers == 0 || buffer->closed_read) {
+            restore_interrupts(irq_flags);
+            return bytes_written > 0 ? (ssize_t)bytes_written : -EPIPE;
+        }
+
+        //KDEBUG("WRITING TO PIPE\n");
+
+        /* Écrire tant qu'il y a de la place */
+        while (bytes_written < count && buffer->count < PIPE_BUF_SIZE) {
+            buffer->data[buffer->write_pos] = user_buf[bytes_written];
+            buffer->write_pos = (buffer->write_pos + 1) % PIPE_BUF_SIZE;
+            buffer->count++;
+            bytes_written++;
+        }
+
+        restore_interrupts(irq_flags);
+
+        if (bytes_written >= count)
+            return bytes_written;
+
+        if (pipe_wait_interruptible() < 0)
+            return bytes_written > 0 ? (ssize_t)bytes_written : -EINTR;
     }
 
-    //KDEBUG("WRITING TO PIPE\n");
-    
-    /* Écrire tant qu'il y a de la place */
-    while (bytes_written < count && buffer->count < PIPE_BUF_SIZE) {
-        buffer->data[buffer->write_pos] = user_buf[bytes_written];
-        buffer->write_pos = (buffer->write_pos + 1) % PIPE_BUF_SIZE;
-        buffer->count++;
-        bytes_written++;
-    }
-    
     //KDEBUG("DATA WROTE TO PIPE\n");
     return bytes_written;
 }
