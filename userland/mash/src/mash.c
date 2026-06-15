@@ -62,6 +62,16 @@ static int token_has_slash(const char* s) {
     return 0;
 }
 
+static int shell_var_start(char c) {
+    return (c >= 'A' && c <= 'Z') ||
+           (c >= 'a' && c <= 'z') ||
+           c == '_';
+}
+
+static int shell_var_char(char c) {
+    return shell_var_start(c) || (c >= '0' && c <= '9');
+}
+
 static const char* shell_getenv(const char* name) {
     int i;
 
@@ -834,6 +844,33 @@ int shell_parse_line(char* line, char* argv[]) {
 
                 if (*readp == '\\' && readp[1]) {
                     readp++;
+                }
+                if (*readp == '$' && quote != '\'') {
+                    char var_name[SHELL_ENV_NAME_LEN];
+                    int var_len = 0;
+                    const char* value;
+
+                    readp++;
+                    if (!shell_var_start(*readp)) {
+                        if (writep >= endp)
+                            break;
+                        *writep++ = '$';
+                        continue;
+                    }
+
+                    while (shell_var_char(*readp) && var_len < SHELL_ENV_NAME_LEN - 1)
+                        var_name[var_len++] = *readp++;
+                    while (shell_var_char(*readp))
+                        readp++;
+                    var_name[var_len] = '\0';
+
+                    value = shell_getenv(var_name);
+                    if (!value)
+                        value = "";
+
+                    while (*value && writep < endp)
+                        *writep++ = *value++;
+                    continue;
                 }
                 if (writep >= endp)
                     break;

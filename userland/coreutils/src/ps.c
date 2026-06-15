@@ -56,16 +56,19 @@ int main(void)
 
     /* Ligne mémoire */
     unsigned used_kb = info->mem_total_kb - info->mem_free_kb;
-    unsigned pct = info->mem_total_kb ? (used_kb * 100 / info->mem_total_kb) : 0;
-    printf("\033[1mMem:\033[0m  %u MB total   %u MB free   \033[%sm%u%%\033[0m used\n\n",
+    unsigned pct_x10 = info->mem_total_kb ? (used_kb * 1000 / info->mem_total_kb) : 0;
+    unsigned pct = pct_x10 / 10;
+    unsigned pct_frac = pct_x10 % 10;
+    printf("\033[1mMem:\033[0m  %u MB total   %u MB free   \033[%sm%u.%u%%\033[0m used\n\n",
            info->mem_total_kb / 1024, info->mem_free_kb / 1024,
-           pct > 80 ? "1;31" : pct > 60 ? "1;33" : "1;32", pct);
+           pct_x10 > 800 ? "1;31" : pct_x10 > 600 ? "1;33" : "1;32",
+           pct, pct_frac);
 
     /* Header */
-    printf("\033[1m%4s %4s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %4s %4s %4s %-6s %s\033[0m\n",
+    printf("\033[1m%4s %4s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %5s %4s %4s %4s %-6s %s\033[0m\n",
            "TID", "PID", "PPID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",
-           "VM", "RSS", "L2", "PF", "COW", "STK", "STATE", "NAME");
-    printf("------------------------------------------------------------------------------------------------\n");
+           "VM", "RSS", "L2", "CTX", "PF", "COW", "STK", "STATE", "NAME");
+    printf("------------------------------------------------------------------------------------------------------\n");
 
     for (int i = 0; i < n; i++) {
         struct proc_info *p = &info->procs[i];
@@ -76,13 +79,14 @@ int main(void)
                                ci >= 20 ? "\033[1;33m" : "\033[0m";
         const char *pfcolor = p->page_faults ? "\033[1;35m" : "\033[0m";
 
-        printf("%4u %4d %4d %s%-6s\033[0m %3u %s%3u.%u\033[0m %4uK %4uK %4uK %4uK %2u %s%4u\033[0m %4u %4u %s%-6s\033[0m %s\n",
+        printf("%4u %4d %4d %s%-6s\033[0m %3u %s%3u.%u\033[0m %4uK %4uK %4uK %4uK %2u %5u %s%4u\033[0m %4u %4u %s%-6s\033[0m %s\n",
                p->tid, p->pid, p->ppid,
                kind_color(p->type), kind_name(p->type),
                p->priority,
                cpucolor, ci, cf,
                p->stack_kb, p->heap_kb, p->vm_kb, p->rss_kb,
                p->l2_tables,
+               p->switches,
                pfcolor, p->page_faults,
                p->cow_faults, p->stack_faults,
                state_color(p->state), state_name(p->state),
