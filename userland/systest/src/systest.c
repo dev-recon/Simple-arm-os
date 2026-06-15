@@ -697,6 +697,119 @@ static int read_free_mem_kb(unsigned *free_kb)
     return 0;
 }
 
+static int read_self_mem_kb(unsigned *heap_kb, unsigned *rss_kb, unsigned *pf)
+{
+    int self = getpid();
+
+    if (getsysinfo(&sysinfo_scratch) < 0)
+        return -1;
+
+    for (int i = 0; i < sysinfo_scratch.proc_count; i++) {
+        if (sysinfo_scratch.procs[i].pid == self) {
+            if (heap_kb)
+                *heap_kb = sysinfo_scratch.procs[i].heap_kb;
+            if (rss_kb)
+                *rss_kb = sysinfo_scratch.procs[i].rss_kb;
+            if (pf)
+                *pf = sysinfo_scratch.procs[i].page_faults;
+            return 0;
+        }
+    }
+
+    return -1;
+}
+
+static void touch_all_pages(unsigned char *ptr, size_t size, unsigned char seed)
+{
+    for (size_t off = 0; off < size; off += 4096)
+        ptr[off] = (unsigned char)(seed + (off >> 12));
+    ptr[size - 1] = (unsigned char)(seed ^ 0x5a);
+}
+
+static int check_all_pages(unsigned char *ptr, size_t size, unsigned char seed)
+{
+    for (size_t off = 0; off < size; off += 4096) {
+        if (ptr[off] != (unsigned char)(seed + (off >> 12)))
+            return 0;
+    }
+    return ptr[size - 1] == (unsigned char)(seed ^ 0x5a);
+}
+
+static void test_malloc_free_stress(void)
+{
+    enum { BLOCKS = 5 };
+    static const size_t sizes[BLOCKS] = { 4096, 8192, 32768, 65536, 131072 };
+    unsigned char *blocks[BLOCKS];
+    unsigned heap_before = 0;
+    unsigned heap_after_alloc = 0;
+    unsigned heap_after_reuse = 0;
+    unsigned rss_after_alloc = 0;
+    unsigned pf_before = 0;
+    unsigned pf_after = 0;
+    int ok = 1;
+
+    for (int i = 0; i < BLOCKS; i++)
+        blocks[i] = NULL;
+
+    expect(read_self_mem_kb(&heap_before, NULL, &pf_before) == 0,
+           "malloc stress baseline stats", 0);
+
+    for (int i = 0; i < BLOCKS; i++) {
+        blocks[i] = malloc(sizes[i]);
+        if (!blocks[i]) {
+            ok = 0;
+            break;
+        }
+        touch_all_pages(blocks[i], sizes[i], (unsigned char)(0x20 + i * 7));
+    }
+
+    expect(ok, "malloc stress multi-page allocations", ok);
+    if (!ok)
+        goto cleanup;
+
+    for (int i = 0; i < BLOCKS; i++) {
+        if (!check_all_pages(blocks[i], sizes[i], (unsigned char)(0x20 + i * 7)))
+            ok = 0;
+    }
+    expect(ok, "malloc stress page contents intact", ok);
+
+    expect(read_self_mem_kb(&heap_after_alloc, &rss_after_alloc, &pf_after) == 0,
+           "malloc stress sysinfo after alloc", 0);
+    expect(heap_after_alloc >= heap_before + 128,
+           "malloc stress heap visible in ps data", (int)(heap_after_alloc - heap_before));
+    expect(rss_after_alloc >= heap_after_alloc,
+           "malloc stress rss covers heap", (int)rss_after_alloc);
+    expect(pf_after >= pf_before,
+           "malloc stress page faults stable", (int)(pf_after - pf_before));
+
+    free(blocks[1]);
+    blocks[1] = NULL;
+    free(blocks[3]);
+    blocks[3] = NULL;
+
+    blocks[1] = malloc(12288);
+    blocks[3] = malloc(49152);
+    ok = blocks[1] && blocks[3];
+    if (ok) {
+        touch_all_pages(blocks[1], 12288, 0x71);
+        touch_all_pages(blocks[3], 49152, 0x91);
+        ok = check_all_pages(blocks[1], 12288, 0x71) &&
+             check_all_pages(blocks[3], 49152, 0x91);
+    }
+    expect(ok, "malloc stress free/reuse blocks", ok);
+
+    expect(read_self_mem_kb(&heap_after_reuse, NULL, NULL) == 0,
+           "malloc stress sysinfo after reuse", 0);
+    expect(heap_after_reuse >= heap_after_alloc,
+           "malloc stress heap remains mapped after free", (int)heap_after_reuse);
+
+cleanup:
+    for (int i = 0; i < BLOCKS; i++) {
+        if (blocks[i])
+            free(blocks[i]);
+    }
+}
+
 static void test_cow_fork_stress(void)
 {
     enum { STRESS_ITERS = 64 };
@@ -984,6 +1097,7 @@ int main(void)
     test_waitpid_group_stop_reports_all();
     test_sleep_survives_stop_continue();
     test_nanosleep_signal_interrupt();
+    test_malloc_free_stress();
     test_cow_memory();
     test_shared_memory();
     test_cow_fork_stress();
