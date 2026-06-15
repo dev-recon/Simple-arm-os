@@ -24,7 +24,6 @@ static int cmd_save(int argc, char* argv[]);
 static int cmd_load(int argc, char* argv[]);
 static int cmd_yield(int argc, char* argv[]);
 static int cmd_fork_test(int argc, char* argv[]);
-static int cmd_pstree(int argc, char* argv[]);
 static int cmd_cd(int argc, char *argv[]);
 
 int register_command(const char* name, const char* desc, command_func_t function);
@@ -77,6 +76,16 @@ command_entry_t* find_command(const char* name) {
         }
     }
     return NULL;
+}
+
+int command_count_registered(void) {
+    return command_count;
+}
+
+const char* command_name_at(int index) {
+    if (index < 0 || index >= command_count)
+        return NULL;
+    return command_table[index].name;
 }
 
 // List available commands
@@ -158,12 +167,6 @@ static int cmd_yield(int argc, char* argv[]) {
 }
 
 static int cmd_fork_test(int argc, char* argv[]) {
-    (void)argc; (void)argv;
-    printf("Not yet implemented\n");
-    return 0;
-}
-
-static int cmd_pstree(int argc, char* argv[]) {
     (void)argc; (void)argv;
     printf("Not yet implemented\n");
     return 0;

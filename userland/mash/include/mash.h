@@ -11,6 +11,16 @@ typedef struct {
     command_func_t function;
 } command_entry_t;
 
+int register_command(const char* name, const char* desc, command_func_t function);
+command_entry_t* find_command(const char* name);
+void list_commands(void);
+int command_init(void);
+int command_count_registered(void);
+const char* command_name_at(int index);
+const char* shell_getenv(const char* name);
+void shell_print_prompt(void);
+char* shell_read_line(void);
+void shell_line_edit_init(void);
 
 #define SHELL_BUFFER_SIZE 256
 #define SHELL_MAX_ARGS      16
@@ -20,8 +30,8 @@ typedef struct {
 #define SHELL_ERROR         1
 #define SHELL_EXIT          2
 
-static char input_buffer[SHELL_BUFFER_SIZE];
-static char* argv_buffer[SHELL_MAX_ARGS];
-static int shell_running = 0;
+extern char input_buffer[SHELL_BUFFER_SIZE];
+extern char* argv_buffer[SHELL_MAX_ARGS];
+extern int shell_running;
 
 #endif

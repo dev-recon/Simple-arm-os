@@ -6,16 +6,15 @@
 #include <fcntl.h>
 #include "../include/mash.h"
 
-extern command_entry_t* find_command(const char* name);
-extern void list_commands(void);
-extern int command_init(void);
+char input_buffer[SHELL_BUFFER_SIZE];
+char* argv_buffer[SHELL_MAX_ARGS];
+int shell_running = 0;
 
 static char token_buffer[SHELL_BUFFER_SIZE];
 
 #define SHELL_MAX_ENV       16
 #define SHELL_ENV_NAME_LEN  32
 #define SHELL_ENV_VALUE_LEN 160
-
 typedef struct shell_env {
     char name[SHELL_ENV_NAME_LEN];
     char value[SHELL_ENV_VALUE_LEN];
@@ -50,7 +49,7 @@ typedef struct shell_command {
 } shell_command_t;
 
 static int token_is_special(char c) {
-    return c == '<' || c == '>' || c == '&' || c == '|';
+    return c == '<' || c == '>' || c == '&' || c == '|' || c == ';';
 }
 
 static int token_has_slash(const char* s) {
@@ -72,7 +71,7 @@ static int shell_var_char(char c) {
     return shell_var_start(c) || (c >= '0' && c <= '9');
 }
 
-static const char* shell_getenv(const char* name) {
+const char* shell_getenv(const char* name) {
     int i;
 
     for (i = 0; i < shell_env_count; i++) {
@@ -779,153 +778,6 @@ void shell_print_prompt(void) {
     pflush();
 }
 
-static void shell_cursor_left(int count) {
-    while (count-- > 0) {
-        putc_tty('\033');
-        putc_tty('[');
-        putc_tty('D');
-    }
-}
-
-static void shell_cursor_right(int count) {
-    while (count-- > 0) {
-        putc_tty('\033');
-        putc_tty('[');
-        putc_tty('C');
-    }
-}
-
-static void shell_redraw_from(char* line, int len, int cursor) {
-    int i;
-
-    for (i = cursor; i < len; i++)
-        putc_tty(line[i]);
-    putc_tty(' ');
-    shell_cursor_left(len - cursor + 1);
-}
-
-static void shell_insert_char(char* line, int* len, int* cursor, char c) {
-    int i;
-
-    if (*len >= SHELL_BUFFER_SIZE - 1)
-        return;
-
-    for (i = *len; i > *cursor; i--)
-        line[i] = line[i - 1];
-
-    line[*cursor] = c;
-    (*len)++;
-    (*cursor)++;
-    line[*len] = '\0';
-
-    for (i = *cursor - 1; i < *len; i++)
-        putc_tty(line[i]);
-    shell_cursor_left(*len - *cursor);
-}
-
-static void shell_backspace_char(char* line, int* len, int* cursor) {
-    int i;
-
-    if (*cursor <= 0)
-        return;
-
-    (*cursor)--;
-    for (i = *cursor; i < *len - 1; i++)
-        line[i] = line[i + 1];
-
-    (*len)--;
-    line[*len] = '\0';
-    shell_cursor_left(1);
-    shell_redraw_from(line, *len, *cursor);
-}
-
-static void shell_delete_char(char* line, int* len, int cursor) {
-    int i;
-
-    if (cursor >= *len)
-        return;
-
-    for (i = cursor; i < *len - 1; i++)
-        line[i] = line[i + 1];
-
-    (*len)--;
-    line[*len] = '\0';
-    shell_redraw_from(line, *len, cursor);
-}
-
-static void shell_handle_escape(char* line, int* len, int* cursor) {
-    char introducer = getc_tty();
-    char code;
-
-    if (introducer != '[' && introducer != 'O')
-        return;
-
-    code = getc_tty();
-    if (code >= '0' && code <= '9') {
-        char suffix = getc_tty();
-        if (code == '3' && suffix == '~')
-            shell_delete_char(line, len, *cursor);
-        return;
-    }
-
-    switch (code) {
-    case 'D':
-        if (*cursor > 0) {
-            shell_cursor_left(1);
-            (*cursor)--;
-        }
-        break;
-    case 'C':
-        if (*cursor < *len) {
-            shell_cursor_right(1);
-            (*cursor)++;
-        }
-        break;
-    case 'H':
-        shell_cursor_left(*cursor);
-        *cursor = 0;
-        break;
-    case 'F':
-        shell_cursor_right(*len - *cursor);
-        *cursor = *len;
-        break;
-    case 'A':
-    case 'B':
-    default:
-        break;
-    }
-}
-
-
-// Read a command line
-char* shell_read_line(void) {
-    int len = 0;
-    int cursor = 0;
-    char c;
-
-    input_buffer[0] = '\0';
-    
-    while (1) {
-        c = getc_tty();
-        if(!c) continue;
-        if (c == '\r' || c == '\n') {
-            printf("\n");
-            break;
-        } else if (c == '\b' || c == 0x7F) {
-            shell_backspace_char(input_buffer, &len, &cursor);
-        } else if (c == '\033') {
-            shell_handle_escape(input_buffer, &len, &cursor);
-        } else if (c >= ' ' && c <= '~') {
-            shell_insert_char(input_buffer, &len, &cursor, c);
-        }
-        pflush();
-    }
-    
-    input_buffer[len] = '\0';
-    return input_buffer;
-}
-
-
 // Parse a line into arguments
 int shell_parse_line(char* line, char* argv[]) {
     int argc = 0;
@@ -944,7 +796,9 @@ int shell_parse_line(char* line, char* argv[]) {
 
         argv[argc++] = writep;
 
-        if (*readp == '>' && readp[1] == '>') {
+        if ((*readp == '&' && readp[1] == '&') ||
+            (*readp == '|' && readp[1] == '|') ||
+            (*readp == '>' && readp[1] == '>')) {
             if (writep + 2 >= endp)
                 break;
             *writep++ = *readp++;
@@ -1108,6 +962,66 @@ int shell_execute(int argc, char* argv[]) {
     return SHELL_ERROR;
 }
 
+static int shell_is_sequence_operator(const char* token) {
+    return strcmp(token, ";") == 0 ||
+           strcmp(token, "&&") == 0 ||
+           strcmp(token, "||") == 0;
+}
+
+static int shell_should_execute_segment(const char* previous_op, int last_status) {
+    if (!previous_op || strcmp(previous_op, ";") == 0)
+        return 1;
+    if (strcmp(previous_op, "&&") == 0)
+        return last_status == 0;
+    if (strcmp(previous_op, "||") == 0)
+        return last_status != 0;
+    return 1;
+}
+
+static int shell_execute_argv_line(int argc, char* argv[]) {
+    int start = 0;
+    int last_status = SHELL_OK;
+    const char* previous_op = NULL;
+
+    while (start < argc) {
+        int end = start;
+        const char* next_op = NULL;
+        int segment_argc;
+
+        while (end < argc && !shell_is_sequence_operator(argv[end]))
+            end++;
+
+        if (end < argc)
+            next_op = argv[end];
+
+        segment_argc = end - start;
+        if (segment_argc == 0) {
+            printf("mash: syntax error near '%s'\n", next_op ? next_op : "newline");
+            return SHELL_ERROR;
+        }
+
+        if (shell_should_execute_segment(previous_op, last_status)) {
+            argv[end] = NULL;
+            last_status = shell_execute(segment_argc, &argv[start]);
+            if (last_status == SHELL_EXIT)
+                return SHELL_EXIT;
+        }
+
+        if (!next_op)
+            break;
+
+        previous_op = next_op;
+        start = end + 1;
+
+        if (start >= argc) {
+            printf("mash: expected command after '%s'\n", previous_op);
+            return SHELL_ERROR;
+        }
+    }
+
+    return last_status;
+}
+
 
 // Shell main loop
 void shell_run(void) {
@@ -1127,7 +1041,7 @@ void shell_run(void) {
         
         int argc = shell_parse_line(line, argv_buffer);
         if (argc > 0) {
-            int result = shell_execute(argc, argv_buffer);
+            int result = shell_execute_argv_line(argc, argv_buffer);
             if (result == SHELL_EXIT) {
                 break;
             }
@@ -1140,21 +1054,14 @@ void shell_run(void) {
 
 int main() {
     int version = 11 ;
-    char *cmd1[] = { "hello" , NULL} ;
-    char *cmd2[] = { "hello2" , NULL} ;
-    char *cmd3[] = { "malloc" , NULL} ;
 
     printf("******************************************************\n");
 
     shell_init_env();
     shell_load_startup_files();
+    shell_line_edit_init();
     command_init();
     shell_run();
-    //shell_execute(1, cmd2);
-
-    //shell_execute(1, cmd2);
-
-    //shell_execute(1, cmd3);
 
     printf("SHELL EXITING **********************************************\n");
 
