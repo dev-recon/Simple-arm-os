@@ -165,6 +165,12 @@ void irq_c_handler(void)
     
     /* Debug : afficher l'IRQ recue */
     //kprintf("[IRQ] DONE IRQ %u received! (count=%u)\n", int_id, irq_count);
+
+    if (int_id == virtio_blk_get_irq()) {
+        virtio_block_irq_handler();
+        gicc[0x010/4] = irq_id;  /* GICC_EOIR */
+        return;
+    }
     
     /* Router vers les handlers specifiques pour machine virt */
     switch (int_id) {
@@ -188,11 +194,6 @@ void irq_c_handler(void)
             ide_irq_handler();
             break;
             
-        case VIRT_VIRTIO_BLOCK_IRQ:
-            //kprintf("[IRQ] - VirtIO IRQ %u - SUCCESS!\n", int_id);
-            virtio_block_irq_handler();
-            break;
-
         /* VirtIO IRQs non utilises pour l'instant. Les laisser visibles plutot
          * que les router dans l'ancien handler ATA, qui manipule un etat de
          * queue different du driver virtio_block.c. */
