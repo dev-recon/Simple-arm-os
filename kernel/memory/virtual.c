@@ -310,6 +310,11 @@ vm_space_t *fork_vm_space(vm_space_t *parent_vm)
     parent_vma = parent_vm->vma_list;
     while (parent_vma)
     {
+        if (parent_vma->end <= parent_vma->start) {
+            parent_vma = parent_vma->next;
+            continue;
+        }
+
         child_vma = create_vma(child_vm,
                                parent_vma->start,
                                parent_vma->end - parent_vma->start,

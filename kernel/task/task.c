@@ -322,7 +322,6 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
 task_t* task_create_copy(task_t* parent, bool from_user)
 {
     task_t* child;
-    char *child_name = NULL;
     
     if (!parent || !parent->process) {
         KERROR("task_create_copy: parent NULL\n");
@@ -339,24 +338,13 @@ task_t* task_create_copy(task_t* parent, bool from_user)
 
     /* Copier la structure parent */
     memcpy(child, parent, sizeof(task_t));
-
-    child_name = (char *)kmalloc(TASK_NAME_MAX);
-    if(!child_name){
-        KERROR("task_create_copy: Failed to allocate child name\n");
-        kfree(child);
-        return NULL;
-    }
-
-    /* Generer un nom pour l'enfant */
-    snprintf(child_name, TASK_NAME_MAX, "%s-child", parent->name);
     
     /* Reinitialiser les champs specifiques a l'enfant */
     child->task_id = next_task_id++;
-    strncpy(child->name, child_name, TASK_NAME_MAX - 1);
+    strncpy(child->name, parent->name, TASK_NAME_MAX - 1);
     child->name[TASK_NAME_MAX - 1] = '\0';
     
     if(!set_process_stack(parent,child, from_user)) {
-        kfree(child_name);
         kfree(child);
         return NULL;
     }
@@ -400,7 +388,6 @@ task_t* task_create_copy(task_t* parent, bool from_user)
         }
         else {
             task_free_kernel_stack(child);
-            kfree(child_name);
             kfree(child);
             panic("Task Create Copy - cannot allocate Process Structure");
         }
@@ -423,7 +410,6 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->wakeup_time = 0;
     child->quantum_left = QUANTUM_TICKS;
 
-    kfree(child_name);
     kernel_lifecycle_stats.tasks_created++;
     return child;
 }

@@ -25,6 +25,22 @@ static int check_pages(unsigned char *ptr, unsigned size, unsigned seed)
     return ptr[size - 1] == (unsigned char)(seed ^ 0x5a);
 }
 
+static void print_malloc_stats(const char *label)
+{
+    struct malloc_stats stats;
+
+    if (malloc_get_stats(&stats) < 0)
+        return;
+
+    printf("memstress: %s mapped=%uKB used=%uKB free=%uKB blocks=%u free_blocks=%u\n",
+           label,
+           (unsigned)(stats.heap_mapped / 1024),
+           (unsigned)(stats.heap_used / 1024),
+           (unsigned)(stats.heap_free / 1024),
+           (unsigned)stats.block_count,
+           (unsigned)stats.free_count);
+}
+
 int main(int argc, char **argv)
 {
     unsigned total_kb = DEFAULT_KB;
@@ -55,6 +71,7 @@ int main(int argc, char **argv)
 
     printf("memstress: pid=%d target=%uKB chunks=%u hold=%us\n",
            getpid(), chunk_count * CHUNK_KB, chunk_count, seconds);
+    print_malloc_stats("initial");
 
     for (unsigned i = 0; i < chunk_count; i++) {
         chunks[i] = malloc(chunk_bytes);
@@ -75,6 +92,7 @@ int main(int argc, char **argv)
     }
 
     printf("memstress: allocated and touched %uKB, run ps now\n", live_kb);
+    print_malloc_stats("after alloc");
     sleep(seconds);
 
     for (unsigned i = 1; i < chunk_count; i += 2) {
@@ -95,6 +113,7 @@ int main(int argc, char **argv)
     }
 
     printf("memstress: reuse phase ready, run ps again\n");
+    print_malloc_stats("after reuse");
     sleep(seconds);
 
     for (unsigned i = 0; i < chunk_count; i++) {
@@ -102,6 +121,7 @@ int main(int argc, char **argv)
             free(chunks[i]);
     }
 
+    print_malloc_stats("after free");
     printf("memstress: done%s\n", ok ? "" : " with errors");
     return ok ? 0 : 1;
 }

@@ -129,5 +129,27 @@ int unsetenv(const char* name);
 
 int system(const char* command);
 
+/* ========================================
+ * Allocation mémoire
+ * ======================================== */
+
+void* malloc(size_t size);
+void free(void* ptr);
+void* calloc(size_t count, size_t size);
+void* realloc(void* ptr, size_t size);
+
+/* ========================================
+ * Diagnostics mémoire
+ * ======================================== */
+
+struct malloc_stats {
+    size_t heap_mapped;
+    size_t heap_used;
+    size_t heap_free;
+    size_t block_count;
+    size_t free_count;
+};
+
+int malloc_get_stats(struct malloc_stats* stats);
 
 #endif /* _STDLIB_H */

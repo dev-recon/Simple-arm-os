@@ -409,7 +409,11 @@ int sys_brk(void* addr)
                 free_page((void *)phys_addr);
             }
         }
-        heap_vma->end = new_brk;
+        if (new_brk == proc->vm->heap_start) {
+            remove_vma(proc->vm, heap_vma->start, heap_vma->end);
+        } else {
+            heap_vma->end = new_brk;
+        }
     } else if (new_brk > old_brk) {
         /* Growing heap */
         heap_vma = find_heap_vma(proc->vm);

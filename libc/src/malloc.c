@@ -1,6 +1,7 @@
 #include <../include/stddef.h>
 #include <../include/stdint.h>
 #include <../include/stdio.h>
+#include <../include/stdlib.h>
 
 // Header de bloc mémoire
 struct block_header {
@@ -12,11 +13,14 @@ struct block_header {
 
 #define HEADER_SIZE sizeof(struct block_header)
 #define ALIGN(size) (((size) + 7) & ~7)  // Alignement 8 bytes
+#define PAGE_SIZE 4096U
+#define PAGE_ALIGN_UP(addr) (((addr) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
 
 // Variables globales
 static struct block_header *heap_head = NULL;
 static void *current_brk = NULL;
 static void *heap_start = NULL;
+static int heap_has_blocks = 0;
 
 void *malloc(size_t size);
 struct block_header *find_free_block(size_t size);
@@ -24,9 +28,11 @@ struct block_header *extend_heap(size_t size);
 void split_block(struct block_header *block, size_t size);
 void merge_blocks(struct block_header *first, struct block_header *second);
 struct block_header *allocate_block(size_t size);
+void trim_tail_block(struct block_header *block);
 void free(void *ptr);
 void *calloc(size_t count, size_t size);
 void *realloc(void *ptr, size_t size);
+int malloc_get_stats(struct malloc_stats* stats);
 
 extern void *brk(void *addr);
 extern void *sbrk(void *addr);
@@ -48,6 +54,7 @@ void *malloc(size_t size) {
         current_brk = sbrk(0);
         heap_start = current_brk ;
         heap_head = heap_start ;
+        heap_has_blocks = 0;
 
         //printf("malloc: current_brk 0x%08X \n", current_brk);
         
@@ -61,7 +68,7 @@ void *malloc(size_t size) {
     //printf("malloc: trying to find free block of size %u \n", size);
  
     // Chercher un bloc libre existant
-    block = find_free_block(size);
+    block = heap_has_blocks ? find_free_block(size) : NULL;
     if (block) {
         block->free = 0;
         
@@ -113,7 +120,7 @@ struct block_header *allocate_block(size_t size) {
     new_block->prev = NULL;
     
     // Lier à la liste existante
-    if (heap_start != heap_head) {
+    if (heap_has_blocks) {
         // Trouver le dernier bloc
         struct block_header *last = heap_start;
         while (last->next) {
@@ -122,6 +129,8 @@ struct block_header *allocate_block(size_t size) {
         
         last->next = new_block;
         new_block->prev = last;
+    } else {
+        heap_has_blocks = 1;
     }
 
     //printf("Exiting  allocate_block: new_block at %p\n", new_block);
@@ -209,7 +218,43 @@ void free(void *ptr) {
     // Fusionner avec le bloc précédent si libre
     if (block->prev && block->prev->free) {
         merge_blocks(block->prev, block);
+        block = block->prev;
     }
+
+    trim_tail_block(block);
+}
+
+void trim_tail_block(struct block_header *block)
+{
+    uintptr_t block_start;
+    uintptr_t keep_brk;
+    void *new_brk;
+
+    if (!block || !block->free || block->next)
+        return;
+
+    if (!block->prev) {
+        new_brk = sbrk(heap_start);
+        if (new_brk != (void*)-1) {
+            current_brk = new_brk;
+            heap_head = (struct block_header*)heap_start;
+            heap_has_blocks = 0;
+        }
+        return;
+    }
+
+    block_start = (uintptr_t)block;
+    keep_brk = PAGE_ALIGN_UP(block_start + HEADER_SIZE);
+    if (keep_brk >= (uintptr_t)current_brk)
+        return;
+
+    new_brk = sbrk((void*)keep_brk);
+    if (new_brk == (void*)-1)
+        return;
+
+    current_brk = new_brk;
+    heap_head = (struct block_header*)new_brk;
+    block->size = (uintptr_t)new_brk - block_start - HEADER_SIZE;
 }
 
 void *calloc(size_t count, size_t size) {
@@ -251,6 +296,40 @@ void *realloc(void *ptr, size_t size) {
     return new_ptr;
 }
 
+int malloc_get_stats(struct malloc_stats* stats)
+{
+    struct block_header *current;
 
+    if (!stats)
+        return -1;
+
+    stats->heap_mapped = 0;
+    stats->heap_used = 0;
+    stats->heap_free = 0;
+    stats->block_count = 0;
+    stats->free_count = 0;
+
+    if (!heap_start || !current_brk)
+        return 0;
+
+    stats->heap_mapped = (size_t)((uintptr_t)current_brk - (uintptr_t)heap_start);
+
+    if (!heap_has_blocks)
+        return 0;
+
+    current = (struct block_header *)heap_start;
+    while (current) {
+        stats->block_count++;
+        if (current->free) {
+            stats->free_count++;
+            stats->heap_free += current->size;
+        } else {
+            stats->heap_used += current->size;
+        }
+        current = current->next;
+    }
+
+    return 0;
+}
 
 

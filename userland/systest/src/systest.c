@@ -743,6 +743,7 @@ static void test_malloc_free_stress(void)
     unsigned heap_before = 0;
     unsigned heap_after_alloc = 0;
     unsigned heap_after_reuse = 0;
+    unsigned heap_after_free = 0;
     unsigned rss_after_alloc = 0;
     unsigned pf_before = 0;
     unsigned pf_after = 0;
@@ -801,12 +802,21 @@ static void test_malloc_free_stress(void)
     expect(read_self_mem_kb(&heap_after_reuse, NULL, NULL) == 0,
            "malloc stress sysinfo after reuse", 0);
     expect(heap_after_reuse >= heap_after_alloc,
-           "malloc stress heap remains mapped after free", (int)heap_after_reuse);
+           "malloc stress heap stays mapped while blocks live", (int)heap_after_reuse);
 
 cleanup:
     for (int i = 0; i < BLOCKS; i++) {
         if (blocks[i])
             free(blocks[i]);
+    }
+
+    if (heap_after_alloc > heap_before &&
+        expect(read_self_mem_kb(&heap_after_free, NULL, NULL) == 0,
+               "malloc stress sysinfo after free", 0) == 0) {
+        int heap_delta = (int)heap_after_free - (int)heap_before;
+        expect(heap_after_free <= heap_before,
+               "malloc stress terminal free shrinks heap",
+               heap_delta);
     }
 }
 
