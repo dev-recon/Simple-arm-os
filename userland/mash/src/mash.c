@@ -379,8 +379,8 @@ static void exec_external_or_die(int argc, char* argv[]) {
         }
     }
 
-    printf("exec %s failed\n", argv[0]);
-    exit(-1);
+    printf("mash: command not found: %s\n", argv[0]);
+    exit(127);
 }
 
 static int split_pipeline(int argc, char* argv[], shell_command_t commands[], int* command_count) {
@@ -779,31 +779,149 @@ void shell_print_prompt(void) {
     pflush();
 }
 
+static void shell_cursor_left(int count) {
+    while (count-- > 0) {
+        putc_tty('\033');
+        putc_tty('[');
+        putc_tty('D');
+    }
+}
+
+static void shell_cursor_right(int count) {
+    while (count-- > 0) {
+        putc_tty('\033');
+        putc_tty('[');
+        putc_tty('C');
+    }
+}
+
+static void shell_redraw_from(char* line, int len, int cursor) {
+    int i;
+
+    for (i = cursor; i < len; i++)
+        putc_tty(line[i]);
+    putc_tty(' ');
+    shell_cursor_left(len - cursor + 1);
+}
+
+static void shell_insert_char(char* line, int* len, int* cursor, char c) {
+    int i;
+
+    if (*len >= SHELL_BUFFER_SIZE - 1)
+        return;
+
+    for (i = *len; i > *cursor; i--)
+        line[i] = line[i - 1];
+
+    line[*cursor] = c;
+    (*len)++;
+    (*cursor)++;
+    line[*len] = '\0';
+
+    for (i = *cursor - 1; i < *len; i++)
+        putc_tty(line[i]);
+    shell_cursor_left(*len - *cursor);
+}
+
+static void shell_backspace_char(char* line, int* len, int* cursor) {
+    int i;
+
+    if (*cursor <= 0)
+        return;
+
+    (*cursor)--;
+    for (i = *cursor; i < *len - 1; i++)
+        line[i] = line[i + 1];
+
+    (*len)--;
+    line[*len] = '\0';
+    shell_cursor_left(1);
+    shell_redraw_from(line, *len, *cursor);
+}
+
+static void shell_delete_char(char* line, int* len, int cursor) {
+    int i;
+
+    if (cursor >= *len)
+        return;
+
+    for (i = cursor; i < *len - 1; i++)
+        line[i] = line[i + 1];
+
+    (*len)--;
+    line[*len] = '\0';
+    shell_redraw_from(line, *len, cursor);
+}
+
+static void shell_handle_escape(char* line, int* len, int* cursor) {
+    char introducer = getc_tty();
+    char code;
+
+    if (introducer != '[' && introducer != 'O')
+        return;
+
+    code = getc_tty();
+    if (code >= '0' && code <= '9') {
+        char suffix = getc_tty();
+        if (code == '3' && suffix == '~')
+            shell_delete_char(line, len, *cursor);
+        return;
+    }
+
+    switch (code) {
+    case 'D':
+        if (*cursor > 0) {
+            shell_cursor_left(1);
+            (*cursor)--;
+        }
+        break;
+    case 'C':
+        if (*cursor < *len) {
+            shell_cursor_right(1);
+            (*cursor)++;
+        }
+        break;
+    case 'H':
+        shell_cursor_left(*cursor);
+        *cursor = 0;
+        break;
+    case 'F':
+        shell_cursor_right(*len - *cursor);
+        *cursor = *len;
+        break;
+    case 'A':
+    case 'B':
+    default:
+        break;
+    }
+}
+
 
 // Read a command line
 char* shell_read_line(void) {
-    int pos = 0;
+    int len = 0;
+    int cursor = 0;
     char c;
+
+    input_buffer[0] = '\0';
     
-    while (pos < SHELL_BUFFER_SIZE - 1) {
+    while (1) {
         c = getc_tty();
         if(!c) continue;
         if (c == '\r' || c == '\n') {
             printf("\n");
             break;
-        } else if (c == '\b' || c == 0x7F) {  // Backspace
-            if (pos > 0) {
-                pos--;
-                printf("\b \b");
-            }
-        } else if (c >= ' ' && c <= '~') {  // Printable characters
-            input_buffer[pos++] = c;
-            putc_tty(c);
+        } else if (c == '\b' || c == 0x7F) {
+            shell_backspace_char(input_buffer, &len, &cursor);
+        } else if (c == '\033') {
+            shell_handle_escape(input_buffer, &len, &cursor);
+        } else if (c >= ' ' && c <= '~') {
+            shell_insert_char(input_buffer, &len, &cursor, c);
         }
         pflush();
     }
     
-    input_buffer[pos] = '\0';
+    input_buffer[len] = '\0';
     return input_buffer;
 }
 

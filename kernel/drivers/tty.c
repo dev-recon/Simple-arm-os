@@ -23,21 +23,19 @@ void tty_input_char(char c) {
     unsigned long flags;
     spin_lock_irqsave(&tty0.lock, &flags);
     
-    /* Echo si activé */
-    if (tty0.c_lflag & ECHO) {
-        uart_putc(c);
-    }
-    
-    /* Gestion backspace */
-    if (c == '\b' || c == 127) {
+    /* In raw/no-echo mode, pass editing keys to userland. mash owns line editing. */
+    if ((tty0.c_lflag & ECHO) && (c == '\b' || c == 127)) {
         if (tty0.input_head != tty0.input_tail) {
             tty0.input_head = (tty0.input_head - 1) % TTY_INPUT_BUF_SIZE;
-            if (tty0.c_lflag & ECHO) {
-                uart_puts("\b \b");  /* Effacer le caractère à l'écran */
-            }
+            uart_puts("\b \b");
         }
         spin_unlock_irqrestore(&tty0.lock, flags);
         return;
+    }
+
+    /* Echo si activé */
+    if (tty0.c_lflag & ECHO) {
+        uart_putc(c);
     }
     
     /* Ajouter au buffer */
