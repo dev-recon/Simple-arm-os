@@ -186,6 +186,7 @@ static void test_cow_memory(void)
     int pid;
     int status = -1;
     int waited;
+    unsigned char *heap;
 
     cow_shared_value = 11;
     pid = fork();
@@ -215,6 +216,50 @@ static void test_cow_memory(void)
     waited = waitpid(pid, &status, 0);
     expect(waited == pid && status == 0, "COW parent writes private page", waited);
     expect(cow_shared_value == 44, "COW parent keeps own write", cow_shared_value);
+
+    heap = malloc(8192);
+    if (expect(heap != NULL, "COW heap allocation", 0) < 0)
+        return;
+
+    heap[0] = 0x11;
+    heap[4095] = 0x22;
+    heap[4096] = 0x33;
+    heap[8191] = 0x44;
+
+    pid = fork();
+    if (pid == 0) {
+        heap[0] = 0xAA;
+        heap[4096] = 0xBB;
+        exit(heap[0] == 0xAA && heap[4096] == 0xBB ? 0 : 1);
+    }
+
+    if (expect(pid > 0, "COW heap child writer", pid) >= 0) {
+        waited = waitpid(pid, &status, 0);
+        expect(waited == pid && status == 0, "COW heap child writes private pages", waited);
+        expect(heap[0] == 0x11 && heap[4095] == 0x22 &&
+               heap[4096] == 0x33 && heap[8191] == 0x44,
+               "COW heap parent unchanged", heap[0]);
+    }
+
+    heap[0] = 0x11;
+    heap[4096] = 0x33;
+
+    pid = fork();
+    if (pid == 0) {
+        usleep(20000);
+        exit(heap[0] == 0x11 && heap[4096] == 0x33 ? 0 : 1);
+    }
+
+    if (expect(pid > 0, "COW heap parent writer", pid) >= 0) {
+        heap[0] = 0xCC;
+        heap[4096] = 0xDD;
+        waited = waitpid(pid, &status, 0);
+        expect(waited == pid && status == 0, "COW heap child unchanged", waited);
+        expect(heap[0] == 0xCC && heap[4096] == 0xDD,
+               "COW heap parent keeps own writes", heap[0]);
+    }
+
+    free(heap);
 }
 
 static void test_identity(void)
