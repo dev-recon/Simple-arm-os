@@ -440,7 +440,9 @@ int sys_dup2(int oldfd, int newfd)
     
     /* Close newfd if it's open */
     if (current_task->process->files[newfd]) {
-        close_file(current_task->process->files[newfd]);
+        file_t* old_newfd = current_task->process->files[newfd];
+        current_task->process->files[newfd] = NULL;
+        close_file(old_newfd);
     }
     
     file->ref_count++;
@@ -952,6 +954,16 @@ int sys_sysinfo(struct sysinfo_response *resp)
     /* Mémoire système */
     local->mem_total_kb = (get_total_page_count() * PAGE_SIZE) / 1024;
     local->mem_free_kb  = (get_free_page_count()  * PAGE_SIZE) / 1024;
+    local->tasks_created = kernel_lifecycle_stats.tasks_created;
+    local->tasks_destroyed = kernel_lifecycle_stats.tasks_destroyed;
+    local->zombies_created = kernel_lifecycle_stats.zombies_created;
+    local->zombies_reaped = kernel_lifecycle_stats.zombies_reaped;
+    local->failed_forks = kernel_lifecycle_stats.failed_forks;
+    local->scheduler_refused = kernel_lifecycle_stats.scheduler_refused;
+    local->ready_queue_refused = kernel_lifecycle_stats.ready_queue_refused;
+    local->stack_pages_allocated = kernel_lifecycle_stats.stack_pages_allocated;
+    local->stack_pages_freed = kernel_lifecycle_stats.stack_pages_freed;
+    local->asid_rollovers = kernel_lifecycle_stats.asid_rollovers;
 
     /* Uptime pour %CPU */
     uint32_t uptime = get_system_ticks();

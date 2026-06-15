@@ -825,6 +825,7 @@ int shell_parse_line(char* line, char* argv[]) {
             *writep++ = *readp++;
         } else {
             char quote = 0;
+            char* token_start = writep;
 
             while (*readp) {
                 if (quote) {
@@ -844,6 +845,20 @@ int shell_parse_line(char* line, char* argv[]) {
 
                 if (*readp == '\\' && readp[1]) {
                     readp++;
+                }
+                if (!quote && writep == token_start && *readp == '~' &&
+                    (readp[1] == '\0' || readp[1] == '/' ||
+                     readp[1] == ' ' || readp[1] == '\t' ||
+                     token_is_special(readp[1]))) {
+                    const char* home = shell_getenv("HOME");
+
+                    if (!home || !*home)
+                        home = "/";
+
+                    while (*home && writep < endp)
+                        *writep++ = *home++;
+                    readp++;
+                    continue;
                 }
                 if (*readp == '$' && quote != '\'') {
                     char var_name[SHELL_ENV_NAME_LEN];

@@ -159,8 +159,8 @@ void init_process_main(void* arg)
             
             if (child_pid > 0) {
                 reaped_count++;
-                KINFO("[INIT] Reaped orphan child PID=%d (status=%d) [total=%d]\n", 
-                      child_pid, status, reaped_count);
+                //KDEBUG("[INIT] Reaped orphan child PID=%d (status=%d) [total=%d]\n",
+                //       child_pid, status, reaped_count);
             } else if (child_pid == -ECHILD) {
                 KDEBUG("[INIT] No children to reap anymore\n");
             }
@@ -289,4 +289,3 @@ process_t* get_current_process(void)
     }
     return NULL;
 }
-

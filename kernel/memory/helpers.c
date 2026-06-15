@@ -1948,16 +1948,19 @@ bool validate_split_ttbr_config(void)
  */
 void flush_tlb_for_asid(uint32_t asid)
 {
-    if (asid > MAX_ASID) {
+    uint32_t hw_asid = asid & MAX_ASID;
+
+    if (hw_asid == 0 || hw_asid == ASID_KERNEL) {
         KERROR("flush_tlb_for_asid: Invalid ASID %u\n", asid);
         return;
     }
     
-    KDEBUG("flush_tlb_for_asid: Flushing TLB for ASID %u\n", asid);
+    KDEBUG("flush_tlb_for_asid: Flushing TLB for ASID cookie=%u hw=%u\n",
+           asid, hw_asid);
     
-    tlb_flush_by_asid(asid);
+    tlb_flush_by_asid(hw_asid);
     
-    KDEBUG("flush_tlb_for_asid: TLB flush completed for ASID %u\n", asid);
+    KDEBUG("flush_tlb_for_asid: TLB flush completed for ASID hw=%u\n", hw_asid);
 }
 
 /**

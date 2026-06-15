@@ -63,6 +63,13 @@ int main(void)
            info->mem_total_kb / 1024, info->mem_free_kb / 1024,
            pct_x10 > 800 ? "1;31" : pct_x10 > 600 ? "1;33" : "1;32",
            pct, pct_frac);
+    printf("\033[1mLife:\033[0m tasks %u/%u  zombies %u/%u  forkfail %u  sched-refuse %u  ready-refuse %u  kstack pages %u/%u  asid-roll %u\n\n",
+           info->tasks_created, info->tasks_destroyed,
+           info->zombies_created, info->zombies_reaped,
+           info->failed_forks,
+           info->scheduler_refused, info->ready_queue_refused,
+           info->stack_pages_allocated, info->stack_pages_freed,
+           info->asid_rollovers);
 
     /* Header */
     printf("\033[1m%4s %4s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %5s %4s %4s %4s %-6s %s\033[0m\n",

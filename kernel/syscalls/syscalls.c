@@ -76,6 +76,41 @@ extern void switch_to_idle_stack(void);
 extern void __task_switch_to_user(task_context_t* new_ctx);
 extern void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 
+static void cleanup_failed_fork_child(task_t* parent, task_t* child)
+{
+    task_t* iter;
+
+    if (!child)
+        return;
+
+    if (parent && parent->process) {
+        if (parent->process->children == child) {
+            parent->process->children = child->process ? child->process->sibling_next : NULL;
+        } else {
+            iter = parent->process->children;
+            while (iter && iter->process && iter->process->sibling_next != child)
+                iter = iter->process->sibling_next;
+
+            if (iter && iter->process)
+                iter->process->sibling_next = child->process ? child->process->sibling_next : NULL;
+        }
+    }
+
+    if (child->process) {
+        if (child->process->vm) {
+            destroy_vm_space(child->process->vm);
+            child->process->vm = NULL;
+        }
+        kfree(child->process);
+        child->process = NULL;
+    }
+
+    task_free_kernel_stack(child);
+
+    kfree(child);
+    kernel_lifecycle_stats.tasks_destroyed++;
+}
+
 static void rename_task_from_exec_path(task_t *task, const char *path)
 {
     const char *base;
@@ -307,7 +342,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     /* Ouvrir le fichier executable */
     exe_inode = path_lookup(kernel_filename);
     if (!exe_inode) {
-        KERROR("sys_execve: File not found: %s\n", kernel_filename);
+        //KDEBUG("sys_execve: File not found: %s\n", kernel_filename);
         cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
         return -ENOENT;
     }
@@ -414,7 +449,6 @@ int sys_fork(void)
 {
     task_t* parent = current_task;
     task_t* child;
-    int i;
 
     uint32_t return_address;
     __asm__ volatile("mov %0, lr" : "=r"(return_address));
@@ -434,14 +468,10 @@ int sys_fork(void)
     child = task_create_copy(parent, from_user);
     if (!child) {
         KERROR("sys_fork: Failed to create child process\n");
+        kernel_lifecycle_stats.failed_forks++;
         return -ENOMEM;
     }
 
-    /* Configuration des relations parent-enfant - ACCeS CORRECT */
-    child->process->parent = parent;
-    child->process->sibling_next = parent->process->children;
-    parent->process->children = child;
-    
     /* Copier l'espace memoire avec COW - ACCeS CORRECT */
     if (child->process->vm) {
         destroy_vm_space(child->process->vm);
@@ -450,17 +480,18 @@ int sys_fork(void)
     child->process->vm = fork_vm_space(parent->process->vm);
     if (!child->process->vm) {
         KERROR("sys_fork: Failed to copy VM space\n");
-        destroy_process(child);
+        cleanup_failed_fork_child(parent, child);
+        kernel_lifecycle_stats.failed_forks++;
         return -ENOMEM;
     }
+
+    /* Configuration des relations parent-enfant apres creation VM reussie. */
+    child->process->parent = parent;
+    child->process->sibling_next = parent->process->children;
+    parent->process->children = child;
     
-    /* Copier les descripteurs de fichiers - ACCeS CORRECT */
-    for (i = 0; i < MAX_FILES; i++) {
-        if (parent->process->files[i]) {
-            child->process->files[i] = parent->process->files[i];
-            parent->process->files[i]->ref_count++;
-        }
-    }
+    /* Copier les descripteurs de fichiers */
+    copy_process_files(parent, child);
 
     init_process_signals(child);
 
@@ -546,8 +577,11 @@ void sys_exit(int status)
     /* CORRECTION: États cohérents avec sys_waitpid */
     proc->process->exit_code = status;
     //task_set_state(proc, TASK_ZOMBIE);
-    proc->state = TASK_ZOMBIE;           /* Pas TASK_TERMINATED ! */
-    proc->process->state = (proc_state_t)PROC_ZOMBIE;
+    if (proc->state != TASK_ZOMBIE) {
+        proc->state = TASK_ZOMBIE;           /* Pas TASK_TERMINATED ! */
+        proc->process->state = (proc_state_t)PROC_ZOMBIE;
+        kernel_lifecycle_stats.zombies_created++;
+    }
     spin_unlock(&task_lock);
 
     /* Fermer tous les fichiers ouverts avant de reveiller le parent */
@@ -619,6 +653,7 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
             //task_set_state(zombie, TASK_TERMINATED);
             zombie->state = TASK_TERMINATED;
             zombie->process->state = (proc_state_t)PROC_DEAD;
+            kernel_lifecycle_stats.zombies_reaped++;
             destroy_process(zombie);
 
             return child_pid;

@@ -34,7 +34,13 @@ void copy_process_files(task_t* parent, task_t* child)
         return;
     }
     
-    /* ACCeS CORRECT */
+    for (i = 0; i < MAX_FILES; i++) {
+        if (child->process->files[i]) {
+            close_file(child->process->files[i]);
+            child->process->files[i] = NULL;
+        }
+    }
+
     for (i = 0; i < MAX_FILES; i++) {
         if (parent->process->files[i]) {
             child->process->files[i] = parent->process->files[i];
@@ -243,18 +249,21 @@ void remove_child_from_parent(task_t* parent, task_t* child_to_remove)
     } else {
         task_t* current = parent->process->children;
         int count = 0;
-        const int MAX_SEARCH = 20;
         
-        while (current && current->process->sibling_next != child_to_remove && count < MAX_SEARCH) {
+        while (current && current->process &&
+               current->process->sibling_next != child_to_remove &&
+               count < MAX_TASKS) {
             current = current->process->sibling_next;
             count++;
         }
         
-        if (current && count < MAX_SEARCH) {
+        if (current && current->process && count < MAX_TASKS) {
             current->process->sibling_next = child_to_remove->process->sibling_next;
             //KDEBUG("[REMOVE_CHILD] Enfant retire du milieu de liste\n");
         } else {
-            //KDEBUG("[REMOVE_CHILD] Enfant non trouve dans la liste\n");
+            KERROR("[REMOVE_CHILD] Child PID %u not found under parent PID %u\n",
+                   child_to_remove->process->pid, parent->process->pid);
+            return;
         }
     }
     

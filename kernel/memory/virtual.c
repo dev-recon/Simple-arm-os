@@ -523,7 +523,8 @@ void debug_asid_usage(void)
     uint32_t current_asid = vm_get_current_asid();
 
     KDEBUG("=== ASID USAGE DEBUG ===\n");
-    KDEBUG("Current ASID: %u\n", current_asid);
+    KDEBUG("Current ASID: cookie=%u hw=%u gen=%u\n",
+           current_asid, current_asid & ASID_MAX, current_asid >> 8);
 
     for (uint32_t i = 0; i <= 255; i++)
     {
@@ -567,7 +568,8 @@ bool validate_vm_space(vm_space_t *vm)
         return false;
     }
 
-    if (vm->asid == 0 || vm->asid > 255)
+    uint32_t hw_asid = vm->asid & ASID_MAX;
+    if (hw_asid == 0 || hw_asid == ASID_KERNEL)
     {
         KERROR("validate_vm_space: Invalid ASID: %u\n", vm->asid);
         return false;

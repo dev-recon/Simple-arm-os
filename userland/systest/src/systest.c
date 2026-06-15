@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -154,6 +155,32 @@ static void test_pipe_dup2(void)
 
     n = read_file("/tmp/dup2.txt", buf, sizeof(buf));
     expect(n == 8 && strcmp(buf, "dup2-ok\n") == 0, "dup2 redirected write", n);
+}
+
+static void test_stat_syscalls(void)
+{
+    struct stat st;
+    struct stat fst;
+    int fd;
+
+    expect(stat("/bin/systest", &st) == 0, "stat existing executable", 0);
+    expect(S_ISREG(st.st_mode), "stat reports regular file", st.st_mode);
+    expect(st.st_size > 0, "stat reports file size", (int)st.st_size);
+    expect(st.st_blksize > 0, "stat reports IO block size", (int)st.st_blksize);
+    expect(st.st_blocks > 0, "stat reports allocated blocks", (int)st.st_blocks);
+
+    fd = open("/bin/systest", O_RDONLY, 0);
+    if (expect(fd >= 0, "open executable for fstat", fd) >= 0) {
+        expect(fstat(fd, &fst) == 0, "fstat open executable", 0);
+        expect(fst.st_size == st.st_size, "fstat size matches stat", (int)fst.st_size);
+        expect((fst.st_mode & S_IFMT) == (st.st_mode & S_IFMT),
+               "fstat type matches stat", fst.st_mode);
+        close(fd);
+    }
+
+    expect(stat("/", &st) == 0, "stat root directory", 0);
+    expect(S_ISDIR(st.st_mode), "stat reports directory", st.st_mode);
+    expect(stat("/bin/does-not-exist", &st) < 0, "stat missing file fails", 0);
 }
 
 static void test_fork_wait_kill(void)
@@ -383,6 +410,154 @@ static void test_cow_fork_stress(void)
     free(heap);
 }
 
+static void test_asid_churn(void)
+{
+    enum { ASID_ITERS = 280 };
+    int loop_ok = 1;
+    int pid;
+    int status;
+    int waited;
+
+    for (int i = 0; i < ASID_ITERS; i++) {
+        status = -1;
+        pid = fork();
+        if (pid == 0)
+            exit(i & 0x7f);
+
+        if (pid <= 0) {
+            loop_ok = 0;
+            break;
+        }
+
+        waited = waitpid(pid, &status, 0);
+        if (waited != pid || status != (i & 0x7f)) {
+            loop_ok = 0;
+            break;
+        }
+    }
+
+    expect(loop_ok, "ASID churn over 255 forks", loop_ok);
+}
+
+static void test_asid_live_saturation(void)
+{
+    enum { LIVE_LIMIT = 270 };
+    int pids[LIVE_LIMIT];
+    int count = 0;
+    int reaped = 0;
+    int pid;
+    int status;
+
+    for (int i = 0; i < LIVE_LIMIT; i++)
+        pids[i] = -1;
+
+    for (int i = 0; i < LIVE_LIMIT; i++) {
+        pid = fork();
+        if (pid == 0) {
+            while (1)
+                usleep(50000);
+        }
+
+        if (pid < 0)
+            break;
+
+        pids[count++] = pid;
+    }
+
+    expect(count == LIVE_LIMIT, "ASID generation rollover creates full live set", count);
+
+    for (int i = 0; i < count; i++)
+        kill(pids[i], SIGKILL);
+
+    for (int i = 0; i < count; i++) {
+        status = -1;
+        if (waitpid(pids[i], &status, 0) == pids[i])
+            reaped++;
+    }
+
+    expect(reaped == count, "ASID live saturation reaps children", reaped);
+}
+
+static void test_lifecycle_exec_fail_loop(void)
+{
+    enum { ITERS = 32 };
+    int ok = 1;
+
+    for (int i = 0; i < ITERS; i++) {
+        int status = -1;
+        int pid = fork();
+
+        if (pid == 0) {
+            char *argv[] = { "missing-command", NULL };
+            execve("/bin/missing-command", argv, NULL);
+            exit(90 + (i & 7));
+        }
+
+        if (pid <= 0) {
+            ok = 0;
+            break;
+        }
+
+        if (waitpid(pid, &status, 0) != pid || status != 90 + (i & 7)) {
+            ok = 0;
+            break;
+        }
+    }
+
+    expect(ok, "lifecycle repeated exec failure is reaped", ok);
+}
+
+static void test_lifecycle_wnohang_kill(void)
+{
+    int status = -1;
+    int pid = fork();
+
+    if (pid == 0) {
+        while (1)
+            usleep(50000);
+    }
+
+    if (expect(pid > 0, "lifecycle fork live child", pid) < 0)
+        return;
+
+    expect(waitpid(pid, &status, WNOHANG) == 0, "waitpid WNOHANG leaves live child", status);
+    expect(kill(pid, SIGKILL) == 0, "lifecycle kill live child", pid);
+    expect(waitpid(pid, &status, 0) == pid, "lifecycle reap killed child", status);
+}
+
+static void test_lifecycle_orphan_reaper(void)
+{
+    enum { ITERS = 8 };
+    int ok = 1;
+
+    for (int i = 0; i < ITERS; i++) {
+        int status = -1;
+        int pid = fork();
+
+        if (pid == 0) {
+            int grandchild = fork();
+            if (grandchild == 0) {
+                usleep(20000);
+                exit(40 + i);
+            }
+            exit(grandchild > 0 ? 30 + i : 1);
+        }
+
+        if (pid <= 0) {
+            ok = 0;
+            break;
+        }
+
+        if (waitpid(pid, &status, 0) != pid || status != 30 + i) {
+            ok = 0;
+            break;
+        }
+    }
+
+    usleep(200000);
+    expect(ok, "lifecycle orphan children delegated to init", ok);
+}
+
 static void test_identity(void)
 {
     expect(getuid() == 1000, "shell runs as user uid", getuid());
@@ -397,9 +572,15 @@ int main(void)
     test_file_io();
     test_access_umask();
     test_pipe_dup2();
+    test_stat_syscalls();
     test_fork_wait_kill();
     test_cow_memory();
     test_cow_fork_stress();
+    test_asid_churn();
+    test_asid_live_saturation();
+    test_lifecycle_exec_fail_loop();
+    test_lifecycle_wnohang_kill();
+    test_lifecycle_orphan_reaper();
 
     if (failures == 0) {
         printf("systest: all tests passed\n");

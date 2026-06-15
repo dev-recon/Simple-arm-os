@@ -515,6 +515,24 @@ off_t sys_lseek(int fd, off_t offset, int whence)
     return new_offset;
 }
 
+static void fill_stat_from_inode(struct stat* kstat, inode_t* inode)
+{
+    memset(kstat, 0, sizeof(*kstat));
+    kstat->st_dev = 0;      /* TODO: expose VFS mount/device id */
+    kstat->st_ino = inode->ino;
+    kstat->st_mode = inode->mode;
+    kstat->st_nlink = 1;
+    kstat->st_uid = inode->uid;
+    kstat->st_gid = inode->gid;
+    kstat->st_rdev = 0;
+    kstat->st_size = inode->size;
+    kstat->st_blksize = 1024;
+    kstat->st_blocks = inode->blocks ? inode->blocks : (inode->size + 511) / 512;
+    kstat->st_atime = inode->atime;
+    kstat->st_mtime = inode->mtime;
+    kstat->st_ctime = inode->ctime;
+}
+
 int sys_stat(const char* pathname, struct stat* statbuf)
 {
     char* kernel_path;
@@ -534,17 +552,7 @@ int sys_stat(const char* pathname, struct stat* statbuf)
     
     if (!inode) return -ENOENT;
     
-    /* Fill stat structure */
-    memset(&kstat, 0, sizeof(kstat));
-    kstat.st_ino = inode->ino;
-    kstat.st_mode = inode->mode;
-    kstat.st_nlink = 1;
-    kstat.st_uid = inode->uid;
-    kstat.st_gid = inode->gid;
-    kstat.st_size = inode->size;
-    kstat.st_atime = inode->atime;
-    kstat.st_mtime = inode->mtime;
-    kstat.st_ctime = inode->ctime;
+    fill_stat_from_inode(&kstat, inode);
     
     /* Copy to user space */
     if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
@@ -571,17 +579,7 @@ int sys_fstat(int fd, struct stat* statbuf)
     inode = file->inode;
     if (!inode) return -ENOENT;
     
-    /* Fill stat structure */
-    memset(&kstat, 0, sizeof(kstat));
-    kstat.st_ino = inode->ino;
-    kstat.st_mode = inode->mode;
-    kstat.st_nlink = 1;
-    kstat.st_uid = inode->uid;
-    kstat.st_gid = inode->gid;
-    kstat.st_size = inode->size;
-    kstat.st_atime = inode->atime;
-    kstat.st_mtime = inode->mtime;
-    kstat.st_ctime = inode->ctime;
+    fill_stat_from_inode(&kstat, inode);
     
     /* Copy to user space */
     if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {

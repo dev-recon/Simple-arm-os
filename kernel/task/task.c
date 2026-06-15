@@ -31,6 +31,7 @@ volatile int need_resched = 0;
 /* Tache idle et processus init */
 task_t* idle_task = NULL;
 task_t* init_process = NULL;
+volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
 //static int yield_count = 0;
 
 /* === NOUVELLES VARIABLES POUR PROCESSUS === */
@@ -40,6 +41,8 @@ task_t* init_process = NULL;
 void idle_task_func(void* arg);
 void init_process_main(void* arg);
 static task_t* schedule_next_task(void);
+static bool task_stack_metadata_valid(task_t* task);
+static bool task_is_schedulable(task_t* task);
 void add_task_to_list(task_t* task);
 void remove_task_from_list(task_t* task);
 void setup_task_context(task_t* task);
@@ -80,17 +83,92 @@ uid_t current_gid(void) {
     return 0;  /* Root group par défaut */
 }
 
-// Prototypes utiles
-static inline void *kstack_alloc(size_t sz) { void *p = kmalloc(sz); memset(p, 0, sz); return p; }
+static bool task_stack_metadata_valid(task_t* task)
+{
+    if (!task || !task->stack_base || !task->stack_top || task->stack_size == 0) {
+        return false;
+    }
+
+    if (task->stack_top != (uint8_t*)task->stack_base + task->stack_size) {
+        KERROR("TASK: %s stack metadata inconsistent base=%p top=%p size=%u\n",
+               task->name, task->stack_base, task->stack_top, task->stack_size);
+        return false;
+    }
+
+    if (task->context.sp < (uint32_t)task->stack_base ||
+        task->context.sp >= (uint32_t)task->stack_top) {
+        KERROR("TASK: %s context SP 0x%08X outside stack 0x%08X-0x%08X\n",
+               task->name, task->context.sp,
+               (uint32_t)task->stack_base, (uint32_t)task->stack_top);
+        return false;
+    }
+
+    return true;
+}
+
+static bool task_is_schedulable(task_t* task)
+{
+    if (!task) {
+        return false;
+    }
+
+    if (task->state != TASK_READY) {
+        return false;
+    }
+
+    return task_stack_metadata_valid(task);
+}
+
+#define KERNEL_TASK_STACK_PAGES \
+    ((KERNEL_TASK_STACK_SIZE + PAGE_SIZE - 1) / PAGE_SIZE)
+
+static void *kstack_alloc(void)
+{
+    void *p = allocate_pages(KERNEL_TASK_STACK_PAGES);
+    if (p)
+        memset(p, 0, KERNEL_TASK_STACK_SIZE);
+    return p;
+}
+
+static void kstack_free(void *p)
+{
+    if (p)
+        free_pages(p, KERNEL_TASK_STACK_PAGES);
+}
+
+static bool task_alloc_kernel_stack(task_t *task)
+{
+    if (!task)
+        return false;
+
+    task->stack_base = kstack_alloc();
+    if (!task->stack_base)
+        return false;
+
+    task->stack_size = KERNEL_TASK_STACK_SIZE;
+    task->stack_top = (uint8_t *)task->stack_base + task->stack_size;
+    kernel_lifecycle_stats.stack_pages_allocated += KERNEL_TASK_STACK_PAGES;
+    return true;
+}
+
+void task_free_kernel_stack(task_t *task)
+{
+    if (!task || !task->stack_base)
+        return;
+
+    kstack_free(task->stack_base);
+    task->stack_base = NULL;
+    task->stack_top = NULL;
+    task->stack_size = 0;
+    kernel_lifecycle_stats.stack_pages_freed += KERNEL_TASK_STACK_PAGES;
+}
 
 
 // Construit une pile noyau "propre" pour un PROCESS (utile pour from_user=true)
 static void build_clean_kernel_stack(task_t *t)
 {
-    if(!t->stack_base)
-        t->stack_base = kstack_alloc(KERNEL_TASK_STACK_SIZE);
-    t->stack_size = KERNEL_TASK_STACK_SIZE;
-    t->stack_top  = (uint8_t*)t->stack_base + t->stack_size;
+    if(!t->stack_base && !task_alloc_kernel_stack(t))
+        return;
 
     // SP noyau posé près du top (garde 512B pour sentinelles/debug si tu veux)
     t->context.svc_sp_top = (uint32_t)t->stack_top;
@@ -102,17 +180,12 @@ static void build_clean_kernel_stack(task_t *t)
 
 task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
 {
-        /* Allouer une nouvelle pile */
-    child->stack_base = kmalloc(KERNEL_TASK_STACK_SIZE);
-    if (!child->stack_base) {
+    /* Allouer une nouvelle pile */
+    if (!task_alloc_kernel_stack(child)) {
         KERROR("task_create_copy: Failed to allocate child stack\n");
         //kfree(child);
         return NULL;
     }
-    
-    child->stack_size = KERNEL_TASK_STACK_SIZE;
-    child->stack_top = (uint8_t*)child->stack_base + KERNEL_TASK_STACK_SIZE;
-    memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
 
     //bool parent_is_user_process = (parent->context.sp < 0x40000000);  /* Espace user */
     //bool parent_is_user_process = false;  /* FIX IT Espace user */
@@ -259,6 +332,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child_name = (char *)kmalloc(TASK_NAME_MAX);
     if(!child_name){
         KERROR("task_create_copy: Failed to allocate child name\n");
+        kfree(child);
         return NULL;
     }
 
@@ -270,8 +344,11 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     strncpy(child->name, child_name, TASK_NAME_MAX - 1);
     child->name[TASK_NAME_MAX - 1] = '\0';
     
-    if(!set_process_stack(parent,child, from_user))
+    if(!set_process_stack(parent,child, from_user)) {
+        kfree(child_name);
+        kfree(child);
         return NULL;
+    }
 
     /* Configuration processus pour l'enfant */
     if (parent->type == TASK_TYPE_PROCESS) {
@@ -304,7 +381,12 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             child->process->waitpid_caller_lr = 0;
 
         }
-        else panic("Task Create Copy - cannot allocate Process Structure");
+        else {
+            task_free_kernel_stack(child);
+            kfree(child_name);
+            kfree(child);
+            panic("Task Create Copy - cannot allocate Process Structure");
+        }
     } else {
         /* Pour les threads kernel, garder le meme type */
         child->type = parent->type;
@@ -325,6 +407,8 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->quantum_left = QUANTUM_TICKS;
     child->defer_return_to_user = 0;
 
+    kfree(child_name);
+    kernel_lifecycle_stats.tasks_created++;
     return child;
 }
 
@@ -670,17 +754,10 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     }
     
     /* Allouer la stack */
-    task->stack_base = kmalloc(KERNEL_TASK_STACK_SIZE);
-    if (!task->stack_base) {
+    if (!task_alloc_kernel_stack(task)) {
         KERROR("task_create: Failed to allocate stack\n");
         kfree(task);
         return NULL;
-    }
-    
-    /* CORRECTION : Verifier l'alignement de la stack */
-    if (((uint32_t)task->stack_base & 7) != 0) {
-        KWARN("Stack base not aligned for task %s, adjusting...\n", name ? name : "unnamed");
-        /* Note: Dans un vrai systeme, on devrait reallouer avec un allocateur aligne */
     }
     
     /* Initialiser la structure */
@@ -690,9 +767,6 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     
     task->state = TASK_READY;
     task->priority = priority;
-    
-    task->stack_size = KERNEL_TASK_STACK_SIZE;
-    task->stack_top = (uint8_t*)task->stack_base + KERNEL_TASK_STACK_SIZE;
     
     task->entry_point = entry;
     task->entry_arg = arg;
@@ -729,13 +803,14 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     /* === VALIDATION CRITIQUE === */
     if (!validate_task_stack_safe(task)) {
         KERROR("KO Stack validation failed for task %s\n", task->name);
-        kfree(task->stack_base);
+        task_free_kernel_stack(task);
         kfree(task);
         return NULL;
     }
     
     /* Ajouter a la liste des taches */
     add_task_to_list(task);
+    kernel_lifecycle_stats.tasks_created++;
     
     KINFO("OK Created task '%s' (ID=%u, priority=%u) - Stack validated\n", 
           task->name, task->task_id, task->priority);
@@ -877,10 +952,12 @@ void task_destroy(task_t* task)
     
     spin_lock(&task_lock);
     
-    /* Marquer comme zombie d'abord */
-    //task_set_state(task, TASK_ZOMBIE);
-    task->state = TASK_ZOMBIE;
-    task->process->state = (proc_state_t)PROC_ZOMBIE;
+    if (task->state != TASK_ZOMBIE && task->state != TASK_TERMINATED) {
+        task->state = TASK_ZOMBIE;
+        if (task->process)
+            task->process->state = (proc_state_t)PROC_ZOMBIE;
+        kernel_lifecycle_stats.zombies_created++;
+    }
     
     /* Si c'est la tache courante, forcer une commutation */
     if (task == (task_t*)current_task) {
@@ -895,11 +972,12 @@ void task_destroy(task_t* task)
     remove_task_from_list(task);
     
     /* Liberer les ressources */
-    kfree(task->stack_base);
+    task_free_kernel_stack(task);
 
     kfree(task->process);
 
     kfree(task);
+    kernel_lifecycle_stats.tasks_destroyed++;
 }
 
 /* Ajouter cette vérification dans schedule_next_task */
@@ -1363,6 +1441,14 @@ void schedule_to(task_t *next_task)
     //KDEBUG("=== SCHED ==== get_cpu_mode = 0X%02X ==========\n", get_cpu_mode());
     if( get_cpu_mode() == ARM_MODE_IRQ ) return;
 
+    if (next_task->state == TASK_ZOMBIE || next_task->state == TASK_TERMINATED ||
+        !task_stack_metadata_valid(next_task)) {
+        KERROR("SCHED_TO: refusing invalid task %s state=%d\n",
+               next_task->name, next_task->state);
+        kernel_lifecycle_stats.scheduler_refused++;
+        return;
+    }
+
     for_each_task(current_task);
 
     //KDEBUG("=== SCHED ==================\n");
@@ -1570,9 +1656,12 @@ static task_t* schedule_next_task(void)
     spin_lock(&task_lock);
 
     do {
-        if (current->state == TASK_READY && 
-            current->state != TASK_ZOMBIE && 
-            current->state != TASK_TERMINATED) {
+        if (!current) {
+            KERROR("schedule_next_task: NULL task in run queue\n");
+            break;
+        }
+
+        if (task_is_schedulable(current)) {
             
             /* Preferer une tache differente de current_task */
             if (current != (task_t *)current_task) {
@@ -1592,6 +1681,7 @@ static task_t* schedule_next_task(void)
         
         if (count > MAX_TASKS) {
             KERROR("schedule_next_task: Loop protection triggered!\n");
+            kernel_lifecycle_stats.scheduler_refused++;
             break;
         }
         
@@ -1644,9 +1734,33 @@ void add_task_to_list(task_t* task)
  */
 void remove_task_from_list(task_t* task)
 {
+    task_t* current;
+    bool found = false;
+    int count = 0;
+
     if (!task || !task_list_head) return;
 
-     spin_lock(&task_lock);   
+    spin_lock(&task_lock);
+
+    if (!task->next || !task->prev) {
+        spin_unlock(&task_lock);
+        return;
+    }
+
+    current = task_list_head;
+    do {
+        if (current == task) {
+            found = true;
+            break;
+        }
+        current = current->next;
+        count++;
+    } while (current && current != task_list_head && count < MAX_TASKS);
+
+    if (!found) {
+        spin_unlock(&task_lock);
+        return;
+    }
     
     if (task->next == task) {
         /* Derniere tache */
@@ -1662,9 +1776,10 @@ void remove_task_from_list(task_t* task)
     
     task->next = NULL;
     task->prev = NULL;
-    task_count--;
+    if (task_count > 0)
+        task_count--;
 
-     spin_unlock(&task_lock);   
+    spin_unlock(&task_lock);
 
 }
 
@@ -2560,6 +2675,7 @@ void add_to_ready_queue(task_t* task)
     if (task->state == TASK_ZOMBIE || task->state == TASK_TERMINATED) {
         //KDEBUG("add_to_ready_queue: Ignoring zombie/terminated task %s\n", 
         //       task->name);
+        kernel_lifecycle_stats.ready_queue_refused++;
         return;
     }
     
@@ -2635,10 +2751,7 @@ void destroy_zombie_process(task_t* zombie)
         zombie->process->vm = NULL;
     }
     
-    if (zombie->stack_base) {
-        kfree(zombie->stack_base);
-        zombie->stack_base = NULL;
-    }
+    task_free_kernel_stack(zombie);
     
     /* Marquer comme completement mort */
     zombie->state = TASK_TERMINATED;

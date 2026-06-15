@@ -55,6 +55,16 @@ struct sysinfo_response {
     unsigned         mem_free_kb;
     int              proc_count;
     unsigned         _pad;
+    unsigned         tasks_created;
+    unsigned         tasks_destroyed;
+    unsigned         zombies_created;
+    unsigned         zombies_reaped;
+    unsigned         failed_forks;
+    unsigned         scheduler_refused;
+    unsigned         ready_queue_refused;
+    unsigned         stack_pages_allocated;
+    unsigned         stack_pages_freed;
+    unsigned         asid_rollovers;
     struct proc_info procs[64];
 };
 

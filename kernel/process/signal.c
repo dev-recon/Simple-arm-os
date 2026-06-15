@@ -369,7 +369,7 @@ void deliver_signal(task_t* proc, int sig)
     
     if (action->sa_handler == SIG_DFL) {
         /* Action par defaut */
-        KDEBUG("[SIGNAL] Proc %s Using default action for signal %d\n", proc->name, sig);
+        //KDEBUG("[SIGNAL] Proc %s Using default action for signal %d\n", proc->name, sig);
         handle_default_signal_action(proc, sig);
         return;
     }

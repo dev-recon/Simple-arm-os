@@ -4,6 +4,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/debug_print.h>
 #include <kernel/display.h>
+#include <kernel/task.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 
@@ -33,8 +34,10 @@ uint32_t* kernel_pgdir = kernel_page_dir;   /* TTBR1 - Espace noyau */
 uint32_t* ttbr0_pgdir = kernel_ttbr0;   /* TTBR0 - Espace noyau */
 
 /* Gestion ASID */
-static uint32_t current_asid = 1;  /* ASID 0 réservé au noyau */
+static uint32_t current_asid = ASID_KERNEL;
+static uint32_t asid_generation = 1;
 bool asid_map[MAX_ASID + 1] = {true}; /* ASID 0 réservé */
+static uint32_t asid_slot_generation[MAX_ASID + 1];
 
 extern void vectors(void);
 
@@ -53,6 +56,55 @@ void check_address_content(uint32_t phys_addr, const char* step);
 static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
                                    uint32_t phys_addr, uint32_t vma_flags,
                                    uint32_t asid, bool writable);
+
+static inline uint32_t asid_hw(uint32_t asid)
+{
+    return asid & ASID_MASK;
+}
+
+static inline uint32_t asid_gen(uint32_t asid)
+{
+    return asid >> ASID_BITS;
+}
+
+static inline uint32_t asid_make(uint32_t generation, uint32_t hw_asid)
+{
+    return (generation << ASID_BITS) | (hw_asid & ASID_MASK);
+}
+
+static inline bool asid_hw_reserved(uint32_t hw_asid)
+{
+    return hw_asid == 0 || hw_asid == ASID_KERNEL;
+}
+
+static void asid_reserve_special(void)
+{
+    asid_map[0] = true;
+    asid_map[ASID_KERNEL] = true;
+    asid_slot_generation[0] = asid_generation;
+    asid_slot_generation[ASID_KERNEL] = asid_generation;
+}
+
+static bool asid_cookie_valid(uint32_t asid)
+{
+    uint32_t hw_asid = asid_hw(asid);
+    uint32_t generation = asid_gen(asid);
+
+    if (asid_hw_reserved(hw_asid))
+        return false;
+
+    return asid_map[hw_asid] && asid_slot_generation[hw_asid] == generation;
+}
+
+static void flush_all_tlb_local(void)
+{
+    uint32_t zero = 0;
+
+    data_sync_barrier();
+    __asm__ volatile("mcr p15, 0, %0, c8, c7, 0" :: "r"(zero) : "memory");
+    data_sync_barrier();
+    instruction_sync_barrier();
+}
 
 static uint32_t user_page_flags(uint32_t vma_flags, bool writable)
 {
@@ -688,34 +740,56 @@ static void setup_ttbr_split(void)
 /* Gestion ASID */
 static uint32_t allocate_asid(void)
 {
-    asid_map[0] = true;  /* ASID 0 reste réservé */
-    asid_map[ASID_KERNEL] = true;
+    asid_reserve_special();
 
-    for (uint32_t asid = 1; asid <= MAX_ASID; asid++) {
-        if (!asid_map[asid]) {
+    for (uint32_t asid = ASID_MIN_USER; asid <= MAX_ASID; asid++) {
+        if (!asid_hw_reserved(asid) && !asid_map[asid]) {
             asid_map[asid] = true;
-            return asid;
+            asid_slot_generation[asid] = asid_generation;
+            return asid_make(asid_generation, asid);
         }
     }
-    
-    /* Si tous les ASID sont utilisés, faire un flush global et recommencer */
-    kprintf("MMU: All ASIDs in use, performing global TLB flush\n");
-    
-    /* Invalider tout le TLB et réinitialiser la carte ASID */
-    __asm__ volatile("mcr p15, 0, %0, c8, c7, 0" : : "r"(0));  /* TLBIALL */
-    memset(asid_map, false, sizeof(asid_map));
-    asid_map[0] = true;  /* ASID 0 reste réservé */
-    asid_map[ASID_KERNEL] = true;
-    return 1;
+
+    asid_generation++;
+    if (asid_generation == 0)
+        asid_generation = 1;
+
+    for (uint32_t asid = 0; asid <= MAX_ASID; asid++) {
+        asid_map[asid] = false;
+        asid_slot_generation[asid] = 0;
+    }
+
+    asid_reserve_special();
+    flush_all_tlb_local();
+    kernel_lifecycle_stats.asid_rollovers++;
+
+    KWARN("MMU: ASID generation rollover -> %u\n", asid_generation);
+
+    for (uint32_t asid = ASID_MIN_USER; asid <= MAX_ASID; asid++) {
+        if (!asid_hw_reserved(asid) && !asid_map[asid]) {
+            asid_map[asid] = true;
+            asid_slot_generation[asid] = asid_generation;
+            return asid_make(asid_generation, asid);
+        }
+    }
+
+    KERROR("MMU: ASID allocation failed after rollover\n");
+    return 0;
 }
 
 static void free_asid(uint32_t asid)
 {
-    if (asid > 0 && asid < MAX_ASID) {
-        asid_map[asid] = false;
+    uint32_t hw_asid = asid_hw(asid);
+    uint32_t generation = asid_gen(asid);
+
+    if (!asid_hw_reserved(hw_asid) &&
+        asid_map[hw_asid] &&
+        asid_slot_generation[hw_asid] == generation) {
+        asid_map[hw_asid] = false;
+        asid_slot_generation[hw_asid] = 0;
         
         /* Invalider les entrées TLB pour cet ASID */
-        __asm__ volatile("mcr p15, 0, %0, c8, c7, 2" : : "r"(asid));  /* TLBIASID */
+        __asm__ volatile("mcr p15, 0, %0, c8, c7, 2" : : "r"(hw_asid));  /* TLBIASID */
         //asm volatile("mcr p15, 0, %0, c8, c7, 0" :: "r"(0));  // TLBIALL
         data_sync_barrier();
         instruction_sync_barrier();
@@ -725,6 +799,7 @@ static void free_asid(uint32_t asid)
 void set_current_asid(uint32_t asid)
 {
     uint32_t contextidr;
+    uint32_t hw_asid = asid_hw(asid);
     
     //KDEBUG("Setting up ASID %d\n", asid);
     /* Lire le CONTEXTIDR actuel */
@@ -732,8 +807,8 @@ void set_current_asid(uint32_t asid)
 
     //KDEBUG("Current contextidr = 0x%08X\n", contextidr);
     
-    /* Mettre à jour seulement les bits ASID (bits 7:0) */
-    contextidr = (contextidr & ~CONTEXTIDR_ASID_MASK) | (asid & CONTEXTIDR_ASID_MASK);
+    /* CONTEXTIDR[7:0] contient l'ASID matériel, le haut sert de génération. */
+    contextidr = asid;
     //KDEBUG("Setting up contextidr = 0x%08X\n", contextidr);
 
     /* NOUVEAU: Vérification de cohérence avant écriture */
@@ -770,8 +845,9 @@ void set_current_asid(uint32_t asid)
     uint32_t verify_contextidr;
     __asm__ volatile("mrc p15, 0, %0, c13, c0, 1" : "=r"(verify_contextidr));
     
-    if ((verify_contextidr & 0xFF) != asid) {
-        KERROR("ASID write failed! Expected %u, got %u\n", asid, verify_contextidr & 0xFF);
+    if ((verify_contextidr & CONTEXTIDR_ASID_MASK) != hw_asid) {
+        KERROR("ASID write failed! Expected hw=%u cookie=%u, got %u\n",
+               hw_asid, asid, verify_contextidr & CONTEXTIDR_ASID_MASK);
         return;
     }
     
@@ -785,7 +861,7 @@ uint32_t get_current_asid(void)
 {
     uint32_t contextidr;
     __asm__ volatile("mrc p15, 0, %0, c13, c0, 1" : "=r"(contextidr));
-    return contextidr & CONTEXTIDR_ASID_MASK;
+    return contextidr;
 }
 
 /* Fonctions publiques modifiées pour ASID */
@@ -829,8 +905,9 @@ void switch_address_space_with_asid(uint32_t* pgdir, uint32_t asid)
     }
     
     /* Vérifier que l'ASID est valide et alloué */
-    if (asid > MAX_ASID || !asid_map[asid]) {
-        KERROR("Invalid or unallocated ASID: %u\n", asid);
+    if (!asid_cookie_valid(asid)) {
+        KERROR("Invalid or unallocated ASID cookie: %u (hw=%u gen=%u)\n",
+               asid, asid_hw(asid), asid_gen(asid));
         return;
     }
 
@@ -1305,7 +1382,8 @@ void debug_mmu_state(void)
     KDEBUG("TTBR1 register:       0x%08X (kernel space)\n", ttbr1);
     KDEBUG("TTBCR register:       0x%08X (N=%d)\n", ttbcr, ttbcr & 0x7);
     KDEBUG("CONTEXTIDR:           0x%08X (ASID=%d)\n", contextidr, contextidr & ASID_MASK);
-    KDEBUG("Current ASID:         %u\n", current_asid);
+    KDEBUG("Current ASID:         cookie=%u hw=%u gen=%u\n",
+           current_asid, asid_hw(current_asid), asid_gen(current_asid));
     KDEBUG("SCTLR Register:       0x%08X\n", sctlr);
     KDEBUG("DACR Register:        0x%08X\n", dacr);
      

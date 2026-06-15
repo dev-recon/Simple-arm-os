@@ -12,11 +12,26 @@ struct file;
 
 /* Configuration */
 #define KERNEL_TASK_STACK_SIZE  (16 * 1024)    /* 16KB par tache */
-#define MAX_TASKS               128              /* Maximum de taches */
+#define MAX_TASKS               288              /* Maximum de taches */
 #define TASK_NAME_MAX           32              /* Longueur max du nom */
 #define MAX_SIGNALS             32
 
 #define QUANTUM_TICKS           10 
+
+typedef struct kernel_lifecycle_stats {
+    uint32_t tasks_created;
+    uint32_t tasks_destroyed;
+    uint32_t zombies_created;
+    uint32_t zombies_reaped;
+    uint32_t failed_forks;
+    uint32_t scheduler_refused;
+    uint32_t ready_queue_refused;
+    uint32_t stack_pages_allocated;
+    uint32_t stack_pages_freed;
+    uint32_t asid_rollovers;
+} kernel_lifecycle_stats_t;
+
+extern volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
 
 /* Forward declarations for structures */
 typedef struct inode inode_t;
@@ -290,6 +305,7 @@ void cleanup_task_system(void);
 task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint32_t priority);
 task_t* task_create_process(const char* name, void (*entry)(void* arg), void* arg, uint32_t priority, task_type_t type);
 void task_destroy(task_t* task);
+void task_free_kernel_stack(task_t* task);
 
 /* Gestion du scheduler */
 void yield(void);                           /* Ceder le CPU volontairement */

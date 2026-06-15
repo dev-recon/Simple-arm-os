@@ -25,6 +25,14 @@ Small kernel is in place with the following features:
   - Basic libc: printf, tty, terminal management, malloc, free, ...
   - Basic shell: work in progress, called ``mash`` (Moon Shell).
 
+Userland currently includes small coreutils-style commands such as `cat`,
+`echo`, `pwd`, `ls`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `touch`, `sleep`,
+`kill`, `ps` and `stat`. The `stat` command exercises the kernel `stat(2)` and
+`fstat(2)` syscalls and reports file type, mode, size, block count and
+timestamps on both the ext2 root filesystem and the FAT32 compatibility mount.
+Some fields are still intentionally simple: `st_dev` is not mount-aware yet and
+`st_nlink` is currently reported as 1.
+
 Code is still dirty and not well documented (need some help for this as well).
 I'm using Mac M4 to developp and cross-compile, not a big deal to adapt makefiles to make it compile and run on Linux.
 
