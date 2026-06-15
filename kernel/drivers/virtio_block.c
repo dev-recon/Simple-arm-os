@@ -146,8 +146,9 @@ void virtio_mmio_dump32(uintptr_t base)
         {"DEVICE_ID",      0x008},
         {"VENDOR_ID",      0x00C},
         {"DEVICE_FEATURES",0x010},   // lisible
-        {"QUEUE_NUM_MAX",  0x02C},   // lisible
-        {"QUEUE_NUM",      0x030},   // R/W
+        {"QUEUE_SEL",      0x030},   // R/W
+        {"QUEUE_NUM_MAX",  0x034},   // lisible
+        {"QUEUE_NUM",      0x038},   // R/W
         {"STATUS",         0x070},   // legacy: 0x070 (v1)
         {"INT_STATUS",     0x060},   // legacy: 0x060
         {"QUEUE_NOTIFY",   0x050},   // write-only normalement → lira 0
@@ -167,8 +168,6 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
     virtio_blk_readonly = false;
     virtio_capacity_sectors = 0;
 
-    virtio_mmio_dump32(base_addr);
-
     uint32_t magic   = mmio_read32(base, VIRTIO_MMIO_MAGIC);
     uint32_t version = mmio_read32(base, VIRTIO_MMIO_VERSION);
     uint32_t devid   = mmio_read32(base, VIRTIO_MMIO_DEVICE_ID);
@@ -177,6 +176,7 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
 
     if (magic != 0x74726976) {
         KERROR("virtio-mmio bad magic 0x%08X @0x%08X\n", magic, base_addr);
+        virtio_mmio_dump32(base_addr);
         return false;
     }
 
@@ -184,11 +184,13 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
 
     if (version != 1) {
         KERROR("VirtIO unsupported MMIO version=%u (legacy driver expects 1)\n", version);
+        virtio_mmio_dump32(base_addr);
         return false;
     }
 
     if (devid != 2) {
         KERROR("VirtIO device ID=%u (expected 2=blk)\n", devid);
+        virtio_mmio_dump32(base_addr);
         return false;
     }
 
@@ -215,7 +217,7 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
     mmio_write32(base, VIRTIO_MMIO_STATUS, mmio_read32(base, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_FEATURES_OK);
     if (!(mmio_read32(base, VIRTIO_MMIO_STATUS) & VIRTIO_STATUS_FEATURES_OK)) {
         // Le device a rejeté nos features
-        mmio_write32(base, VIRTIO_MMIO_STATUS, VIRTIO_STATUS_FAILED);
+        virtio_blk_mark_failed(base, "feature negotiation rejected");
         return false;
     }
 
@@ -224,14 +226,18 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
     // Queue 0
     mmio_write32(base, VIRTIO_MMIO_QUEUE_SEL, 0);
     uint32_t qmax = mmio_read32(base, VIRTIO_MMIO_QUEUE_NUM_MAX);
-    if (qmax == 0) return false;
+    if (qmax == 0) {
+        virtio_blk_mark_failed(base, "queue 0 unavailable");
+        return false;
+    }
 
     uint16_t qsize = (VQ_SIZE <= qmax) ? VQ_SIZE : (uint16_t)qmax;
     mmio_write32(base, VIRTIO_MMIO_QUEUE_NUM, qsize);
     mmio_write32(base, VIRTIO_MMIO_QUEUE_ALIGN_OFF, VQ_ALIGN);
 
     uint32_t align_rb = mmio_read32(base, VIRTIO_MMIO_QUEUE_ALIGN_OFF);
-    kprintf("DBG: wrote QUEUE_ALIGN=0x%x readback=0x%x\n", VQ_ALIGN, align_rb);
+    if (align_rb != 0 && align_rb != VQ_ALIGN)
+        KWARN("VirtIO QueueAlign readback=0x%X (expected 0x%X)\n", align_rb, VQ_ALIGN);
 
         /* Setup virtqueue */
     KDEBUG("Setting up virtqueue...\n");
@@ -243,7 +249,10 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
 
     // Allouer le ring legacy
     //vq_legacy_t vq = {0};
-    if (!vq_alloc_legacy(&global_vq, qsize)) return false;
+    if (!vq_alloc_legacy(&global_vq, qsize)) {
+        virtio_blk_mark_failed(base, "virtqueue allocation failed");
+        return false;
+    }
 
     // IMPORTANT: legacy → on programme la PFN (= base_phys >> 12)
     mmio_write32(base, VIRTIO_MMIO_QUEUE_PFN, global_vq.pa_base >> 12);
@@ -313,9 +322,6 @@ static inline uint64_t vblk_cntpct(void) {
 
 void virtio_block_irq_handler(void)
 {
-    if (!ata_sector_size)
-        return;
-
     /*
      * Le driver block est encore synchrone/polling: l'IRQ sert uniquement a
      * deassert le niveau cote device. La completion reste lue dans used ring
@@ -477,6 +483,7 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
                             unsigned timeout_ms)
 {
     uint32_t sector_size = ata_sector_size;
+    if (!mmio_base || !vq) return -1;
     if (!buf) return -1;
     if (!virtio_blk_request_in_bounds(sector, nsectors)) return -1;
     if (nsectors > 0xFFFFFFFFu / sector_size) return -1;
@@ -552,6 +559,7 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
                              unsigned timeout_ms)
 {
     uint32_t sector_size = ata_sector_size;
+    if (!mmio_base || !vq) return -1;
     if (!buf) return -1;
     if (!virtio_blk_request_in_bounds(sector, nsectors)) return -1;
     if (nsectors > 0xFFFFFFFFu / sector_size) return -1;
