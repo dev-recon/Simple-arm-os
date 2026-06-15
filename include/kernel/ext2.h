@@ -98,6 +98,9 @@ typedef struct {
     uint64_t lba_start;
     uint32_t block_size;
     uint32_t sectors_per_block;
+    uint32_t first_data_block;
+    uint32_t blocks_count;
+    uint32_t groups_count;
     uint32_t inodes_per_group;
     uint32_t blocks_per_group;
     uint32_t inode_size;
