@@ -163,6 +163,11 @@ static void ext2_bitmap_set(uint8_t* bitmap, uint32_t bit)
     bitmap[bit / 8] |= (uint8_t)(1u << (bit % 8));
 }
 
+static void ext2_bitmap_clear(uint8_t* bitmap, uint32_t bit)
+{
+    bitmap[bit / 8] &= (uint8_t)~(1u << (bit % 8));
+}
+
 static uint32_t ext2_min_u32(uint32_t a, uint32_t b)
 {
     return a < b ? a : b;
@@ -249,6 +254,93 @@ static int ext2_alloc_block(uint32_t* out_block)
     }
 
     return -ENOSPC;
+}
+
+static int ext2_free_block_list(const uint32_t* blocks, uint32_t count)
+{
+    ext2_superblock_t sb;
+
+    if (!blocks) return -EINVAL;
+
+    if (ext2_read_superblock(&sb) < 0)
+        return -EIO;
+
+    for (uint32_t i = 0; i < count; i++) {
+        if (blocks[i] == 0)
+            continue;
+        if (blocks[i] < ext2_fs.first_data_block || blocks[i] >= ext2_fs.blocks_count)
+            return -EINVAL;
+    }
+
+    uint32_t total_freed = 0;
+
+    for (uint32_t group = 0; group < ext2_fs.groups_count; group++) {
+        ext2_group_desc_t gd;
+        uint32_t group_first = ext2_fs.first_data_block + group * ext2_fs.blocks_per_group;
+        if (group_first >= ext2_fs.blocks_count)
+            break;
+
+        uint32_t group_blocks = ext2_min_u32(ext2_fs.blocks_per_group,
+                                             ext2_fs.blocks_count - group_first);
+        uint32_t group_end = group_first + group_blocks;
+        uint32_t freed = 0;
+
+        uint8_t* bitmap = NULL;
+
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t block = blocks[i];
+            if (block < group_first || block >= group_end)
+                continue;
+
+            if (!bitmap) {
+                if (ext2_read_group_desc(group, &gd) < 0)
+                    return -EIO;
+
+                bitmap = kmalloc(ext2_fs.block_size);
+                if (!bitmap) return -ENOMEM;
+
+                if (ext2_read_block(gd.bg_block_bitmap, bitmap) < 0) {
+                    kfree(bitmap);
+                    return -EIO;
+                }
+            }
+
+            uint32_t bit = block - group_first;
+            if (ext2_bitmap_test(bitmap, bit)) {
+                ext2_bitmap_clear(bitmap, bit);
+                freed++;
+            }
+        }
+
+        if (!bitmap)
+            continue;
+
+        if (freed > 0) {
+            if (ext2_write_block(gd.bg_block_bitmap, bitmap) < 0) {
+                kfree(bitmap);
+                return -EIO;
+            }
+
+            gd.bg_free_blocks_count += freed;
+            if (ext2_write_group_desc(group, &gd) < 0) {
+                kfree(bitmap);
+                return -EIO;
+            }
+
+            total_freed += freed;
+        }
+
+        kfree(bitmap);
+    }
+
+    if (total_freed > 0) {
+        sb.s_free_blocks_count += total_freed;
+        sb.s_wtime = get_current_time();
+        if (ext2_write_superblock(&sb) < 0)
+            return -EIO;
+    }
+
+    return 0;
 }
 
 /* ---------- inode table ---------- */
@@ -361,16 +453,68 @@ static uint32_t ext2_get_or_alloc_block_at(ext2_inode_t* di, uint32_t idx, bool*
     if (block != 0)
         return block;
 
-    if (idx >= 12)
-        return 0; /* allocation through indirect blocks comes next */
+    if (idx < 12) {
+        if (ext2_alloc_block(&block) < 0)
+            return 0;
 
-    if (ext2_alloc_block(&block) < 0)
+        di->i_block[idx] = block;
+        di->i_blocks += ext2_fs.sectors_per_block;
+        if (allocated)
+            *allocated = true;
+        return block;
+    }
+
+    idx -= 12;
+    uint32_t ptrs_per_block = ext2_fs.block_size / 4;
+    if (idx >= ptrs_per_block)
+        return 0; /* double-indirect blocks are not supported yet */
+
+    bool new_indirect = false;
+    if (di->i_block[12] == 0) {
+        uint32_t indirect_block;
+        if (ext2_alloc_block(&indirect_block) < 0)
+            return 0;
+
+        di->i_block[12] = indirect_block;
+        di->i_blocks += ext2_fs.sectors_per_block;
+        new_indirect = true;
+        if (allocated)
+            *allocated = true;
+    }
+
+    uint32_t* indirect = kmalloc(ext2_fs.block_size);
+    if (!indirect) return 0;
+
+    if (new_indirect) {
+        memset(indirect, 0, ext2_fs.block_size);
+    } else if (ext2_read_block(di->i_block[12], indirect) < 0) {
+        kfree(indirect);
         return 0;
+    }
 
-    di->i_block[idx] = block;
-    di->i_blocks += ext2_fs.sectors_per_block;
-    if (allocated)
-        *allocated = true;
+    if (indirect[idx] == 0) {
+        uint32_t data_block;
+        if (ext2_alloc_block(&data_block) < 0) {
+            if (new_indirect)
+                ext2_write_block(di->i_block[12], indirect);
+            kfree(indirect);
+            return 0;
+        }
+
+        indirect[idx] = data_block;
+
+        if (ext2_write_block(di->i_block[12], indirect) < 0) {
+            kfree(indirect);
+            return 0;
+        }
+
+        di->i_blocks += ext2_fs.sectors_per_block;
+        if (allocated)
+            *allocated = true;
+    }
+
+    block = indirect[idx];
+    kfree(indirect);
     return block;
 }
 
@@ -474,6 +618,74 @@ static int ext2_file_close(file_t* file)
     return 0;
 }
 
+int ext2_truncate_inode(inode_t* inode)
+{
+    if (!inode) return -EINVAL;
+    if (S_ISDIR(inode->mode)) return -EISDIR;
+
+    ext2_inode_t di;
+    if (ext2_read_disk_inode(inode->first_cluster, &di) < 0)
+        return -EIO;
+
+    if (di.i_block[13] || di.i_block[14])
+        return -EFBIG; /* double/triple indirect truncation is not implemented yet */
+
+    uint32_t ptrs_per_block = ext2_fs.block_size / 4;
+    uint32_t max_blocks = 13 + ptrs_per_block;
+    uint32_t* blocks = kmalloc(max_blocks * sizeof(uint32_t));
+    if (!blocks) return -ENOMEM;
+
+    uint32_t count = 0;
+
+    for (uint32_t i = 0; i < 12; i++) {
+        if (di.i_block[i] != 0)
+            blocks[count++] = di.i_block[i];
+    }
+
+    if (di.i_block[12] != 0) {
+        uint32_t* indirect = kmalloc(ext2_fs.block_size);
+        if (!indirect) {
+            kfree(blocks);
+            return -ENOMEM;
+        }
+
+        if (ext2_read_block(di.i_block[12], indirect) < 0) {
+            kfree(indirect);
+            kfree(blocks);
+            return -EIO;
+        }
+
+        for (uint32_t i = 0; i < ptrs_per_block; i++) {
+            if (indirect[i] != 0)
+                blocks[count++] = indirect[i];
+        }
+
+        kfree(indirect);
+        blocks[count++] = di.i_block[12];
+    }
+
+    int ret = ext2_free_block_list(blocks, count);
+    kfree(blocks);
+    if (ret < 0)
+        return ret;
+
+    di.i_size = 0;
+    di.i_blocks = 0;
+    memset(di.i_block, 0, sizeof(di.i_block));
+    di.i_mtime = get_current_time();
+    di.i_ctime = di.i_mtime;
+
+    inode->size = 0;
+    inode->blocks = 0;
+    inode->mtime = di.i_mtime;
+    inode->ctime = di.i_ctime;
+
+    if (ext2_write_disk_inode(inode->first_cluster, &di) < 0)
+        return -EIO;
+
+    return 0;
+}
+
 /* ---------- file_operations — regular files ---------- */
 
 static ssize_t ext2_file_read(file_t* file, void* buffer, size_t count)
@@ -499,16 +711,19 @@ static ssize_t ext2_file_read(file_t* file, void* buffer, size_t count)
         uint32_t blk_off = file->offset % ext2_fs.block_size;
         uint32_t blk     = ext2_get_block_at(di, blk_idx);
 
-        if (blk == 0) break;
-        if (ext2_read_block(blk, blkbuf) < 0) {
-            total = total ? total : -EIO;
-            break;
-        }
-
         uint32_t chunk = ext2_fs.block_size - blk_off;
         if (chunk > (uint32_t)count) chunk = (uint32_t)count;
 
-        memcpy(dst, blkbuf + blk_off, chunk);
+        if (blk == 0) {
+            memset(dst, 0, chunk);
+        } else {
+            if (ext2_read_block(blk, blkbuf) < 0) {
+                total = total ? total : -EIO;
+                break;
+            }
+            memcpy(dst, blkbuf + blk_off, chunk);
+        }
+
         dst         += chunk;
         file->offset += chunk;
         total        += chunk;

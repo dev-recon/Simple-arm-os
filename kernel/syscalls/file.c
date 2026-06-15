@@ -8,6 +8,7 @@
 #include <kernel/userspace.h>
 #include <kernel/kprintf.h>
 #include <kernel/fat32.h>
+#include <kernel/ext2.h>
 #include <kernel/timer.h>
 #include <kernel/dirent.h>
 #include <asm/mmu.h>
@@ -22,6 +23,7 @@ extern int fat32_update_file_by_name(const char* filename, uint32_t parent_clust
 extern int fat32_update_file_size_in_dir(const char* filename, uint32_t parent_cluster, uint32_t new_size);
 extern file_operations_t fat32_file_ops;
 extern inode_operations_t fat32_inode_ops;
+extern file_operations_t ext2_file_ops;
 
 bool inode_permission(inode_t* inode, int mask) {
     /* Root peut tout faire */
@@ -290,13 +292,16 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
         }
 
         if ((flags & O_TRUNC) && ((flags & O_ACCMODE) != O_RDONLY)) {
-            if (inode->f_op != &fat32_file_ops) {
-                put_inode(inode);
-                kfree(kernel_path);
-                return -EROFS;
+            int truncate_result;
+
+            if (inode->f_op == &fat32_file_ops) {
+                truncate_result = truncate_file_inode(inode, opened_name);
+            } else if (inode->f_op == &ext2_file_ops) {
+                truncate_result = ext2_truncate_inode(inode);
+            } else {
+                truncate_result = -EROFS;
             }
 
-            int truncate_result = truncate_file_inode(inode, opened_name);
             if (truncate_result < 0) {
                 put_inode(inode);
                 kfree(kernel_path);

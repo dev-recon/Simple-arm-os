@@ -277,8 +277,7 @@ static int open_redirect_output(const char* path, int append) {
     int fd;
 
     if (!append) {
-        unlink(path);
-        return open(path, O_CREAT | O_WRONLY, 0644);
+        return open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
     }
 
     fd = open(path, O_WRONLY, 0);
