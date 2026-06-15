@@ -80,6 +80,7 @@ struct process;
 #define __NR_shm_unlink         191
 #define __NR_shm_map            192
 #define __NR_shm_unmap          193
+#define __NR_shutdown           194
 #define __NR_sysinfo            116     /* reused for getprocs — remplacer par /proc plus tard */
 
 /* Informations sur un processus */
@@ -179,6 +180,7 @@ int sys_shm_open(const char *name, size_t size, int flags);
 int sys_shm_unlink(const char *name);
 void *sys_shm_map(int id, void *addr, int flags);
 int sys_shm_unmap(void *addr, size_t size);
+int sys_shutdown(void);
 
 /* Additional process syscalls */
 int sys_dup(int oldfd);

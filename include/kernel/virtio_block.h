@@ -213,6 +213,8 @@ uint64_t blk_get_capacity_sectors(void);
 uint32_t blk_get_sector_size(void);
 bool blk_is_readonly(void);
 uint32_t virtio_blk_get_irq(void);
+int virtio_blk_flush(void);
+void virtio_blk_shutdown(void);
 
 /* Fonctions utilitaires */
 uint32_t virtio_read_reg(uint32_t reg);

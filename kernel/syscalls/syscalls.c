@@ -7,6 +7,7 @@
 #include <kernel/elf32.h>
 #include <kernel/userspace.h>
 #include <kernel/shm.h>
+#include <kernel/power.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 #include <kernel/timer.h>
@@ -61,6 +62,7 @@ static syscall_func_t syscall_table[256] = {
     [__NR_shm_unlink] = (syscall_func_t)sys_shm_unlink,
     [__NR_shm_map]   = (syscall_func_t)sys_shm_map,
     [__NR_shm_unmap] = (syscall_func_t)sys_shm_unmap,
+    [__NR_shutdown]  = (syscall_func_t)sys_shutdown,
 
 };
 

@@ -122,6 +122,7 @@ int shm_open(const char *name, size_t size, int flags);
 int shm_unlink(const char *name);
 void *shm_map(int id, void *addr, int flags);
 int shm_unmap(void *addr, size_t size);
+int sys_shutdown(void);
 
 /* Équivalent uart_putc */
 static inline int putc_tty(char c) {

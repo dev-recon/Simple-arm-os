@@ -41,6 +41,7 @@ uint32_t ata_sector_size = 0;
 static uint64_t virtio_capacity_sectors = 0;
 static bool virtio_blk_failed = false;
 static bool virtio_blk_readonly = false;
+static bool virtio_blk_flush_supported = false;
 static spinlock_t virtio_blk_lock = SPINLOCK_INIT("virtio_blk");
 
 typedef struct {
@@ -309,6 +310,16 @@ static bool virtio_blk_request_in_bounds(uint64_t sector, uint32_t nsectors)
     return true;
 }
 
+static inline void virtio_dma_to_device(const void *addr, size_t size)
+{
+    clean_dcache_by_mva(addr, size);
+}
+
+static inline void virtio_dma_from_device(void *addr, size_t size)
+{
+    clean_invalidate_dcache_by_mva(addr, size);
+}
+
 void virtio_mmio_dump32(uintptr_t base)
 {
     kprintf("=== VIRTIO MMIO DUMP (32-bit) @ 0x%08X ===\n", (uint32_t)base);
@@ -340,6 +351,7 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
     volatile uint32_t *base = (volatile uint32_t *)base_addr;
     virtio_blk_failed = false;
     virtio_blk_readonly = false;
+    virtio_blk_flush_supported = false;
     virtio_capacity_sectors = 0;
 
     uint32_t magic   = mmio_read32(base, VIRTIO_MMIO_MAGIC);
@@ -378,14 +390,12 @@ bool virtio_blk_init_legacy(uint32_t base_addr)
 
     uint32_t device_features = mmio_read32(base, VIRTIO_MMIO_DEVICE_FEATURES);
     virtio_blk_readonly = (device_features & (1u << VIRTIO_BLK_F_RO)) != 0;
+    virtio_blk_flush_supported = (device_features & (1u << VIRTIO_BLK_F_FLUSH)) != 0;
     if (virtio_blk_readonly)
         KINFO("VirtIO block device is read-only\n");
 
-    /*
-     * Le driver legacy utilise le profil minimal: pas de feature optionnelle
-     * négociée. Ecrire explicitement 0 évite de dépendre d'un état résiduel.
-     */
-    mmio_write32(base, VIRTIO_MMIO_DRIVER_FEATURES, 0);
+    uint32_t driver_features = virtio_blk_flush_supported ? (1u << VIRTIO_BLK_F_FLUSH) : 0;
+    mmio_write32(base, VIRTIO_MMIO_DRIVER_FEATURES, driver_features);
 
     // FEATURES_OK
     mmio_write32(base, VIRTIO_MMIO_STATUS, mmio_read32(base, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_FEATURES_OK);
@@ -654,10 +664,18 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
     clean_dcache_by_mva((void *)vq->va_desc, sizeof(struct vring_desc) * vq->qsize); /* ou au moins 3*16 */
     asm volatile("dmb ish" ::: "memory"); /* ensure desc visible */
 
-    /* flush header/data/status buffers */
-    clean_dcache_by_mva(hdr, sizeof(struct virtio_blk_req));
-    clean_dcache_by_mva(data_va, data_len);
-    clean_dcache_by_mva(status_va, 1);
+    /* DMA ownership:
+     * - header is read by the device
+     * - data is read or written depending on request type
+     * - status is written by the device
+     */
+    virtio_dma_to_device(hdr, sizeof(struct virtio_blk_req));
+    if (data_is_write) {
+        virtio_dma_from_device(data_va, data_len);
+    } else {
+        virtio_dma_to_device(data_va, data_len);
+    }
+    virtio_dma_from_device(status_va, 1);
     asm volatile("dmb ish" ::: "memory");
 
     /* --- Publier avail entry de façon sûre --- */
@@ -720,6 +738,94 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
 
     if (status != VIRTIO_BLK_S_OK) {
         KERROR("virtio_blk: device returned status=0x%02X\n", status);
+        return -1;
+    }
+
+    return 0;
+}
+
+static int virtio_blk_submit_flush(vq_legacy_t *vq,
+                                  volatile uint32_t *mmio_base,
+                                  struct virtio_blk_req *hdr, uint32_t hdr_pa,
+                                  uint8_t *status_va, uint32_t status_pa,
+                                  unsigned timeout_ms)
+{
+    const unsigned d0 = 0, d2 = 2;
+    if (virtio_blk_failed) return -1;
+    if (!virtio_blk_flush_supported) return 0;
+    if (vq->qsize < 3) return -1;
+
+    uint32_t dev_status = mmio_read32(mmio_base, VIRTIO_MMIO_STATUS);
+    if (dev_status & VIRTIO_STATUS_DEVICE_NEEDS_RESET) {
+        virtio_blk_mark_failed(mmio_base, "device needs reset before flush");
+        return -1;
+    }
+
+    *status_va = 0xFF;
+    hdr->type = VIRTIO_BLK_T_FLUSH;
+    hdr->reserved = 0;
+    hdr->sector = 0;
+
+    struct vring_desc *desc0 = vq_desc_ptr(vq, d0);
+    struct vring_desc *desc2 = vq_desc_ptr(vq, d2);
+
+    desc0->addr  = (uint64_t)hdr_pa;
+    desc0->len   = (uint32_t)sizeof(struct virtio_blk_req);
+    desc0->flags = (uint16_t)VRING_DESC_F_NEXT;
+    desc0->next  = (uint16_t)d2;
+
+    desc2->addr  = (uint64_t)status_pa;
+    desc2->len   = 1;
+    desc2->flags = (uint16_t)VRING_DESC_F_WRITE;
+    desc2->next  = 0;
+
+    clean_dcache_by_mva((void *)vq->va_desc, sizeof(struct vring_desc) * vq->qsize);
+    virtio_dma_to_device(hdr, sizeof(struct virtio_blk_req));
+    virtio_dma_from_device(status_va, 1);
+    asm volatile("dmb ish" ::: "memory");
+
+    uint16_t prev_used = vq->last_used_idx;
+    virtio_blk_prepare_wait(vq, prev_used);
+
+    uint16_t old_idx = vq_avail_ptr(vq)->idx;
+    vq_avail_ptr(vq)->ring[old_idx % vq->qsize] = d0;
+    clean_dcache_by_mva((void *)vq->va_avail, vq->avail_size);
+    asm volatile("dmb ish" ::: "memory");
+
+    vq_avail_ptr(vq)->idx = old_idx + 1;
+    clean_dcache_by_mva((void *)&vq_avail_ptr(vq)->idx, sizeof(vq_avail_ptr(vq)->idx));
+    asm volatile("dsb ishst" ::: "memory");
+
+    mmio_write32(mmio_base, VIRTIO_MMIO_QUEUE_NOTIFY, 0);
+    asm volatile("dsb ishst; isb" ::: "memory");
+
+    if (wait_for_used(vq, prev_used, timeout_ms) != 0) {
+        virtio_blk_finish_wait();
+        virtio_blk_mark_failed(mmio_base, "flush timeout");
+        return -1;
+    }
+
+    virtio_blk_finish_wait();
+    invalidate_dcache_by_mva((void *)vq->va_used,
+        sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
+
+    struct vring_used *used = vq_used_ptr(vq);
+    uint16_t new_used_idx = used->idx;
+    if ((uint16_t)(new_used_idx - prev_used) != 1) {
+        virtio_blk_mark_failed(mmio_base, "unexpected used ring advance after flush");
+        return -1;
+    }
+    if (used->ring[prev_used % vq->qsize].id != d0) {
+        virtio_blk_mark_failed(mmio_base, "unexpected flush descriptor id");
+        return -1;
+    }
+
+    vq->last_used_idx = new_used_idx;
+    virtio_blk_ack_interrupts(mmio_base);
+
+    invalidate_dcache_by_mva(status_va, 1);
+    if (*status_va != VIRTIO_BLK_S_OK) {
+        KERROR("virtio_blk: flush status=0x%02X\n", *status_va);
         return -1;
     }
 
@@ -912,6 +1018,53 @@ uint32_t blk_get_sector_size(void)
 bool blk_is_readonly(void)
 {
     return virtio_blk_readonly;
+}
+
+int virtio_blk_flush(void)
+{
+    if (!blk_is_initialized())
+        return -1;
+    if (!virtio_blk_flush_supported)
+        return 0;
+
+    spin_lock(&virtio_blk_lock);
+    if (virtio_blk_failed) {
+        spin_unlock(&virtio_blk_lock);
+        return -1;
+    }
+
+    uint32_t hdr_pa = 0;
+    void *hdr_va = alloc_dma_pages(1, &hdr_pa);
+    if (!hdr_va) {
+        spin_unlock(&virtio_blk_lock);
+        return -1;
+    }
+
+    struct virtio_blk_req *hdr = (struct virtio_blk_req *)hdr_va;
+    uint8_t *status_va = ((uint8_t *)hdr_va) + 512;
+    uint32_t status_pa = hdr_pa + 512;
+
+    int ret = virtio_blk_submit_flush(&global_vq, virtio_mmio_base, hdr, hdr_pa,
+                                      status_va, status_pa, VIRTIO_BLOCK_TIMEOUT);
+    if (!virtio_blk_failed)
+        free_pages(hdr_va, 1);
+
+    spin_unlock(&virtio_blk_lock);
+    return ret;
+}
+
+void virtio_blk_shutdown(void)
+{
+    if (!blk_is_initialized())
+        return;
+
+    int ret = virtio_blk_flush();
+    if (ret < 0)
+        KERROR("virtio_blk: flush failed during shutdown\n");
+
+    virtio_blk_ack_interrupts(virtio_mmio_base);
+    mmio_write32(virtio_mmio_base, VIRTIO_MMIO_STATUS, 0);
+    asm volatile("dsb sy; isb" ::: "memory");
 }
 
 uint32_t virtio_blk_get_irq(void)

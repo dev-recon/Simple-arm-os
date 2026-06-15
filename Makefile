@@ -65,6 +65,7 @@ KERNEL_OBJS = \
 	kernel/drivers/console.o \
 	kernel/drivers/uart.o \
 	kernel/drivers/tty.o \
+	kernel/drivers/power.o \
 	kernel/drivers/ide.o \
 	kernel/drivers/ramfs.o \
 	kernel/drivers/tar_parser_ramfs.o \

@@ -855,6 +855,15 @@ shm_unmap_success:
     pop {r7, lr}
     bx lr
 
+.global sys_shutdown
+.type sys_shutdown, %function
+sys_shutdown:
+    push {r7, lr}
+    mov r7, #194        /* __NR_shutdown */
+    swi #0
+    pop {r7, lr}
+    bx lr
+
 /* ========================================
  * Gestion d'errno (simple)
  * ======================================== */
