@@ -283,7 +283,6 @@ typedef struct task {
     /* === EXTENSIONS PROCESSUS === */
     task_type_t type;               /* Type de tache */
     uint32_t quantum_left;
-    volatile uint8_t defer_return_to_user; /* 0/1 */
     
     /* Donnees processus (seulement si type == PROCESS) */
     union {

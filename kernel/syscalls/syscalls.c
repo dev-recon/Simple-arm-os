@@ -860,18 +860,16 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
 {
     //KDEBUG("====== SYSCALL HANDLER ===========\n");
     //char str[100];
+    task_t *proc;
+    signal_check_result_t sig_result = SIGNAL_CHECK_NONE;
+    int result;
 
     if (syscall_num >= 256 || !syscall_table[syscall_num]) {
         return -ENOSYS;
     }
 
-    task_t *proc = current_task;
+    proc = current_task;
     //uint32_t usr_r11 = proc->context.usr_r[11];
-
-    if(proc && proc->context.returns_to_user)
-    {
-        proc->context.svc_sp = proc->context.sp;
-    }
 
     //if( syscall_num != __NR_read &&
     //    syscall_num != __NR_write ) KDEBUG(" SYSCALL NUM == %u == %s\n", syscall_num, proc->name);
@@ -887,7 +885,9 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
     //debug_print_ctx(&proc->context, "----->>>>>> ENTER SYSCALL HANDLER");
     
     /* Call syscall */
-    int result = syscall_table[syscall_num](arg1, arg2, arg3, arg4, arg5);
+    result = syscall_table[syscall_num](arg1, arg2, arg3, arg4, arg5);
+
+    proc = current_task;
 
     /*
      * Le contexte user canonique doit contenir la valeur de retour avant de
@@ -897,22 +897,32 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
         proc->context.usr_r[0] = (uint32_t)result;
     }
 
-    if (syscall_num != __NR_rt_sigreturn) {
-        check_pending_signals();
+    if (proc && syscall_num != __NR_rt_sigreturn) {
+        sig_result = check_pending_signals();
+        proc = current_task;
+    }
+
+    if (!proc) {
+        return result;
+    }
+
+    if (sig_result == SIGNAL_CHECK_EXITED) {
+        return result;
+    }
+
+    if (sig_result == SIGNAL_CHECK_STOPPED ||
+        proc->state == TASK_BLOCKED ||
+        proc->state == TASK_INTERRUPTIBLE ||
+        proc->state == TASK_UNINTERRUPTIBLE ||
+        proc->state == TASK_ZOMBIE ||
+        proc->state == TASK_TERMINATED) {
+        yield();
+        return result;
     }
 
     if (need_resched /* && (syscall_num != __NR_waitpid) */) {
         need_resched = 0;
-        bool from_user = proc->context.returns_to_user ? true : false;
-        if(from_user){
-            proc->defer_return_to_user = 1;
-        }
-
         yield();
-
-        if(from_user){
-            proc->defer_return_to_user = 0;
-        }
     }
 
 

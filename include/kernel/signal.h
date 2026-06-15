@@ -32,12 +32,21 @@
 #define SA_NODEFER    0x02
 #define SA_RESETHAND  0x04
 
+typedef enum {
+    SIGNAL_CHECK_NONE = 0,
+    SIGNAL_CHECK_IGNORED,
+    SIGNAL_CHECK_USER_FRAME,
+    SIGNAL_CHECK_STOPPED,
+    SIGNAL_CHECK_EXITED,
+    SIGNAL_CHECK_DEFERRED
+} signal_check_result_t;
+
 /* Signal functions */
 void init_process_signals(task_t* proc);
 int send_signal(task_t* target, int sig);
-void check_pending_signals(void);
+signal_check_result_t check_pending_signals(void);
 int signal_consume_user_return_override(void);
-void deliver_signal(task_t* proc, int sig);
+signal_check_result_t deliver_signal(task_t* proc, int sig);
 bool has_pending_signals(task_t* proc);
 
 void print_signal_stack_stats(void);

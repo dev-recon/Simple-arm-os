@@ -107,6 +107,16 @@ static bool task_stack_metadata_valid(task_t* task)
     return true;
 }
 
+static bool task_kernel_sp_valid(task_t* task, uint32_t sp)
+{
+    if (!task || !task->stack_base || !task->stack_top) {
+        return false;
+    }
+
+    return sp >= (uint32_t)task->stack_base &&
+           sp < (uint32_t)task->stack_top;
+}
+
 static bool task_is_schedulable(task_t* task)
 {
     if (!task) {
@@ -408,7 +418,6 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->context.r0 = 0;
     child->wakeup_time = 0;
     child->quantum_left = QUANTUM_TICKS;
-    child->defer_return_to_user = 0;
 
     kfree(child_name);
     kernel_lifecycle_stats.tasks_created++;
@@ -797,7 +806,6 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     task->context.sp = task->context.svc_sp;
 
     task->quantum_left = QUANTUM_TICKS;
-    task->defer_return_to_user = 0;
     task->wakeup_time = 0;
     task->process = NULL;  /* Par defaut, pas de processus associe */
 
@@ -1355,14 +1363,13 @@ void schedule(void)
     }
 
     /* Verifier que les SP sont dans les bonnes plages */
-    if (current_task->context.sp < (uint32_t)current_task->stack_base || 
-        current_task->context.sp >= (uint32_t)current_task->stack_top) {
-        KERROR("SCHED: old_task (%s) SP 0x%08X out of range!\n", current_task->name, current_task->context.sp);
+    if (!task_kernel_sp_valid(current_task, current_sp)) {
+        KERROR("SCHED: old_task (%s) current SP 0x%08X out of range!\n", current_task->name, current_sp);
         KERROR("     SP BASE: 0x%08X \n", (uint32_t)current_task->stack_base);
         KERROR("     SP TOP: 0x%08X \n", (uint32_t)current_task->stack_top);
+        KERROR("     CONTEXT SP: 0x%08X \n", current_task->context.sp);
         KERROR("     SVC SP: 0x%08X \n", current_task->context.svc_sp);
         KERROR("     SVC SP TOP: 0x%08X \n", current_task->context.svc_sp_top);
-        KERROR("     CURRENT SP: 0x%08X \n", current_sp);
 
         //old_task->context.sp = current_sp;
 
@@ -1418,11 +1425,6 @@ void schedule(void)
         }
     }
     #endif
-
-    //int wants_user = next_task->context.returns_to_user;
-    //if (next_task->defer_return_to_user) wants_user = 0;
-
-    //next_task->context.returns_to_user = wants_user;
 
     unset_critical_section();
     /* === CRITIACL POINT === */
@@ -1516,14 +1518,13 @@ void schedule_to(task_t *next_task)
     
 
     /* Verifier que les SP sont dans les bonnes plages */
-    if (current_task->context.sp < (uint32_t)current_task->stack_base || 
-        current_task->context.sp >= (uint32_t)current_task->stack_top) {
-        KERROR("SCHED: old_task (%s) SP 0x%08X out of range!\n", current_task->name, current_task->context.sp);
+    if (!task_kernel_sp_valid(current_task, current_sp)) {
+        KERROR("SCHED: old_task (%s) current SP 0x%08X out of range!\n", current_task->name, current_sp);
         KERROR("     SP BASE: 0x%08X \n", (uint32_t)current_task->stack_base);
         KERROR("     SP TOP: 0x%08X \n", (uint32_t)current_task->stack_top);
+        KERROR("     CONTEXT SP: 0x%08X \n", current_task->context.sp);
         KERROR("     SVC SP: 0x%08X \n", current_task->context.svc_sp);
         KERROR("     SVC SP TOP: 0x%08X \n", current_task->context.svc_sp_top);
-        KERROR("     CURRENT SP: 0x%08X \n", current_sp);
 
         //old_task->context.sp = current_sp;
 
@@ -1562,11 +1563,6 @@ void schedule_to(task_t *next_task)
     next_task->switch_count++;
     spin_unlock(&task_lock);
 
-
-    //int wants_user = next_task->context.returns_to_user;
-    //if (next_task->defer_return_to_user) wants_user = 0;
-
-    //next_task->context.returns_to_user = wants_user;
 
     unset_critical_section();
     /* === CRITIACL POINT === */

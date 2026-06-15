@@ -15,9 +15,9 @@
 
 /* Forward declarations de TOUTES les fonctions */
 void wake_up_process_for_signal(task_t* proc);
-void deliver_signal(task_t* proc, int sig);
+signal_check_result_t deliver_signal(task_t* proc, int sig);
 static int find_highest_priority_signal(uint32_t signal_mask);
-static void handle_default_signal_action(task_t* proc, int sig);
+static signal_check_result_t handle_default_signal_action(task_t* proc, int sig);
 static bool setup_signal_handler(task_t* proc, int sig, sigaction_t* action);
 static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
                                uint32_t signal_sp, uint32_t old_blocked);
@@ -343,14 +343,14 @@ bool has_pending_signals(task_t* proc)
 /**
  * Delivrer un signal a un processus - CORRIGe
  */
-void deliver_signal(task_t* proc, int sig)
+signal_check_result_t deliver_signal(task_t* proc, int sig)
 {
     signal_state_t* sig_state;
     sigaction_t* action;
     
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process){
         KERROR("deliver_signal: NULL PROC\n");
-         return ;
+        return SIGNAL_CHECK_DEFERRED;
     }
 
     sig_state = &proc->process->signals;
@@ -361,14 +361,13 @@ void deliver_signal(task_t* proc, int sig)
     /* Verifier si le signal est ignore */
     if (action->sa_handler == SIG_IGN) {
         KDEBUG("[SIGNAL] Signal %d ignored by PID=%u\n", sig, proc->process->pid);
-        return;
+        return SIGNAL_CHECK_IGNORED;
     }
     
     if (action->sa_handler == SIG_DFL) {
         /* Action par defaut */
         //KDEBUG("[SIGNAL] Proc %s Using default action for signal %d\n", proc->name, sig);
-        handle_default_signal_action(proc, sig);
-        return;
+        return handle_default_signal_action(proc, sig);
     }
     
     /* Handler utilisateur */
@@ -376,17 +375,20 @@ void deliver_signal(task_t* proc, int sig)
     //       (uint32_t)action->sa_handler, sig);
     if (!setup_signal_handler(proc, sig, action)) {
         sig_state->pending |= (1u << sig);
+        return SIGNAL_CHECK_DEFERRED;
     }
+
+    return SIGNAL_CHECK_USER_FRAME;
 }
 
 /**
  * Gerer l'action par defaut d'un signal - CORRIGe
  */
-static void handle_default_signal_action(task_t* proc, int sig)
+static signal_check_result_t handle_default_signal_action(task_t* proc, int sig)
 {
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         KERROR("handle_default_signal_action: NULL PROC\n");
-         return ;
+        return SIGNAL_CHECK_DEFERRED;
     }
      
     //KDEBUG("[SIGNAL] Default action for signal %d: %d\n", sig, default_signal_actions[sig]);
@@ -394,26 +396,28 @@ static void handle_default_signal_action(task_t* proc, int sig)
     switch (default_signal_actions[sig]) {
         case SIG_ACT_TERM:
             terminate_process(proc, sig);
-            break;
+            return SIGNAL_CHECK_EXITED;
             
         case SIG_ACT_CORE:
             dump_core(proc);
             terminate_process(proc, sig);
-            break;
+            return SIGNAL_CHECK_EXITED;
             
         case SIG_ACT_STOP:
             stop_process(proc);
-            break;
+            return SIGNAL_CHECK_STOPPED;
             
         case SIG_ACT_CONT:
             continue_process(proc);
-            break;
+            return SIGNAL_CHECK_NONE;
             
         case SIG_ACT_IGN:
             /* Ne rien faire */
             KDEBUG("[SIGNAL] Signal %d ignored by default\n", sig);
-            break;
+            return SIGNAL_CHECK_IGNORED;
     }
+
+    return SIGNAL_CHECK_NONE;
 }
 
 /**
@@ -667,36 +671,37 @@ void sys_sigreturn(void)
 /**
  * Verifier les signaux en attente - CORRIGe
  */
-void check_pending_signals(void)
+signal_check_result_t check_pending_signals(void)
 {
     task_t* proc = current_task;
     signal_state_t* sig;
     uint32_t deliverable;
     int signal_num;
     
-    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
+        return SIGNAL_CHECK_NONE;
 
     //KDEBUG("[SIGNAL] entered check_pending_signals PID=%u - TTBR0 = 0x%08X\n", proc->process->pid, (uint32_t)proc->process->vm->pgdir);
 
     if( proc->state == TASK_UNINTERRUPTIBLE ){
         //KDEBUG("[SIGNAL] process in TASK_UNINTERRUPTIBLE PID=%u - skipping\n", proc->process->pid);
-        return;
+        return SIGNAL_CHECK_DEFERRED;
     }
     
     sig = &proc->process->signals;
 
     /* Une seule frame est supportee pour l'instant: pas de signal imbrique. */
-    if (sig->in_handler != 0) return;
+    if (sig->in_handler != 0) return SIGNAL_CHECK_DEFERRED;
     
     /* Trouver les signaux delivrables */
     deliverable = sig->pending & ~sig->blocked;
-    if (!deliverable) return;
+    if (!deliverable) return SIGNAL_CHECK_NONE;
 
     //KDEBUG("[SIGNAL] Deliverable signals found %u PID=%u\n", deliverable, proc->process->pid);
 
     /* Trouver le signal de plus haute priorite */
     signal_num = find_highest_priority_signal(deliverable);
-    if (signal_num == 0) return;
+    if (signal_num == 0) return SIGNAL_CHECK_NONE;
     
      //KDEBUG("[SIGNAL] find_highest_priority_signal found %d PID=%u\n", signal_num, proc->process->pid);
 
@@ -706,7 +711,7 @@ void check_pending_signals(void)
     //KDEBUG("[SIGNAL] Processing pending signal %d for PID=%u\n", 
     //       signal_num, proc->process->pid);
     
-    deliver_signal(proc, signal_num);
+    return deliver_signal(proc, signal_num);
 }
 
 int signal_consume_user_return_override(void)
