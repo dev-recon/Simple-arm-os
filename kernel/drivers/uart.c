@@ -30,6 +30,11 @@ static uintptr_t uart_mmio_base = VIRT_UART_BASE;
 #define UART_MIS        UART_REG(0x40)  /* Masked Interrupt Status */
 #define UART_ICR        UART_REG(0x44)  /* Interrupt Clear */
 
+/* Bits UART interrupt PL011 */
+#define UART_INT_RX     (1 << 4)  /* Receive FIFO interrupt */
+#define UART_INT_RT     (1 << 6)  /* Receive timeout interrupt */
+#define UART_INT_ERR    ((1 << 7) | (1 << 8) | (1 << 9) | (1 << 10))
+
 /* Bits de controle UART_FR (Flag Register) */
 #define UART_FR_TXFE    (1 << 7)  /* Transmit FIFO empty */
 #define UART_FR_RXFF    (1 << 6)  /* Receive FIFO full */
@@ -94,7 +99,7 @@ void uart_init(void)
     
     /* Effacer toutes les interruptions */
     UART_ICR = 0x7FF;
-    UART_IMSC = 0;
+    UART_IMSC = UART_INT_RX | UART_INT_RT;
     
     /* Activer UART, TX et RX */
     UART_CR = UART_CR_UARTEN | UART_CR_TXE | UART_CR_RXE;
@@ -441,27 +446,21 @@ file_t* create_uart_console_file(const char* name, int flags) {
 /* Dans uart.c */
 void uart_irq_handler(void) {
     uint32_t mis = UART_MIS;  /* Masked Interrupt Status */
+    uint32_t handled = mis & (UART_INT_RX | UART_INT_RT | UART_INT_ERR);
     
-    KDEBUG("UART IRQ! MIS=0x%X\n", mis);
-    
-    /* RX interrupt ? */
-    if (mis & (1 << 4)) {
+    /* RX ou timeout de reception ? */
+    if (mis & (UART_INT_RX | UART_INT_RT)) {
         /* Lire tous les caractères disponibles */
         while (uart_has_data()) {
-            char c = uart_getc();
-            KDEBUG("UART received: '%c' (0x%02X)\n", c, c);
+            int c = uart_getc();
+            if (c < 0) break;
             
             /* Envoyer au TTY */
-            tty_input_char(c);
+            tty_input_char((char)c);
         }
-        
-        /* Acquitter l'interruption RX */
-        UART_ICR = (1 << 4);
     }
     
-    /* Autres interruptions (TX, erreurs, etc.) */
-    if (mis & ~(1 << 4)) {
-        KDEBUG("UART other interrupt: 0x%X\n", mis);
-        UART_ICR = mis;  /* Acquitter toutes */
+    if (handled) {
+        UART_ICR = handled;
     }
 }

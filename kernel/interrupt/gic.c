@@ -181,12 +181,14 @@ void irq_c_handler(void)
             
         case VIRT_UART_IRQ:  /* UART machine virt */
             //kprintf("[IRQ] UART IRQ %u Received\n", int_id);
-            //uart_irq_handler();
+            uart_irq_handler();
             break;
 
         case IRQ_KEYBOARD:
-            kprintf("[IRQ] Keyboard IRQ 33 Received\n");
-            keyboard_irq_handler();
+            /* Sur qemu virt -nographic, l'entree interactive arrive via PL011.
+             * Le GIC nous livre l'IRQ 33 pour cette source; l'ancien handler
+             * clavier cible un MMIO non-present sur cette machine. */
+            uart_irq_handler();
             break;
             
         case 15:  /* IDE si present */

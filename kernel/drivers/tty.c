@@ -19,6 +19,7 @@ void tty_init(void) {
 
 /* Appelé par l'IRQ UART (ou polling) */
 void tty_input_char(char c) {
+    task_t* reader = NULL;
     unsigned long flags;
     spin_lock_irqsave(&tty0.lock, &flags);
     
@@ -45,19 +46,21 @@ void tty_input_char(char c) {
         tty0.input_buf[tty0.input_head] = c;
         tty0.input_head = next_head;
         
-        /* Réveiller le lecteur si mode ligne et '\n' reçu */
-        if ((tty0.c_lflag & ICANON) && (c == '\n' || c == '\r')) {
-            if (tty0.read_wait) {
-                task_t* reader = tty0.read_wait;
-                reader->state = TASK_READY;
-                if (reader->process)
-                    reader->process->state = (proc_state_t)PROC_READY;
-                tty0.read_wait = NULL;
-            }
+        /* read(0, &c, 1) doit être réveillé dès qu'un caractère arrive. */
+        if (tty0.read_wait) {
+            reader = tty0.read_wait;
+            tty0.read_wait = NULL;
         }
     }
     
     spin_unlock_irqrestore(&tty0.lock, flags);
+
+    if (reader) {
+        reader->wakeup_time = 0;
+        if (reader->process)
+            reader->process->state = (proc_state_t)PROC_READY;
+        add_to_ready_queue(reader);
+    }
 }
 
 ssize_t tty_read(char *buf, size_t count) {
@@ -75,8 +78,19 @@ ssize_t tty_read(char *buf, size_t count) {
         
         /* Buffer vide ? */
         if (tty0.input_head == tty0.input_tail) {
+            if (read > 0 || !current_task) {
+                spin_unlock_irqrestore(&tty0.lock, flags);
+                break;
+            }
+
+            tty0.read_wait = current_task;
+            current_task->state = TASK_INTERRUPTIBLE;
+            if (current_task->process)
+                current_task->process->state = (proc_state_t)PROC_INTERRUPTIBLE;
             spin_unlock_irqrestore(&tty0.lock, flags);
-            break;
+
+            schedule();
+            continue;
         }
         
         /* Lire un caractère */
