@@ -84,6 +84,7 @@ struct inode_operations {
     int (*create)(inode_t* dir, const char* name, uint16_t mode);
     int (*mkdir)(inode_t* dir, const char* name, uint16_t mode);
     int (*unlink)(inode_t* dir, const char* name);
+    int (*rmdir)(inode_t* dir, const char* name);
     int (*rename)(inode_t* old_dir, const char* old_name,
                   inode_t* new_dir, const char* new_name);
 };

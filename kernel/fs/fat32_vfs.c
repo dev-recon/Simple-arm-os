@@ -15,6 +15,7 @@ static int fat32_file_close(file_t* file);
 static off_t fat32_file_lseek(file_t* file, off_t offset, int whence);
 static int fat32_dir_readdir(file_t* file, dirent_t* dirent);
 int fat32_inode_mkdir(inode_t* dir, const char* name, uint16_t mode);
+int fat32_inode_rmdir(inode_t* dir, const char* name);
 int fat32_add_dir_entry(uint32_t parent_cluster, fat32_dir_entry_t* new_entry);
 int fat32_inode_unlink(inode_t* dir, const char* name);
 int fat32_remove_dir_entry(uint32_t dir_cluster, const char* name);
@@ -103,6 +104,7 @@ inode_operations_t fat32_inode_ops = {
     .create = NULL,
     .mkdir  = fat32_inode_mkdir,
     .unlink = fat32_inode_unlink,
+    .rmdir  = fat32_inode_rmdir,
     .rename = fat32_inode_rename,
 };
 
@@ -236,6 +238,32 @@ int fat32_inode_unlink(inode_t* dir, const char* name) {
     /* Supprimer l'entrée du répertoire */
     int result = fat32_remove_dir_entry(dir->first_cluster, name);
     
+    kfree(entry);
+    return result;
+}
+
+int fat32_inode_rmdir(inode_t* dir, const char* name)
+{
+    if (!dir || !name) return -EINVAL;
+
+    fat32_dir_entry_t* entry = fat32_find_entry(dir->first_cluster, name);
+    if (!entry) return -ENOENT;
+
+    if (!(entry->attr & FAT_ATTR_DIRECTORY)) {
+        kfree(entry);
+        return -ENOTDIR;
+    }
+
+    uint32_t cluster = fat32_get_cluster_from_entry(entry);
+    if (fat32_directory_is_not_empty(cluster)) {
+        kfree(entry);
+        return -ENOTEMPTY;
+    }
+
+    int result = fat32_remove_dir_entry(dir->first_cluster, name);
+    if (result == 0)
+        fat32_free_cluster(cluster);
+
     kfree(entry);
     return result;
 }

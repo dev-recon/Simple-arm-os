@@ -41,10 +41,6 @@ static file_operations_t pipe_write_fops = {
     .close = pipe_close,
 };
 
-/* Forward declarations de toutes les fonctions statiques */
-extern bool fat32_directory_is_not_empty(uint32_t dir_cluster);      // FIX THE DEPENDENCY TO FAT32
-extern int fat32_remove_dir_entry(uint32_t dir_cluster, const char* name);
-extern void fat32_free_cluster(uint32_t cluster);
 extern char* resolve_path(const char* path);
 
 bool can_read(file_t* file) {
@@ -749,12 +745,6 @@ int sys_rmdir(const char* pathname)
         return -ENOTDIR;
     }
 
-    if (fat32_directory_is_not_empty(target_inode->first_cluster)) {
-        put_inode(target_inode);
-        kfree(abs_path);
-        return -ENOTEMPTY;
-    }
-
     result = split_path(abs_path, &parent_path, &dir_name);
     if (result != 0) {
         put_inode(target_inode);
@@ -771,10 +761,12 @@ int sys_rmdir(const char* pathname)
         return -ENOENT;
     }
 
-    result = fat32_remove_dir_entry(parent_inode->first_cluster, dir_name);
-    if (result == 0) {
-        fat32_free_cluster(target_inode->first_cluster);
-    }
+    if (!parent_inode->i_op || !parent_inode->i_op->rmdir)
+        result = -ENOSYS;
+    else if (!inode_permission(parent_inode, MAY_WRITE))
+        result = -EACCES;
+    else
+        result = parent_inode->i_op->rmdir(parent_inode, dir_name);
 
     put_inode(target_inode);
     put_inode(parent_inode);
