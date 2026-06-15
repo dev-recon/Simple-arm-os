@@ -636,6 +636,21 @@ bool blk_is_initialized(void) {
     return ata_sector_size > 0 && virtio_capacity_sectors > 0 && !virtio_blk_failed;
 }
 
+uint64_t blk_get_capacity_sectors(void)
+{
+    return virtio_capacity_sectors;
+}
+
+uint32_t blk_get_sector_size(void)
+{
+    return ata_sector_size;
+}
+
+bool blk_is_readonly(void)
+{
+    return virtio_blk_readonly;
+}
+
 
 void read_sector0_and_print(void)
 {

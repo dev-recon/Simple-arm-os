@@ -204,6 +204,14 @@ void virtio_block_irq_handler(void);
 void virtio_block_comprehensive_test(void);
 bool virtio_blk_init_legacy(uint32_t base_addr);
 void read_sector0_and_print(void);
+int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer);
+int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer);
+int blk_read_sector(uint64_t lba, void* buffer);
+int blk_write_sector(uint64_t lba, void* buffer);
+bool blk_is_initialized(void);
+uint64_t blk_get_capacity_sectors(void);
+uint32_t blk_get_sector_size(void);
+bool blk_is_readonly(void);
 
 /* Fonctions utilitaires */
 uint32_t virtio_read_reg(uint32_t reg);
