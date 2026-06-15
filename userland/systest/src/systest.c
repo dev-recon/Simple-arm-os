@@ -396,6 +396,54 @@ static void test_waitpid_wuntraced_continue(void)
     expect(waited == pid, "waitpid reaps continued killed child", waited);
 }
 
+static void test_waitpid_group_stop_reports_all(void)
+{
+    int pids[2] = {-1, -1};
+    int pgid = 0;
+    int stopped = 0;
+    int reaped = 0;
+    int status = -1;
+
+    for (int i = 0; i < 2; i++) {
+        int pid = fork();
+        if (pid == 0) {
+            while (1)
+                usleep(50000);
+        }
+
+        if (pid < 0)
+            break;
+
+        if (i == 0)
+            pgid = pid;
+        pids[i] = pid;
+        setpgid(pid, pgid);
+    }
+
+    if (expect(pids[0] > 0 && pids[1] > 0, "WUNTRACED group fork children", pids[1]) < 0)
+        return;
+
+    expect(kill(-pgid, SIGSTOP) == 0, "WUNTRACED group SIGSTOP", pgid);
+    while (stopped < 2) {
+        int waited = waitpid(-pgid, &status, WUNTRACED);
+        if (waited <= 0)
+            break;
+        if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGSTOP)
+            stopped++;
+    }
+    expect(stopped == 2, "WUNTRACED group reports all stopped children", stopped);
+
+    expect(kill(-pgid, SIGCONT) == 0, "WUNTRACED group SIGCONT", pgid);
+    expect(kill(-pgid, SIGKILL) == 0, "WUNTRACED group cleanup kill", pgid);
+
+    for (int i = 0; i < 2; i++) {
+        status = -1;
+        if (waitpid(pids[i], &status, 0) == pids[i])
+            reaped++;
+    }
+    expect(reaped == 2, "WUNTRACED group cleanup reap", reaped);
+}
+
 static void test_sleep_survives_stop_continue(void)
 {
     int pid;
@@ -883,6 +931,7 @@ int main(void)
     test_process_groups();
     test_waitpid_process_group();
     test_waitpid_wuntraced_continue();
+    test_waitpid_group_stop_reports_all();
     test_sleep_survives_stop_continue();
     test_nanosleep_signal_interrupt();
     test_cow_memory();

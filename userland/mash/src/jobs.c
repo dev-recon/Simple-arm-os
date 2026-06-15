@@ -379,8 +379,6 @@ int jobs_fg_builtin(int argc, char* argv[])
             break;
 
         jobs_note_status(pid, status);
-        if (WIFSTOPPED(status))
-            break;
     }
     if (shell_pgid > 0)
         stty(TTY_STTY_SET_FOREGROUND_PGID, shell_pgid);

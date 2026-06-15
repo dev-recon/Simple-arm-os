@@ -466,6 +466,15 @@ static int pipeline_pid_index(const int pids[], int count, int pid)
     return -1;
 }
 
+static int pipeline_has_stopped_member(const int seen[], const int statuses[], int count)
+{
+    for (int i = 0; i < count; i++) {
+        if (seen[i] && WIFSTOPPED(statuses[i]))
+            return 1;
+    }
+    return 0;
+}
+
 static int run_pipeline(int argc, char* argv[], int background) {
     shell_command_t commands[SHELL_MAX_PIPELINE];
     int pipes[SHELL_MAX_PIPELINE - 1][2];
@@ -479,8 +488,7 @@ static int run_pipeline(int argc, char* argv[], int background) {
     int last_status = 0;
     int launched = 0;
     int pgid = 0;
-    int stopped = 0;
-    int finished = 0;
+    int reported = 0;
     char command[JOBS_COMMAND_LEN];
 
     for (i = 0; i < SHELL_MAX_PIPELINE - 1; i++) {
@@ -578,7 +586,7 @@ static int run_pipeline(int argc, char* argv[], int background) {
     }
 
     shell_set_foreground_pgid(pgid);
-    while (finished < command_count && !stopped) {
+    while (reported < command_count) {
         int waited = waitpid(-pgid, &status, WUNTRACED);
         int idx;
 
@@ -590,17 +598,15 @@ static int run_pipeline(int argc, char* argv[], int background) {
             continue;
 
         wait_statuses[idx] = status;
-        wait_seen[idx] = 1;
-        last_status = status;
-        if (WIFSTOPPED(status)) {
-            stopped = 1;
-        } else {
-            finished++;
+        if (!wait_seen[idx]) {
+            wait_seen[idx] = 1;
+            reported++;
         }
+        last_status = status;
     }
     shell_restore_foreground();
 
-    if (stopped) {
+    if (pipeline_has_stopped_member(wait_seen, wait_statuses, command_count)) {
         for (i = 0; i < command_count; i++)
             jobs_add(pids[i], pgid, command);
         for (i = 0; i < command_count; i++) {
