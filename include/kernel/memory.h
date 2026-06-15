@@ -94,7 +94,7 @@ struct page_info {
     uint8_t used     : 1;  // page allouée ou libre
     size_t size        ;  // buddy order (si utilisé)
     uint8_t reserved : 1;  // marquée réservée (ex: DTB)
-    uint8_t refcount;      // pour un ref counting basique
+    uint16_t refcount;     // references physiques (COW, mappings partages)
     uint32_t start;
 }__attribute__((packed));
 
@@ -108,6 +108,10 @@ void* allocate_page(void);
 void free_page(void* page_addr);
 void* allocate_pages(uint32_t num_pages);
 void free_pages(void* page_addr, uint32_t num_pages);
+bool page_is_buddy_page(void* page_addr);
+uint16_t page_ref_count(void* page_addr);
+int page_ref_inc(void* page_addr);
+uint16_t page_ref_dec(void* page_addr);
 uint32_t get_kernel_memory_size(void);
 
 
@@ -117,6 +121,7 @@ void destroy_vm_space(vm_space_t* vm);
 vm_space_t* fork_vm_space(vm_space_t* parent_vm);
 vma_t* create_vma(vm_space_t* vm, uint32_t start, uint32_t size, uint32_t flags);
 vma_t* find_vma(vm_space_t* vm, uint32_t addr);
+int handle_cow_fault(uint32_t fault_addr);
 
 /* Nouvelles fonctions pour ASID */
 void switch_to_vm_space(vm_space_t *vm);
@@ -129,6 +134,11 @@ bool setup_mmu(void);
 void switch_address_space(uint32_t* pgdir);                           /* TTBR0 seulement */
 void switch_address_space_with_asid(uint32_t* pgdir, uint32_t asid);   /* TTBR0 + ASID */
 int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid);
+int map_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid);
+int remap_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid);
+int set_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t asid);
+int set_user_page_writable(uint32_t* pgdir, uint32_t vaddr, uint32_t asid);
+uint32_t* get_user_pte(uint32_t* pgdir, uint32_t vaddr);
 uint32_t get_physical_address(uint32_t* pgdir, uint32_t vaddr);
 void debug_mmu_state(void);
 void unmap_temp_pages_contiguous(uint32_t base_vaddr, int num_pages);

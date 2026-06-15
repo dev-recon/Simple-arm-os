@@ -289,7 +289,12 @@ data_abort_vector:
     mrc     p15,0,r2,c5,c0,0     @ r2 = DFSR
     mov     r3, sp               @ r3 = ptr vers regs sauvés
     bl      data_abort_handler
-1:  b       1b                   @ au cas où le C ne revient jamais
+    cmp     r0, #0
+    bne     1f                   @ non-zero = fault non recupere
+    ldmia   sp!, {r0-r3, r12, lr}
+    add     sp, sp, #64
+    subs    pc, lr, #8           @ rejouer l'instruction ARM fautive
+1:  b       1b                   @ au cas où le C revient sur erreur
 //    sub lr, lr, #8               /* Corrige l'adresse de retour (ARM spec) */
 //    stmfd sp!, {r0-r12, lr}      /* Sauvegarde des registres */
 //    bl data_abort_handler        /* Appel du handler en C */

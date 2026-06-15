@@ -47,8 +47,63 @@ static void setup_ttbr_split(void);
 static void setup_kernel_space(void);
 static void setup_user_template(void);
 static void map_kernel_mmio_alias(uint32_t vaddr, uint32_t paddr);
+static bool is_valid_vaddr(uint32_t vaddr);
 uint32_t allocate_l2_page(bool is_kernel);
 void check_address_content(uint32_t phys_addr, const char* step);
+static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
+                                   uint32_t phys_addr, uint32_t vma_flags,
+                                   uint32_t asid, bool writable);
+
+static uint32_t user_page_flags(uint32_t vma_flags, bool writable)
+{
+    uint32_t page_flags = 0x02 | 0x0C;  /* small page + B/C */
+
+    page_flags |= writable ? PTE_AP_RW_RW : PTE_AP_RW_RO;
+    if (!(vma_flags & VMA_EXEC)) {
+        page_flags |= 0x01;             /* XN with small-page 0b11 format */
+    }
+
+    return page_flags;
+}
+
+uint32_t* get_user_pte(uint32_t* pgdir, uint32_t vaddr)
+{
+    if (!pgdir || !is_valid_vaddr(vaddr) || vaddr >= 0x40000000 ||
+        (vaddr & (PAGE_SIZE - 1))) {
+        return NULL;
+    }
+
+    uint32_t l1_index = get_L1_index(vaddr);
+    uint32_t l2_index = L2_INDEX(vaddr);
+    uint32_t l1_entry = pgdir[l1_index];
+
+    if ((l1_entry & 0x3) != 0x1) {
+        return NULL;
+    }
+
+    uint32_t* l2_table = (uint32_t *)(l1_entry & 0xFFFFFC00);
+    return &l2_table[l2_index];
+}
+
+static int update_user_pte(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr,
+                           uint32_t vma_flags, uint32_t asid, bool writable)
+{
+    uint32_t* pte = get_user_pte(pgdir, vaddr);
+    if (!pte || ((*pte & PTE_TYPE_MASK) == PTE_TYPE_FAULT)) {
+        return -ENOENT;
+    }
+
+    *pte = (phys_addr & PTE_SMALL_BASE) | user_page_flags(vma_flags, writable);
+    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
+    asm volatile("dsb ishst" ::: "memory");
+    invalidate_tlb_page_asid(vaddr, asid);
+    if (vma_flags & VMA_EXEC) {
+        asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0));
+        asm volatile("dsb ish; isb" ::: "memory");
+    }
+
+    return 0;
+}
 
 
 
@@ -936,6 +991,51 @@ void check_address_content(uint32_t phys_addr, const char* step) {
 
 int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid)
 {
+    return map_user_page_with_perm(pgdir, vaddr, phys_addr, vma_flags, asid, true);
+}
+
+int map_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid)
+{
+    return map_user_page_with_perm(pgdir, vaddr, phys_addr, vma_flags, asid, false);
+}
+
+int remap_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid)
+{
+    return update_user_pte(pgdir, vaddr, phys_addr, vma_flags, asid, true);
+}
+
+int set_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
+{
+    uint32_t* pte = get_user_pte(pgdir, vaddr);
+    if (!pte || ((*pte & PTE_TYPE_MASK) == PTE_TYPE_FAULT)) {
+        return -ENOENT;
+    }
+
+    *pte = (*pte & ~PTE_AP_MASK) | PTE_AP_RW_RO;
+    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
+    asm volatile("dsb ishst" ::: "memory");
+    invalidate_tlb_page_asid(vaddr, asid);
+    return 0;
+}
+
+int set_user_page_writable(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
+{
+    uint32_t* pte = get_user_pte(pgdir, vaddr);
+    if (!pte || ((*pte & PTE_TYPE_MASK) == PTE_TYPE_FAULT)) {
+        return -ENOENT;
+    }
+
+    *pte = (*pte & ~PTE_AP_MASK) | PTE_AP_RW_RW;
+    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
+    asm volatile("dsb ishst" ::: "memory");
+    invalidate_tlb_page_asid(vaddr, asid);
+    return 0;
+}
+
+static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
+                                   uint32_t phys_addr, uint32_t vma_flags,
+                                   uint32_t asid, bool writable)
+{
     if (!pgdir || !is_valid_vaddr(vaddr)) {
         KERROR("Invalid pgdir or vaddr\n");
         return -1;
@@ -994,16 +1094,7 @@ int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t 
         return -EEXIST;
     }
 
-    uint32_t page_flags = 0x02;
-    page_flags |= 0x0C;
-    if (vma_flags & VMA_WRITE) {
-        page_flags |= 0x30;
-    } else {
-        page_flags |= 0x20;
-    }
-    if (!(vma_flags & VMA_EXEC)) {
-        page_flags |= 0x01;
-    }
+    uint32_t page_flags = user_page_flags(vma_flags, writable);
 
     l2_table[l2_index] = (phys_addr & 0xFFFFF000) | page_flags;
     asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(&l2_table[l2_index]) : "memory");

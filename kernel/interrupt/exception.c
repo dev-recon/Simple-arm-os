@@ -6,6 +6,7 @@
 #include <kernel/uart.h>
 #include <kernel/process.h>
 #include <kernel/task.h>
+#include <kernel/memory.h>
 
 // Implémentez ces handlers
 void undefined_instruction_handler(void) {
@@ -327,10 +328,19 @@ void dump_task_context(task_t *t) {
     }
 }
 
-void data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t *saved)
+int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t *saved)
 {
     /* saved = {r0,r1,r2,r3,r12,lr_abt} empilés par le vecteur */
     uint32_t lr_abt = saved[5];
+    uint32_t status = ((dfsr >> 10) & 1) << 4 | (dfsr & 0xF);
+    uint32_t mode = spsr_abt & 0x1F;
+    bool is_write = (dfsr & (1u << 11)) != 0;
+
+    if (status == 0x0F && is_write && mode == 0x10) {
+        if (handle_cow_fault(dfar) == 0) {
+            return 0;
+        }
+    }
 
     uart_puts("\n=== DATA ABORT ===\n");
     uart_puts("DFAR="); uart_put_hex(dfar);
@@ -380,30 +390,7 @@ void data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_
     uart_puts(current_task->name);
     uart_puts("\n");
 
-    //task_t *parent = current_task->process->parent;
-    
-        /* Creer le shell de demonstration */
-    task_t* shell_proc  = task_create_process("shell", simple_shell_task, NULL, 10, TASK_TYPE_PROCESS);
-    //init_process = create_process("init");
-    if (!shell_proc) {
-        panic("Failed to create init process");
-    }
-
-    shell_proc->context.is_first_run = 1;                    
-    shell_proc->context.returns_to_user = 0;
-
-    //KDEBUG("[SHELL PROC] SCV STACK TOP = 0x%08X\n", shell_proc->context.svc_sp_top);
-    //KDEBUG("[SHELL PROC] SCV STACK SP = 0x%08X\n", shell_proc->context.svc_sp);
-    add_to_ready_queue(shell_proc);
-    task_destroy(current_task);
-
-   //dump_task_context(current_task);
-
-    //schedule_to(parent);
-    yield();
-
-    /* Stop net (ou tente une recovery si tu peux) */
-    while (1) { /* halt */ }
+    return -1;
 }
 
 /* ATS1CPR: translate VA as privileged read; PAR returns PA or fault status */

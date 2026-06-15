@@ -18,6 +18,7 @@ static void reserve_kernel_pages(void);
 static void reserve_bitmap_pages(void);
 static void reserve_heap_pages(void);
 static void reserve_dtb_pages(void);
+static struct page_info* buddy_page_info(void* ptr);
 //static void reserve_mmu_pages(void);
 
 void* early_alloc(uint32_t size, uint32_t align) {
@@ -124,6 +125,7 @@ void* buddy_alloc(size_t num_block) {
                 page_infos[run_start + j].used = 1;
                 page_infos[run_start + j].start = addr;
                 page_infos[run_start + j].size = num_block;
+                page_infos[run_start + j].refcount = 1;
             }
 
             memset((void *)addr, 0, num_block * PAGE_SIZE);
@@ -144,10 +146,16 @@ void buddy_free(void* ptr) {
     uint32_t caller;
     __asm__ volatile("mov %0, lr" : "=r"(caller));
 
-    uint32_t addr = (uint32_t)ptr;
-    size_t index = (addr - buddy_base) / PAGE_SIZE;
     uint32_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
+    uint32_t addr = (uint32_t)ptr;
+
+    if (!ptr || (addr & (PAGE_SIZE - 1)) || addr < buddy_base || addr >= ram_end) {
+        //kprintf("[ERROR] buddy_free: invalid ptr 0x%08X caller=0x%08X\n", addr, caller);
+        return;
+    }
+
+    size_t index = (addr - buddy_base) / PAGE_SIZE;
 
     //kprintf("\n***********************************************************************\n");
     //kprintf("\n***********************************************************************\n");
@@ -171,10 +179,63 @@ void buddy_free(void* ptr) {
     for (size_t i = 0; i < block_size; ++i) {
         page_infos[index + i].used = 0;
         page_infos[index + i].size = 0;
+        page_infos[index + i].refcount = 0;
     }
 
     page_infos[index].start = 0;
     page_infos[index].size = 0;  
+}
+
+static struct page_info* buddy_page_info(void* ptr)
+{
+    uint32_t addr = (uint32_t)ptr;
+    uint32_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
+    uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
+    uint32_t index;
+
+    if (!ptr || (addr & (PAGE_SIZE - 1)) || addr < buddy_base || addr >= ram_end) {
+        return NULL;
+    }
+
+    index = (addr - buddy_base) / PAGE_SIZE;
+    if (index >= max_pages || page_infos[index].reserved || !page_infos[index].used) {
+        return NULL;
+    }
+
+    return &page_infos[index];
+}
+
+bool page_is_buddy_page(void* page_addr)
+{
+    return buddy_page_info(page_addr) != NULL;
+}
+
+uint16_t page_ref_count(void* page_addr)
+{
+    struct page_info* info = buddy_page_info(page_addr);
+    return info ? info->refcount : 0;
+}
+
+int page_ref_inc(void* page_addr)
+{
+    struct page_info* info = buddy_page_info(page_addr);
+    if (!info || info->refcount == 0xFFFFu) {
+        return -1;
+    }
+
+    info->refcount++;
+    return 0;
+}
+
+uint16_t page_ref_dec(void* page_addr)
+{
+    struct page_info* info = buddy_page_info(page_addr);
+    if (!info || info->refcount == 0) {
+        return 0;
+    }
+
+    info->refcount--;
+    return info->refcount;
 }
 
 
@@ -537,7 +598,19 @@ void free_page(void* page_addr)
     __asm__ volatile("mov %0, lr" : "=r"(caller));
 
     //KDEBUG("free_page: caller &=0x%08X\n", caller);
-    buddy_free(page_addr);
+    if (!page_addr) {
+        return;
+    }
+
+    if (!page_is_buddy_page(page_addr)) {
+        //KERROR("free_page: invalid page 0x%08X caller=0x%08X\n", (uint32_t)page_addr, caller);
+        (void)caller;
+        return;
+    }
+
+    if (page_ref_dec(page_addr) == 0) {
+        buddy_free(page_addr);
+    }
 }
 
 /*
@@ -552,6 +625,10 @@ void* allocate_pages(uint32_t num_pages)
 void free_pages(void* page_addr, uint32_t num_pages)
 {
     (void) num_pages;
+
+    if (!page_addr) {
+        return;
+    }
 
     buddy_free(page_addr);
 

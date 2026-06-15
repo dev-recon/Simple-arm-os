@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 static int failures = 0;
+static volatile int cow_shared_value = 11;
 
 static void pass(const char *name)
 {
@@ -180,6 +181,42 @@ static void test_fork_wait_kill(void)
     expect(waited == pid, "waitpid collects killed child", waited);
 }
 
+static void test_cow_memory(void)
+{
+    int pid;
+    int status = -1;
+    int waited;
+
+    cow_shared_value = 11;
+    pid = fork();
+    if (pid == 0) {
+        cow_shared_value = 33;
+        exit(cow_shared_value == 33 ? 0 : 1);
+    }
+
+    if (expect(pid > 0, "COW fork child writer", pid) < 0)
+        return;
+
+    waited = waitpid(pid, &status, 0);
+    expect(waited == pid && status == 0, "COW child writes private page", waited);
+    expect(cow_shared_value == 11, "COW parent value unchanged", cow_shared_value);
+
+    cow_shared_value = 11;
+    pid = fork();
+    if (pid == 0) {
+        usleep(20000);
+        exit(cow_shared_value == 11 ? 0 : 1);
+    }
+
+    if (expect(pid > 0, "COW fork parent writer", pid) < 0)
+        return;
+
+    cow_shared_value = 44;
+    waited = waitpid(pid, &status, 0);
+    expect(waited == pid && status == 0, "COW parent writes private page", waited);
+    expect(cow_shared_value == 44, "COW parent keeps own write", cow_shared_value);
+}
+
 static void test_identity(void)
 {
     expect(getuid() == 1000, "shell runs as user uid", getuid());
@@ -195,6 +232,7 @@ int main(void)
     test_access_umask();
     test_pipe_dup2();
     test_fork_wait_kill();
+    test_cow_memory();
 
     if (failures == 0) {
         printf("systest: all tests passed\n");

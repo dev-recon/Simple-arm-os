@@ -1,6 +1,8 @@
 #include <kernel/memory.h>
 #include <kernel/kernel.h>
 #include <kernel/kprintf.h>
+#include <kernel/task.h>
+#include <kernel/process.h>
 #include <asm/arm.h>
 #include <asm/mmu.h>
 
@@ -341,56 +343,90 @@ vm_space_t *fork_vm_space(vm_space_t *parent_vm)
 static int cow_copy_vma(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma)
 {
     uint32_t vaddr;
-    // uint32_t stack_start = USER_STACK_TOP;
-
-    // KDEBUG("cow_copy_vma: parent ASID %u (pgdir 0x%08X) to child ASID %u (pgdir 0x%08X), VMA 0x%08X-0x%08X\n",
-    //        parent_vm->asid, parent_vm->pgdir, child_vm->asid, child_vm->pgdir,
-    //        vma->start, vma->end);
 
     for (vaddr = vma->start; vaddr < vma->end; vaddr += PAGE_SIZE)
     {
         if (vaddr == USER_STACK_TOP - PAGE_SIZE)
             continue;
+
         uint32_t phys_addr = get_physical_address(parent_vm->pgdir, vaddr);
-        // uint32_t temp_ptr = map_temp_user_page(vaddr);
-        uint32_t temp_ptr = phys_addr;
-        if (!temp_ptr)
-        {
-            // KERROR("cow_copy_vma: Failed to temp-map vaddr 0x%08X\n", vaddr);
+        if (!phys_addr) {
             continue;
         }
 
-        // uint32_t phys_addr = get_phys_from_temp_mapping(temp_ptr);
-        // KDEBUG("cow_copy_vma: Copying vaddr 0x%08X to phys_addr 0x%08X\n", vaddr, phys_addr);
-
-        // unmap_temp_user_page();
-
-        // make_page_readonly(parent_vm->pgdir, vaddr);
-
-        uint32_t pte_flags = 0x02;
-        pte_flags |= 0x0C;
-        if (vma->flags & VMA_EXEC)
-            pte_flags |= (2 << 4); // AP=2
-        else
-            pte_flags |= (2 << 4) | 0x1; // AP=2 + XN=1
-
-        void* child_page = allocate_page();
-        if (!child_page)
-        {
-            KERROR("cow_copy_vma: Failed to allocate child page for 0x%08X\n", vaddr);
-            return -ENOMEM;
-        }
-        memcpy(child_page, (void *)temp_ptr, PAGE_SIZE);
-
-        if (map_user_page(child_vm->pgdir, vaddr, (uint32_t)child_page,
-                          vma->flags, child_vm->asid) < 0)
-        {
-            free_page(child_page);
+        if (page_ref_inc((void*)phys_addr) < 0) {
+            KERROR("cow_copy_vma: failed to ref page 0x%08X\n", phys_addr);
             return -ENOMEM;
         }
 
-        // track_cow_page(phys_addr);
+        if (vma->flags & VMA_WRITE) {
+            if (set_user_page_readonly(parent_vm->pgdir, vaddr, parent_vm->asid) < 0) {
+                free_page((void*)phys_addr);
+                return -EFAULT;
+            }
+        }
+
+        if (map_user_page_readonly(child_vm->pgdir, vaddr, phys_addr,
+                                   vma->flags, child_vm->asid) < 0) {
+            free_page((void*)phys_addr);
+            if ((vma->flags & VMA_WRITE) && page_ref_count((void*)phys_addr) == 1) {
+                set_user_page_writable(parent_vm->pgdir, vaddr, parent_vm->asid);
+            }
+            return -ENOMEM;
+        }
     }
+
+    return 0;
+}
+
+int handle_cow_fault(uint32_t fault_addr)
+{
+    if (!current_task || current_task->type != TASK_TYPE_PROCESS ||
+        !current_task->process || !current_task->process->vm) {
+        return -EINVAL;
+    }
+
+    vm_space_t* vm = current_task->process->vm;
+    uint32_t vaddr = fault_addr & ~(PAGE_SIZE - 1);
+    vma_t* vma = find_vma(vm, fault_addr);
+    if (!vma || !(vma->flags & VMA_WRITE)) {
+        return -EACCES;
+    }
+
+    uint32_t* pte = get_user_pte(vm->pgdir, vaddr);
+    if (!pte || ((*pte & PTE_TYPE_MASK) == PTE_TYPE_FAULT)) {
+        return -EFAULT;
+    }
+
+    if ((*pte & PTE_AP_MASK) != PTE_AP_RW_RO) {
+        return -EACCES;
+    }
+
+    uint32_t old_phys = *pte & PTE_SMALL_BASE;
+    uint16_t refs = page_ref_count((void*)old_phys);
+    if (refs == 0) {
+        return -EFAULT;
+    }
+
+    if (refs == 1) {
+        return set_user_page_writable(vm->pgdir, vaddr, vm->asid);
+    }
+
+    void* new_page = allocate_page();
+    if (!new_page) {
+        return -ENOMEM;
+    }
+
+    memcpy(new_page, (void*)old_phys, PAGE_SIZE);
+
+    int ret = remap_user_page(vm->pgdir, vaddr, (uint32_t)new_page,
+                              vma->flags, vm->asid);
+    if (ret < 0) {
+        free_page(new_page);
+        return ret;
+    }
+
+    free_page((void*)old_phys);
     return 0;
 }
 

@@ -1,6 +1,6 @@
 #ifndef EXCEPTIONS_H
 #define EXCEPTIONS_H
 
-void data_abort_handler(void);
+int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t *saved);
 
 #endif
