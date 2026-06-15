@@ -262,8 +262,12 @@ disk-simple: $(USERFS_DIR)
 
 # Verifier le contenu du disque
 check-disk: $(DISK_IMG)
-	@echo "=== FAT32 root contents ==="
-	@mdir -i $(FAT32_IMG) :: 2>/dev/null || echo "Could not list FAT32 root directory"
+	@echo "=== ext2 root contents (mounted as /) ==="
+	@if [ -x "$(DEBUGFS)" ]; then \
+		$(DEBUGFS) -R 'ls -l /' $(EXT2_IMG); \
+	else \
+		echo "Could not list ext2 root: debugfs not found"; \
+	fi
 	@echo ""
 	@echo "=== ext2 /bin contents ==="
 	@if [ -x "$(DEBUGFS)" ]; then \
@@ -271,6 +275,9 @@ check-disk: $(DISK_IMG)
 	else \
 		echo "Could not list ext2 /bin: debugfs not found"; \
 	fi
+	@echo ""
+	@echo "=== FAT32 contents (mounted as /mnt) ==="
+	@mdir -i $(FAT32_IMG) :: 2>/dev/null || echo "Could not list FAT32 /mnt directory"
 	@echo ""
 	@echo "=== Disk image info ==="
 	@file $(FAT32_IMG)
@@ -283,16 +290,18 @@ check-disk: $(DISK_IMG)
 
 # Extraire le contenu du disque (pour debug)
 extract-disk: $(DISK_IMG)
-	@echo "Extracting disk contents to disk_contents/..."
-	mkdir -p disk_contents
-	mcopy -s -i $(DISK_IMG) :: disk_contents/ 2>/dev/null || \
-	(echo "Trying alternative extraction..."; \
-	 mdir -i $(DISK_IMG) :: | tail -n +4 | awk '{print $$1}' | while read file; do \
-		if [ "$$file" != "" ] && [ "$$file" != "." ] && [ "$$file" != ".." ]; then \
-			echo "Extracting $$file..."; \
-			mcopy -i $(DISK_IMG) "::$$file" "disk_contents/$$file" 2>/dev/null || true; \
-		fi; \
-	 done)
+	@echo "Extracting ext2 / and FAT32 /mnt to disk_contents/..."
+	rm -rf disk_contents
+	mkdir -p disk_contents/ext2-root disk_contents/fat32-mnt
+	@if [ -x "$(DEBUGFS)" ]; then \
+		$(DEBUGFS) -R 'rdump / disk_contents/ext2-root' $(EXT2_IMG) >/dev/null 2>/dev/null || \
+			echo "Could not extract ext2 root"; \
+	else \
+		echo "Could not extract ext2 root: debugfs not found"; \
+	fi
+	@mcopy -s -i $(FAT32_IMG) :: disk_contents/fat32-mnt/ 2>/dev/null || \
+		echo "Could not extract FAT32 /mnt contents"
+	@echo "Extracted to disk_contents/ext2-root and disk_contents/fat32-mnt"
 
 # Creer un disque de boot avec le kernel (optionnel)
 boot-disk: $(KERNEL_BIN) $(USERFS_DIR)
