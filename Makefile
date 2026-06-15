@@ -170,6 +170,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
 	           printf 'mkdir /%s\n' "$$relpath"; \
 	           case "$$relpath" in \
 	               tmp) mode=040777; uid=0; gid=0 ;; \
+	               dev) mode=040755; uid=0; gid=0 ;; \
 	               home/user|home/user/*) mode=040755; uid=1000; gid=1000 ;; \
 	               *) mode=040755; uid=0; gid=0 ;; \
 	           esac; \
@@ -180,6 +181,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
 	   done; \
 	   find $(USERFS_DIR) -type f | sort | while read f; do \
 	       relpath=$$(echo "$$f" | sed 's|$(USERFS_DIR)/||'); \
+	       case "$$relpath" in dev/tty0|dev/console) continue ;; esac; \
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
 	       case "$$relpath" in \
 	           bin/*|usr/bin/*|init.sh) mode=0100755 ;; \
@@ -193,6 +195,15 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
 	       printf 'set_inode_field /%s uid %s\n' "$$relpath" "$$uid"; \
 	       printf 'set_inode_field /%s gid %s\n' "$$relpath" "$$gid"; \
 	   done; \
+	   printf 'cd /dev\n'; \
+	   printf 'mknod console c 5 1\n'; \
+	   printf 'set_inode_field console mode 020666\n'; \
+	   printf 'set_inode_field console uid 0\n'; \
+	   printf 'set_inode_field console gid 0\n'; \
+	   printf 'mknod tty0 c 4 0\n'; \
+	   printf 'set_inode_field tty0 mode 020666\n'; \
+	   printf 'set_inode_field tty0 uid 0\n'; \
+	   printf 'set_inode_field tty0 gid 0\n'; \
 	   printf 'quit\n' ) | $(DEBUGFS) -w -f - $(EXT2_IMG) >/dev/null
 	$(DEBUGFS) -R 'ls -l /bin' $(EXT2_IMG) >/dev/null
 	@echo "ext2 image created"
@@ -230,6 +241,9 @@ $(USERFS_DIR):
 	
 	mkdir -p $(USERFS_DIR)/tmp
 	echo "Temporary files directory" > $(USERFS_DIR)/tmp/README
+	
+	mkdir -p $(USERFS_DIR)/dev
+	touch $(USERFS_DIR)/dev/tty0 $(USERFS_DIR)/dev/console
 	
 	@echo "$(USERFS_DIR) directory created with test files"
 

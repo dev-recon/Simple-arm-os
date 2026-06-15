@@ -406,16 +406,6 @@ static ssize_t uart_console_read(file_t* file, void* buf, size_t count) {
     return read_count;
 }
 
-static ssize_t uart_console_read2(file_t* file, void* buf, size_t count) {
-    (void)file;
-    return tty_read((char*)buf, count);
-}
-
-static ssize_t uart_console_write2(file_t* file, const void* buf, size_t count) {
-    (void)file;
-    return tty_write((const char*)buf, count);
-}
-
 // File operations pour console UART
 file_operations_t uart_console_fops = {
     .read = uart_console_read,

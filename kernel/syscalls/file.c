@@ -11,6 +11,7 @@
 #include <kernel/ext2.h>
 #include <kernel/timer.h>
 #include <kernel/dirent.h>
+#include <kernel/tty.h>
 #include <asm/mmu.h>
 
 
@@ -458,6 +459,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
 {
     char* kernel_path;
     char* full_path;
+    file_t* tty_file;
 
     int fd;
 
@@ -473,6 +475,26 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     kfree(kernel_path);
     
     if (!full_path) return -ENOENT;
+
+    if (strcmp(full_path, "/dev/tty0") == 0 || strcmp(full_path, "/dev/console") == 0) {
+        fd = allocate_fd(current_task);
+        if (fd < 0) {
+            kfree(full_path);
+            return fd;
+        }
+
+        tty_file = create_tty_console_file("tty0", flags & ~O_CLOEXEC);
+        if (!tty_file) {
+            free_fd(current_task, fd);
+            kfree(full_path);
+            return -ENOMEM;
+        }
+
+        current_task->process->files[fd] = tty_file;
+        current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
+        kfree(full_path);
+        return fd;
+    }
 
     fd = kernel_open(full_path, flags, mode);
 

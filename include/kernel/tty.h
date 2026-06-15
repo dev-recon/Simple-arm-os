@@ -34,5 +34,6 @@ void tty_init(void);
 void tty_input_char(char c);
 ssize_t tty_read(char *buf, size_t count);
 ssize_t tty_write(const char *buf, size_t count);
+file_t* create_tty_console_file(const char* name, int flags);
 
 #endif

@@ -19,7 +19,10 @@ struct dirent_raw {
 
 static void perm_string(mode_t mode, char *out)
 {
-    out[0]  = S_ISDIR(mode) ? 'd' : S_ISLNK(mode) ? 'l' : '-';
+    out[0]  = S_ISDIR(mode) ? 'd' :
+              S_ISLNK(mode) ? 'l' :
+              S_ISCHR(mode) ? 'c' :
+              S_ISBLK(mode) ? 'b' : '-';
     out[1]  = (mode & 0400) ? 'r' : '-';
     out[2]  = (mode & 0200) ? 'w' : '-';
     out[3]  = (mode & 0100) ? 'x' : '-';

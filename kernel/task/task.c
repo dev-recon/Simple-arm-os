@@ -5,6 +5,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
 #include <kernel/uart.h>
+#include <kernel/tty.h>
 #include <kernel/syscalls.h>
 #include <kernel/signal.h>
 #include <kernel/timer.h>
@@ -821,16 +822,16 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
 }
 
 void init_standard_files(process_t* process) {
-    // stdin (fd = 0) - lecture UART
-    process->files[STDIN_FILENO] = create_uart_console_file("stdin", O_RDONLY);
+    // stdin (fd = 0) - TTY logique, backend UART
+    process->files[STDIN_FILENO] = create_tty_console_file("stdin", O_RDONLY);
     process->fd_flags[STDIN_FILENO] = 0;
     
-    // stdout (fd = 1) - écriture UART
-    process->files[STDOUT_FILENO] = create_uart_console_file("stdout", O_WRONLY);
+    // stdout (fd = 1) - TTY logique, backend UART
+    process->files[STDOUT_FILENO] = create_tty_console_file("stdout", O_WRONLY);
     process->fd_flags[STDOUT_FILENO] = 0;
     
-    // stderr (fd = 2) - écriture UART (même que stdout)
-    process->files[STDERR_FILENO] = create_uart_console_file("stderr", O_WRONLY);
+    // stderr (fd = 2) - TTY logique, backend UART
+    process->files[STDERR_FILENO] = create_tty_console_file("stderr", O_WRONLY);
     process->fd_flags[STDERR_FILENO] = 0;
 }
 

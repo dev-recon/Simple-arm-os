@@ -554,7 +554,9 @@ static void virtio_blk_finish_wait(void)
 /* Attente IRQ-backed avec timeout: l'IRQ reveille vite, le timer borne l'attente. */
 static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms)
 {
+    const uint32_t spin_budget = 512;
     uint32_t freq;
+    uint32_t spins = 0;
     asm volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(freq));
     if (freq == 0) freq = 62500000; /* 62.5 MHz défaut QEMU */
 
@@ -570,6 +572,12 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
             KERROR("virtio_blk: timeout waiting used ring\n");
             return -1;
         }
+
+        if (spins++ < spin_budget) {
+            asm volatile("yield" ::: "memory");
+            continue;
+        }
+        spins = 0;
 
         if (!current_task) {
             wait_for_interrupt();
