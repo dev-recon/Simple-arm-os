@@ -1,6 +1,7 @@
 /* kernel/fs/vfs.c */
 #include <kernel/vfs.h>
 #include <kernel/fat32.h>
+#include <kernel/ext2.h>
 #include <kernel/kernel.h>
 #include <kernel/memory.h>
 #include <kernel/process.h>
@@ -15,6 +16,26 @@ static inode_t* inode_table[MAX_INODES] = {0};
 static inode_t* root_inode = NULL;
 static uint32_t next_inode_number = 1;
 static spinlock_t vfs_lock;
+
+/* Mount table */
+#define MAX_MOUNTS 8
+typedef struct {
+    char     path[128];
+    inode_t* root;
+} mount_entry_t;
+static mount_entry_t mount_table[MAX_MOUNTS];
+static int mount_count = 0;
+
+int vfs_mount(const char* path, inode_t* root)
+{
+    if (!path || !root || mount_count >= MAX_MOUNTS) return -1;
+    strncpy(mount_table[mount_count].path, path, 127);
+    mount_table[mount_count].path[127] = '\0';
+    mount_table[mount_count].root = root;
+    mount_count++;
+    KINFO("[VFS] Mounted '%s'\n", path);
+    return 0;
+}
 
 /* File operations for FAT32 */
 extern file_operations_t fat32_file_ops;
@@ -99,6 +120,21 @@ bool init_vfs(void)
 
     //test_root_directory();
     
+    /* Monter ext2 sur /mnt (second 64 Mo du disk.img, après la FAT32) */
+    #define FAT32_SIZE_MB   64ULL
+    #define EXT2_LBA_START  (FAT32_SIZE_MB * 1024ULL * 1024ULL / 512ULL)
+
+    inode_t* ext2_root = ext2_mount(EXT2_LBA_START);
+    if (ext2_root) {
+        if (vfs_mount("/mnt", ext2_root) != 0) {
+            KERROR("[VFS] vfs_mount /mnt failed\n");
+            put_inode(ext2_root);
+        }
+    } else {
+        KERROR("[VFS] ext2 not found at LBA %llu — /mnt unavailable\n",
+               (unsigned long long)EXT2_LBA_START);
+    }
+
     KINFO("[VFS] OK VFS initialized successfully\n");
     return true;
 }
@@ -220,46 +256,53 @@ void put_inode(inode_t* inode)
 inode_t* path_lookup(const char* path)
 {
     inode_t* current;
-    char* path_copy;
-    char* token;
-    
-    if (!path || path[0] != '/') {
-        return NULL;
-    }
-    
+    char*    path_copy;
+    char*    token;
+    char     current_path[256];
+
+    if (!path || path[0] != '/') return NULL;
+
     current = root_inode;
     current->ref_count++;
-    
-    if (strcmp(path, "/") == 0) {
-        return current;
-    }
-    
-    /* Copy path for tokenization */
+
+    if (strcmp(path, "/") == 0) return current;
+
     path_copy = strdup(path);
-    if (!path_copy) {
-        put_inode(current);
-        return NULL;
-    }
-    
-    /* Use standard strtok function */
+    if (!path_copy) { put_inode(current); return NULL; }
+
+    current_path[0] = '\0';
     token = strtok(path_copy + 1, "/");
-    
+
     while (token && current) {
-        inode_t* next;
-        
         if (!S_ISDIR(current->mode)) {
             put_inode(current);
             current = NULL;
             break;
         }
-        
-        next = current->i_op->lookup(current, token);
+
+        inode_t* next = current->i_op->lookup(current, token);
         put_inode(current);
         current = next;
-        
+
+        if (current) {
+            /* Build accumulated path and check for mount points */
+            int plen = strlen(current_path);
+            snprintf(current_path + plen, (int)sizeof(current_path) - plen,
+                     "/%s", token);
+
+            for (int i = 0; i < mount_count; i++) {
+                if (strcmp(current_path, mount_table[i].path) == 0) {
+                    put_inode(current);
+                    current = mount_table[i].root;
+                    current->ref_count++;
+                    break;
+                }
+            }
+        }
+
         token = strtok(NULL, "/");
     }
-    
+
     kfree(path_copy);
     return current;
 }

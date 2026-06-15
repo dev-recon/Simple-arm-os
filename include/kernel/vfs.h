@@ -59,6 +59,7 @@ struct process;
 
 /* VFS functions */
 bool init_vfs(void);
+int  vfs_mount(const char* path, inode_t* root);
 inode_t* create_inode(void);
 inode_t* get_inode(uint32_t ino);
 inode_t* get_root_inode(void);

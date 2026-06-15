@@ -7,6 +7,7 @@
 #include <kernel/elf32.h>
 #include <kernel/kprintf.h>
 #include <kernel/file.h>
+#include <kernel/string.h>
 
 
 /* Forward declarations de toutes les fonctions statiques */
@@ -15,6 +16,36 @@ bool validate_elf_header(elf32_ehdr_t* header);
 int load_elf_segments(inode_t* inode, elf32_ehdr_t* elf_header, vm_space_t* vm);
 int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm);
 
+static int open_temp_inode_file(inode_t* inode, file_t* file, uint32_t offset)
+{
+    int ret;
+
+    if (!inode || !inode->f_op || !inode->f_op->read)
+        return -EINVAL;
+
+    memset(file, 0, sizeof(*file));
+    file->inode = inode;
+    file->offset = offset;
+    file->flags = O_RDONLY;
+    file->ref_count = 1;
+    file->f_op = inode->f_op;
+
+    if (file->f_op->open) {
+        ret = file->f_op->open(inode, file);
+        if (ret < 0)
+            return ret;
+        file->offset = offset;
+    }
+
+    return 0;
+}
+
+static void close_temp_inode_file(file_t* file)
+{
+    if (file && file->f_op && file->f_op->close)
+        file->f_op->close(file);
+}
+
 
 
 int read_elf_header(inode_t* inode, elf32_ehdr_t* header)
@@ -22,21 +53,24 @@ int read_elf_header(inode_t* inode, elf32_ehdr_t* header)
     /* Create temporary file for reading */
     file_t temp_file;
     ssize_t bytes_read;
+    int ret;
     
-    temp_file.inode = inode;
-    temp_file.offset = 0;
-    temp_file.flags = O_RDONLY;
-    temp_file.f_op = inode->f_op;
+    ret = open_temp_inode_file(inode, &temp_file, 0);
+    if (ret < 0)
+        return ret;
     
     bytes_read = temp_file.f_op->read(&temp_file, header, sizeof(elf32_ehdr_t));
     if (bytes_read != (ssize_t)sizeof(elf32_ehdr_t)) {
+        close_temp_inode_file(&temp_file);
         return -EINVAL;
     }
     
     if(!validate_elf_header(header)){
+        close_temp_inode_file(&temp_file);
         return -EINVAL;
     }
 
+    close_temp_inode_file(&temp_file);
     return 0;
 }
 
@@ -86,18 +120,21 @@ int load_elf_segments(inode_t* inode, elf32_ehdr_t* elf_header, vm_space_t* vm)
     size_t phdrs_size;
     ssize_t bytes_read;
     int i;
+    int ret;
     
     if (!phdrs) return -1;
     
-    temp_file.inode = inode;
-    temp_file.offset = elf_header->e_phoff;
-    temp_file.flags = O_RDONLY;
-    temp_file.f_op = inode->f_op;
+    ret = open_temp_inode_file(inode, &temp_file, elf_header->e_phoff);
+    if (ret < 0) {
+        kfree(phdrs);
+        return -1;
+    }
     
     //KDEBUG("Load ELF Segemnts : Start reading segments\n");
 
     phdrs_size = elf_header->e_phnum * sizeof(elf32_phdr_t);
     bytes_read = temp_file.f_op->read(&temp_file, phdrs, phdrs_size);
+    close_temp_inode_file(&temp_file);
     if (bytes_read != (ssize_t)phdrs_size) {
         kfree(phdrs);
         return -1;
@@ -134,6 +171,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
     uint32_t vma_flags = 0;
     vma_t* vma = NULL;
     file_t temp_file;
+    int ret;
     //uint32_t phys_addr = 0;
 
     extern void check_address_content(uint32_t phys_addr, const char* step);
@@ -154,10 +192,9 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
         return -1;
     }
   
-    /* Setup file for reading */
-    temp_file.inode = inode;
-    temp_file.flags = O_RDONLY;
-    temp_file.f_op = inode->f_op;
+    ret = open_temp_inode_file(inode, &temp_file, 0);
+    if (ret < 0)
+        return -1;
     
     /* Load page by page - BOUCLE CORRIGÉE */
     for (uint32_t page_vaddr = vaddr_start; page_vaddr < vaddr_end; page_vaddr += PAGE_SIZE) {
@@ -165,6 +202,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
         void* phys_page = allocate_page();
         if (!phys_page) {
             KERROR("Failed to allocate physical page for 0x%08X\n", page_vaddr);
+            close_temp_inode_file(&temp_file);
             return -1;
         }
                 
@@ -174,6 +212,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
         if (temp_vaddr == 0) {
             KERROR("Failed to map temp page\n");
             free_page(phys_page);
+            close_temp_inode_file(&temp_file);
             return -1;
         } 
         
@@ -211,6 +250,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
                        file_end_in_page - file_start_in_page, bytes_read);
                 //unmap_temp_page((void*)temp_vaddr);
                 free_page(phys_page);
+                close_temp_inode_file(&temp_file);
                 return -1;
             }
             
@@ -293,6 +333,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
         if (map_user_page(vm->pgdir, page_vaddr, (uint32_t)phys_page, vma_flags, vm->asid) < 0) {
             KERROR("Failed to map user page 0x%08X\n", page_vaddr);
             free_page(phys_page);
+            close_temp_inode_file(&temp_file);
             return -1;
         }
 
@@ -326,7 +367,6 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
     }
     
     //KINFO("Segment loaded successfully\n");
+    close_temp_inode_file(&temp_file);
     return 0;
 }
-
-

@@ -5,6 +5,13 @@ set -euo pipefail
 
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
+if [ -d /opt/homebrew/opt/e2fsprogs/sbin ]; then
+    export PATH="/opt/homebrew/opt/e2fsprogs/sbin:$PATH"
+fi
+if [ -d /usr/local/opt/e2fsprogs/sbin ]; then
+    export PATH="/usr/local/opt/e2fsprogs/sbin:$PATH"
+fi
+
 USERFS_DIR="userfs"
 USERLAND_DIR="userland"
 LIBC_DIR="libc"
@@ -22,7 +29,7 @@ for dir in "$USERFS_DIR" "$USERLAND_DIR" "$LIBC_DIR"; do
     fi
 done
 
-for tool in make arm-none-eabi-gcc arm-none-eabi-ld arm-none-eabi-objcopy arm-none-eabi-objdump mkfs.fat mcopy mmd qemu-system-arm; do
+for tool in make arm-none-eabi-gcc arm-none-eabi-ld arm-none-eabi-objcopy arm-none-eabi-objdump mkfs.fat mcopy mmd mke2fs debugfs qemu-system-arm; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Error: required tool '$tool' not found in PATH"
         exit 1
@@ -41,7 +48,7 @@ echo "=== Rebuilding kernel ==="
 make kernel.bin
 
 echo "=== Recreating disk image ==="
-rm -f disk.img
+rm -f disk.img fat32.img ext2.img
 make disk.img
 
 echo "=== Booting QEMU ==="

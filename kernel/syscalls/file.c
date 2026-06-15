@@ -20,6 +20,8 @@ extern inode_t* fat32_create_file(const char* parent_path, const char* filename,
 extern void fat32_free_cluster_chain(uint32_t start_cluster);
 extern int fat32_update_file_by_name(const char* filename, uint32_t parent_cluster, uint32_t new_cluster);
 extern int fat32_update_file_size_in_dir(const char* filename, uint32_t parent_cluster, uint32_t new_size);
+extern file_operations_t fat32_file_ops;
+extern inode_operations_t fat32_inode_ops;
 
 bool inode_permission(inode_t* inode, int mask) {
     /* Root peut tout faire */
@@ -228,6 +230,21 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
             
             /* Vérifier que le fichier n'existe pas déjà */
             inode_t* parent = path_lookup(parent_path);
+            if (!parent) {
+                kfree(parent_path);
+                kfree(filename);
+                kfree(kernel_path);
+                return -ENOENT;
+            }
+
+            if (parent->i_op != &fat32_inode_ops) {
+                put_inode(parent);
+                kfree(parent_path);
+                kfree(filename);
+                kfree(kernel_path);
+                return -EROFS;
+            }
+
             if (parent && fat32_file_exists_in_dir(parent, filename)) {
                 if (flags & O_EXCL) {
                     /* O_CREAT | O_EXCL = échec si existe */
@@ -244,6 +261,7 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
                 put_inode(parent);
                 kfree(parent_path);
                 kfree(filename);
+                filename = NULL;
             } else {
                 /* Créer le nouveau fichier */
                 if (current_task && current_task->process)
@@ -272,6 +290,12 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
         }
 
         if ((flags & O_TRUNC) && ((flags & O_ACCMODE) != O_RDONLY)) {
+            if (inode->f_op != &fat32_file_ops) {
+                put_inode(inode);
+                kfree(kernel_path);
+                return -EROFS;
+            }
+
             int truncate_result = truncate_file_inode(inode, opened_name);
             if (truncate_result < 0) {
                 put_inode(inode);

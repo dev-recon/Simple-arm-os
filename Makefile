@@ -55,6 +55,7 @@ KERNEL_OBJS = \
 	kernel/fs/vfs.o \
 	kernel/fs/fat32.o \
 	kernel/fs/fat32_vfs.o \
+	kernel/fs/ext2_vfs.o \
 	kernel/fs/userfs_loader.o \
 	kernel/drivers/ata.o \
 	kernel/drivers/keyboard.o \
@@ -80,10 +81,18 @@ KERNEL_OBJS = \
 ALL_OBJS = $(KERNEL_OBJS) $(LIB_OBJ) $(TASK_OBJS)
 
 # Configuration du disque
-DISK_IMG = disk.img
-DISK_SIZE_MB = 64
-USERFS_DIR = userfs
+DISK_IMG     = disk.img
+FAT32_IMG    = fat32.img
+EXT2_IMG     = ext2.img
+FAT32_SIZE_MB = 64
+EXT2_SIZE_MB = 64
+DISK_SIZE_MB = $(shell echo $$(($(FAT32_SIZE_MB) + $(EXT2_SIZE_MB))))
+USERFS_DIR   = userfs
 USERLAND_DIR = userland
+EXT2_STAGING = /tmp/ext2_staging
+USERFS_FILES := $(shell find $(USERFS_DIR) -type f 2>/dev/null)
+USERFS_DIRS  := $(shell find $(USERFS_DIR) -type d 2>/dev/null)
+USERFS_BIN_FILES := $(shell find $(USERFS_DIR)/bin -type f 2>/dev/null)
 
 # Cibles
 TARGET = kernel
@@ -107,40 +116,65 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 %.o: %.S
 	$(AS) $(ASFLAGS) $< -o $@
 
-# Creation du disque avec FAT32 (version macOS)
-$(DISK_IMG): $(USERFS_DIR)
-	@echo "Creating disk image $(DISK_IMG) ($(DISK_SIZE_MB)MB) on macOS..."
-
-	# Creer un fichier image vide
-	dd if=/dev/zero of=$(DISK_IMG) bs=1m count=$(DISK_SIZE_MB) 2>/dev/null
-	
-	# Formater en FAT32 directement (plus simple sur macOS)
-	mkfs.fat -F 32 -n "OSKERNEL" $(DISK_IMG)
-	
-	# Copier le contenu de userfs vers le disque
+# Partition FAT32
+$(FAT32_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
+	@echo "=== Creating FAT32 image ($(FAT32_SIZE_MB) MB) ==="
+	dd if=/dev/zero of=$(FAT32_IMG) bs=1m count=$(FAT32_SIZE_MB) 2>/dev/null
+	mkfs.fat -F 32 -n "OSKERNEL" $(FAT32_IMG)
 	@if [ -d $(USERFS_DIR) ]; then \
-		echo "Copying $(USERFS_DIR) contents to disk..."; \
 		find $(USERFS_DIR) -type d | while read dir; do \
 			if [ "$$dir" != "$(USERFS_DIR)" ]; then \
-				relpath=$$(echo $$dir | sed 's|$(USERFS_DIR)/||' | sed 's|$(USERFS_DIR)||'); \
-				if [ -n "$$relpath" ]; then \
-					echo "Creating directory: $$relpath"; \
-					mmd -i $(DISK_IMG) "::$$relpath" 2>/dev/null || true; \
-				fi; \
+				relpath=$$(echo $$dir | sed 's|$(USERFS_DIR)/||'); \
+				[ -n "$$relpath" ] && mmd -i $(FAT32_IMG) "::$$relpath" || true; \
 			fi; \
 		done; \
 		find $(USERFS_DIR) -type f | while read file; do \
-			relpath=$$(echo $$file | sed 's|$(USERFS_DIR)/||' | sed 's|$(USERFS_DIR)/||'); \
-			echo "Copying file: $$relpath"; \
-			mcopy -i $(DISK_IMG) "$$file" "::$$relpath" 2>/dev/null || \
-			mcopy -i $(DISK_IMG) "$$file" "::" 2>/dev/null || \
-			echo "Warning: Could not copy $$file"; \
+			relpath=$$(echo $$file | sed 's|$(USERFS_DIR)/||'); \
+			mcopy -o -i $(FAT32_IMG) "$$file" "::$$relpath"; \
 		done; \
-	else \
-		echo "Warning: $(USERFS_DIR) directory not found"; \
 	fi
-	
-	@echo "Disk image $(DISK_IMG) created successfully"
+	@echo "FAT32 image created"
+
+# Partition ext2 (64 Mo) — peuplée avec userfs/bin via mke2fs + debugfs
+E2FSPROGS_PREFIX ?= $(shell \
+	if command -v brew >/dev/null 2>&1; then \
+		brew --prefix e2fsprogs 2>/dev/null; \
+	elif [ -d /opt/homebrew/opt/e2fsprogs ]; then \
+		echo /opt/homebrew/opt/e2fsprogs; \
+	elif [ -d /usr/local/opt/e2fsprogs ]; then \
+		echo /usr/local/opt/e2fsprogs; \
+	fi)
+MKE2FS  := $(E2FSPROGS_PREFIX)/sbin/mke2fs
+DEBUGFS := $(E2FSPROGS_PREFIX)/sbin/debugfs
+
+$(EXT2_IMG): $(USERFS_DIR)/bin $(USERFS_BIN_FILES)
+	@echo "=== Creating ext2 image ($(EXT2_SIZE_MB) MB) ==="
+	@if [ ! -x "$(MKE2FS)" ] || [ ! -x "$(DEBUGFS)" ]; then \
+		echo "Error: e2fsprogs not found — run: brew install e2fsprogs"; \
+		echo "MKE2FS=$(MKE2FS)"; \
+		echo "DEBUGFS=$(DEBUGFS)"; \
+		exit 1; \
+	fi
+	dd if=/dev/zero of=$(EXT2_IMG) bs=1m count=$(EXT2_SIZE_MB) 2>/dev/null
+	$(MKE2FS) -q -t ext2 -F -L OS_EXT2 $(EXT2_IMG)
+	@( printf 'mkdir /bin\n'; \
+	   for f in $(USERFS_DIR)/bin/*; do \
+	       printf 'write %s /bin/%s\n' "$$f" "$${f##*/}"; \
+	       printf 'set_inode_field /bin/%s mode 0100755\n' "$${f##*/}"; \
+	       printf 'set_inode_field /bin/%s uid 0\n' "$${f##*/}"; \
+	       printf 'set_inode_field /bin/%s gid 0\n' "$${f##*/}"; \
+	   done; \
+	   printf 'quit\n' ) | $(DEBUGFS) -w -f - $(EXT2_IMG) >/dev/null
+	$(DEBUGFS) -R 'ls -l /bin' $(EXT2_IMG) >/dev/null
+	@echo "ext2 image created"
+
+# Disque final = FAT32 + ext2 concaténés
+$(DISK_IMG): $(FAT32_IMG) $(EXT2_IMG)
+	@echo "=== Assembling $(DISK_IMG) (FAT32 + ext2) ==="
+	dd if=/dev/zero of=$(DISK_IMG) bs=1m count=$(DISK_SIZE_MB) 2>/dev/null
+	dd if=$(FAT32_IMG) of=$(DISK_IMG) bs=1m seek=0 conv=notrunc 2>/dev/null
+	dd if=$(EXT2_IMG) of=$(DISK_IMG) bs=1m seek=$(FAT32_SIZE_MB) conv=notrunc 2>/dev/null
+	@echo "Disk image $(DISK_IMG) created ($(DISK_SIZE_MB) MB)"
 
 # Creer le repertoire userfs avec des fichiers de test
 $(USERFS_DIR):
@@ -215,14 +249,24 @@ disk-simple: $(USERFS_DIR)
 
 # Verifier le contenu du disque
 check-disk: $(DISK_IMG)
-	@echo "=== Disk image contents ==="
-	mdir -i $(DISK_IMG) :: 2>/dev/null || echo "Could not list root directory"
+	@echo "=== FAT32 root contents ==="
+	@mdir -i $(FAT32_IMG) :: 2>/dev/null || echo "Could not list FAT32 root directory"
+	@echo ""
+	@echo "=== ext2 /bin contents ==="
+	@if [ -x "$(DEBUGFS)" ]; then \
+		$(DEBUGFS) -R 'ls -l /bin' $(EXT2_IMG); \
+	else \
+		echo "Could not list ext2 /bin: debugfs not found"; \
+	fi
 	@echo ""
 	@echo "=== Disk image info ==="
-	file $(DISK_IMG)
+	@file $(FAT32_IMG)
+	@file $(EXT2_IMG)
+	@file $(DISK_IMG)
 	@echo ""
 	@echo "=== Disk size ==="
-	ls -lh $(DISK_IMG)
+	@ls -lh $(FAT32_IMG) $(EXT2_IMG)
+	@ls -lh $(DISK_IMG)
 
 # Extraire le contenu du disque (pour debug)
 extract-disk: $(DISK_IMG)
