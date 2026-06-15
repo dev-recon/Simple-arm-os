@@ -160,9 +160,10 @@ void init_timer(void)
     
     kprintf("[TIMER] Timer frequency: %u Hz\n", timer_freq);
     
-    /* 2. Calculer l'interval pour 100Hz (10ms) */
-    uint32_t interval = timer_freq / TIMER_FREQ / 10;
-    kprintf("[TIMER] Timer interval: %u ticks (%u ms)\n", interval, 1000/TIMER_FREQ);
+    /* 2. Calculer l'interval pour TIMER_FREQ Hz */
+    uint32_t interval = timer_freq / TIMER_FREQ;
+    kprintf("[TIMER] Timer interval: %u counter ticks (%u us)\n",
+            interval, 1000000 / TIMER_FREQ);
     
     /* 3. Configurer le timer EL1 (non-secure) */
     
@@ -185,8 +186,8 @@ void init_timer(void)
     /* 3. Activer l'IRQ du timer dans le GIC */
     gic_enable_irq_kernel(VIRT_TIMER_NS_EL1_IRQ);  // IRQ 30
     
-    /* Programmer une interruption toutes les 10ms */
-    uint32_t timeout = timer_freq / TIMER_FREQ / 10;  // 10ms
+    /* Programmer une interruption periodique */
+    uint32_t timeout = timer_freq / TIMER_FREQ;
     timer_set_timeout(timeout);
     
     /* 5. Activer les interruptions au niveau CPU */
@@ -209,7 +210,7 @@ void timer_irq_handler(void)
     
     /* 2. CORRECTION: Programmer le PROCHAIN timer (relatif) */
     uint32_t timer_freq = get_timer_frequency();
-    uint32_t next_interval = timer_freq / TIMER_FREQ / 10;  /* 10ms */
+    uint32_t next_interval = timer_freq / TIMER_FREQ;
     __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(next_interval));
     
     /* 3. Réactiver le timer */
@@ -220,8 +221,8 @@ void timer_irq_handler(void)
     system_ticks++;
     
     /* 5. RÉDUIRE drastiquement les messages */
-    if (system_ticks % 2500 == 0) {  /* Toutes les 10 secondes seulement */
-        //kprintf("[TIMER] System uptime: %u seconds -> %s\n", system_ticks / 250, current_task->name);
+    if (system_ticks % (TIMER_FREQ * 10) == 0) {  /* Toutes les 10 secondes seulement */
+        //kprintf("[TIMER] System uptime: %u seconds -> %s\n", system_ticks / TIMER_FREQ, current_task->name);
     }
     
     /* 6. Scheduling sans messages debug */

@@ -9,6 +9,7 @@
 #include <time.h>
 #include <signal.h>
 #include "../include/mash.h"
+#include "../include/jobs.h"
 
 // Table of registered commands
 #define MAX_COMMANDS 32
@@ -48,6 +49,7 @@ int command_init(void) {
     register_command("yield", "Yield the CPU", cmd_yield);
     register_command("fork", "Test fork()", cmd_fork_test);
     register_command("cd", "Change the current directory", cmd_cd);
+    register_command("jobs", "List background jobs", jobs_builtin);
 
     return SHELL_OK;
 }

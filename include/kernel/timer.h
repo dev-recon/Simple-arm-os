@@ -6,7 +6,7 @@
 /* Timer SP804 pour machine virt (si utilise) */
 #define TIMER_BASE_SP804    0x10011000
 
-#define TIMER_FREQ 100  /* 100Hz */
+#define TIMER_FREQ 1000  /* 1000Hz, system_ticks increments every millisecond */
 
 /* Macros conditionnelles pour eviter les redefinitions */
 #ifndef TIMER_LOAD

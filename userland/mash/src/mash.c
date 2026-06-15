@@ -5,6 +5,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include "../include/mash.h"
+#include "../include/jobs.h"
 
 char input_buffer[SHELL_BUFFER_SIZE];
 char* argv_buffer[SHELL_MAX_ARGS];
@@ -33,15 +34,6 @@ static void shell_set_foreground_pgid(int pgid) {
 
 static void shell_restore_foreground(void) {
     shell_set_foreground_pgid(shell_pgid);
-}
-
-static void shell_reap_background(void) {
-    int status = 0;
-    int pid;
-
-    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        printf("[bg] pid %d done status=%d\n", pid, status);
-    }
 }
 
 typedef struct shell_redirs {
@@ -548,9 +540,14 @@ static int run_pipeline(int argc, char* argv[], int background) {
     close_pipeline_fds(pipes, pipe_count);
 
     if (background) {
+        char command[JOBS_COMMAND_LEN];
+
+        jobs_build_command(argc, argv, command, sizeof(command));
         printf("[bg]");
-        for (i = 0; i < command_count; i++)
+        for (i = 0; i < command_count; i++) {
+            jobs_add(pids[i], pgid, command);
             printf(" pid %d", pids[i]);
+        }
         printf("\n");
         return SHELL_OK;
     }
@@ -958,6 +955,10 @@ int shell_execute(int argc, char* argv[]) {
         setpgid(child_pid, child_pid);
 
         if (background) {
+            char command[JOBS_COMMAND_LEN];
+
+            jobs_build_command(argc, argv, command, sizeof(command));
+            jobs_add(child_pid, child_pid, command);
             printf("[bg] pid %d\n", child_pid);
             return SHELL_OK;
         }
@@ -1046,7 +1047,7 @@ void shell_run(void) {
     shell_running = 1;
     
     while (shell_running) {
-        shell_reap_background();
+        jobs_reap_background();
         shell_print_prompt();
         
         char* line = shell_read_line();
@@ -1054,7 +1055,7 @@ void shell_run(void) {
             continue;
         }
 
-        shell_reap_background();
+        jobs_reap_background();
         
         int argc = shell_parse_line(line, argv_buffer);
         if (argc > 0) {

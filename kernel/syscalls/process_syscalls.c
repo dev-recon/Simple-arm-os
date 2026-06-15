@@ -889,19 +889,31 @@ int sys_mkdir(const char* pathname, mode_t mode)
 
 
 int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
-    uint32_t sleep_ms;
+    uint32_t sleep_ticks;
     uint32_t start_time, elapsed_time;
     
     if (!req) return -EFAULT;
+    if (req->nsec >= 1000000000u) return -EINVAL;
 
     //KDEBUG("sys_nanosleep: req->sec=%u, req->nsec=%u\n", req->sec, req->nsec);
     
-    /* Convertir en millisecondes */
-    sleep_ms = req->sec * 350 + req->nsec / 1000000;
+    /* Convertir la duree demandee en ticks kernel.
+     * TIMER_FREQ vaut 1000: un tick == une milliseconde. Garder ce calcul en
+     * 32-bit evite de tirer __aeabi_uldivmod dans le kernel freestanding. */
+    if (req->sec > 0xFFFFFFFFu / TIMER_FREQ) {
+        sleep_ticks = 0xFFFFFFFFu;
+    } else {
+        uint32_t nsec_ticks = (req->nsec + 999999u) / 1000000u;
+        sleep_ticks = req->sec * TIMER_FREQ;
+        if (sleep_ticks > 0xFFFFFFFFu - nsec_ticks)
+            sleep_ticks = 0xFFFFFFFFu;
+        else
+            sleep_ticks += nsec_ticks;
+    }
 
-    //KDEBUG("sys_nanosleep: sleep_ms=%u\n", sleep_ms);
+    //KDEBUG("sys_nanosleep: sleep_ticks=%u\n", sleep_ticks);
     
-    if (sleep_ms == 0) {
+    if (sleep_ticks == 0) {
         yield();  /* Juste céder le CPU */
         return 0;
     }
@@ -912,7 +924,7 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     spin_lock(&task_lock);
         /* Mettre le processus en sommeil */
     current_task->state = TASK_INTERRUPTIBLE;
-    current_task->wakeup_time = start_time + sleep_ms;
+    current_task->wakeup_time = start_time + sleep_ticks;
     spin_unlock(&task_lock);
     
     yield();
@@ -927,9 +939,9 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
         /* Réveillé prématurément par un signal */
         if (rem) {
             elapsed_time = get_system_ticks() - start_time;
-            uint32_t remaining_ms = sleep_ms - elapsed_time;
-            rem->sec = remaining_ms / 1000;
-            rem->nsec = (remaining_ms % 1000) * 1000000;
+            uint32_t remaining_ticks = (elapsed_time >= sleep_ticks) ? 0 : sleep_ticks - elapsed_time;
+            rem->sec = remaining_ticks / TIMER_FREQ;
+            rem->nsec = (remaining_ticks % TIMER_FREQ) * (1000000000u / TIMER_FREQ);
         }
         return -EINTR;
     }
