@@ -15,8 +15,12 @@ extern uint32_t get_current_time(void);
 
 static ext2_fs_t ext2_fs;
 
+static int ext2_read_disk_inode(uint32_t ino, ext2_inode_t* out);
+static int ext2_write_disk_inode(uint32_t ino, const ext2_inode_t* in);
+
 /* Forward declarations */
 static inode_t* ext2_inode_lookup(inode_t* dir, const char* name);
+static int      ext2_inode_unlink(inode_t* dir, const char* name);
 static ssize_t  ext2_file_read(file_t* file, void* buffer, size_t count);
 static ssize_t  ext2_file_write(file_t* file, const void* buffer, size_t count);
 static int      ext2_file_open(inode_t* inode, file_t* file);
@@ -46,7 +50,7 @@ inode_operations_t ext2_inode_ops = {
     .lookup = ext2_inode_lookup,
     .create = NULL,
     .mkdir  = NULL,
-    .unlink = NULL,
+    .unlink = ext2_inode_unlink,
     .rename = NULL,
 };
 
@@ -417,6 +421,62 @@ static int ext2_alloc_inode(uint32_t* out_ino)
     }
 
     return -ENOSPC;
+}
+
+static int ext2_free_inode(uint32_t ino)
+{
+    ext2_superblock_t sb;
+
+    if (ino == 0) return -EINVAL;
+    if (ext2_read_superblock(&sb) < 0) return -EIO;
+    if (ino > sb.s_inodes_count) return -EINVAL;
+
+    uint32_t group = (ino - 1) / ext2_fs.inodes_per_group;
+    uint32_t bit = (ino - 1) % ext2_fs.inodes_per_group;
+    if (group >= ext2_fs.groups_count)
+        return -EINVAL;
+
+    ext2_group_desc_t gd;
+    if (ext2_read_group_desc(group, &gd) < 0)
+        return -EIO;
+
+    uint8_t* bitmap = kmalloc(ext2_fs.block_size);
+    if (!bitmap) return -ENOMEM;
+
+    if (ext2_read_block(gd.bg_inode_bitmap, bitmap) < 0) {
+        kfree(bitmap);
+        return -EIO;
+    }
+
+    if (!ext2_bitmap_test(bitmap, bit)) {
+        kfree(bitmap);
+        return 0;
+    }
+
+    ext2_inode_t zero;
+    memset(&zero, 0, sizeof(zero));
+    if (ext2_write_disk_inode(ino, &zero) < 0) {
+        kfree(bitmap);
+        return -EIO;
+    }
+
+    ext2_bitmap_clear(bitmap, bit);
+    if (ext2_write_block(gd.bg_inode_bitmap, bitmap) < 0) {
+        kfree(bitmap);
+        return -EIO;
+    }
+    kfree(bitmap);
+
+    gd.bg_free_inodes_count++;
+    if (ext2_write_group_desc(group, &gd) < 0)
+        return -EIO;
+
+    sb.s_free_inodes_count++;
+    sb.s_wtime = get_current_time();
+    if (ext2_write_superblock(&sb) < 0)
+        return -EIO;
+
+    return 0;
 }
 
 /* ---------- inode table ---------- */
@@ -827,6 +887,83 @@ static inode_t* ext2_inode_lookup(inode_t* dir, const char* name)
 
     kfree(blkbuf);
     return NULL;
+}
+
+static int ext2_remove_dir_entry(inode_t* dir, const char* name)
+{
+    ext2_inode_t disk;
+    if (!dir || !name) return -EINVAL;
+    if (ext2_read_disk_inode(dir->first_cluster, &disk) < 0) return -EIO;
+
+    uint32_t name_len32 = strlen(name);
+    if (name_len32 == 0 || name_len32 > 255) return -EINVAL;
+    uint8_t name_len = (uint8_t)name_len32;
+
+    uint8_t* blkbuf = kmalloc(ext2_fs.block_size);
+    if (!blkbuf) return -ENOMEM;
+
+    for (uint32_t idx = 0; idx < 12 + ext2_fs.block_size / 4; idx++) {
+        uint32_t blk = ext2_get_block_at(&disk, idx);
+        if (blk == 0) break;
+
+        if (ext2_read_block(blk, blkbuf) < 0) {
+            kfree(blkbuf);
+            return -EIO;
+        }
+
+        uint32_t offset = 0;
+        while (offset + sizeof(ext2_dir_entry_t) <= ext2_fs.block_size) {
+            ext2_dir_entry_t* de = (ext2_dir_entry_t*)(blkbuf + offset);
+            if (de->rec_len == 0) break;
+
+            if (de->inode != 0 &&
+                de->name_len == name_len &&
+                memcmp(de->name, name, name_len) == 0) {
+                de->inode = 0;
+
+                disk.i_mtime = get_current_time();
+                disk.i_ctime = disk.i_mtime;
+
+                if (ext2_write_block(blk, blkbuf) < 0 ||
+                    ext2_write_disk_inode(dir->first_cluster, &disk) < 0) {
+                    kfree(blkbuf);
+                    return -EIO;
+                }
+
+                dir->mtime = disk.i_mtime;
+                dir->ctime = disk.i_ctime;
+                kfree(blkbuf);
+                return 0;
+            }
+
+            offset += de->rec_len;
+        }
+    }
+
+    kfree(blkbuf);
+    return -ENOENT;
+}
+
+static int ext2_inode_unlink(inode_t* dir, const char* name)
+{
+    if (!dir || !name) return -EINVAL;
+
+    inode_t* target = ext2_inode_lookup(dir, name);
+    if (!target) return -ENOENT;
+
+    if (S_ISDIR(target->mode)) {
+        put_inode(target);
+        return -EISDIR;
+    }
+
+    int ret = ext2_remove_dir_entry(dir, name);
+    if (ret == 0)
+        ret = ext2_truncate_inode(target);
+    if (ret == 0)
+        ret = ext2_free_inode(target->first_cluster);
+
+    put_inode(target);
+    return ret;
 }
 
 /* ---------- file_operations — open/close ---------- */
