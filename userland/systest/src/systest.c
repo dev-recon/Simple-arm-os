@@ -180,10 +180,17 @@ static void test_fork_wait_kill(void)
     expect(waited == pid, "waitpid collects killed child", waited);
 }
 
+static void test_identity(void)
+{
+    expect(getuid() == 1000, "shell runs as user uid", getuid());
+    expect(getgid() == 1000, "shell runs as user gid", getgid());
+}
+
 int main(void)
 {
     printf("=== syscall smoke tests ===\n");
 
+    test_identity();
     test_file_io();
     test_access_umask();
     test_pipe_dup2();

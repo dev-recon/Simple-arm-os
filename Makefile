@@ -53,6 +53,7 @@ KERNEL_OBJS = \
 	kernel/process/exec.o \
 	kernel/process/signal.o \
 	kernel/fs/vfs.o \
+	kernel/fs/mount.o \
 	kernel/fs/fat32.o \
 	kernel/fs/fat32_vfs.o \
 	kernel/fs/ext2_vfs.o \
@@ -93,6 +94,12 @@ EXT2_STAGING = /tmp/ext2_staging
 USERFS_FILES := $(shell find $(USERFS_DIR) -type f 2>/dev/null)
 USERFS_DIRS  := $(shell find $(USERFS_DIR) -type d 2>/dev/null)
 USERFS_BIN_FILES := $(shell find $(USERFS_DIR)/bin -type f 2>/dev/null)
+FAT32_MNT_FILES := \
+	$(USERFS_DIR)/README.TXT \
+	$(USERFS_DIR)/hello.txt \
+	$(USERFS_DIR)/test.txt \
+	$(USERFS_DIR)/home/user/profile.txt \
+	$(USERFS_DIR)/tmp/README
 
 # Cibles
 TARGET = kernel
@@ -116,23 +123,20 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 %.o: %.S
 	$(AS) $(ASFLAGS) $< -o $@
 
-# Partition FAT32
-$(FAT32_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
+# Partition FAT32 montee sous /mnt. Elle reste volontairement minimale :
+# ext2 est le root complet, FAT32 sert surtout d'espace de compatibilite/echange.
+$(FAT32_IMG): $(USERFS_DIR) $(FAT32_MNT_FILES)
 	@echo "=== Creating FAT32 image ($(FAT32_SIZE_MB) MB) ==="
 	dd if=/dev/zero of=$(FAT32_IMG) bs=1m count=$(FAT32_SIZE_MB) 2>/dev/null
 	mkfs.fat -F 32 -n "OSKERNEL" $(FAT32_IMG)
-	@if [ -d $(USERFS_DIR) ]; then \
-		find $(USERFS_DIR) -type d | while read dir; do \
-			if [ "$$dir" != "$(USERFS_DIR)" ]; then \
-				relpath=$$(echo $$dir | sed 's|$(USERFS_DIR)/||'); \
-				[ -n "$$relpath" ] && mmd -i $(FAT32_IMG) "::$$relpath" || true; \
-			fi; \
-		done; \
-		find $(USERFS_DIR) -type f | while read file; do \
-			relpath=$$(echo $$file | sed 's|$(USERFS_DIR)/||'); \
-			mcopy -o -i $(FAT32_IMG) "$$file" "::$$relpath"; \
-		done; \
-	fi
+	@for dir in home home/user tmp; do \
+		mmd -i $(FAT32_IMG) "::$$dir" || true; \
+	done
+	@for file in README.TXT hello.txt test.txt home/user/profile.txt tmp/README; do \
+		if [ -f "$(USERFS_DIR)/$$file" ]; then \
+			mcopy -o -i $(FAT32_IMG) "$(USERFS_DIR)/$$file" "::$$file"; \
+		fi; \
+	done
 	@echo "FAT32 image created"
 
 # Partition ext2 (64 Mo) — peuplée avec tout userfs via mke2fs + debugfs
@@ -161,9 +165,14 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
 	       if [ "$$dir" != "$(USERFS_DIR)" ]; then \
 	           relpath=$$(echo "$$dir" | sed 's|$(USERFS_DIR)/||'); \
 	           printf 'mkdir /%s\n' "$$relpath"; \
-	           printf 'set_inode_field /%s mode 040755\n' "$$relpath"; \
-	           printf 'set_inode_field /%s uid 0\n' "$$relpath"; \
-	           printf 'set_inode_field /%s gid 0\n' "$$relpath"; \
+	           case "$$relpath" in \
+	               tmp) mode=040777; uid=0; gid=0 ;; \
+	               home/user|home/user/*) mode=040755; uid=1000; gid=1000 ;; \
+	               *) mode=040755; uid=0; gid=0 ;; \
+	           esac; \
+	           printf 'set_inode_field /%s mode %s\n' "$$relpath" "$$mode"; \
+	           printf 'set_inode_field /%s uid %s\n' "$$relpath" "$$uid"; \
+	           printf 'set_inode_field /%s gid %s\n' "$$relpath" "$$gid"; \
 	       fi; \
 	   done; \
 	   find $(USERFS_DIR) -type f | sort | while read f; do \
@@ -173,9 +182,13 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
 	           bin/*|usr/bin/*|init.sh) mode=0100755 ;; \
 	           *) mode=0100644 ;; \
 	       esac; \
+	       case "$$relpath" in \
+	           home/user/*) uid=1000; gid=1000 ;; \
+	           *) uid=0; gid=0 ;; \
+	       esac; \
 	       printf 'set_inode_field /%s mode %s\n' "$$relpath" "$$mode"; \
-	       printf 'set_inode_field /%s uid 0\n' "$$relpath"; \
-	       printf 'set_inode_field /%s gid 0\n' "$$relpath"; \
+	       printf 'set_inode_field /%s uid %s\n' "$$relpath" "$$uid"; \
+	       printf 'set_inode_field /%s gid %s\n' "$$relpath" "$$gid"; \
 	   done; \
 	   printf 'quit\n' ) | $(DEBUGFS) -w -f - $(EXT2_IMG) >/dev/null
 	$(DEBUGFS) -R 'ls -l /bin' $(EXT2_IMG) >/dev/null

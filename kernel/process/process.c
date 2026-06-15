@@ -134,6 +134,9 @@ void init_process_main(void* arg)
 
     shell_proc->context.is_first_run = 1;                    
     shell_proc->context.returns_to_user = 0;
+    shell_proc->process->uid = 1000;
+    shell_proc->process->gid = 1000;
+    strcpy(shell_proc->process->cwd, "/home/user");
 
     //KDEBUG("[SHELL PROC] SCV STACK TOP = 0x%08X\n", shell_proc->context.svc_sp_top);
     //KDEBUG("[SHELL PROC] SCV STACK SP = 0x%08X\n", shell_proc->context.svc_sp);
@@ -286,5 +289,4 @@ process_t* get_current_process(void)
     }
     return NULL;
 }
-
 

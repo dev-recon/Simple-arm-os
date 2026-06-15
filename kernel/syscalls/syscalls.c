@@ -884,7 +884,6 @@ int sys_getppid(void)
 
 int sys_getuid(void)
 {
-    /* Simple implementation - always return 0 (root) */
     task_t *proc = current_task;
 
     if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
@@ -896,7 +895,6 @@ int sys_getuid(void)
 
 int sys_getgid(void)
 {
-    /* Simple implementation - always return 0 (root) */
     task_t *proc = current_task;
 
     if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {

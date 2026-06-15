@@ -197,8 +197,7 @@ static void shell_load_rc_file(const char* path) {
 }
 
 static void shell_load_startup_files(void) {
-    shell_load_rc_file("/etc/mashrc");
-    shell_load_rc_file("/home/user/mashrc");
+    shell_load_rc_file("/home/user/.mashrc");
 }
 
 static int build_exec_path_from_dir(const char* dir, int dir_len,

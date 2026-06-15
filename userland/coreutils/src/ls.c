@@ -78,7 +78,7 @@ static void print_long(const char *name, struct stat *st)
                perms, nl, (uint32_t)st->st_size, tstr, name);
 }
 
-static int ls_dir(const char *path, int long_fmt)
+static int ls_dir(const char *path, int long_fmt, int show_all)
 {
     char *buf = malloc(BUF_SIZE);
     if (!buf) return 1;
@@ -97,28 +97,28 @@ static int ls_dir(const char *path, int long_fmt)
             struct dirent_raw *e = (struct dirent_raw *)ptr;
             if (e->d_reclen == 0) break;
 
-            if (strcmp(e->d_name, ".") != 0 &&
-                strcmp(e->d_name, "..") != 0 &&
-                e->d_ino != 0) {
+            if ((!show_all && e->d_name[0] == '.') || e->d_ino == 0) {
+                ptr += e->d_reclen;
+                continue;
+            }
 
-                if (long_fmt) {
-                    char fullpath[512];
-                    int plen = strlen(path);
-                    memcpy(fullpath, path, (size_t)plen);
-                    if (plen > 0 && fullpath[plen - 1] != '/') fullpath[plen++] = '/';
-                    strcpy(fullpath + plen, e->d_name);
+            if (long_fmt) {
+                char fullpath[512];
+                int plen = strlen(path);
+                memcpy(fullpath, path, (size_t)plen);
+                if (plen > 0 && fullpath[plen - 1] != '/') fullpath[plen++] = '/';
+                strcpy(fullpath + plen, e->d_name);
 
-                    struct stat st;
-                    if (stat(fullpath, &st) == 0)
-                        print_long(e->d_name, &st);
-                    else
-                        printf("??????????  ? root root        ?            %s\n", e->d_name);
-                } else {
-                    if (e->d_type == 4)
-                        printf("\033[1;34m%s\033[0m\n", e->d_name);
-                    else
-                        printf("%s\n", e->d_name);
-                }
+                struct stat st;
+                if (stat(fullpath, &st) == 0)
+                    print_long(e->d_name, &st);
+                else
+                    printf("??????????  ? root root        ?            %s\n", e->d_name);
+            } else {
+                if (e->d_type == 4)
+                    printf("\033[1;34m%s\033[0m\n", e->d_name);
+                else
+                    printf("%s\n", e->d_name);
             }
             ptr += e->d_reclen;
         }
@@ -147,14 +147,25 @@ static int ls_file(const char *path, int long_fmt)
 int main(int argc, char **argv)
 {
     int long_fmt = 0;
+    int show_all = 0;
     int npath = 0;
     const char *paths[64];
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-l") == 0)
-            long_fmt = 1;
-        else if (argv[i][0] != '-' && npath < 64)
+        if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            for (int j = 1; argv[i][j]; j++) {
+                if (argv[i][j] == 'l') {
+                    long_fmt = 1;
+                } else if (argv[i][j] == 'a') {
+                    show_all = 1;
+                } else {
+                    printf("ls: invalid option -- '%c'\n", argv[i][j]);
+                    return 1;
+                }
+            }
+        } else if (npath < 64) {
             paths[npath++] = argv[i];
+        }
     }
 
     if (npath == 0) {
@@ -176,7 +187,7 @@ int main(int argc, char **argv)
         if (S_ISDIR(st.st_mode)) {
             if (print_header)
                 printf("%s:\n", paths[i]);
-            if (ls_dir(paths[i], long_fmt) != 0)
+            if (ls_dir(paths[i], long_fmt, show_all) != 0)
                 status = 1;
             if (print_header && i < npath - 1)
                 printf("\n");

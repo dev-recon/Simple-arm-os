@@ -77,6 +77,8 @@ int chown(const char* pathname, uid_t owner, gid_t group);
 
 int getpid(void);
 int getppid(void);
+int getuid(void);
+int getgid(void);
 int fork(void);
 int execve(const char* filename, char* const argv[], char* const envp[]);
 int waitpid(int pid, int* status, int options);
