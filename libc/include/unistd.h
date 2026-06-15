@@ -108,6 +108,8 @@ int setpgid(pid_t pid, pid_t pgid);
 int getpgrp(void);
 int stty(int cmd, int arg);
 int gtty(int cmd);
+int tcsetpgrp(int fd, pid_t pgrp);
+pid_t tcgetpgrp(int fd);
 int fork(void);
 int execve(const char* filename, char* const argv[], char* const envp[]);
 int waitpid(int pid, int* status, int options);

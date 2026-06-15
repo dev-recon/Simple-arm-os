@@ -29,7 +29,7 @@ static int shell_pgid = 0;
 
 static void shell_set_foreground_pgid(int pgid) {
     if (pgid >= 0)
-        stty(TTY_STTY_SET_FOREGROUND_PGID, pgid);
+        tcsetpgrp(STDIN_FILENO, pgid);
 }
 
 static void shell_restore_foreground(void) {

@@ -371,7 +371,7 @@ int jobs_fg_builtin(int argc, char* argv[])
 
     printf("%s\n", job->command);
     jobs_continue(job);
-    stty(TTY_STTY_SET_FOREGROUND_PGID, job->pgid);
+    tcsetpgrp(STDIN_FILENO, job->pgid);
     while (job->state == JOB_RUNNING) {
         int pid = waitpid(-job->pgid, &status, WUNTRACED);
 
@@ -381,7 +381,7 @@ int jobs_fg_builtin(int argc, char* argv[])
         jobs_note_status(pid, status);
     }
     if (shell_pgid > 0)
-        stty(TTY_STTY_SET_FOREGROUND_PGID, shell_pgid);
+        tcsetpgrp(STDIN_FILENO, shell_pgid);
 
     if (job->state == JOB_DONE)
         job->state = JOB_EMPTY;

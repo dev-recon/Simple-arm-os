@@ -916,11 +916,32 @@ static void test_identity(void)
     expect(getgid() == 1000, "shell runs as user gid", getgid());
 }
 
+static void test_terminal_process_group(void)
+{
+    int old_pgrp = tcgetpgrp(STDIN_FILENO);
+    int self_pgrp = getpgrp();
+    int current;
+
+    if (expect(old_pgrp >= 0, "tcgetpgrp returns foreground group", old_pgrp) < 0)
+        return;
+
+    if (expect(self_pgrp > 0, "getpgrp returns process group", self_pgrp) < 0)
+        return;
+
+    expect(tcsetpgrp(STDIN_FILENO, self_pgrp) == 0, "tcsetpgrp sets foreground group", self_pgrp);
+    current = tcgetpgrp(STDIN_FILENO);
+    expect(current == self_pgrp, "tcgetpgrp observes tcsetpgrp", current);
+
+    if (old_pgrp > 0 && old_pgrp != self_pgrp)
+        tcsetpgrp(STDIN_FILENO, old_pgrp);
+}
+
 int main(void)
 {
     printf("=== syscall smoke tests ===\n");
 
     test_identity();
+    test_terminal_process_group();
     test_file_io();
     test_access_umask();
     test_pipe_dup2();
