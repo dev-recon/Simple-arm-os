@@ -6,6 +6,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/interrupt.h>
 #include <kernel/task.h>
+#include <kernel/timer.h>
 #include <kernel/spinlock.h>
 #include <asm/arm.h>
 
@@ -41,6 +42,16 @@ static uint64_t virtio_capacity_sectors = 0;
 static bool virtio_blk_failed = false;
 static bool virtio_blk_readonly = false;
 static spinlock_t virtio_blk_lock = SPINLOCK_INIT("virtio_blk");
+
+typedef struct {
+    volatile bool active;
+    volatile bool completed;
+    uint16_t prev_used_idx;
+    vq_legacy_t *vq;
+    task_t *waiter;
+} virtio_blk_pending_t;
+
+static virtio_blk_pending_t virtio_blk_pending = {0};
 
 #define VIRTIO_PHY_ADDR 0x0A003E00u
 volatile uint32_t *virtio_mmio_base =
@@ -322,15 +333,62 @@ static inline uint64_t vblk_cntpct(void) {
 
 void virtio_block_irq_handler(void)
 {
-    /*
-     * Le driver block est encore synchrone/polling: l'IRQ sert uniquement a
-     * deassert le niveau cote device. La completion reste lue dans used ring
-     * par wait_for_used().
-     */
     virtio_blk_ack_interrupts(virtio_mmio_base);
+
+    if (!virtio_blk_pending.active || !virtio_blk_pending.vq)
+        return;
+
+    /*
+     * Completion IRQ: on ne prend pas virtio_blk_lock ici, car le thread qui a
+     * soumis la requete le garde jusqu'a la fin. Le handler observe seulement
+     * le used ring et reveille la tache bloquee.
+     */
+    vq_legacy_t *vq = virtio_blk_pending.vq;
+    invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
+        sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
+    asm volatile("dmb ish" ::: "memory");
+
+    if (vq_used_ptr(vq)->idx != virtio_blk_pending.prev_used_idx) {
+        virtio_blk_pending.completed = true;
+        if (virtio_blk_pending.waiter &&
+            (virtio_blk_pending.waiter->state == TASK_BLOCKED ||
+             virtio_blk_pending.waiter->state == TASK_INTERRUPTIBLE)) {
+            virtio_blk_pending.waiter->wakeup_time = 0;
+            add_to_ready_queue(virtio_blk_pending.waiter);
+        }
+    }
 }
 
-/* Poll used ring avec un vrai timeout en ms basé sur CNTPCT. */
+static bool virtio_blk_used_advanced(vq_legacy_t *vq, uint16_t prev_idx)
+{
+    invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
+        sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
+    asm volatile("dmb ish" ::: "memory");
+
+    return vq_used_ptr(vq)->idx != prev_idx;
+}
+
+static void virtio_blk_prepare_wait(vq_legacy_t *vq, uint16_t prev_idx)
+{
+    virtio_blk_pending.active = true;
+    virtio_blk_pending.completed = false;
+    virtio_blk_pending.prev_used_idx = prev_idx;
+    virtio_blk_pending.vq = vq;
+    virtio_blk_pending.waiter = current_task;
+    asm volatile("dmb ish" ::: "memory");
+}
+
+static void virtio_blk_finish_wait(void)
+{
+    virtio_blk_pending.active = false;
+    virtio_blk_pending.completed = false;
+    virtio_blk_pending.prev_used_idx = 0;
+    virtio_blk_pending.vq = NULL;
+    virtio_blk_pending.waiter = NULL;
+    asm volatile("dmb ish" ::: "memory");
+}
+
+/* Attente IRQ-backed avec timeout: l'IRQ reveille vite, le timer borne l'attente. */
 static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms)
 {
     uint32_t freq;
@@ -339,19 +397,40 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
 
     uint64_t timeout_ticks = (uint64_t)timeout_ms * (uint64_t)(freq / 1000);
     uint64_t t0 = vblk_cntpct();
+    uint32_t wake_deadline = get_system_ticks() + 2;
 
     while (1) {
-        invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
-            sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
-        asm volatile("dmb ish" ::: "memory");
-
-        if (vq_used_ptr(vq)->idx != prev_idx)
+        if (virtio_blk_pending.completed || virtio_blk_used_advanced(vq, prev_idx))
             return 0;
 
         if ((vblk_cntpct() - t0) >= timeout_ticks) {
             KERROR("virtio_blk: timeout waiting used ring\n");
             return -1;
         }
+
+        if (!current_task) {
+            wait_for_interrupt();
+            continue;
+        }
+
+        if (get_critical_section()) {
+            wait_for_interrupt();
+            continue;
+        }
+
+        uint32_t irq_flags = disable_interrupts_save();
+        if (virtio_blk_pending.completed || virtio_blk_used_advanced(vq, prev_idx)) {
+            restore_interrupts(irq_flags);
+            return 0;
+        }
+
+        current_task->state = TASK_INTERRUPTIBLE;
+        current_task->wakeup_time = wake_deadline;
+        restore_interrupts(irq_flags);
+
+        schedule();
+
+        wake_deadline = get_system_ticks() + 2;
     }
 }
 
@@ -412,6 +491,8 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
 
     /* --- Publier avail entry de façon sûre --- */
     uint16_t prev_used = vq->last_used_idx;
+    virtio_blk_prepare_wait(vq, prev_used);
+
     uint16_t old_idx = vq_avail_ptr(vq)->idx;
     uint16_t slot = old_idx % vq->qsize;
     vq_avail_ptr(vq)->ring[slot] = d0;
@@ -433,9 +514,12 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
 
     /* wait for completion by polling used.idx (blocking) */
     if (wait_for_used(vq, prev_used, timeout_ms) != 0) {
+        virtio_blk_finish_wait();
         virtio_blk_mark_failed(mmio_base, "request timeout");
         return -1;
     }
+
+    virtio_blk_finish_wait();
 
     /* read the used element (invalidate used memory then read) */
     invalidate_dcache_by_mva((void *)vq->va_used, sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
