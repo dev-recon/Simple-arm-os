@@ -700,6 +700,13 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
     //KDEBUG("ENTERING KERNEL WAITPID LOOP for %s...\n", parent->name);
 
     while (1) {
+        if (has_pending_signals(parent)) {
+            parent->process->waitpid_pid = 0;
+            parent->process->waitpid_status = NULL;
+            parent->process->waitpid_options = 0;
+            return -EINTR;
+        }
+
         /* Chercher un processus zombie - ACCeS CORRECT */
         zombie = find_zombie_child(parent, pid);
 

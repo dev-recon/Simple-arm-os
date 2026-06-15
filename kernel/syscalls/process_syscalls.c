@@ -891,6 +891,8 @@ int sys_mkdir(const char* pathname, mode_t mode)
 int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     uint32_t sleep_ticks;
     uint32_t start_time, elapsed_time;
+    uint32_t now;
+    bool interrupted;
     
     if (!req) return -EFAULT;
     if (req->nsec >= 1000000000u) return -EINVAL;
@@ -932,13 +934,20 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     //KDEBUG("sys_nanosleep: woke up\n");
 
     /* Vérifier si réveillé par signal */
-    if (has_pending_signals(current_task) ||
+    now = get_system_ticks();
+    interrupted = has_pending_signals(current_task) ||
         (current_task->state == TASK_RUNNING &&
          current_task->wakeup_time > 0 &&
-         get_system_ticks() < current_task->wakeup_time)) {
+         now < current_task->wakeup_time);
+
+    spin_lock(&task_lock);
+    current_task->wakeup_time = 0;
+    spin_unlock(&task_lock);
+
+    if (interrupted) {
         /* Réveillé prématurément par un signal */
         if (rem) {
-            elapsed_time = get_system_ticks() - start_time;
+            elapsed_time = now - start_time;
             uint32_t remaining_ticks = (elapsed_time >= sleep_ticks) ? 0 : sleep_ticks - elapsed_time;
             rem->sec = remaining_ticks / TIMER_FREQ;
             rem->nsec = (remaining_ticks % TIMER_FREQ) * (1000000000u / TIMER_FREQ);

@@ -116,10 +116,20 @@ void tty_input_char(char c) {
         tty0.input_buf[tty0.input_head] = c;
         tty0.input_head = next_head;
         
-        /* read(0, &c, 1) doit être réveillé dès qu'un caractère arrive. */
+        /* read(0, &c, 1) doit être réveillé dès qu'un caractère arrive.
+         * Ne pas conserver un waiter mort ou qui n'attend plus le TTY: après
+         * un signal, il doit revenir en userland via -EINTR plutôt que voler
+         * le prochain caractère du shell. */
         if (tty0.read_wait) {
-            reader = tty0.read_wait;
-            tty0.read_wait = NULL;
+            if (tty0.read_wait->state == TASK_INTERRUPTIBLE) {
+                reader = tty0.read_wait;
+                tty0.read_wait = NULL;
+            } else if (tty0.read_wait->state == TASK_ZOMBIE ||
+                       tty0.read_wait->state == TASK_TERMINATED ||
+                       tty0.read_wait->state == TASK_READY ||
+                       tty0.read_wait->state == TASK_RUNNING) {
+                tty0.read_wait = NULL;
+            }
         }
     }
     
@@ -160,6 +170,8 @@ ssize_t tty_read(char *buf, size_t count) {
             spin_unlock_irqrestore(&tty0.lock, flags);
 
             schedule();
+            if (has_pending_signals(current_task))
+                return read > 0 ? (ssize_t)read : (ssize_t)-EINTR;
             continue;
         }
         

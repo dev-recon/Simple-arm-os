@@ -331,6 +331,7 @@ void wake_up_process_for_signal(task_t* proc)
     } else if (proc->state == TASK_INTERRUPTIBLE) {
         proc->state = TASK_READY;
         proc->wakeup_time = 0;
+        add_to_ready_queue(proc);
     }
     //KDEBUG("wake_up_process_for_signal: state %s\n", task_state_string(proc->state));
 }
