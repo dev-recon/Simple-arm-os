@@ -15,6 +15,7 @@
 static int failures = 0;
 static volatile int cow_shared_value = 11;
 static volatile int sleep_signal_seen = 0;
+static struct sysinfo_response sysinfo_scratch;
 
 static void pass(const char *name)
 {
@@ -687,12 +688,10 @@ static void test_shared_memory(void)
 
 static int read_free_mem_kb(unsigned *free_kb)
 {
-    struct sysinfo_response info;
-
-    if (getsysinfo(&info) < 0)
+    if (getsysinfo(&sysinfo_scratch) < 0)
         return -1;
 
-    *free_kb = info.mem_free_kb;
+    *free_kb = sysinfo_scratch.mem_free_kb;
     return 0;
 }
 
@@ -941,12 +940,35 @@ static void test_terminal_process_group(void)
         tcsetpgrp(STDIN_FILENO, old_pgrp);
 }
 
+static void test_process_session_info(void)
+{
+    int self = getpid();
+    int found = 0;
+
+    if (expect(getsysinfo(&sysinfo_scratch) >= 0, "sysinfo session query", 0) < 0)
+        return;
+
+    for (int i = 0; i < sysinfo_scratch.proc_count; i++) {
+        if (sysinfo_scratch.procs[i].pid == self) {
+            found = 1;
+            expect(sysinfo_scratch.procs[i].sid > 0, "sysinfo reports process sid",
+                   sysinfo_scratch.procs[i].sid);
+            expect(sysinfo_scratch.procs[i].tty == 0, "sysinfo reports controlling tty",
+                   sysinfo_scratch.procs[i].tty);
+            break;
+        }
+    }
+
+    expect(found, "sysinfo contains current process", self);
+}
+
 int main(void)
 {
     printf("=== syscall smoke tests ===\n");
 
     test_identity();
     test_terminal_process_group();
+    test_process_session_info();
     test_file_io();
     test_access_umask();
     test_pipe_dup2();

@@ -1052,6 +1052,8 @@ int sys_sysinfo(struct sysinfo_response *resp)
         p->tid      = task->task_id;
         p->pid      = proc ? proc->pid : 0;
         p->ppid     = proc ? proc->ppid : 0;
+        p->sid      = proc ? proc->sid : 0;
+        p->tty      = proc ? proc->controlling_tty : -1;
         p->uid      = proc ? proc->uid : 0;
         p->gid      = proc ? proc->gid : 0;
         p->priority = task->priority;

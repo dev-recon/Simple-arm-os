@@ -370,6 +370,8 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             child->process->pid = next_pid++;
             child->process->ppid = parent->process->pid;
             child->process->pgid = parent->process->pgid;
+            child->process->sid = parent->process->sid;
+            child->process->controlling_tty = parent->process->controlling_tty;
             child->process->parent = parent;
             child->process->children = NULL;
             child->process->sibling_next = NULL;
@@ -872,6 +874,8 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         task->process->ppid = (current_task && current_task->type == TASK_TYPE_PROCESS) ? 
                              current_task->process->pid : 0;
         task->process->pgid = task->process->pid;
+        task->process->sid = task->process->pid;
+        task->process->controlling_tty = 0;
         task->process->parent = (current_task && current_task->type == TASK_TYPE_PROCESS) ? 
                                current_task : NULL;
         task->process->children = NULL;

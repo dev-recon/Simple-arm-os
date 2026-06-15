@@ -31,6 +31,8 @@ struct proc_info {
     unsigned tid;
     int      pid;
     int      ppid;
+    int      sid;
+    int      tty;
     unsigned uid;
     unsigned gid;
     unsigned priority;

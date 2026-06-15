@@ -88,6 +88,8 @@ struct proc_info {
     uint32_t tid;
     int      pid;
     int      ppid;
+    int      sid;
+    int      tty;
     uint32_t uid;
     uint32_t gid;
     uint32_t priority;

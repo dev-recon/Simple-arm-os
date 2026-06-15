@@ -219,6 +219,8 @@ typedef struct {
     pid_t pid;              /* PID POSIX */
     pid_t ppid;             /* Parent PID */
     pid_t pgid;             /* Process group ID */
+    pid_t sid;              /* Session ID */
+    int controlling_tty;    /* Controlling TTY id, -1 if none */
     struct task* parent;    /* Processus parent */
     struct task* children;  /* Enfants */
     struct task* sibling_next;
