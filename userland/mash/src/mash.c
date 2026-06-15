@@ -39,7 +39,9 @@ static void shell_restore_foreground(void) {
 typedef struct shell_redirs {
     const char* input;
     const char* output;
-    int append;
+    const char* error;
+    int output_append;
+    int error_append;
 } shell_redirs_t;
 
 #define SHELL_MAX_PIPELINE 8
@@ -251,27 +253,50 @@ static int parse_redirections(int* argc, char* argv[], shell_redirs_t* redirs) {
 
     redirs->input = NULL;
     redirs->output = NULL;
-    redirs->append = 0;
+    redirs->error = NULL;
+    redirs->output_append = 0;
+    redirs->error_append = 0;
 
     while (src < *argc) {
+        int target_fd = -1;
+        int op_index = src;
+        const char* op = argv[src];
+
+        if ((strcmp(argv[src], "1") == 0 || strcmp(argv[src], "2") == 0) &&
+            src + 1 < *argc &&
+            (strcmp(argv[src + 1], ">") == 0 || strcmp(argv[src + 1], ">>") == 0)) {
+            target_fd = argv[src][0] - '0';
+            op_index = src + 1;
+            op = argv[op_index];
+        } else if ((strcmp(argv[src], "1>") == 0 || strcmp(argv[src], "1>>") == 0 ||
+                    strcmp(argv[src], "2>") == 0 || strcmp(argv[src], "2>>") == 0)) {
+            target_fd = argv[src][0] - '0';
+            op = argv[src] + 1;
+        }
+
         if (strcmp(argv[src], "<") == 0 ||
             strcmp(argv[src], ">") == 0 ||
-            strcmp(argv[src], ">>") == 0) {
-            int is_input = strcmp(argv[src], "<") == 0;
-            int is_append = strcmp(argv[src], ">>") == 0;
+            strcmp(argv[src], ">>") == 0 ||
+            target_fd >= 0) {
+            int is_input = strcmp(op, "<") == 0;
+            int is_append = strcmp(op, ">>") == 0;
+            int target_index = op_index + 1;
 
-            if (src + 1 >= *argc) {
-                printf("mash: missing redirection target after %s\n", argv[src]);
+            if (target_index >= *argc) {
+                printf("mash: missing redirection target after %s\n", argv[op_index]);
                 return -1;
             }
 
             if (is_input) {
-                redirs->input = argv[src + 1];
+                redirs->input = argv[target_index];
+            } else if (target_fd == 2) {
+                redirs->error = argv[target_index];
+                redirs->error_append = is_append;
             } else {
-                redirs->output = argv[src + 1];
-                redirs->append = is_append;
+                redirs->output = argv[target_index];
+                redirs->output_append = is_append;
             }
-            src += 2;
+            src = target_index + 1;
             continue;
         }
 
@@ -316,7 +341,7 @@ static int apply_redirections(const shell_redirs_t* redirs) {
     }
 
     if (redirs->output) {
-        fd = open_redirect_output(redirs->output, redirs->append);
+        fd = open_redirect_output(redirs->output, redirs->output_append);
         if (fd < 0) {
             printf("mash: cannot open output %s\n", redirs->output);
             return -1;
@@ -324,6 +349,20 @@ static int apply_redirections(const shell_redirs_t* redirs) {
         if (dup2(fd, STDOUT_FILENO) < 0) {
             close(fd);
             printf("mash: cannot redirect stdout\n");
+            return -1;
+        }
+        close(fd);
+    }
+
+    if (redirs->error) {
+        fd = open_redirect_output(redirs->error, redirs->error_append);
+        if (fd < 0) {
+            printf("mash: cannot open stderr %s\n", redirs->error);
+            return -1;
+        }
+        if (dup2(fd, STDERR_FILENO) < 0) {
+            close(fd);
+            printf("mash: cannot redirect stderr\n");
             return -1;
         }
         close(fd);
@@ -623,6 +662,7 @@ static int run_builtin_with_redirs(command_entry_t* entry, int argc, char* argv[
                                   const shell_redirs_t* redirs) {
     int saved_stdin = -1;
     int saved_stdout = -1;
+    int saved_stderr = -1;
     int result;
 
     if (redirs->input) {
@@ -640,6 +680,17 @@ static int run_builtin_with_redirs(command_entry_t* entry, int argc, char* argv[
         }
     }
 
+    if (redirs->error) {
+        saved_stderr = dup(STDERR_FILENO);
+        if (saved_stderr < 0) {
+            if (saved_stdin >= 0)
+                close(saved_stdin);
+            if (saved_stdout >= 0)
+                close(saved_stdout);
+            return SHELL_ERROR;
+        }
+    }
+
     if (apply_redirections(redirs) < 0) {
         if (saved_stdin >= 0) {
             dup2(saved_stdin, STDIN_FILENO);
@@ -648,6 +699,10 @@ static int run_builtin_with_redirs(command_entry_t* entry, int argc, char* argv[
         if (saved_stdout >= 0) {
             dup2(saved_stdout, STDOUT_FILENO);
             close(saved_stdout);
+        }
+        if (saved_stderr >= 0) {
+            dup2(saved_stderr, STDERR_FILENO);
+            close(saved_stderr);
         }
         return SHELL_ERROR;
     }
@@ -662,6 +717,10 @@ static int run_builtin_with_redirs(command_entry_t* entry, int argc, char* argv[
     if (saved_stdout >= 0) {
         dup2(saved_stdout, STDOUT_FILENO);
         close(saved_stdout);
+    }
+    if (saved_stderr >= 0) {
+        dup2(saved_stderr, STDERR_FILENO);
+        close(saved_stderr);
     }
 
     return result;
