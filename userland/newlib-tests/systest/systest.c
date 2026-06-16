@@ -36,13 +36,19 @@ static const char *tmp_path(const char *name)
 
 static void pass(const char *name)
 {
-    printf(COLOR_GREEN "[OK]" COLOR_RESET " %s\n", name);
+    printf("pid %d " COLOR_GREEN "[OK]" COLOR_RESET " %s\n", getpid(), name);
 }
 
 static void fail(const char *name, int value)
 {
-    printf(COLOR_RED "[KO]" COLOR_RESET " %s (%d, errno=%d)\n", name, value, errno);
+    printf("pid %d " COLOR_RED "[KO]" COLOR_RESET " %s (%d, errno=%d)\n",
+           getpid(), name, value, errno);
     failures++;
+}
+
+static void skip(const char *name)
+{
+    printf("pid %d [SKIP] %s\n", getpid(), name);
 }
 
 static int expect(int cond, const char *name, int value)
@@ -794,28 +800,51 @@ static void test_nanosleep_signal_interrupt(void)
 {
     struct timespec req;
     struct timespec rem;
+    int sync_pipe[2];
     int parent_pid;
     int pid;
     int status = -1;
     int rc;
+    int waited;
+    char token = 'x';
 
     sleep_signal_seen = 0;
     signal(SIGUSR1, systest_sleep_signal_handler);
     parent_pid = getpid();
 
-    pid = fork();
-    if (pid == 0) {
-        usleep(200000);
-        kill(parent_pid, SIGUSR1);
-        exit(0);
-    }
-
-    if (expect(pid > 0, "nanosleep interrupt fork child", pid) < 0) {
+    if (expect(pipe(sync_pipe) == 0, "nanosleep interrupt sync pipe", 0) < 0) {
         signal(SIGUSR1, SIG_DFL);
         return;
     }
 
-    req.tv_sec = 2;
+    pid = fork();
+    if (pid == 0) {
+        int i;
+
+        close(sync_pipe[1]);
+        if (read(sync_pipe[0], &token, 1) != 1)
+            exit(1);
+        close(sync_pipe[0]);
+
+        for (i = 0; i < 40; i++) {
+            usleep(50000);
+            kill(parent_pid, SIGUSR1);
+        }
+        exit(0);
+    }
+
+    if (expect(pid > 0, "nanosleep interrupt fork child", pid) < 0) {
+        close(sync_pipe[0]);
+        close(sync_pipe[1]);
+        signal(SIGUSR1, SIG_DFL);
+        return;
+    }
+
+    close(sync_pipe[0]);
+    expect(write(sync_pipe[1], &token, 1) == 1, "nanosleep interrupt arm child", 0);
+    close(sync_pipe[1]);
+
+    req.tv_sec = 10;
     req.tv_nsec = 0;
     rem.tv_sec = 0;
     rem.tv_nsec = 0;
@@ -825,7 +854,10 @@ static void test_nanosleep_signal_interrupt(void)
     expect(rc < 0 && errno == EINTR, "nanosleep interrupted by signal", rc);
     expect(sleep_signal_seen == 1, "nanosleep signal handler ran", sleep_signal_seen);
     expect(rem.tv_sec > 0 || rem.tv_nsec > 0, "nanosleep reports remaining time", (int)rem.tv_sec);
-    expect(waitpid(pid, &status, 0) == pid && status == 0, "nanosleep signal child reaped", status);
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    expect(waited == pid && status == 0, "nanosleep signal child reaped", status);
     signal(SIGUSR1, SIG_DFL);
 }
 
@@ -995,16 +1027,8 @@ static void test_shared_memory(void)
     expect(shm_unlink(name) == 0, "shm unlink", 0);
 }
 
-static int read_free_mem_kb(unsigned *free_kb)
-{
-    if (getsysinfo(&sysinfo_scratch) < 0)
-        return -1;
-
-    *free_kb = sysinfo_scratch.mem_free_kb;
-    return 0;
-}
-
-static int read_self_mem_kb(unsigned *heap_kb, unsigned *rss_kb, unsigned *pf)
+static int read_self_mem_kb(unsigned *heap_kb, unsigned *rss_kb,
+                            unsigned *pf, unsigned *l2_tables)
 {
     int self = getpid();
 
@@ -1019,6 +1043,8 @@ static int read_self_mem_kb(unsigned *heap_kb, unsigned *rss_kb, unsigned *pf)
                 *rss_kb = sysinfo_scratch.procs[i].rss_kb;
             if (pf)
                 *pf = sysinfo_scratch.procs[i].page_faults;
+            if (l2_tables)
+                *l2_tables = sysinfo_scratch.procs[i].l2_tables;
             return 0;
         }
     }
@@ -1059,7 +1085,7 @@ static void test_malloc_free_stress(void)
     for (int i = 0; i < BLOCKS; i++)
         blocks[i] = NULL;
 
-    expect(read_self_mem_kb(&heap_before, NULL, &pf_before) == 0,
+    expect(read_self_mem_kb(&heap_before, NULL, &pf_before, NULL) == 0,
            "malloc stress baseline stats", 0);
 
     for (int i = 0; i < BLOCKS; i++) {
@@ -1081,7 +1107,7 @@ static void test_malloc_free_stress(void)
     }
     expect(ok, "malloc stress page contents intact", ok);
 
-    expect(read_self_mem_kb(&heap_after_alloc, &rss_after_alloc, &pf_after) == 0,
+    expect(read_self_mem_kb(&heap_after_alloc, &rss_after_alloc, &pf_after, NULL) == 0,
            "malloc stress sysinfo after alloc", 0);
     expect(heap_after_alloc >= heap_before + 128,
            "malloc stress heap visible in ps data", (int)(heap_after_alloc - heap_before));
@@ -1106,7 +1132,7 @@ static void test_malloc_free_stress(void)
     }
     expect(ok, "malloc stress free/reuse blocks", ok);
 
-    expect(read_self_mem_kb(&heap_after_reuse, NULL, NULL) == 0,
+    expect(read_self_mem_kb(&heap_after_reuse, NULL, NULL, NULL) == 0,
            "malloc stress sysinfo after reuse", 0);
     expect(heap_after_reuse >= heap_after_alloc,
            "malloc stress heap stays mapped while blocks live", (int)heap_after_reuse);
@@ -1118,7 +1144,7 @@ cleanup:
     }
 
     if (heap_after_alloc > heap_before &&
-        expect(read_self_mem_kb(&heap_after_free, NULL, NULL) == 0,
+        expect(read_self_mem_kb(&heap_after_free, NULL, NULL, NULL) == 0,
                "malloc stress sysinfo after free", 0) == 0) {
         int heap_delta = (int)heap_after_free - (int)heap_before;
         /*
@@ -1138,10 +1164,10 @@ static void test_cow_fork_stress(void)
     enum { STRESS_ITERS = 64 };
     unsigned char *heap;
     volatile unsigned char stack_area[12288];
-    unsigned before_kb = 0;
-    unsigned after_kb = 0;
+    unsigned before_l2 = 0;
+    unsigned after_l2 = 0;
     int loop_ok = 1;
-    int leak_kb;
+    int l2_delta;
     int pid;
     int status;
     int waited;
@@ -1158,7 +1184,8 @@ static void test_cow_fork_stress(void)
     stack_area[4096] = 0x60;
     stack_area[8192] = 0x70;
 
-    if (expect(read_free_mem_kb(&before_kb) == 0, "COW stress baseline memory", 0) < 0) {
+    if (expect(read_self_mem_kb(NULL, NULL, NULL, &before_l2) == 0,
+               "COW stress baseline L2 tables", 0) < 0) {
         free(heap);
         return;
     }
@@ -1192,9 +1219,10 @@ static void test_cow_fork_stress(void)
     }
 
     expect(loop_ok, "COW stress fork/write/wait loop", loop_ok);
-    expect(read_free_mem_kb(&after_kb) == 0, "COW stress final memory", 0);
-    leak_kb = before_kb > after_kb ? (int)(before_kb - after_kb) : 0;
-    expect(leak_kb <= 512, "COW stress no page-table leak", leak_kb);
+    expect(read_self_mem_kb(NULL, NULL, NULL, &after_l2) == 0,
+           "COW stress final L2 tables", 0);
+    l2_delta = after_l2 > before_l2 ? (int)(after_l2 - before_l2) : 0;
+    expect(l2_delta <= 1, "COW stress parent L2 stable", l2_delta);
 
     free(heap);
 }
@@ -1364,6 +1392,16 @@ static void test_terminal_process_group(void)
 
     if (expect(self_pgrp > 0, "getpgrp returns process group", self_pgrp) < 0)
         return;
+
+    if (old_pgrp != self_pgrp) {
+        skip("tcsetpgrp foreground mutation (not foreground job)");
+        errno = 0;
+        expect(tcgetpgrp(99) < 0 && errno == ENOTTY, "tcgetpgrp rejects non-tty fd", errno);
+        errno = 0;
+        expect(tcsetpgrp(99, self_pgrp) < 0 && errno == ENOTTY,
+               "tcsetpgrp rejects non-tty fd", errno);
+        return;
+    }
 
     expect(tcsetpgrp(STDIN_FILENO, self_pgrp) == 0, "tcsetpgrp sets foreground group", self_pgrp);
     current = tcgetpgrp(STDIN_FILENO);

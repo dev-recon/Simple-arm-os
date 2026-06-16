@@ -73,22 +73,36 @@ int main(void)
            info->mem_total_kb / 1024, info->mem_free_kb / 1024,
            pct_x10 > 800 ? "1;31" : pct_x10 > 600 ? "1;33" : "1;32",
            pct, pct_frac);
-    printf("\033[1mLife:\033[0m tasks live %u (+%u/-%u)  zombies live %u (+%u/-%u)  forkfail %u  sched-refuse %u  ready-refuse %u\n",
+    printf("\033[1m%-6s\033[0m %-10s %8s %8s %8s   %-12s %u  %-12s %u  %-12s %u\n",
+           "Life:", "metric", "live", "+new", "-done",
+           "forkfail", info->failed_forks,
+           "sched-refuse", info->scheduler_refused,
+           "ready-refuse", info->ready_queue_refused);
+    printf("%-6s %-10s %8u %8u %8u   %-12s %u\n",
+           "", "tasks",
            live_tasks, info->tasks_created, info->tasks_destroyed,
-           live_zombies, info->zombies_created, info->zombies_reaped,
-           info->failed_forks,
-           info->scheduler_refused, info->ready_queue_refused);
-    printf("\033[1mAlloc:\033[0m kstack live %up (+%u/-%u)  phys live %up (+%u/-%u)  asid-roll %u\n",
+           "asid-roll", info->asid_rollovers);
+    printf("%-6s %-10s %8u %8u %8u\n",
+           "", "zombies",
+           live_zombies, info->zombies_created, info->zombies_reaped);
+
+    printf("\033[1m%-6s\033[0m %-10s %8s %8s %8s\n",
+           "Alloc:", "metric", "live", "+alloc", "-free");
+    printf("%-6s %-10s %7up %7up %7up\n",
+           "", "kstack",
            live_kstack_pages,
-           info->stack_pages_allocated, info->stack_pages_freed,
+           info->stack_pages_allocated, info->stack_pages_freed);
+    printf("%-6s %-10s %7up %7up %7up\n",
+           "", "phys",
            live_phys_pages,
-           info->phys_pages_allocated, info->phys_pages_freed,
-           info->asid_rollovers);
-    printf("\033[1mDiag:\033[0m state-set %u  signal-wake %u  tty-stale %u  unintr-timeout %u\n\n",
-           info->state_sync_repairs,
-           info->blocked_signal_wakeups,
-           info->tty_stale_waiters,
-           info->uninterruptible_timeouts);
+           info->phys_pages_allocated, info->phys_pages_freed);
+
+    printf("\033[1m%-6s\033[0m %-12s %7u   %-12s %7u   %-12s %7u   %-12s %7u\n\n",
+           "Diag:",
+           "state-set", info->state_sync_repairs,
+           "signal-wake", info->blocked_signal_wakeups,
+           "tty-stale", info->tty_stale_waiters,
+           "unintr-timeout", info->uninterruptible_timeouts);
 
     /* Header */
     printf("\033[1m%4s %4s %4s %4s %3s %-6s %3s %5s %5s %5s %5s %5s %2s %5s %4s %4s %4s %-6s %s\033[0m\n",
