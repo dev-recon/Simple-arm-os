@@ -44,5 +44,6 @@ extern int errno;
 #define ENOLCK       37    /* No record locks available */
 #define ENOSYS       38    /* Function not implemented */
 #define ENOTEMPTY    39    /* Directory not empty */
+#define ELOOP        40    /* Too many symbolic links */
 
 #endif /* _ERRNO_H */

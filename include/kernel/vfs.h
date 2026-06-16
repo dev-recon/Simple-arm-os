@@ -65,6 +65,7 @@ inode_t* get_inode(uint32_t ino);
 inode_t* get_root_inode(void);
 void put_inode(inode_t* inode);
 inode_t* path_lookup(const char* path);
+inode_t* path_lookup_ex(const char* path, bool follow_final_symlink);
 
 /* File descriptor management */
 void free_fd(task_t* proc, int fd);

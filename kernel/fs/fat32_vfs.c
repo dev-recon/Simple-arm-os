@@ -106,6 +106,7 @@ inode_operations_t fat32_inode_ops = {
     .unlink = fat32_inode_unlink,
     .rmdir  = fat32_inode_rmdir,
     .rename = fat32_inode_rename,
+    .readlink = NULL,
 };
 
 static bool fat_dirty = false;

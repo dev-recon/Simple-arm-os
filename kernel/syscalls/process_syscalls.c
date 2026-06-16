@@ -621,24 +621,148 @@ int sys_gettimeofday(struct timeval* tv, struct timezone* tz)
 
 int sys_link(const char* oldpath, const char* newpath)
 {
-    (void)oldpath;
-    (void)newpath;
-    return -ENOSYS;
+    char *old_kpath, *new_kpath;
+    char *old_full, *new_full;
+    char *new_parent_path, *new_name;
+    inode_t *target, *new_parent;
+    int result;
+
+    old_kpath = copy_string_from_user(oldpath);
+    if (!old_kpath) return -EFAULT;
+
+    new_kpath = copy_string_from_user(newpath);
+    if (!new_kpath) { kfree(old_kpath); return -EFAULT; }
+
+    old_full = resolve_path(old_kpath);
+    kfree(old_kpath);
+    if (!old_full) { kfree(new_kpath); return -ENOENT; }
+
+    new_full = resolve_path(new_kpath);
+    kfree(new_kpath);
+    if (!new_full) { kfree(old_full); return -ENOENT; }
+
+    target = path_lookup_ex(old_full, false);
+    if (!target) {
+        kfree(old_full);
+        kfree(new_full);
+        return -ENOENT;
+    }
+
+    if (S_ISDIR(target->mode)) {
+        put_inode(target);
+        kfree(old_full);
+        kfree(new_full);
+        return -EPERM;
+    }
+
+    result = split_path(new_full, &new_parent_path, &new_name);
+    if (result != 0) {
+        put_inode(target);
+        kfree(old_full);
+        kfree(new_full);
+        return result;
+    }
+
+    new_parent = path_lookup(new_parent_path);
+    if (!new_parent) {
+        result = -ENOENT;
+    } else if (!inode_permission(new_parent, MAY_WRITE)) {
+        result = -EACCES;
+    } else if (new_parent->i_op != &ext2_inode_ops || target->i_op != &ext2_inode_ops) {
+        result = -EXDEV;
+    } else {
+        result = ext2_link_inode(new_parent, new_name, target);
+    }
+
+    if (new_parent) put_inode(new_parent);
+    put_inode(target);
+    kfree(old_full);
+    kfree(new_full);
+    kfree(new_parent_path);
+    kfree(new_name);
+    return result;
 }
 
 int sys_symlink(const char* target, const char* linkpath)
 {
-    (void)target;
-    (void)linkpath;
-    return -ENOSYS;
+    char *target_kpath, *link_kpath;
+    char *link_full;
+    char *parent_path, *name;
+    inode_t *parent;
+    int result;
+
+    target_kpath = copy_string_from_user(target);
+    if (!target_kpath) return -EFAULT;
+
+    link_kpath = copy_string_from_user(linkpath);
+    if (!link_kpath) { kfree(target_kpath); return -EFAULT; }
+
+    link_full = resolve_path(link_kpath);
+    kfree(link_kpath);
+    if (!link_full) {
+        kfree(target_kpath);
+        return -ENOENT;
+    }
+
+    result = split_path(link_full, &parent_path, &name);
+    if (result != 0) {
+        kfree(target_kpath);
+        kfree(link_full);
+        return result;
+    }
+
+    parent = path_lookup(parent_path);
+    if (!parent) {
+        result = -ENOENT;
+    } else if (!inode_permission(parent, MAY_WRITE)) {
+        result = -EACCES;
+    } else if (parent->i_op != &ext2_inode_ops) {
+        result = -EROFS;
+    } else {
+        result = ext2_create_symlink(parent, name, target_kpath);
+    }
+
+    if (parent) put_inode(parent);
+    kfree(target_kpath);
+    kfree(link_full);
+    kfree(parent_path);
+    kfree(name);
+    return result;
 }
 
 int sys_readlink(const char* pathname, char* buf, size_t bufsiz)
 {
-    (void)pathname;
-    (void)buf;
-    (void)bufsiz;
-    return -ENOSYS;
+    char *kernel_path;
+    char *full_path;
+    inode_t *inode;
+    char link_target[MAX_PATH];
+    int result;
+
+    if (!buf || bufsiz == 0) return -EINVAL;
+
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path) return -EFAULT;
+
+    full_path = resolve_path(kernel_path);
+    kfree(kernel_path);
+    if (!full_path) return -ENOENT;
+
+    inode = path_lookup_ex(full_path, false);
+    kfree(full_path);
+    if (!inode) return -ENOENT;
+
+    if (!S_ISLNK(inode->mode) || !inode->i_op || !inode->i_op->readlink) {
+        put_inode(inode);
+        return -EINVAL;
+    }
+
+    result = inode->i_op->readlink(inode, link_target,
+                                   bufsiz < sizeof(link_target) ? bufsiz : sizeof(link_target));
+    if (result >= 0 && copy_to_user(buf, link_target, (size_t)result) < 0)
+        result = -EFAULT;
+
+    put_inode(inode);
+    return result;
 }
 
 int sys_chdir(const char* path)
@@ -889,7 +1013,7 @@ int sys_unlink(const char* pathname)
     if (!full_path) return -ENOENT;
 
     /* Vérifier que le fichier existe */
-    target_inode = path_lookup(full_path);
+    target_inode = path_lookup_ex(full_path, false);
     if (!target_inode) {
         kfree(full_path);
         return -ENOENT;
@@ -1030,7 +1154,7 @@ int sys_rmdir(const char* pathname)
     kfree(kernel_path);
     if (!abs_path) return -ENOMEM;
 
-    target_inode = path_lookup(abs_path);
+    target_inode = path_lookup_ex(abs_path, false);
     if (!target_inode) {
         kfree(abs_path);
         return -ENOENT;

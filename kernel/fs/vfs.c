@@ -11,8 +11,10 @@
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
 #include <kernel/task.h>
+#include <kernel/file.h>
 
 #define MAX_INODES 1024
+#define MAX_SYMLINK_DEPTH 8
 
 static inode_t* inode_table[MAX_INODES] = {0};
 static inode_t* root_inode = NULL;
@@ -239,7 +241,23 @@ void put_inode(inode_t* inode)
     }
 }
 
-inode_t* path_lookup(const char* path)
+static void vfs_append_component(char* path, size_t path_size, const char* component)
+{
+    size_t len;
+
+    if (!path || !component || path_size == 0) return;
+
+    len = strlen(path);
+    if (len == 0) {
+        snprintf(path, (int)path_size, "/%s", component);
+    } else if (strcmp(path, "/") == 0) {
+        snprintf(path + 1, (int)path_size - 1, "%s", component);
+    } else {
+        snprintf(path + len, (int)path_size - (int)len, "/%s", component);
+    }
+}
+
+static inode_t* path_lookup_internal(const char* path, bool follow_final_symlink, int depth)
 {
     inode_t* current;
     char*    path_copy;
@@ -247,6 +265,7 @@ inode_t* path_lookup(const char* path)
     char     current_path[256];
 
     if (!path || path[0] != '/') return NULL;
+    if (depth > MAX_SYMLINK_DEPTH) return NULL;
 
     current = root_inode;
     current->ref_count++;
@@ -260,11 +279,23 @@ inode_t* path_lookup(const char* path)
     token = strtok(path_copy + 1, "/");
 
     while (token && current) {
+        char* next_token;
+        bool is_final;
+        char parent_path[256];
+
         if (!S_ISDIR(current->mode)) {
             put_inode(current);
             current = NULL;
             break;
         }
+
+        next_token = strtok(NULL, "/");
+        is_final = (next_token == NULL);
+        if (current_path[0] == '\0')
+            strcpy(parent_path, "/");
+        else
+            strncpy(parent_path, current_path, sizeof(parent_path) - 1);
+        parent_path[sizeof(parent_path) - 1] = '\0';
 
         inode_t* next = current->i_op->lookup(current, token);
         put_inode(current);
@@ -272,9 +303,7 @@ inode_t* path_lookup(const char* path)
 
         if (current) {
             /* Build accumulated path and check for mount points */
-            int plen = strlen(current_path);
-            snprintf(current_path + plen, (int)sizeof(current_path) - plen,
-                     "/%s", token);
+            vfs_append_component(current_path, sizeof(current_path), token);
 
             for (int i = 0; i < mount_count; i++) {
                 if (strcmp(current_path, mount_table[i].path) == 0) {
@@ -284,13 +313,64 @@ inode_t* path_lookup(const char* path)
                     break;
                 }
             }
+
+            if (S_ISLNK(current->mode) && (!is_final || follow_final_symlink)) {
+                char target[256];
+                char remaining[256];
+                char new_path[512];
+                int ret;
+
+                if (!current->i_op || !current->i_op->readlink) {
+                    put_inode(current);
+                    current = NULL;
+                    break;
+                }
+
+                ret = current->i_op->readlink(current, target, sizeof(target) - 1);
+                if (ret < 0 || ret >= (int)sizeof(target)) {
+                    put_inode(current);
+                    current = NULL;
+                    break;
+                }
+                target[ret] = '\0';
+
+                remaining[0] = '\0';
+                while (next_token) {
+                    vfs_append_component(remaining, sizeof(remaining), next_token);
+                    next_token = strtok(NULL, "/");
+                }
+
+                if (target[0] == '/') {
+                    snprintf(new_path, (int)sizeof(new_path), "%s%s", target, remaining);
+                } else if (strcmp(parent_path, "/") == 0) {
+                    snprintf(new_path, (int)sizeof(new_path), "/%s%s", target, remaining);
+                } else {
+                    snprintf(new_path, (int)sizeof(new_path), "%s/%s%s",
+                             parent_path, target, remaining);
+                }
+                path_canonicalize(new_path);
+
+                put_inode(current);
+                kfree(path_copy);
+                return path_lookup_internal(new_path, follow_final_symlink, depth + 1);
+            }
         }
 
-        token = strtok(NULL, "/");
+        token = next_token;
     }
 
     kfree(path_copy);
     return current;
+}
+
+inode_t* path_lookup_ex(const char* path, bool follow_final_symlink)
+{
+    return path_lookup_internal(path, follow_final_symlink, 0);
+}
+
+inode_t* path_lookup(const char* path)
+{
+    return path_lookup_ex(path, true);
 }
 
 /**

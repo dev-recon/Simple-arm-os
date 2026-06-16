@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -89,6 +90,18 @@ static int run_rm1(const char *arg)
 static int run_rm2(const char *opt, const char *arg)
 {
     char *argv[] = { "/bin/rm", (char *)opt, (char *)arg, NULL };
+    return run_command(argv);
+}
+
+static int run_ln2(const char *target, const char *link_name)
+{
+    char *argv[] = { "/bin/ln", (char *)target, (char *)link_name, NULL };
+    return run_command(argv);
+}
+
+static int run_ln3(const char *opt, const char *target, const char *link_name)
+{
+    char *argv[] = { "/bin/ln", (char *)opt, (char *)target, (char *)link_name, NULL };
     return run_command(argv);
 }
 
@@ -331,16 +344,6 @@ static void test_posix_compat_syscalls(void)
     expect(ioctl(STDIN_FILENO, TCGETS, &tio) == 0, "ioctl TCGETS accepts tty", 0);
     expect(tcgetattr(STDIN_FILENO, &tio) == 0, "tcgetattr accepts tty", 0);
 
-    errno = 0;
-    expect(link(path, "/tmp/compat-hardlink.txt") < 0 && errno == ENOSYS,
-           "link reports ENOSYS", errno);
-    errno = 0;
-    expect(symlink(path, "/tmp/compat-symlink.txt") < 0 && errno == ENOSYS,
-           "symlink reports ENOSYS", errno);
-    errno = 0;
-    expect(readlink("/tmp/compat-symlink.txt", (char*)&tio, sizeof(tio)) < 0 &&
-           errno == ENOSYS, "readlink reports ENOSYS", errno);
-
     expect(time(&now) != (time_t)-1 && now != 0, "time returns timestamp", (int)now);
     expect(gettimeofday(&tv, &tz) == 0, "gettimeofday succeeds", 0);
     expect(tv.tv_sec != 0 && tv.tv_usec < 1000000,
@@ -349,15 +352,113 @@ static void test_posix_compat_syscalls(void)
     unlink(path);
 }
 
+static void test_ext2_links_and_dirents(void)
+{
+    const char *path = "/tmp/link-target.txt";
+    const char *hard = "/tmp/link-hard.txt";
+    const char *sym = "/tmp/link-sym.txt";
+    const char *cmd_hard = "/tmp/ln-cmd-hard.txt";
+    const char *cmd_sym = "/tmp/ln-cmd-sym.txt";
+    struct stat st_path;
+    struct stat st_hard;
+    struct stat st_sym;
+    char buf[64];
+    char dents[512];
+    int fd;
+    int n;
+    int saw_dot = 0;
+    int saw_dotdot = 0;
+
+    unlink(cmd_sym);
+    unlink(cmd_hard);
+    unlink(sym);
+    unlink(hard);
+    unlink(path);
+
+    fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (expect(fd >= 0, "link target create", fd) < 0)
+        return;
+    expect(write(fd, "linked", 6) == 6, "link target write", fd);
+    close(fd);
+
+    expect(link(path, hard) == 0, "hard link syscall", 0);
+    if (expect(stat(path, &st_path) == 0, "hard link stat original", 0) == 0 &&
+        expect(stat(hard, &st_hard) == 0, "hard link stat alias", 0) == 0) {
+        expect(st_path.st_ino == st_hard.st_ino, "hard link shares inode", st_hard.st_ino);
+        expect(st_path.st_nlink >= 2 && st_hard.st_nlink >= 2,
+               "hard link increments nlink", st_hard.st_nlink);
+    }
+
+    expect(unlink(path) == 0, "unlink original hard link", 0);
+    n = read_file(hard, buf, sizeof(buf));
+    expect(n == 6 && strcmp(buf, "linked") == 0,
+           "hard link survives original unlink", n);
+
+    expect(symlink(hard, sym) == 0, "symlink syscall", 0);
+    memset(buf, 0, sizeof(buf));
+    n = readlink(sym, buf, sizeof(buf) - 1);
+    if (expect(n == (int)strlen(hard), "readlink returns target length", n) == 0) {
+        buf[n] = '\0';
+        expect(strcmp(buf, hard) == 0, "readlink target bytes", n);
+    }
+
+    if (expect(lstat(sym, &st_sym) == 0, "lstat symlink", 0) == 0)
+        expect(S_ISLNK(st_sym.st_mode), "lstat reports symlink", st_sym.st_mode);
+
+    n = read_file(sym, buf, sizeof(buf));
+    expect(n == 6 && strcmp(buf, "linked") == 0, "stat/open follows symlink", n);
+
+    expect(run_ln2(hard, cmd_hard) == 0, "ln command hard link", 0);
+    n = read_file(cmd_hard, buf, sizeof(buf));
+    expect(n == 6 && strcmp(buf, "linked") == 0, "ln hard link readable", n);
+
+    expect(run_ln3("-s", hard, cmd_sym) == 0, "ln -s command symlink", 0);
+    memset(buf, 0, sizeof(buf));
+    n = readlink(cmd_sym, buf, sizeof(buf) - 1);
+    if (expect(n == (int)strlen(hard), "ln -s readlink length", n) == 0) {
+        buf[n] = '\0';
+        expect(strcmp(buf, hard) == 0, "ln -s readlink target", n);
+    }
+
+    fd = open("/tmp", O_RDONLY | O_DIRECTORY, 0);
+    if (expect(fd >= 0, "getdents open /tmp", fd) >= 0) {
+        n = getdents(fd, dents, sizeof(dents));
+        close(fd);
+        if (expect(n > 0, "getdents returns entries", n) == 0) {
+            int pos = 0;
+            while (pos < n) {
+                struct linux_dirent *de = (struct linux_dirent *)(dents + pos);
+                if (strcmp(de->d_name, ".") == 0)
+                    saw_dot = 1;
+                if (strcmp(de->d_name, "..") == 0)
+                    saw_dotdot = 1;
+                if (de->d_reclen == 0)
+                    break;
+                pos += de->d_reclen;
+            }
+            expect(saw_dot, "getdents exposes dot", saw_dot);
+            expect(saw_dotdot, "getdents exposes dotdot", saw_dotdot);
+        }
+    }
+
+    unlink(cmd_sym);
+    unlink(cmd_hard);
+    unlink(sym);
+    unlink(hard);
+}
+
 static void test_ext2_write_edges(void)
 {
     char buf[64];
+    char bigbuf[512];
     struct stat st;
     int fd;
     int n;
+    int total;
 
     unlink("/tmp/ext2-renamed.txt");
     unlink("/tmp/ext2-edge.txt");
+    unlink("/tmp/ext2-big.bin");
     rmdir("/tmp/ext2-edge-dir");
 
     expect(mkdir("/tmp/ext2-edge-dir", 0755) == 0, "ext2 mkdir edge dir", 0);
@@ -393,6 +494,27 @@ static void test_ext2_write_edges(void)
 
     n = read_file("/tmp/ext2-renamed.txt", buf, sizeof(buf));
     expect(n == 3 && strcmp(buf, "xyz") == 0, "ext2 read truncate+append result", n);
+
+    memset(bigbuf, 'A', sizeof(bigbuf));
+    fd = open("/tmp/ext2-big.bin", O_CREAT | O_RDWR | O_TRUNC, 0644);
+    if (expect(fd >= 0, "ext2 double-indirect create", fd) >= 0) {
+        total = 0;
+        while (total < 300 * 1024) {
+            if (write(fd, bigbuf, sizeof(bigbuf)) != (int)sizeof(bigbuf))
+                break;
+            total += sizeof(bigbuf);
+        }
+        expect(total == 300 * 1024, "ext2 double-indirect write", total);
+        expect(lseek(fd, 299 * 1024, SEEK_SET) == 299 * 1024,
+               "ext2 double-indirect seek", 0);
+        memset(buf, 0, sizeof(buf));
+        n = read(fd, buf, 16);
+        expect(n == 16 && buf[0] == 'A' && buf[15] == 'A',
+               "ext2 double-indirect read tail", n);
+        close(fd);
+    }
+    unlink("/tmp/ext2-big.bin");
+
     expect(unlink("/tmp/ext2-renamed.txt") == 0, "ext2 unlink renamed file", 0);
     expect(open("/tmp/ext2-renamed.txt", O_RDONLY, 0) < 0, "ext2 unlinked file missing", 0);
 }
@@ -402,6 +524,7 @@ static void test_rm_recursive_utility(void)
     struct stat st;
     int fd;
 
+    unlink("/tmp/rm-dir-link");
     unlink("/tmp/rm-tree/sub/file.txt");
     rmdir("/tmp/rm-tree/sub");
     rmdir("/tmp/rm-tree");
@@ -417,6 +540,13 @@ static void test_rm_recursive_utility(void)
 
     expect(run_rm1("/tmp/rm-tree") != 0, "rm refuses directory without -r", 0);
     expect(stat("/tmp/rm-tree/sub/file.txt", &st) == 0, "rm refusal preserves tree", 0);
+
+    expect(symlink("/tmp/rm-tree", "/tmp/rm-dir-link") == 0, "rm symlink-to-dir setup", 0);
+    expect(run_rm2("-rf", "/tmp/rm-dir-link") == 0, "rm -rf removes symlink to dir only", 0);
+    expect(lstat("/tmp/rm-dir-link", &st) < 0, "rm removed symlink itself", 0);
+    expect(stat("/tmp/rm-tree/sub/file.txt", &st) == 0,
+           "rm symlink target tree survives", 0);
+
     expect(run_rm2("-rf", "/tmp/rm-tree") == 0, "rm -rf removes directory tree", 0);
     expect(stat("/tmp/rm-tree", &st) < 0, "rm -rf removed root directory", 0);
 }
@@ -1264,6 +1394,7 @@ int main(void)
     test_stat_syscalls();
     test_chmod_chown_syscalls();
     test_posix_compat_syscalls();
+    test_ext2_links_and_dirents();
     test_ext2_write_edges();
     test_rm_recursive_utility();
     test_fork_wait_kill();

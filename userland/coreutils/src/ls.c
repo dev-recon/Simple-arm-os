@@ -66,19 +66,45 @@ static void format_time(uint32_t ts, char *out)
     sprintf(out, "%s %2u %02u:%02u", mon[m], days + 1, hour, min);
 }
 
-static void print_long(const char *name, struct stat *st)
+static void print_long(const char *name, struct stat *st, const char *link_target)
 {
     char perms[11];
     char tstr[16];
     perm_string(st->st_mode, perms);
     format_time((uint32_t)st->st_mtime, tstr);
     int nl = S_ISDIR(st->st_mode) ? 2 : 1;
-    if (S_ISDIR(st->st_mode))
+    if (S_ISLNK(st->st_mode) && link_target)
+        printf("%s %d root root %8u %s %s -> %s\n",
+               perms, nl, (uint32_t)st->st_size, tstr, name, link_target);
+    else if (S_ISDIR(st->st_mode))
         printf("%s %d root root %8u %s \033[1;34m%s\033[0m\n",
                perms, nl, (uint32_t)st->st_size, tstr, name);
     else
         printf("%s %d root root %8u %s %s\n",
                perms, nl, (uint32_t)st->st_size, tstr, name);
+}
+
+static void print_long_path(const char *display_name, const char *path)
+{
+    struct stat st;
+    char target[512];
+    char *link_target = NULL;
+    int n;
+
+    if (lstat(path, &st) < 0) {
+        printf("??????????  ? root root        ?            %s\n", display_name);
+        return;
+    }
+
+    if (S_ISLNK(st.st_mode)) {
+        n = readlink(path, target, sizeof(target) - 1);
+        if (n >= 0) {
+            target[n] = '\0';
+            link_target = target;
+        }
+    }
+
+    print_long(display_name, &st, link_target);
 }
 
 static int ls_dir(const char *path, int long_fmt, int show_all)
@@ -112,11 +138,7 @@ static int ls_dir(const char *path, int long_fmt, int show_all)
                 if (plen > 0 && fullpath[plen - 1] != '/') fullpath[plen++] = '/';
                 strcpy(fullpath + plen, e->d_name);
 
-                struct stat st;
-                if (stat(fullpath, &st) == 0)
-                    print_long(e->d_name, &st);
-                else
-                    printf("??????????  ? root root        ?            %s\n", e->d_name);
+                print_long_path(e->d_name, fullpath);
             } else {
                 if (e->d_type == 4)
                     printf("\033[1;34m%s\033[0m\n", e->d_name);
@@ -136,11 +158,11 @@ static int ls_file(const char *path, int long_fmt)
 {
     if (long_fmt) {
         struct stat st;
-        if (stat(path, &st) < 0) {
+        if (lstat(path, &st) < 0) {
             printf("ls: cannot stat '%s'\n", path);
             return 1;
         }
-        print_long(path, &st);
+        print_long_path(path, path);
     } else {
         printf("%s\n", path);
     }
@@ -181,13 +203,23 @@ int main(int argc, char **argv)
 
     for (int i = 0; i < npath; i++) {
         struct stat st;
-        if (stat(paths[i], &st) < 0) {
+        int stat_result;
+
+        if (long_fmt)
+            stat_result = lstat(paths[i], &st);
+        else
+            stat_result = stat(paths[i], &st);
+
+        if (stat_result < 0) {
             printf("ls: cannot access '%s'\n", paths[i]);
             status = 1;
             continue;
         }
 
-        if (S_ISDIR(st.st_mode)) {
+        if (long_fmt && S_ISLNK(st.st_mode)) {
+            if (ls_file(paths[i], long_fmt) != 0)
+                status = 1;
+        } else if (S_ISDIR(st.st_mode)) {
             if (print_header)
                 printf("%s:\n", paths[i]);
             if (ls_dir(paths[i], long_fmt, show_all) != 0)

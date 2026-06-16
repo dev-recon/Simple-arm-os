@@ -104,6 +104,7 @@ typedef enum {
 #define ERANGE         34       /* Math result not representable */
 #define ENOSYS         38       /* Function not implemented */
 #define ENOTEMPTY      39       /* Directory not empty */
+#define ELOOP          40       /* Too many symbolic links */
 #define EINPROGRESS   115       /* Operation now in progress */
 
 /* === TYPES DE SYNCHRONISATION === */

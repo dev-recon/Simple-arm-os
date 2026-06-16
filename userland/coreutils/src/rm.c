@@ -42,7 +42,7 @@ static int remove_path(const char *path, int recursive, int force)
     struct stat st;
 
     errno = 0;
-    if (stat(path, &st) < 0) {
+    if (lstat(path, &st) < 0) {
         if (force && errno == ENOENT)
             return 0;
         if (!force)
@@ -50,7 +50,7 @@ static int remove_path(const char *path, int recursive, int force)
         return -1;
     }
 
-    if (!S_ISDIR(st.st_mode)) {
+    if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
         if (unlink(path) < 0) {
             if (force && errno == ENOENT)
                 return 0;

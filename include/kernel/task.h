@@ -107,6 +107,7 @@ struct inode_operations {
     int (*rmdir)(inode_t* dir, const char* name);
     int (*rename)(inode_t* old_dir, const char* old_name,
                   inode_t* new_dir, const char* new_name);
+    int (*readlink)(inode_t* inode, char* buf, size_t bufsiz);
 };
 
 /* Stat structure */

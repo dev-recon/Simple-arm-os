@@ -212,7 +212,8 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     (void)mode;
     
     /* Find inode */
-    inode = path_lookup(kernel_path);
+    inode = (flags & O_NOFOLLOW) ? path_lookup_ex(kernel_path, false)
+                                 : path_lookup(kernel_path);
     //kfree(kernel_path);
     
 /*     if (!inode) {
@@ -228,6 +229,12 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
         const char* base = slash ? slash + 1 : kernel_path;
         strncpy(opened_name, base, sizeof(opened_name) - 1);
         opened_name[sizeof(opened_name) - 1] = '\0';
+    }
+
+    if (inode && (flags & O_NOFOLLOW) && S_ISLNK(inode->mode)) {
+        put_inode(inode);
+        kfree(kernel_path);
+        return -ELOOP;
     }
 
     if (!inode) {
@@ -556,7 +563,7 @@ static void fill_stat_from_inode(struct stat* kstat, inode_t* inode)
 {
     memset(kstat, 0, sizeof(*kstat));
     kstat->st_dev = 0;      /* TODO: expose VFS mount/device id */
-    kstat->st_ino = inode->ino;
+    kstat->st_ino = inode->first_cluster ? inode->first_cluster : inode->ino;
     kstat->st_mode = inode->mode;
     kstat->st_nlink = inode->nlink ? inode->nlink : 1;
     kstat->st_uid = inode->uid;
@@ -603,11 +610,32 @@ int sys_stat(const char* pathname, struct stat* statbuf)
 
 int sys_lstat(const char* pathname, struct stat* statbuf)
 {
-    /*
-     * Symlinks are not implemented yet, so lstat() is equivalent to stat().
-     * Keeping a real entry point improves POSIX compatibility for toolchains.
-     */
-    return sys_stat(pathname, statbuf);
+    char* kernel_path;
+    inode_t* inode;
+    struct stat kstat;
+    char* full_path;
+
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path) return -EFAULT;
+
+    full_path = resolve_path(kernel_path);
+    kfree(kernel_path);
+    if (!full_path) return -ENOENT;
+
+    inode = path_lookup_ex(full_path, false);
+    kfree(full_path);
+
+    if (!inode) return -ENOENT;
+
+    fill_stat_from_inode(&kstat, inode);
+
+    if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
+        put_inode(inode);
+        return -EFAULT;
+    }
+
+    put_inode(inode);
+    return 0;
 }
 
 int sys_fstat(int fd, struct stat* statbuf)
@@ -724,8 +752,10 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         struct linux_dirent *dirent;
         size_t name_len;
         size_t rec_len;
+        uint32_t saved_offset;
 
         /* Lire une entrée via le VFS */
+        saved_offset = file->offset;
         ssize_t ret = file->f_op->readdir(file, &entry);
         
         if (ret <= 0) {
@@ -741,7 +771,7 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         /* Vérifier qu'il reste assez de place */
         if (bytes_written + rec_len > count) {
             /* Reculer la position de lecture pour cette entrée */
-            file->offset--;
+            file->offset = saved_offset;
             break;
         }
         
