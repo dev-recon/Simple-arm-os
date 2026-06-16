@@ -1,0 +1,86 @@
+#ifndef ARM_OS_ABI_H
+#define ARM_OS_ABI_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+
+#define SHM_O_CREAT 0x01
+#define SHM_O_EXCL  0x02
+#define SHM_RDONLY  0x01
+#define SHM_RDWR    0x02
+
+#ifndef WSTOPSIG
+#define WSTOPSIG(status)   (((status) >> 8) & 0xff)
+#endif
+#undef WIFSTOPPED
+#define WIFSTOPPED(status) ((((status) & 0xff) == 0x7f) && WSTOPSIG(status) != 0)
+
+struct proc_info {
+    unsigned tid;
+    int      pid;
+    int      ppid;
+    int      sid;
+    int      tty;
+    unsigned uid;
+    unsigned gid;
+    unsigned priority;
+    unsigned switches;
+    unsigned cpu_pct_x10;
+    unsigned stack_kb;
+    unsigned heap_kb;
+    unsigned vm_kb;
+    unsigned rss_kb;
+    unsigned l2_tables;
+    unsigned page_faults;
+    unsigned cow_faults;
+    unsigned stack_faults;
+    char     name[32];
+    char     state;
+    char     type;
+    char     _pad[2];
+};
+
+struct sysinfo_response {
+    unsigned         mem_total_kb;
+    unsigned         mem_free_kb;
+    int              proc_count;
+    unsigned         _pad;
+    unsigned         tasks_created;
+    unsigned         tasks_destroyed;
+    unsigned         zombies_created;
+    unsigned         zombies_reaped;
+    unsigned         failed_forks;
+    unsigned         scheduler_refused;
+    unsigned         ready_queue_refused;
+    unsigned         stack_pages_allocated;
+    unsigned         stack_pages_freed;
+    unsigned         asid_rollovers;
+    unsigned         state_sync_repairs;
+    unsigned         blocked_signal_wakeups;
+    unsigned         tty_stale_waiters;
+    unsigned         uninterruptible_timeouts;
+    struct proc_info procs[64];
+};
+
+int getsysinfo(struct sysinfo_response *resp);
+int getdents(int fd, void *dirp, size_t count);
+int tcsetpgrp(int fd, pid_t pgrp);
+pid_t tcgetpgrp(int fd);
+int shm_open(const char *name, size_t size, int flags);
+int shm_unlink(const char *name);
+void *shm_map(int id, void *addr, int flags);
+int shm_unmap(void *addr, size_t size);
+int nanosleep(const struct timespec *req, struct timespec *rem);
+unsigned int sleep(unsigned int seconds);
+int usleep(useconds_t useconds);
+int lstat(const char *pathname, struct stat *statbuf);
+int symlink(const char *target, const char *linkpath);
+int readlink(const char *pathname, char *buf, size_t bufsiz);
+int getpgrp(void);
+int setpgid(pid_t pid, pid_t pgid);
+int sys_shutdown(void);
+
+#endif

@@ -97,6 +97,7 @@ USERLAND_DIR = userland
 EXT2_STAGING = /tmp/ext2_staging
 USERFS_FILES := $(shell find $(USERFS_DIR) -type f 2>/dev/null)
 USERFS_DIRS  := $(shell find $(USERFS_DIR) -type d 2>/dev/null)
+USERFS_LINKS := $(shell find $(USERFS_DIR) -type l 2>/dev/null)
 USERFS_BIN_FILES := $(shell find $(USERFS_DIR)/bin -type f 2>/dev/null)
 FAT32_MNT_FILES := \
 	$(USERFS_DIR)/README.TXT \
@@ -155,7 +156,7 @@ E2FSPROGS_PREFIX ?= $(shell \
 MKE2FS  := $(E2FSPROGS_PREFIX)/sbin/mke2fs
 DEBUGFS := $(E2FSPROGS_PREFIX)/sbin/debugfs
 
-$(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
+$(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	@echo "=== Creating ext2 image ($(EXT2_SIZE_MB) MB) ==="
 	@if [ ! -x "$(MKE2FS)" ] || [ ! -x "$(DEBUGFS)" ]; then \
 		echo "Error: e2fsprogs not found — run: brew install e2fsprogs"; \
@@ -185,7 +186,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
 	       case "$$relpath" in dev/tty0|dev/console) continue ;; esac; \
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
 	       case "$$relpath" in \
-	           bin/*|usr/bin/*|init.sh) mode=0100755 ;; \
+	           bin/*|usr/bin/*|opt/newlib/bin/*|init.sh) mode=0100755 ;; \
 	           home/user/copy_renamed) mode=0100755 ;; \
 	           *) mode=0100644 ;; \
 	       esac; \
@@ -196,6 +197,11 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS)
 	       printf 'set_inode_field /%s mode %s\n' "$$relpath" "$$mode"; \
 	       printf 'set_inode_field /%s uid %s\n' "$$relpath" "$$uid"; \
 	       printf 'set_inode_field /%s gid %s\n' "$$relpath" "$$gid"; \
+	   done; \
+	   find $(USERFS_DIR) -type l | sort | while read l; do \
+	       relpath=$$(echo "$$l" | sed 's|$(USERFS_DIR)/||'); \
+	       target=$$(readlink "$$l"); \
+	       printf 'symlink /%s %s\n' "$$relpath" "$$target"; \
 	   done; \
 	   printf 'cd /dev\n'; \
 	   printf 'mknod console c 5 1\n'; \

@@ -6,8 +6,13 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <errno.h>
+#include <sys/wait.h>
 #include "../include/mash.h"
 #include "../include/jobs.h"
+
+#ifndef SA_RESTART
+#define SA_RESTART 0x01
+#endif
 
 char input_buffer[SHELL_BUFFER_SIZE];
 char* argv_buffer[SHELL_MAX_ARGS];
@@ -234,12 +239,12 @@ static char** shell_build_envp(void) {
 }
 
 static void shell_init_env(void) {
-    script_frames[0].name = "mash";
+    script_frames[0].name = "nl-mash";
     script_frames[0].argc = 0;
-    shell_setenv("PATH", "/bin:/usr/bin");
+    shell_setenv("PATH", "/usr/bin:/bin");
     shell_setenv("HOME", "/home/user");
     shell_setenv("USER", "user");
-    shell_setenv("PS1", "mash$> ");
+    shell_setenv("PS1", "nl-mash$> ");
 }
 
 static char* trim_spaces(char* s) {
@@ -356,7 +361,7 @@ static void shell_load_rc_file(const char* path) {
 }
 
 static void shell_load_startup_files(void) {
-    shell_load_rc_file("/home/user/.mashrc");
+    shell_load_rc_file("/home/user/.nl-mashrc");
 }
 
 static int build_exec_path_from_dir(const char* dir, int dir_len,

@@ -27,6 +27,26 @@ static int check_pages(unsigned char *ptr, unsigned size, unsigned seed)
 
 static void print_malloc_stats(const char *label)
 {
+#ifdef ARM_OS_NEWLIB
+    struct sysinfo_response info;
+    int n = getsysinfo(&info);
+    if (n < 0)
+        return;
+
+    for (int i = 0; i < n; i++) {
+        struct proc_info *p = &info.procs[i];
+        if (p->pid == getpid()) {
+            printf("memstress: %s heap=%uKB rss=%uKB vm=%uKB pf=%u cow=%u\n",
+                   label,
+                   p->heap_kb,
+                   p->rss_kb,
+                   p->vm_kb,
+                   p->page_faults,
+                   p->cow_faults);
+            return;
+        }
+    }
+#else
     struct malloc_stats stats;
 
     if (malloc_get_stats(&stats) < 0)
@@ -39,6 +59,7 @@ static void print_malloc_stats(const char *label)
            (unsigned)(stats.heap_free / 1024),
            (unsigned)stats.block_count,
            (unsigned)stats.free_count);
+#endif
 }
 
 int main(int argc, char **argv)

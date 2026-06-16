@@ -151,6 +151,30 @@ Boot without rebuilding everything:
 make run-userfs
 ```
 
+Build the optional repo-local newlib sysroot and include the newlib smoke test
+program in `/usr/bin`:
+
+```sh
+./tools/build_newlib.sh
+BUILD_NEWLIB=1 ./run.sh
+```
+
+The script uses the local `newlib-4.4.0.20231231.tar.gz` archive when present.
+If the archive is missing, it downloads it with `curl` from Sourceware. The
+installed sysroot lives in `build/newlib-sysroot/arm-none-eabi`; that directory
+is a generated build artifact and is not committed.
+
+After extracting the vanilla archive, the script applies any arm-os patches
+listed in `patches/newlib-4.4.0.20231231/series`. The current series is empty:
+newlib itself stays vanilla, while the arm-os adaptation lives in tracked repo
+code under `newlib-port/` and `userland/newlib-tests/include/`.
+
+You can also point the build at another sysroot:
+
+```sh
+BUILD_NEWLIB=1 NEWLIB_SYSROOT=/path/to/arm-none-eabi ./run.sh
+```
+
 ## 7. Adding userland programs
 
 User programs live under `userland/` and are installed into `userfs/bin`.
@@ -166,6 +190,14 @@ To add a program:
 The root filesystem is ext2, so long filenames are supported there. FAT32 is
 still available under `/mnt`, but it is intentionally a smaller compatibility
 filesystem and should not be treated as the full system root.
+
+Programs linked with the homegrown libc remain available in `/bin`.
+Newlib-linked programs live under `userland/newlib-tests/<name>/`, use the
+standalone `newlib-port/` syscall glue, and install their real binaries under
+`userfs/opt/newlib/bin` when `BUILD_NEWLIB=1` is set. The build also creates
+`/usr/bin` symlinks such as `/usr/bin/ls -> /opt/newlib/bin/nl-ls` and
+`/usr/bin/nl-ls -> /opt/newlib/bin/nl-ls`, which lets the system test newlib
+tools first while keeping the old `/bin` tools as a fallback.
 
 ## 8. Common problems
 

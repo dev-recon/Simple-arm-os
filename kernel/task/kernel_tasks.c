@@ -793,21 +793,27 @@ void simple_shell_task(void* arg) {
 
     (void)arg;
 
-    const char* path = "/bin/mash";
-    char* name = "mash";
+    const char* primary_path = "/usr/bin/nl-mash";
+    const char* fallback_path = "/bin/mash";
+    char* primary_name = "nl-mash";
+    char* fallback_name = "mash";
     int result = 0;
     //task_sleep_ms(10000); 
     //yield();
 
     kprintf("Parent PID: %d about to exec\n", sys_getpid());
         
-    char* const argv[] = { name, NULL };
+    char* const primary_argv[] = { primary_name, NULL };
+    char* const fallback_argv[] = { fallback_name, NULL };
     char* const envp[] = { NULL };
 
     //debug_all_task_stacks();
       
     //shell_run();
-    result = sys_execve(path , argv, envp);
+    result = sys_execve(primary_path, primary_argv, envp);
+    kprintf("Primary shell exec failed with %d, falling back to %s\n",
+            result, fallback_path);
+    result = sys_execve(fallback_path, fallback_argv, envp);
         
     // Si on arrive ici, exec a échoué
     kprintf("Child: exec failed with %d\n", result);
