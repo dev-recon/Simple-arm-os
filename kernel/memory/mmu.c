@@ -340,12 +340,12 @@ static uint32_t detect_available_ram_for_mmu(void)
         
         if (*test_ptr == 0xDEADBEEF) {
             *test_ptr = original;
-            kprintf("MMU: Quick test found %s of RAM\n", quick_tests[i].name);
+            KINFO("MMU: Quick test found %s of RAM\n", quick_tests[i].name);
             return quick_tests[i].size_mb * 1024 * 1024;
         }
     }
     
-    kprintf("MMU: Quick test failed, using 1GB fallback\n");
+    KINFO("MMU: Quick test failed, using 1GB fallback\n");
     return 1024 * 1024 * 1024;
 }
 
@@ -353,8 +353,8 @@ void configure_alignment_policy(void) {
     uint32_t sctlr;
     __asm__ volatile("mrc p15, 0, %0, c1, c0, 0" : "=r" (sctlr));
     
-    kprintf("Current SCTLR = 0x%08X\n", sctlr);
-    kprintf("Alignment checking: %s\n", (sctlr & (1<<1)) ? "ENABLED" : "DISABLED");
+    KINFO("Current SCTLR = 0x%08X\n", sctlr);
+    KINFO("Alignment checking: %s\n", (sctlr & (1<<1)) ? "ENABLED" : "DISABLED");
     
     // Desactiver l'alignement strict
     sctlr &= ~(1 << 1);  // Clear A bit
@@ -363,7 +363,7 @@ void configure_alignment_policy(void) {
     __asm__ volatile("dsb");
     __asm__ volatile("isb");
     
-    kprintf("Alignment checking disabled OK\n");
+    KINFO("Alignment checking disabled OK\n");
 }
 
 void check_endianness() {
@@ -372,24 +372,24 @@ void check_endianness() {
         char c[4];
     } bint = {0x01020304};
 
-    kprintf("Endianness test:\n");
-    kprintf("  32-bit integer value: 0x%08X\n", bint.i);
-    kprintf("  Byte order:   %02X %02X %02X %02X\n", 
+    KINFO("Endianness test:\n");
+    KINFO("  32-bit integer value: 0x%08X\n", bint.i);
+    KINFO("  Byte order:   %02X %02X %02X %02X\n", 
             bint.c[0], bint.c[1], bint.c[2], bint.c[3]);
 
     if (bint.c[0] == 0x01) {
-        kprintf("  System is BIG ENDIAN\n");
+        KINFO("  System is BIG ENDIAN\n");
     } else if (bint.c[0] == 0x04) {
-        kprintf("  System is LITTLE ENDIAN\n");
+        KINFO("  System is LITTLE ENDIAN\n");
     } else {
-        kprintf("  Unexpected endianness!\n");
+        KINFO("  Unexpected endianness!\n");
     }
 
     // Vérification spécifique ARM
     uint32_t cpsr;
     __asm__ volatile("mrs %0, cpsr" : "=r"(cpsr));
     bool ee_bit = (cpsr & (1 << 9)) != 0;
-    kprintf("  CPSR Endian Exception bit: %s\n", 
+    KINFO("  CPSR Endian Exception bit: %s\n", 
             ee_bit ? "SET (Big Endian)" : "CLEAR (Little Endian)");
 }
 
@@ -620,7 +620,7 @@ static void setup_kernel_space(void)
         mapped_low++;
     }
 
-    kprintf("Mapped low memory (TTBR0): 0x0 - 0x40000000 - %u sections\n", mapped_low);
+    KINFO("Mapped low memory (TTBR0): 0x0 - 0x40000000 - %u sections\n", mapped_low);
 
     /* Map device space */
     for (uint32_t addr = DEVICE_START; addr < DEVICE_END; addr += 0x100000) {
@@ -652,7 +652,7 @@ static void setup_kernel_space(void)
         
     }
 
-    kprintf("Mapped devices sections (TTBR0-TTBR1): 0x0 - 0x40000000 - %u sections\n", mapped_devices);
+    KINFO("Mapped devices sections (TTBR0-TTBR1): 0x0 - 0x40000000 - %u sections\n", mapped_devices);
     
     /* Map kernel/RAM space - seulement les sections >= split_boundary pour TTBR1 */
     for (uint64_t addr64 = split_boundary; addr64 < ram_end; addr64 += 0x100000) {
@@ -679,7 +679,7 @@ static void setup_kernel_space(void)
     
     //kprintf("MMU: Kernel RAM sections mapped: %u\n", mapped_sections);
 
-    kprintf("MMU: Kernel RAM sections mapped before temp area: %u\n", mapped_sections);
+    KINFO("MMU: Kernel RAM sections mapped before temp area: %u\n", mapped_sections);
 
     /*
      * Alias MMIO prives dans TTBR1. Ils sont additifs pour l'instant:
@@ -688,13 +688,13 @@ static void setup_kernel_space(void)
     map_kernel_mmio_alias(KERNEL_MMIO_GIC_BASE, VIRT_GIC_DIST_BASE);
     map_kernel_mmio_alias(KERNEL_MMIO_UART_BASE, VIRT_UART_BASE);
     map_kernel_mmio_alias(KERNEL_MMIO_VIRTIO_BASE, VIRT_VIRTIO_BASE);
-    kprintf("MMU: Kernel MMIO aliases mapped at 0xF0000000 - 0xF02FFFFF\n");
+    KINFO("MMU: Kernel MMIO aliases mapped at 0xF0000000 - 0xF02FFFFF\n");
 
     /* 3. NOUVEAU: Pré-allouer et configurer les temp mappings ICI */
-    kprintf("MMU: Setting up temporary mapping slots...\n");
+    KINFO("MMU: Setting up temporary mapping slots...\n");
     setup_temp_mapping_slots();
     
-    kprintf("MMU: Total sections mapped in TTBR1: %u\n", mapped_sections);
+    KINFO("MMU: Total sections mapped in TTBR1: %u\n", mapped_sections);
 }
 
 
@@ -706,8 +706,8 @@ static void setup_ttbr_split(void)
     uint32_t ttbcr =  get_optimal_ttbcr_n();  /* N=1: 2GB split */
     uint32_t boundary = get_split_boundary();
 
-    kprintf("MMU: Auto-detected split N=%u, boundary=0x%08X\n", ttbcr, boundary);
-    kprintf("MMU: Kernel at 0x%08X -> TTBR%u space\n", 
+    KINFO("MMU: Auto-detected split N=%u, boundary=0x%08X\n", ttbcr, boundary);
+    KINFO("MMU: Kernel at 0x%08X -> TTBR%u space\n", 
         (uint32_t)&__start, ((uint32_t)&__start >= boundary) ? 1 : 0);
     
     //kprintf("MMU: Configuring TTBCR for 2GB split (N=%d)\n", TTBCR_N_SPLIT_2GB);
@@ -730,11 +730,11 @@ static void setup_ttbr_split(void)
     __asm__ volatile("mrc p15, 0, %0, c2, c0, 1" : "=r"(ttbr1_check));
     __asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr_check));
     
-    debug_print_hex("MMU: TTBR0 = ", ttbr0_check);
-    debug_print_hex("MMU: TTBR1 = ", ttbr1_check); 
-    debug_print_hex("MMU: TTBCR = ", ttbcr_check);
+    KDEBUG("MMU: TTBR0 = 0x%08X\n", ttbr0_check);
+    KDEBUG("MMU: TTBR1 = 0x%08X\n", ttbr1_check);
+    KDEBUG("MMU: TTBCR = 0x%08X\n", ttbcr_check);
     
-    kprintf("MMU: Split TTBR configuration complete\n");
+    KINFO("MMU: Split TTBR configuration complete\n");
 }
 
 /* Gestion ASID */
@@ -977,7 +977,7 @@ static bool is_valid_vaddr(uint32_t vaddr)
 
 void map_user_stack(void)
 {
-    kprintf("MMU: Mapping user stack from 0x%08X to 0x%08X\n", 
+    KINFO("MMU: Mapping user stack from 0x%08X to 0x%08X\n", 
             USER_STACK_BOTTOM, USER_STACK_TOP);
     
     /* Lire le TTBR0 actuel (espace utilisateur) */
@@ -985,7 +985,7 @@ void map_user_stack(void)
     uint32_t* page_dir = (uint32_t*)(ttbr0 & 0xFFFFC000);
     
     if (!page_dir) {
-        kprintf("MMU: ERROR - No valid user page directory\n");
+        KERROR("MMU: No valid user page directory\n");
         return;
     }
     
@@ -994,7 +994,7 @@ void map_user_stack(void)
     for (uint32_t addr = USER_STACK_BOTTOM; addr < USER_STACK_TOP; addr += 0x100000) {
         /* Vérifier que c'est dans l'espace TTBR0 (<2GB) */
         if (addr >= 0x40000000) {
-            kprintf("MMU: ERROR - User stack address in kernel space: 0x%08X\n", addr);
+            KERROR("MMU: User stack address in kernel space: 0x%08X\n", addr);
             break;
         }
         
@@ -1013,7 +1013,7 @@ void map_user_stack(void)
         mapped_stack++;
     }
     
-    kprintf("MMU: User stack mapped (%u sections) in TTBR0\n", mapped_stack);
+    KINFO("MMU: User stack mapped (%u sections) in TTBR0\n", mapped_stack);
     
     /* Invalider le TLB pour les nouvelles mappings */
     invalidate_tlb_all();
@@ -1545,13 +1545,13 @@ void setup_svc_stack(void) {
     uint32_t sctlr;
     __asm__ volatile("mrc p15, 0, %0, c1, c0, 0" : "=r"(sctlr));
     if (!(sctlr & 1)) {
-        kprintf("ERROR: Setting up SVC stack before MMU!\n");
+        KERROR("Setting up SVC stack before MMU!\n");
         return;
     }
     
     uint32_t svc_sp = (uint32_t)&__svc_stack_top & ~7;
-    kprintf("Configuring SVC stack at 0x%08X\n", svc_sp);
+    KINFO("Configuring SVC stack at 0x%08X\n", svc_sp);
     
     __asm__ volatile("mov sp, %0" : : "r"(svc_sp));
-    kprintf("SVC stack configured successfully\n");
+    KINFO("SVC stack configured successfully\n");
 }

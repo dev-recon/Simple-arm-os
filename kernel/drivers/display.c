@@ -13,24 +13,24 @@ uint8_t* framebuffer_base = NULL;
 
 void init_display(void)
 {
-    kprintf("=== DISPLAY INITIALIZATION (RAM-based) ===\n");
+    KINFO("=== DISPLAY INITIALIZATION (RAM-based) ===\n");
     
     /* Allouer le framebuffer en RAM */
     uint32_t fb_size = FB_WIDTH * FB_HEIGHT * (FB_BPP / 8);
-    kprintf("Allocating framebuffer: %u bytes (%u KB)\n", 
+    KINFO("Allocating framebuffer: %u bytes (%u KB)\n", 
             fb_size, fb_size / 1024);
     
     /* Allouer des pages contigues pour le framebuffer */
     uint32_t pages_needed = (fb_size + PAGE_SIZE - 1) / PAGE_SIZE;
-    kprintf("Pages needed: %u\n", pages_needed);
+    KINFO("Pages needed: %u\n", pages_needed);
     
     framebuffer_base = (uint8_t*)allocate_pages(pages_needed);
     if (!framebuffer_base) {
-        kprintf("KO Failed to allocate framebuffer memory\n");
+        KERROR("Failed to allocate framebuffer memory\n");
         return;
     }
     
-    kprintf("OK Framebuffer allocated at: 0x%08X\n", (uint32_t)framebuffer_base);
+    KINFO("Framebuffer allocated at: 0x%08X\n", (uint32_t)framebuffer_base);
     
     /* Le framebuffer est en RAM, donc deja mappe - pas besoin de mapping MMU */
     
@@ -41,7 +41,7 @@ void init_display(void)
     display.framebuffer = framebuffer_base;
     
     /* Test d'acces au framebuffer */
-    kprintf("Testing framebuffer access...\n");
+    KINFO("Testing framebuffer access...\n");
     volatile uint32_t* fb_test = (volatile uint32_t*)framebuffer_base;
     
     /* Test d'ecriture */
@@ -49,7 +49,7 @@ void init_display(void)
     uint32_t read_back = *fb_test;
     
     if (read_back == 0x12345678) {
-        kprintf("OK Framebuffer write/read test PASSED\n");
+        KINFO("Framebuffer write/read test PASSED\n");
         
         /* Console mode */
         display.text_cols = display.width / 8;
@@ -60,12 +60,12 @@ void init_display(void)
         display.bg_color = 0x000000;
         
         clear_screen();
-        kprintf("OK Display initialized: %d x %d (RAM-based)\n", 
+        KINFO("Display initialized: %d x %d (RAM-based)\n", 
                 display.width, display.height);
         
     } else {
-        kprintf("KO Framebuffer write/read test FAILED\n");
-        kprintf("   Written: 0x12345678, Read: 0x%08X\n", read_back);
+        KERROR("Framebuffer write/read test FAILED\n");
+        KERROR("   Written: 0x12345678, Read: 0x%08X\n", read_back);
         
         /* Liberer la memoire en cas d'echec */
         free_pages(framebuffer_base, pages_needed);

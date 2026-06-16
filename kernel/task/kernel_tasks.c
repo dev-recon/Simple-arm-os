@@ -798,8 +798,6 @@ void simple_shell_task(void* arg) {
     int result = 0;
     //task_sleep_ms(10000); 
     //yield();
-
-    kprintf("Parent PID: %d about to exec\n", sys_getpid());
         
     char* const argv[] = { name, NULL };
     char* const envp[] = { NULL };
@@ -807,10 +805,11 @@ void simple_shell_task(void* arg) {
     //debug_all_task_stacks();
       
     //shell_run();
+    KBOOT_OKF("Init: starting %s", path);
     result = sys_execve(path , argv, envp);
         
     // Si on arrive ici, exec a échoué
-    kprintf("Child: exec failed with %d\n", result);
+    KERROR("Child: exec failed with %d\n", result);
     sys_exit(-1);
 }
 

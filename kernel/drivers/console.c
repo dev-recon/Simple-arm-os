@@ -3,6 +3,7 @@
 #include <kernel/keyboard.h>
 #include <kernel/kernel.h>
 #include <kernel/uart.h>
+#include <kernel/kprintf.h>
 
 /* Console device operations */
 ssize_t console_device_read(file_t* file, void* buffer, size_t count)
@@ -43,5 +44,5 @@ void init_console_devices(void)
 {
     /* Register console devices */
     /* This would be implemented when we have device registration */
-    uart_puts("Console devices initialized\n");
+    KINFO("Console devices initialized\n");
 }
