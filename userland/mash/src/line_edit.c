@@ -261,8 +261,27 @@ static void completion_lcp(char* common, const char* value) {
     common[i] = '\0';
 }
 
+static int completion_display_exists(completion_result_t* result,
+                                     const char* display) {
+    int i;
+    int count = result->count;
+
+    if (count > SHELL_COMPLETION_MAX)
+        count = SHELL_COMPLETION_MAX;
+
+    for (i = 0; i < count; i++) {
+        if (strcmp(completion_matches[i], display) == 0)
+            return 1;
+    }
+
+    return 0;
+}
+
 static void completion_add(completion_result_t* result, const char* replacement,
                            const char* display, int is_dir) {
+    if (completion_display_exists(result, display))
+        return;
+
     if (result->count == 0) {
         strncpy(result->common, replacement, sizeof(result->common) - 1);
         result->common[sizeof(result->common) - 1] = '\0';

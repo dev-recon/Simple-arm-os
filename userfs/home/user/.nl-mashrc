@@ -2,4 +2,4 @@
 export PATH=/usr/bin:/bin
 export HOME=/home/user
 export USER=user
-export PS1="nl-mash$> "
+export PS1="mash$> "

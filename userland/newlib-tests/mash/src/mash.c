@@ -239,12 +239,12 @@ static char** shell_build_envp(void) {
 }
 
 static void shell_init_env(void) {
-    script_frames[0].name = "nl-mash";
+    script_frames[0].name = "mash";
     script_frames[0].argc = 0;
     shell_setenv("PATH", "/usr/bin:/bin");
     shell_setenv("HOME", "/home/user");
     shell_setenv("USER", "user");
-    shell_setenv("PS1", "nl-mash$> ");
+    shell_setenv("PS1", "mash$> ");
 }
 
 static char* trim_spaces(char* s) {
@@ -620,6 +620,38 @@ static void exec_external_or_die(int argc, char* argv[]) {
     exit(127);
 }
 
+static int external_command_exists(const char* name) {
+    char cmd[256];
+    const char* path;
+    const char* entry;
+
+    if (token_has_slash(name)) {
+        if (build_exec_path_from_dir(NULL, 0, name, cmd, sizeof(cmd)) < 0)
+            return 0;
+        return access(cmd, 0) == 0;
+    }
+
+    path = shell_getenv("PATH");
+    if (!path || !*path)
+        path = "/bin:/usr/bin";
+
+    entry = path;
+    while (*entry) {
+        const char* next = strchr(entry, ':');
+        int len = next ? (int)(next - entry) : (int)strlen(entry);
+
+        if (build_exec_path_from_dir(entry, len, name, cmd, sizeof(cmd)) == 0 &&
+            access(cmd, 0) == 0)
+            return 1;
+
+        if (!next)
+            break;
+        entry = next + 1;
+    }
+
+    return 0;
+}
+
 static int split_pipeline(int argc, char* argv[], shell_command_t commands[], int* command_count) {
     int start = 0;
     int count = 0;
@@ -671,6 +703,25 @@ static int split_pipeline(int argc, char* argv[], shell_command_t commands[], in
     }
 
     *command_count = count;
+    return 0;
+}
+
+static int validate_pipeline_commands(shell_command_t commands[], int command_count) {
+    int i;
+
+    for (i = 0; i < command_count; i++) {
+        const char* name = commands[i].argv[0];
+
+        if (strcmp(name, "exit") == 0 || find_command(name))
+            continue;
+
+        if (external_command_exists(name))
+            continue;
+
+        printf("mash: command not found: %s\n", name);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -739,6 +790,9 @@ static int run_pipeline(int argc, char* argv[], int background) {
     jobs_build_command(argc, argv, command, sizeof(command));
 
     if (split_pipeline(argc, argv, commands, &command_count) < 0)
+        return SHELL_ERROR;
+
+    if (validate_pipeline_commands(commands, command_count) < 0)
         return SHELL_ERROR;
 
     pipe_count = command_count - 1;
@@ -1086,11 +1140,15 @@ int test_execve(void) {
 // Display the shell banner
 void shell_print_banner(void) {
     printf("\n");
-    printf("================================\n");
-    printf("    ARM32 mash v1.0    \n");
-    printf("   (support fork/exec)     \n");
-    printf("================================\n");
-    printf("Type 'help' to see available commands\n");
+    printf("\033[1;36m");
+    printf("  __  __    _    ____  _   _\n");
+    printf(" |  \\/  |  / \\  / ___|| | | |\n");
+    printf(" | |\\/| | / _ \\ \\___ \\| |_| |\n");
+    printf(" | |  | |/ ___ \\ ___) |  _  |\n");
+    printf(" |_|  |_/_/   \\_\\____/|_| |_|\n");
+    printf("\033[0m");
+    printf(" arm-os shell on newlib\n");
+    printf(" type 'help' for builtins, PATH=/usr/bin:/bin\n");
     printf("\n");
 }
 
@@ -2034,8 +2092,6 @@ void shell_run(void) {
 
 int main() {
     int version = 11 ;
-
-    printf("******************************************************\n");
 
     shell_init_env();
     shell_load_startup_files();

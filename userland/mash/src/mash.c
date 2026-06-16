@@ -615,6 +615,38 @@ static void exec_external_or_die(int argc, char* argv[]) {
     exit(127);
 }
 
+static int external_command_exists(const char* name) {
+    char cmd[256];
+    const char* path;
+    const char* entry;
+
+    if (token_has_slash(name)) {
+        if (build_exec_path_from_dir(NULL, 0, name, cmd, sizeof(cmd)) < 0)
+            return 0;
+        return access(cmd, 0) == 0;
+    }
+
+    path = shell_getenv("PATH");
+    if (!path || !*path)
+        path = "/bin:/usr/bin";
+
+    entry = path;
+    while (*entry) {
+        const char* next = strchr(entry, ':');
+        int len = next ? (int)(next - entry) : (int)strlen(entry);
+
+        if (build_exec_path_from_dir(entry, len, name, cmd, sizeof(cmd)) == 0 &&
+            access(cmd, 0) == 0)
+            return 1;
+
+        if (!next)
+            break;
+        entry = next + 1;
+    }
+
+    return 0;
+}
+
 static int split_pipeline(int argc, char* argv[], shell_command_t commands[], int* command_count) {
     int start = 0;
     int count = 0;
@@ -666,6 +698,25 @@ static int split_pipeline(int argc, char* argv[], shell_command_t commands[], in
     }
 
     *command_count = count;
+    return 0;
+}
+
+static int validate_pipeline_commands(shell_command_t commands[], int command_count) {
+    int i;
+
+    for (i = 0; i < command_count; i++) {
+        const char* name = commands[i].argv[0];
+
+        if (strcmp(name, "exit") == 0 || find_command(name))
+            continue;
+
+        if (external_command_exists(name))
+            continue;
+
+        printf("mash: command not found: %s\n", name);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -734,6 +785,9 @@ static int run_pipeline(int argc, char* argv[], int background) {
     jobs_build_command(argc, argv, command, sizeof(command));
 
     if (split_pipeline(argc, argv, commands, &command_count) < 0)
+        return SHELL_ERROR;
+
+    if (validate_pipeline_commands(commands, command_count) < 0)
         return SHELL_ERROR;
 
     pipe_count = command_count - 1;
