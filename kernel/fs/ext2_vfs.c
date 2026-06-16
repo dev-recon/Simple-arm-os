@@ -6,6 +6,9 @@
 #include <kernel/kprintf.h>
 #include <kernel/kernel.h>
 #include <kernel/file.h>
+#include <kernel/spinlock.h>
+#include <kernel/task.h>
+#include <kernel/timer.h>
 
 extern int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer);
 extern int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer);
@@ -26,7 +29,14 @@ static int      ext2_inode_rmdir(inode_t* dir, const char* name);
 static int      ext2_inode_rename(inode_t* old_dir, const char* old_name,
                                   inode_t* new_dir, const char* new_name);
 static int      ext2_inode_readlink(inode_t* inode, char* buf, size_t bufsiz);
+static int      ext2_inode_mkdir_op(inode_t* dir, const char* name, uint16_t mode);
+static int      ext2_inode_unlink_op(inode_t* dir, const char* name);
+static int      ext2_inode_rmdir_op(inode_t* dir, const char* name);
+static int      ext2_inode_rename_op(inode_t* old_dir, const char* old_name,
+                                     inode_t* new_dir, const char* new_name);
+static int      ext2_inode_readlink_op(inode_t* inode, char* buf, size_t bufsiz);
 static int      ext2_truncate_inode_data(inode_t* inode, bool allow_dir);
+static int      ext2_truncate_inode_unlocked(inode_t* inode);
 static int      ext2_remove_dir_entry(inode_t* dir, const char* name);
 static int      ext2_adjust_link_count(inode_t* inode, int delta);
 static ssize_t  ext2_file_read(file_t* file, void* buffer, size_t count);
@@ -35,10 +45,11 @@ static int      ext2_file_open(inode_t* inode, file_t* file);
 static int      ext2_file_close(file_t* file);
 static off_t    ext2_file_lseek(file_t* file, off_t offset, int whence);
 static int      ext2_dir_readdir(file_t* file, dirent_t* dirent);
+static ssize_t  ext2_file_write_op(file_t* file, const void* buffer, size_t count);
 
 file_operations_t ext2_file_ops = {
     .read    = ext2_file_read,
-    .write   = ext2_file_write,
+    .write   = ext2_file_write_op,
     .open    = ext2_file_open,
     .close   = ext2_file_close,
     .lseek   = ext2_file_lseek,
@@ -57,11 +68,11 @@ file_operations_t ext2_dir_ops = {
 inode_operations_t ext2_inode_ops = {
     .lookup = ext2_inode_lookup,
     .create = NULL,
-    .mkdir  = ext2_inode_mkdir,
-    .unlink = ext2_inode_unlink,
-    .rmdir  = ext2_inode_rmdir,
-    .rename = ext2_inode_rename,
-    .readlink = ext2_inode_readlink,
+    .mkdir  = ext2_inode_mkdir_op,
+    .unlink = ext2_inode_unlink_op,
+    .rmdir  = ext2_inode_rmdir_op,
+    .rename = ext2_inode_rename_op,
+    .readlink = ext2_inode_readlink_op,
 };
 
 #define EXT2_BLOCK_CACHE_SIZE 8
@@ -74,6 +85,101 @@ typedef struct ext2_block_cache_entry {
 
 static ext2_block_cache_entry_t ext2_block_cache[EXT2_BLOCK_CACHE_SIZE];
 static uint32_t ext2_block_cache_clock;
+static spinlock_t ext2_cache_lock = SPINLOCK_INIT("ext2_cache");
+static volatile bool ext2_cache_busy;
+static task_t* ext2_cache_owner;
+static spinlock_t ext2_op_lock = SPINLOCK_INIT("ext2_op");
+static volatile bool ext2_op_busy;
+static task_t* ext2_op_owner;
+static uint32_t ext2_op_depth;
+
+static void ext2_op_acquire(void)
+{
+    while (1) {
+        unsigned long flags;
+
+        spin_lock_irqsave(&ext2_op_lock, &flags);
+        if (ext2_op_busy && ext2_op_owner && ext2_op_owner == current_task) {
+            ext2_op_depth++;
+            spin_unlock_irqrestore(&ext2_op_lock, flags);
+            return;
+        }
+        if (!ext2_op_busy) {
+            ext2_op_busy = true;
+            ext2_op_owner = current_task;
+            ext2_op_depth = 1;
+            spin_unlock_irqrestore(&ext2_op_lock, flags);
+            return;
+        }
+        spin_unlock_irqrestore(&ext2_op_lock, flags);
+
+        if (!current_task) {
+            asm volatile("yield" ::: "memory");
+            continue;
+        }
+
+        yield();
+    }
+}
+
+static void ext2_op_release(void)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&ext2_op_lock, &flags);
+    if (!ext2_op_busy) {
+        KERROR("ext2: op release without owner\n");
+    } else if (ext2_op_owner && current_task && ext2_op_owner != current_task) {
+        KERROR("ext2: op release by non-owner\n");
+    } else if (ext2_op_depth > 1) {
+        ext2_op_depth--;
+        spin_unlock_irqrestore(&ext2_op_lock, flags);
+        return;
+    }
+
+    ext2_op_busy = false;
+    ext2_op_owner = NULL;
+    ext2_op_depth = 0;
+    spin_unlock_irqrestore(&ext2_op_lock, flags);
+}
+
+static void ext2_cache_acquire(void)
+{
+    while (1) {
+        unsigned long flags;
+
+        spin_lock_irqsave(&ext2_cache_lock, &flags);
+        if (!ext2_cache_busy) {
+            ext2_cache_busy = true;
+            ext2_cache_owner = current_task;
+            spin_unlock_irqrestore(&ext2_cache_lock, flags);
+            return;
+        }
+        spin_unlock_irqrestore(&ext2_cache_lock, flags);
+
+        if (!current_task) {
+            asm volatile("yield" ::: "memory");
+            continue;
+        }
+
+        yield();
+    }
+}
+
+static void ext2_cache_release(void)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&ext2_cache_lock, &flags);
+    if (!ext2_cache_busy) {
+        KERROR("ext2: cache release without owner\n");
+    } else if (ext2_cache_owner && current_task && ext2_cache_owner != current_task) {
+        KERROR("ext2: cache release by non-owner\n");
+    }
+    ext2_cache_busy = false;
+    ext2_cache_owner = NULL;
+    spin_unlock_irqrestore(&ext2_cache_lock, flags);
+}
 
 static bool ext2_valid_disk_inode_ptr(const ext2_inode_t* di)
 {
@@ -133,23 +239,32 @@ static int ext2_read_block(uint32_t block, void* buf)
     if (ext2_fs.block_size == 0)
         return blk_read_sectors(lba, ext2_fs.sectors_per_block, buf);
 
+    ext2_cache_acquire();
+
     entry = ext2_block_cache_find(block);
     if (entry && entry->data) {
         memcpy(buf, entry->data, ext2_fs.block_size);
+        ext2_cache_release();
         return 0;
     }
 
     entry = ext2_block_cache_pick();
     if (entry && ext2_block_cache_data(entry)) {
         ret = blk_read_sectors(lba, ext2_fs.sectors_per_block, entry->data);
-        if (ret < 0) return ret;
+        if (ret < 0) {
+            ext2_cache_release();
+            return ret;
+        }
         entry->block = block;
         entry->valid = true;
         memcpy(buf, entry->data, ext2_fs.block_size);
+        ext2_cache_release();
         return 0;
     }
 
-    return blk_read_sectors(lba, ext2_fs.sectors_per_block, buf);
+    ret = blk_read_sectors(lba, ext2_fs.sectors_per_block, buf);
+    ext2_cache_release();
+    return ret;
 }
 
 static int ext2_write_block(uint32_t block, void* buf)
@@ -160,9 +275,12 @@ static int ext2_write_block(uint32_t block, void* buf)
 
     if (!buf) return -EINVAL;
 
+    ext2_cache_acquire();
     ret = blk_write_sectors(lba, ext2_fs.sectors_per_block, buf);
-    if (ret < 0 || ext2_fs.block_size == 0)
+    if (ret < 0 || ext2_fs.block_size == 0) {
+        ext2_cache_release();
         return ret;
+    }
 
     entry = ext2_block_cache_find(block);
     if (!entry)
@@ -174,6 +292,7 @@ static int ext2_write_block(uint32_t block, void* buf)
         entry->valid = true;
     }
 
+    ext2_cache_release();
     return ret;
 }
 
@@ -1109,7 +1228,7 @@ static inode_t* ext2_make_inode(uint32_t ino)
     return inode;
 }
 
-inode_t* ext2_create_file(inode_t* parent, const char* name, mode_t mode)
+static inode_t* ext2_create_file_unlocked(inode_t* parent, const char* name, mode_t mode)
 {
     if (!parent || !name) return NULL;
     if (!S_ISDIR(parent->mode)) return NULL;
@@ -1153,7 +1272,7 @@ inode_t* ext2_create_file(inode_t* parent, const char* name, mode_t mode)
     return ext2_make_inode(ino);
 }
 
-int ext2_link_inode(inode_t* parent, const char* name, inode_t* target)
+static int ext2_link_inode_unlocked(inode_t* parent, const char* name, inode_t* target)
 {
     int ret;
 
@@ -1187,7 +1306,7 @@ int ext2_link_inode(inode_t* parent, const char* name, inode_t* target)
     return ret;
 }
 
-int ext2_create_symlink(inode_t* parent, const char* name, const char* target)
+static int ext2_create_symlink_unlocked(inode_t* parent, const char* name, const char* target)
 {
     uint32_t ino;
     uint32_t now;
@@ -1281,7 +1400,7 @@ int ext2_create_symlink(inode_t* parent, const char* name, const char* target)
     return 0;
 }
 
-int ext2_readlink_inode(inode_t* inode, char* buf, size_t bufsiz)
+static int ext2_readlink_inode_unlocked(inode_t* inode, char* buf, size_t bufsiz)
 {
     ext2_inode_t di;
     size_t copied = 0;
@@ -1661,7 +1780,7 @@ static int ext2_inode_unlink(inode_t* dir, const char* name)
                 target->ctime = disk.i_ctime;
             }
         } else {
-            ret = ext2_truncate_inode(target);
+            ret = ext2_truncate_inode_unlocked(target);
             if (ret == 0)
                 ret = ext2_free_inode(target->first_cluster);
         }
@@ -1673,7 +1792,7 @@ static int ext2_inode_unlink(inode_t* dir, const char* name)
 
 static int ext2_inode_readlink(inode_t* inode, char* buf, size_t bufsiz)
 {
-    return ext2_readlink_inode(inode, buf, bufsiz);
+    return ext2_readlink_inode_unlocked(inode, buf, bufsiz);
 }
 
 static int ext2_inode_rmdir(inode_t* dir, const char* name)
@@ -1937,9 +2056,64 @@ static int ext2_truncate_inode_data(inode_t* inode, bool allow_dir)
     return 0;
 }
 
-int ext2_truncate_inode(inode_t* inode)
+static int ext2_truncate_inode_unlocked(inode_t* inode)
 {
     return ext2_truncate_inode_data(inode, false);
+}
+
+inode_t* ext2_create_file(inode_t* parent, const char* name, mode_t mode)
+{
+    inode_t* ret;
+
+    ext2_op_acquire();
+    ret = ext2_create_file_unlocked(parent, name, mode);
+    ext2_op_release();
+
+    return ret;
+}
+
+int ext2_link_inode(inode_t* parent, const char* name, inode_t* target)
+{
+    int ret;
+
+    ext2_op_acquire();
+    ret = ext2_link_inode_unlocked(parent, name, target);
+    ext2_op_release();
+
+    return ret;
+}
+
+int ext2_create_symlink(inode_t* parent, const char* name, const char* target)
+{
+    int ret;
+
+    ext2_op_acquire();
+    ret = ext2_create_symlink_unlocked(parent, name, target);
+    ext2_op_release();
+
+    return ret;
+}
+
+int ext2_readlink_inode(inode_t* inode, char* buf, size_t bufsiz)
+{
+    int ret;
+
+    ext2_op_acquire();
+    ret = ext2_readlink_inode_unlocked(inode, buf, bufsiz);
+    ext2_op_release();
+
+    return ret;
+}
+
+int ext2_truncate_inode(inode_t* inode)
+{
+    int ret;
+
+    ext2_op_acquire();
+    ret = ext2_truncate_inode_unlocked(inode);
+    ext2_op_release();
+
+    return ret;
 }
 
 /* ---------- file_operations — regular files ---------- */
@@ -1984,12 +2158,6 @@ static ssize_t ext2_file_read(file_t* file, void* buffer, size_t count)
         file->offset += chunk;
         total        += chunk;
         count        -= chunk;
-    }
-
-    if (total > 0 && file->inode) {
-        di->i_atime = get_current_time();
-        file->inode->atime = di->i_atime;
-        ext2_write_disk_inode(file->inode->first_cluster, di);
     }
 
     kfree(blkbuf);
@@ -2147,6 +2315,63 @@ static int ext2_dir_readdir(file_t* file, dirent_t* dirent)
 
     kfree(blkbuf);
     return 0;
+}
+
+/* ---------- locked VFS entry points ---------- */
+
+static int ext2_inode_mkdir_op(inode_t* dir, const char* name, uint16_t mode)
+{
+    int ret;
+    ext2_op_acquire();
+    ret = ext2_inode_mkdir(dir, name, mode);
+    ext2_op_release();
+    return ret;
+}
+
+static int ext2_inode_unlink_op(inode_t* dir, const char* name)
+{
+    int ret;
+    ext2_op_acquire();
+    ret = ext2_inode_unlink(dir, name);
+    ext2_op_release();
+    return ret;
+}
+
+static int ext2_inode_rmdir_op(inode_t* dir, const char* name)
+{
+    int ret;
+    ext2_op_acquire();
+    ret = ext2_inode_rmdir(dir, name);
+    ext2_op_release();
+    return ret;
+}
+
+static int ext2_inode_rename_op(inode_t* old_dir, const char* old_name,
+                                inode_t* new_dir, const char* new_name)
+{
+    int ret;
+    ext2_op_acquire();
+    ret = ext2_inode_rename(old_dir, old_name, new_dir, new_name);
+    ext2_op_release();
+    return ret;
+}
+
+static int ext2_inode_readlink_op(inode_t* inode, char* buf, size_t bufsiz)
+{
+    int ret;
+    ext2_op_acquire();
+    ret = ext2_inode_readlink(inode, buf, bufsiz);
+    ext2_op_release();
+    return ret;
+}
+
+static ssize_t ext2_file_write_op(file_t* file, const void* buffer, size_t count)
+{
+    ssize_t ret;
+    ext2_op_acquire();
+    ret = ext2_file_write(file, buffer, count);
+    ext2_op_release();
+    return ret;
 }
 
 /* ---------- mount ---------- */

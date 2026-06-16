@@ -19,6 +19,7 @@ char* strncpy(char* dest, const char* src, size_t n);
 char* strdup(const char* str);
 char* strchr(const char* s, int c);
 char* strtok(char* str, const char* delim);
+char* strtok_r(char* str, const char* delim, char** saveptr);
 char* strstr(const char* haystack, const char* needle);
 char* strrchr(const char* s, int c);
 int snprintf(char* str, size_t size, const char* format, ...);

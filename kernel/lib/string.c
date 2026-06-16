@@ -165,6 +165,49 @@ char* strtok(char* str, const char* delim)
     return token_start;
 }
 
+char* strtok_r(char* str, const char* delim, char** saveptr)
+{
+    char* token_start;
+
+    if (!saveptr) {
+        return NULL;
+    }
+
+    if (str != NULL) {
+        *saveptr = str;
+    } else {
+        str = *saveptr;
+    }
+
+    if (str == NULL) {
+        return NULL;
+    }
+
+    while (*str && strchr(delim, *str)) {
+        str++;
+    }
+
+    if (*str == '\0') {
+        *saveptr = NULL;
+        return NULL;
+    }
+
+    token_start = str;
+
+    while (*str && !strchr(delim, *str)) {
+        str++;
+    }
+
+    if (*str) {
+        *str = '\0';
+        *saveptr = str + 1;
+    } else {
+        *saveptr = NULL;
+    }
+
+    return token_start;
+}
+
 void init_spinlock2(spinlock_t* lock)
 {
     lock->locked = 0;

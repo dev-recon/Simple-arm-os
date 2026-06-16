@@ -68,6 +68,17 @@ uint32_t get_next_inode_number(void){
     return next_inode_number++; 
 }
 
+static void vfs_get_inode_ref(inode_t* inode)
+{
+    unsigned long flags;
+
+    if (!inode) return;
+
+    spin_lock_irqsave(&vfs_lock, &flags);
+    inode->ref_count++;
+    spin_unlock_irqrestore(&vfs_lock, flags);
+}
+
 bool init_vfs(void)
 {
     const disk_partition_t* ext2_part;
@@ -171,19 +182,20 @@ inode_t* create_inode(void)
     
     memset(inode, 0, sizeof(inode_t));
     
-    spin_lock(&vfs_lock);
+    unsigned long flags;
+    spin_lock_irqsave(&vfs_lock, &flags);
     inode->ino = get_next_inode_number();
-    spin_unlock(&vfs_lock);
+    spin_unlock_irqrestore(&vfs_lock, flags);
     
     inode->ref_count = 1;
     inode->nlink = 1;
     
     /* Add to hash table */
     hash = inode->ino % MAX_INODES;
-    spin_lock(&vfs_lock);
+    spin_lock_irqsave(&vfs_lock, &flags);
     inode->next = inode_table[hash];
     inode_table[hash] = inode;
-    spin_unlock(&vfs_lock);
+    spin_unlock_irqrestore(&vfs_lock, flags);
     
     return inode;
 }
@@ -192,21 +204,22 @@ inode_t* get_inode(uint32_t ino)
 {
     uint32_t hash;
     inode_t* inode;
+    unsigned long flags;
     
     hash = ino % MAX_INODES;
     
-    spin_lock(&vfs_lock);
+    spin_lock_irqsave(&vfs_lock, &flags);
     inode = inode_table[hash];
     
     while (inode) {
         if (inode->ino == ino) {
             inode->ref_count++;
-            spin_unlock(&vfs_lock);
+            spin_unlock_irqrestore(&vfs_lock, flags);
             return inode;
         }
         inode = inode->next;
     }
-    spin_unlock(&vfs_lock);
+    spin_unlock_irqrestore(&vfs_lock, flags);
     
     return NULL;
 }
@@ -215,10 +228,11 @@ void put_inode(inode_t* inode)
 {
     uint32_t hash;
     inode_t** current;
+    unsigned long flags;
     
     if (!inode) return;
     
-    spin_lock(&vfs_lock);
+    spin_lock_irqsave(&vfs_lock, &flags);
     inode->ref_count--;
     
     if (inode->ref_count == 0) {
@@ -234,10 +248,10 @@ void put_inode(inode_t* inode)
             current = &(*current)->next;
         }
         
-        spin_unlock(&vfs_lock);
+        spin_unlock_irqrestore(&vfs_lock, flags);
         kfree(inode);
     } else {
-        spin_unlock(&vfs_lock);
+        spin_unlock_irqrestore(&vfs_lock, flags);
     }
 }
 
@@ -262,13 +276,14 @@ static inode_t* path_lookup_internal(const char* path, bool follow_final_symlink
     inode_t* current;
     char*    path_copy;
     char*    token;
+    char*    saveptr;
     char     current_path[256];
 
     if (!path || path[0] != '/') return NULL;
     if (depth > MAX_SYMLINK_DEPTH) return NULL;
 
     current = root_inode;
-    current->ref_count++;
+    vfs_get_inode_ref(current);
 
     if (strcmp(path, "/") == 0) return current;
 
@@ -276,7 +291,8 @@ static inode_t* path_lookup_internal(const char* path, bool follow_final_symlink
     if (!path_copy) { put_inode(current); return NULL; }
 
     current_path[0] = '\0';
-    token = strtok(path_copy + 1, "/");
+    saveptr = NULL;
+    token = strtok_r(path_copy + 1, "/", &saveptr);
 
     while (token && current) {
         char* next_token;
@@ -289,7 +305,7 @@ static inode_t* path_lookup_internal(const char* path, bool follow_final_symlink
             break;
         }
 
-        next_token = strtok(NULL, "/");
+        next_token = strtok_r(NULL, "/", &saveptr);
         is_final = (next_token == NULL);
         if (current_path[0] == '\0')
             strcpy(parent_path, "/");
@@ -309,7 +325,7 @@ static inode_t* path_lookup_internal(const char* path, bool follow_final_symlink
                 if (strcmp(current_path, mount_table[i].path) == 0) {
                     put_inode(current);
                     current = mount_table[i].root;
-                    current->ref_count++;
+                    vfs_get_inode_ref(current);
                     break;
                 }
             }
@@ -337,7 +353,7 @@ static inode_t* path_lookup_internal(const char* path, bool follow_final_symlink
                 remaining[0] = '\0';
                 while (next_token) {
                     vfs_append_component(remaining, sizeof(remaining), next_token);
-                    next_token = strtok(NULL, "/");
+                    next_token = strtok_r(NULL, "/", &saveptr);
                 }
 
                 if (target[0] == '/') {
@@ -412,7 +428,7 @@ void free_fd(task_t* proc, int fd)
 inode_t* get_root_inode(void)
 {
     if (root_inode) {
-        root_inode->ref_count++;
+        vfs_get_inode_ref(root_inode);
         return root_inode;
     }
     return NULL;
