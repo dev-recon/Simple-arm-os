@@ -4,6 +4,7 @@
 
 #include <kernel/types.h>
 #include <kernel/spinlock.h>
+#include <kernel/stdarg.h>
 
 /* Memory functions */
 void* memset(void* dest, int val, size_t len);
@@ -23,6 +24,7 @@ char* strtok_r(char* str, const char* delim, char** saveptr);
 char* strstr(const char* haystack, const char* needle);
 char* strrchr(const char* s, int c);
 int snprintf(char* str, size_t size, const char* format, ...);
+int vsnprintf(char* str, size_t size, const char* format, va_list args);
 
 /* Character functions */
 char tolower(char c);

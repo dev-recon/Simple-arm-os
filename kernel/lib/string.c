@@ -372,9 +372,8 @@ static int utoa_helper(unsigned int value, char* str, int base)
     return len;
 }
 
-int snprintf(char* str, size_t size, const char* format, ...)
+int vsnprintf(char* str, size_t size, const char* format, va_list args)
 {
-    va_list args;
     const char* p;
     char* out;
     char* out_end;
@@ -382,91 +381,232 @@ int snprintf(char* str, size_t size, const char* format, ...)
     int temp_len;
     char temp_buf[32];
     const char* s;
-    int d;
-    unsigned int u;
     char c;
     
     if (!str || size == 0) return 0;
-    
-    va_start(args, format);
-    
+
     out = str;
     out_end = str + size - 1; /* Reserve space for null terminator */
     
-    for (p = format; *p && out < out_end; p++) {
+    for (p = format; *p; p++) {
         if (*p != '%') {
-            *out++ = *p;
+            if (out < out_end) {
+                *out++ = *p;
+            }
             written++;
             continue;
         }
         
         p++; /* Skip '%' */
+        if (!*p) {
+            break;
+        }
+
+        {
+            int left_align = 0;
+            int zero_pad = 0;
+            int width = 0;
+            int precision = -1;
+            int is_long = 0;
+            char spec;
+            char pad_char;
+            int i;
+
+            while (*p == '-' || *p == '0' || *p == '+' || *p == ' ') {
+                if (*p == '-') left_align = 1;
+                else if (*p == '0') zero_pad = 1;
+                p++;
+            }
+
+            while (*p >= '0' && *p <= '9') {
+                width = width * 10 + (*p - '0');
+                p++;
+            }
+
+            if (*p == '.') {
+                p++;
+                precision = 0;
+                if (*p == '*') {
+                    precision = va_arg(args, int);
+                    p++;
+                } else {
+                    while (*p >= '0' && *p <= '9') {
+                        precision = precision * 10 + (*p - '0');
+                        p++;
+                    }
+                }
+            }
+
+            if (*p == 'l') {
+                is_long = 1;
+                p++;
+                if (*p == 'l') {
+                    p++;
+                }
+            } else if (*p == 'z') {
+                is_long = 1;
+                p++;
+            }
+
+            spec = *p;
+            pad_char = (zero_pad && !left_align) ? '0' : ' ';
         
-        /* Handle format specifiers */
-        switch (*p) {
+            /* Handle format specifiers */
+            switch (spec) {
             case 'c':
                 c = (char)va_arg(args, int);
+                if (!left_align && width > 1) {
+                    for (i = 0; i < width - 1; i++) {
+                        if (out < out_end) *out++ = ' ';
+                        written++;
+                    }
+                }
                 if (out < out_end) {
                     *out++ = c;
-                    written++;
+                }
+                written++;
+                if (left_align && width > 1) {
+                    for (i = 0; i < width - 1; i++) {
+                        if (out < out_end) *out++ = ' ';
+                        written++;
+                    }
                 }
                 break;
                 
             case 's':
                 s = va_arg(args, const char*);
                 if (!s) s = "(null)";
-                while (*s && out < out_end) {
-                    *out++ = *s++;
+                temp_len = 0;
+                while (s[temp_len] && (precision < 0 || temp_len < precision)) {
+                    temp_len++;
+                }
+                if (!left_align && width > temp_len) {
+                    for (i = 0; i < width - temp_len; i++) {
+                        if (out < out_end) *out++ = ' ';
+                        written++;
+                    }
+                }
+                for (i = 0; i < temp_len; i++) {
+                    if (out < out_end) *out++ = s[i];
                     written++;
+                }
+                if (left_align && width > temp_len) {
+                    for (i = 0; i < width - temp_len; i++) {
+                        if (out < out_end) *out++ = ' ';
+                        written++;
+                    }
                 }
                 break;
                 
             case 'd':
-            case 'i':
-                d = va_arg(args, int);
-                temp_len = itoa_helper(d, temp_buf, 10);
-                {
-                    int i; /* Declaration GNU89 */
-                    for (i = 0; i < temp_len && out < out_end; i++) {
-                        *out++ = temp_buf[i];
+            case 'i': {
+                long val = is_long ? va_arg(args, long) : va_arg(args, int);
+                temp_len = itoa_helper((int)val, temp_buf, 10);
+                if (!left_align && width > temp_len) {
+                    if (pad_char == '0' && temp_buf[0] == '-') {
+                        if (out < out_end) *out++ = '-';
+                        written++;
+                        for (i = 0; i < width - temp_len; i++) {
+                            if (out < out_end) *out++ = '0';
+                            written++;
+                        }
+                        for (i = 1; i < temp_len; i++) {
+                            if (out < out_end) *out++ = temp_buf[i];
+                            written++;
+                        }
+                        break;
+                    }
+                    for (i = 0; i < width - temp_len; i++) {
+                        if (out < out_end) *out++ = pad_char;
+                        written++;
+                    }
+                }
+                for (i = 0; i < temp_len; i++) {
+                    if (out < out_end) *out++ = temp_buf[i];
+                    written++;
+                }
+                if (left_align && width > temp_len) {
+                    for (i = 0; i < width - temp_len; i++) {
+                        if (out < out_end) *out++ = ' ';
                         written++;
                     }
                 }
                 break;
+            }
                 
-            case 'u':
-                u = va_arg(args, unsigned int);
-                temp_len = utoa_helper(u, temp_buf, 10);
-                {
-                    int i; /* Declaration GNU89 */
-                    for (i = 0; i < temp_len && out < out_end; i++) {
-                        *out++ = temp_buf[i];
+            case 'u': {
+                unsigned long val = is_long ? va_arg(args, unsigned long) : va_arg(args, unsigned int);
+                temp_len = utoa_helper((unsigned int)val, temp_buf, 10);
+                if (!left_align && width > temp_len) {
+                    for (i = 0; i < width - temp_len; i++) {
+                        if (out < out_end) *out++ = pad_char;
+                        written++;
+                    }
+                }
+                for (i = 0; i < temp_len; i++) {
+                    if (out < out_end) *out++ = temp_buf[i];
+                    written++;
+                }
+                if (left_align && width > temp_len) {
+                    for (i = 0; i < width - temp_len; i++) {
+                        if (out < out_end) *out++ = ' ';
                         written++;
                     }
                 }
                 break;
+            }
+                
+            case 'p': {
+                unsigned int val = (unsigned int)va_arg(args, void*);
+                temp_buf[0] = '0';
+                temp_buf[1] = 'x';
+                temp_len = utoa_helper(val, temp_buf + 2, 16) + 2;
+                if (!left_align && width > temp_len) {
+                    for (i = 0; i < width - temp_len; i++) {
+                        if (out < out_end) *out++ = ' ';
+                        written++;
+                    }
+                }
+                for (i = 0; i < temp_len; i++) {
+                    if (out < out_end) *out++ = temp_buf[i];
+                    written++;
+                }
+                if (left_align && width > temp_len) {
+                    for (i = 0; i < width - temp_len; i++) {
+                        if (out < out_end) *out++ = ' ';
+                        written++;
+                    }
+                }
+                break;
+            }
                 
             case 'x':
-                u = va_arg(args, unsigned int);
-                temp_len = utoa_helper(u, temp_buf, 16);
+            case 'X':
                 {
-                    int i; /* Declaration GNU89 */
-                    for (i = 0; i < temp_len && out < out_end; i++) {
-                        *out++ = temp_buf[i];
+                    unsigned long val = is_long ? va_arg(args, unsigned long) : va_arg(args, unsigned int);
+                    temp_len = utoa_helper((unsigned int)val, temp_buf, 16);
+                    if (spec == 'X') {
+                        for (i = 0; i < temp_len; i++) {
+                            if (temp_buf[i] >= 'a' && temp_buf[i] <= 'f')
+                                temp_buf[i] = temp_buf[i] - 'a' + 'A';
+                        }
+                    }
+                    if (!left_align && width > temp_len) {
+                        for (i = 0; i < width - temp_len; i++) {
+                            if (out < out_end) *out++ = pad_char;
+                            written++;
+                        }
+                    }
+                    for (i = 0; i < temp_len; i++) {
+                        char ch = temp_buf[i];
+                        if (out < out_end) *out++ = ch;
                         written++;
                     }
-                }
-                break;
-                
-            case 'X':
-                u = va_arg(args, unsigned int);
-                temp_len = utoa_helper(u, temp_buf, 16);
-                {
-                    int i; /* Declaration GNU89 */
-                    for (i = 0; i < temp_len && out < out_end; i++) {
-                        char ch = temp_buf[i];
-                        *out++ = (ch >= 'a' && ch <= 'f') ? ch - 'a' + 'A' : ch;
-                        written++;
+                    if (left_align && width > temp_len) {
+                        for (i = 0; i < width - temp_len; i++) {
+                            if (out < out_end) *out++ = ' ';
+                            written++;
+                        }
                     }
                 }
                 break;
@@ -474,51 +614,38 @@ int snprintf(char* str, size_t size, const char* format, ...)
             case '%':
                 if (out < out_end) {
                     *out++ = '%';
-                    written++;
                 }
-                break;
-                
-            case '.':
-                /* Handle precision specifier like %.*s */
-                if (*(p + 1) == '*' && *(p + 2) == 's') {
-                    int max_len = va_arg(args, int);
-                    s = va_arg(args, const char*);
-                    if (!s) s = "(null)";
-                    {
-                        int count = 0;
-                        while (*s && count < max_len && out < out_end) {
-                            *out++ = *s++;
-                            written++;
-                            count++;
-                        }
-                    }
-                    p += 2; /* Skip '*s' */
-                } else {
-                    /* Simple . handling - just copy the character */
-                    if (out < out_end) {
-                        *out++ = '.';
-                        written++;
-                    }
-                }
+                written++;
                 break;
                 
             default:
                 /* Unknown format specifier, just copy it */
                 if (out < out_end) {
                     *out++ = '%';
-                    written++;
                 }
+                written++;
                 if (out < out_end) {
-                    *out++ = *p;
-                    written++;
+                    *out++ = spec;
                 }
+                written++;
                 break;
+            }
         }
     }
     
     *out = '\0';
+    return written;
+}
+
+int snprintf(char* str, size_t size, const char* format, ...)
+{
+    va_list args;
+    int written;
+
+    va_start(args, format);
+    written = vsnprintf(str, size, format, args);
     va_end(args);
-    
+
     return written;
 }
 
