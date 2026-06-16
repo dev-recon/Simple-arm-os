@@ -46,6 +46,8 @@ Will publish a documentation on how to:
   1. Setup environment: check `INSTALLATION_macos.md`for mac users.
   1. Create and modify user programs.
 
+Runtime stress baselines are tracked in `STABILITY.md`.
+
 Roadmap for now id to develop the following features (to have a proper userland shell working):
   - virtio mmio block device with wait queues.
   - Files: create, write, lseek, dup.
