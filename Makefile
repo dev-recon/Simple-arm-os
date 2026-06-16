@@ -58,6 +58,7 @@ KERNEL_OBJS = \
 	kernel/fs/fat32.o \
 	kernel/fs/fat32_vfs.o \
 	kernel/fs/ext2_vfs.o \
+	kernel/fs/procfs.o \
 	kernel/fs/userfs_loader.o \
 	kernel/drivers/ata.o \
 	kernel/drivers/keyboard.o \

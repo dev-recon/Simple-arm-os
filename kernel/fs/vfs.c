@@ -2,6 +2,7 @@
 #include <kernel/vfs.h>
 #include <kernel/fat32.h>
 #include <kernel/ext2.h>
+#include <kernel/procfs.h>
 #include <kernel/disk_layout.h>
 #include <kernel/mount.h>
 #include <kernel/kernel.h>
@@ -83,6 +84,7 @@ bool init_vfs(void)
 {
     const disk_partition_t* ext2_part;
     const disk_partition_t* fat32_part;
+    inode_t* proc_root;
     int fstab_mounts;
 
     KINFO("[VFS] Starting VFS initialization...\n");
@@ -130,6 +132,13 @@ bool init_vfs(void)
             KERROR("[VFS] FAT32 fallback mount failed\n");
             return false;
         }
+    }
+
+    proc_root = procfs_mount();
+    if (!proc_root || vfs_mount("/proc", proc_root) != 0) {
+        KERROR("[VFS] procfs mount failed\n");
+        if (proc_root) put_inode(proc_root);
+        return false;
     }
 
     KINFO("[VFS] OK VFS initialized successfully\n");
@@ -313,23 +322,24 @@ static inode_t* path_lookup_internal(const char* path, bool follow_final_symlink
             strncpy(parent_path, current_path, sizeof(parent_path) - 1);
         parent_path[sizeof(parent_path) - 1] = '\0';
 
+        /* Build accumulated path and allow purely virtual mount points. */
+        vfs_append_component(current_path, sizeof(current_path), token);
+
+        for (int i = 0; i < mount_count; i++) {
+            if (strcmp(current_path, mount_table[i].path) == 0) {
+                put_inode(current);
+                current = mount_table[i].root;
+                vfs_get_inode_ref(current);
+                goto mounted_component;
+            }
+        }
+
         inode_t* next = current->i_op->lookup(current, token);
         put_inode(current);
         current = next;
 
+mounted_component:
         if (current) {
-            /* Build accumulated path and check for mount points */
-            vfs_append_component(current_path, sizeof(current_path), token);
-
-            for (int i = 0; i < mount_count; i++) {
-                if (strcmp(current_path, mount_table[i].path) == 0) {
-                    put_inode(current);
-                    current = mount_table[i].root;
-                    vfs_get_inode_ref(current);
-                    break;
-                }
-            }
-
             if (S_ISLNK(current->mode) && (!is_final || follow_final_symlink)) {
                 char target[256];
                 char remaining[256];

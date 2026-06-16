@@ -1,0 +1,743 @@
+/* kernel/fs/procfs.c - minimal read-only proc filesystem */
+#include <kernel/procfs.h>
+#include <kernel/vfs.h>
+#include <kernel/memory.h>
+#include <kernel/string.h>
+#include <kernel/kprintf.h>
+#include <kernel/stdarg.h>
+#include <kernel/timer.h>
+#include <kernel/file.h>
+
+extern uint32_t task_count;
+extern task_t* task_list_head;
+extern spinlock_t task_lock;
+
+static inode_operations_t procfs_inode_ops;
+static file_operations_t procfs_file_ops;
+static file_operations_t procfs_dir_ops;
+
+#define PROC_INO_ROOT       1u
+#define PROC_INO_MEMINFO    2u
+#define PROC_INO_UPTIME     3u
+#define PROC_INO_MOUNTS     4u
+#define PROC_INO_STAT       5u
+#define PROC_INO_TASKS      6u
+#define PROC_PID_BASE       100000u
+#define PROC_PID_STRIDE     16u
+#define PROC_PID_DIR        0u
+#define PROC_PID_STATUS     1u
+#define PROC_PID_STAT       2u
+#define PROC_PID_MAPS       3u
+
+typedef struct proc_file_data {
+    char* data;
+    size_t size;
+} proc_file_data_t;
+
+static bool proc_is_digit(char c)
+{
+    return c >= '0' && c <= '9';
+}
+
+static bool proc_parse_pid(const char* name, pid_t* out)
+{
+    uint32_t pid = 0;
+
+    if (!name || !name[0]) return false;
+
+    for (const char* p = name; *p; p++) {
+        if (!proc_is_digit(*p)) return false;
+        pid = pid * 10u + (uint32_t)(*p - '0');
+    }
+
+    if (pid == 0) return false;
+    if (out) *out = (pid_t)pid;
+    return true;
+}
+
+static uint32_t proc_pid_ino(pid_t pid, uint32_t type)
+{
+    return PROC_PID_BASE + ((uint32_t)pid * PROC_PID_STRIDE) + type;
+}
+
+static pid_t proc_ino_pid(uint32_t ino)
+{
+    if (ino < PROC_PID_BASE) return 0;
+    return (pid_t)((ino - PROC_PID_BASE) / PROC_PID_STRIDE);
+}
+
+static uint32_t proc_ino_type(uint32_t ino)
+{
+    if (ino < PROC_PID_BASE) return ino;
+    return (ino - PROC_PID_BASE) % PROC_PID_STRIDE;
+}
+
+static const char* proc_task_state_name(task_state_t state)
+{
+    switch (state) {
+        case TASK_READY:           return "ready";
+        case TASK_RUNNING:         return "running";
+        case TASK_BLOCKED:         return "blocked";
+        case TASK_ZOMBIE:          return "zombie";
+        case TASK_TERMINATED:      return "terminated";
+        case TASK_INTERRUPTIBLE:   return "sleeping";
+        case TASK_UNINTERRUPTIBLE: return "disk-sleep";
+        case TASK_STOPPED:         return "stopped";
+    }
+    return "unknown";
+}
+
+static char proc_task_state_char(task_state_t state)
+{
+    switch (state) {
+        case TASK_RUNNING:         return 'R';
+        case TASK_ZOMBIE:          return 'Z';
+        case TASK_TERMINATED:      return 'X';
+        case TASK_UNINTERRUPTIBLE: return 'D';
+        case TASK_STOPPED:         return 'T';
+        default:                   return 'S';
+    }
+}
+
+static process_t* proc_task_process(task_t* task)
+{
+    if (!task) return NULL;
+    if (task->type == TASK_TYPE_PROCESS)
+        return task->process;
+    if (task->type == TASK_TYPE_THREAD && task->thread.process &&
+        task->thread.process->type == TASK_TYPE_PROCESS)
+        return task->thread.process->process;
+    return NULL;
+}
+
+static uint32_t proc_vm_virtual_kb(vm_space_t* vm)
+{
+    uint32_t bytes = 0;
+
+    for (vma_t* vma = vm ? vm->vma_list : NULL; vma; vma = vma->next) {
+        if (vma->end > vma->start)
+            bytes += vma->end - vma->start;
+    }
+
+    return bytes / 1024;
+}
+
+static uint32_t proc_vm_rss_kb(vm_space_t* vm)
+{
+    uint32_t pages = 0;
+
+    if (!vm || !vm->pgdir) return 0;
+
+    for (uint32_t i = 0; i < 1024; i++) {
+        uint32_t l1_entry = vm->pgdir[i];
+        if ((l1_entry & 0x3) != 0x1)
+            continue;
+
+        uint32_t* l2_table = (uint32_t*)(l1_entry & 0xFFFFFC00);
+        for (uint32_t j = 0; j < 256; j++) {
+            if ((l2_table[j] & 0x3) != 0)
+                pages++;
+        }
+    }
+
+    return (pages * PAGE_SIZE) / 1024;
+}
+
+static uint32_t proc_vm_l2_tables(vm_space_t* vm)
+{
+    uint32_t count = 0;
+
+    if (!vm || !vm->pgdir) return 0;
+
+    for (uint32_t i = 0; i < 1024; i++) {
+        if ((vm->pgdir[i] & 0x3) == 0x1)
+            count++;
+    }
+
+    return count;
+}
+
+static task_t* proc_find_task_locked(pid_t pid)
+{
+    task_t* task = task_list_head;
+    uint32_t count = 0;
+
+    if (!task) return NULL;
+
+    do {
+        process_t* proc = proc_task_process(task);
+        if (proc && proc->pid == pid)
+            return task;
+
+        task = task->next;
+        count++;
+    } while (task && task != task_list_head && count < MAX_TASKS);
+
+    return NULL;
+}
+
+static bool proc_pid_exists(pid_t pid)
+{
+    bool found;
+    unsigned long flags;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    found = proc_find_task_locked(pid) != NULL;
+    spin_unlock_irqrestore(&task_lock, flags);
+    return found;
+}
+
+static void proc_append(char* buf, size_t cap, size_t* len, const char* fmt, ...)
+{
+    va_list args;
+    int written;
+
+    if (!buf || !len || *len >= cap) return;
+
+    va_start(args, fmt);
+    written = vsnprintf(buf + *len, (int)(cap - *len), fmt, args);
+    va_end(args);
+
+    if (written < 0) return;
+
+    if ((size_t)written >= cap - *len)
+        *len = cap - 1;
+    else
+        *len += (size_t)written;
+}
+
+static inode_t* proc_make_inode(uint32_t ino, uint16_t mode, uint32_t size)
+{
+    inode_t* inode = create_inode();
+    if (!inode) return NULL;
+
+    inode->mode = mode;
+    inode->uid = 0;
+    inode->gid = 0;
+    inode->size = size;
+    inode->blocks = (size + 511) / 512;
+    inode->nlink = S_ISDIR(mode) ? 2 : 1;
+    inode->first_cluster = ino;
+    inode->i_op = &procfs_inode_ops;
+    inode->f_op = S_ISDIR(mode) ? &procfs_dir_ops : &procfs_file_ops;
+    return inode;
+}
+
+static inode_t* procfs_lookup(inode_t* dir, const char* name)
+{
+    uint32_t dir_ino;
+    pid_t pid;
+
+    if (!dir || !name) return NULL;
+
+    dir_ino = dir->first_cluster;
+
+    if (dir_ino == PROC_INO_ROOT) {
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+            return proc_make_inode(PROC_INO_ROOT, S_IFDIR | 0555, 0);
+        if (strcmp(name, "meminfo") == 0)
+            return proc_make_inode(PROC_INO_MEMINFO, S_IFREG | 0444, 0);
+        if (strcmp(name, "uptime") == 0)
+            return proc_make_inode(PROC_INO_UPTIME, S_IFREG | 0444, 0);
+        if (strcmp(name, "mounts") == 0)
+            return proc_make_inode(PROC_INO_MOUNTS, S_IFREG | 0444, 0);
+        if (strcmp(name, "stat") == 0)
+            return proc_make_inode(PROC_INO_STAT, S_IFREG | 0444, 0);
+        if (strcmp(name, "tasks") == 0)
+            return proc_make_inode(PROC_INO_TASKS, S_IFREG | 0444, 0);
+        if (proc_parse_pid(name, &pid) && proc_pid_exists(pid))
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_DIR), S_IFDIR | 0555, 0);
+        return NULL;
+    }
+
+    if (dir_ino >= PROC_PID_BASE && proc_ino_type(dir_ino) == PROC_PID_DIR) {
+        pid = proc_ino_pid(dir_ino);
+        if (!proc_pid_exists(pid)) return NULL;
+
+        if (strcmp(name, ".") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_DIR), S_IFDIR | 0555, 0);
+        if (strcmp(name, "..") == 0)
+            return proc_make_inode(PROC_INO_ROOT, S_IFDIR | 0555, 0);
+        if (strcmp(name, "status") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_STATUS), S_IFREG | 0444, 0);
+        if (strcmp(name, "stat") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_STAT), S_IFREG | 0444, 0);
+        if (strcmp(name, "maps") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_MAPS), S_IFREG | 0444, 0);
+    }
+
+    return NULL;
+}
+
+static int procfs_readonly_create(inode_t* dir, const char* name, uint16_t mode)
+{
+    (void)dir; (void)name; (void)mode;
+    return -EROFS;
+}
+
+static int procfs_readonly_unlink(inode_t* dir, const char* name)
+{
+    (void)dir; (void)name;
+    return -EROFS;
+}
+
+static int procfs_readonly_rename(inode_t* old_dir, const char* old_name,
+                                  inode_t* new_dir, const char* new_name)
+{
+    (void)old_dir; (void)old_name; (void)new_dir; (void)new_name;
+    return -EROFS;
+}
+
+static void proc_fill_meminfo(char* buf, size_t cap, size_t* len)
+{
+    uint32_t total = (get_total_page_count() * PAGE_SIZE) / 1024;
+    uint32_t free = (get_free_page_count() * PAGE_SIZE) / 1024;
+    uint32_t used = total > free ? total - free : 0;
+
+    proc_append(buf, cap, len, "MemTotal:       %u kB\n", total);
+    proc_append(buf, cap, len, "MemFree:        %u kB\n", free);
+    proc_append(buf, cap, len, "MemUsed:        %u kB\n", used);
+    proc_append(buf, cap, len, "PageSize:       %u\n", PAGE_SIZE);
+    proc_append(buf, cap, len, "PhysAllocPages: %u\n", get_allocated_page_count());
+    proc_append(buf, cap, len, "PhysFreePages:  %u\n", get_freed_page_count());
+}
+
+static void proc_fill_uptime(char* buf, size_t cap, size_t* len)
+{
+    uint32_t ticks = get_system_ticks();
+    proc_append(buf, cap, len, "%u.%02u 0.00\n",
+                ticks / TIMER_FREQ,
+                ((ticks % TIMER_FREQ) * 100u) / TIMER_FREQ);
+}
+
+static void proc_fill_mounts(char* buf, size_t cap, size_t* len)
+{
+    proc_append(buf, cap, len, "virtio0p1 / ext2 rw 0 0\n");
+    proc_append(buf, cap, len, "proc /proc proc rw,nosuid,nodev,noexec 0 0\n");
+    proc_append(buf, cap, len, "virtio0p2 /mnt fat32 rw 0 0\n");
+}
+
+static void proc_fill_stat(char* buf, size_t cap, size_t* len)
+{
+    uint32_t live_tasks = kernel_lifecycle_stats.tasks_created -
+                          kernel_lifecycle_stats.tasks_destroyed;
+    uint32_t live_zombies = kernel_lifecycle_stats.zombies_created -
+                            kernel_lifecycle_stats.zombies_reaped;
+
+    proc_append(buf, cap, len, "uptime_ticks %u\n", get_system_ticks());
+    proc_append(buf, cap, len, "tasks %u %u %u\n",
+                live_tasks,
+                kernel_lifecycle_stats.tasks_created,
+                kernel_lifecycle_stats.tasks_destroyed);
+    proc_append(buf, cap, len, "zombies %u %u %u\n",
+                live_zombies,
+                kernel_lifecycle_stats.zombies_created,
+                kernel_lifecycle_stats.zombies_reaped);
+    proc_append(buf, cap, len, "forkfail %u\n", kernel_lifecycle_stats.failed_forks);
+    proc_append(buf, cap, len, "sched_refuse %u\n", kernel_lifecycle_stats.scheduler_refused);
+    proc_append(buf, cap, len, "ready_refuse %u\n", kernel_lifecycle_stats.ready_queue_refused);
+    proc_append(buf, cap, len, "asid_rollovers %u\n", kernel_lifecycle_stats.asid_rollovers);
+    proc_append(buf, cap, len, "state_set %u\n", kernel_lifecycle_stats.state_sync_repairs);
+    proc_append(buf, cap, len, "signal_wake %u\n", kernel_lifecycle_stats.blocked_signal_wakeups);
+    proc_append(buf, cap, len, "tty_stale %u\n", kernel_lifecycle_stats.tty_stale_waiters);
+    proc_append(buf, cap, len, "unintr_timeout %u\n", kernel_lifecycle_stats.uninterruptible_timeouts);
+}
+
+static void proc_fill_tasks(char* buf, size_t cap, size_t* len)
+{
+    task_t* task;
+    uint32_t count = 0;
+    unsigned long flags;
+
+    proc_append(buf, cap, len, "pid tid ppid state kind name\n");
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task = task_list_head;
+    if (!task) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return;
+    }
+
+    do {
+        process_t* proc = proc_task_process(task);
+        proc_append(buf, cap, len, "%d %u %d %c %c %s\n",
+                    proc ? proc->pid : 0,
+                    task->task_id,
+                    proc ? proc->ppid : 0,
+                    proc_task_state_char(task->state),
+                    task->type == TASK_TYPE_PROCESS ? 'P' :
+                    task->type == TASK_TYPE_THREAD ? 'T' : 'K',
+                    task->name);
+        task = task->next;
+        count++;
+    } while (task && task != task_list_head && count < MAX_TASKS);
+
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
+static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
+{
+    unsigned long flags;
+    task_t* task;
+    process_t* proc;
+    vm_space_t* vm;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task = proc_find_task_locked(pid);
+    if (!task) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        proc_append(buf, cap, len, "State:\tX (dead)\n");
+        return;
+    }
+
+    proc = proc_task_process(task);
+    vm = proc ? proc->vm : NULL;
+    proc_append(buf, cap, len, "Name:\t%s\n", task->name);
+    proc_append(buf, cap, len, "State:\t%c (%s)\n",
+                proc_task_state_char(task->state),
+                proc_task_state_name(task->state));
+    proc_append(buf, cap, len, "Tgid:\t%d\n", proc ? proc->pid : 0);
+    proc_append(buf, cap, len, "Pid:\t%d\n", proc ? proc->pid : 0);
+    proc_append(buf, cap, len, "Tid:\t%u\n", task->task_id);
+    proc_append(buf, cap, len, "PPid:\t%d\n", proc ? proc->ppid : 0);
+    proc_append(buf, cap, len, "PGid:\t%d\n", proc ? proc->pgid : 0);
+    proc_append(buf, cap, len, "Sid:\t%d\n", proc ? proc->sid : 0);
+    proc_append(buf, cap, len, "Tty:\t%d\n", proc ? proc->controlling_tty : -1);
+    proc_append(buf, cap, len, "Uid:\t%u\n", proc ? proc->uid : 0);
+    proc_append(buf, cap, len, "Gid:\t%u\n", proc ? proc->gid : 0);
+    proc_append(buf, cap, len, "VmSize:\t%u kB\n", proc_vm_virtual_kb(vm));
+    proc_append(buf, cap, len, "VmRSS:\t%u kB\n", proc_vm_rss_kb(vm));
+    proc_append(buf, cap, len, "L2Tables:\t%u\n", proc_vm_l2_tables(vm));
+    proc_append(buf, cap, len, "CtxSwitches:\t%u\n", task->switch_count);
+    proc_append(buf, cap, len, "PageFaults:\t%u\n", task->page_faults);
+    proc_append(buf, cap, len, "CowFaults:\t%u\n", task->cow_faults);
+    proc_append(buf, cap, len, "StackFaults:\t%u\n", task->stack_faults);
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
+static void proc_fill_pid_stat(pid_t pid, char* buf, size_t cap, size_t* len)
+{
+    unsigned long flags;
+    task_t* task;
+    process_t* proc;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task = proc_find_task_locked(pid);
+    if (!task) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return;
+    }
+
+    proc = proc_task_process(task);
+    proc_append(buf, cap, len, "%d (%s) %c %d %d %d %d %u %u %u %u\n",
+                proc ? proc->pid : 0,
+                task->name,
+                proc_task_state_char(task->state),
+                proc ? proc->ppid : 0,
+                proc ? proc->pgid : 0,
+                proc ? proc->sid : 0,
+                proc ? proc->controlling_tty : -1,
+                task->page_faults,
+                task->cow_faults,
+                task->stack_faults,
+                task->switch_count);
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
+static void proc_fill_pid_maps(pid_t pid, char* buf, size_t cap, size_t* len)
+{
+    unsigned long flags;
+    task_t* task;
+    process_t* proc;
+    vm_space_t* vm;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task = proc_find_task_locked(pid);
+    proc = task ? proc_task_process(task) : NULL;
+    vm = proc ? proc->vm : NULL;
+
+    for (vma_t* vma = vm ? vm->vma_list : NULL; vma; vma = vma->next) {
+        char perms[5];
+        perms[0] = (vma->flags & VMA_READ) ? 'r' : '-';
+        perms[1] = (vma->flags & VMA_WRITE) ? 'w' : '-';
+        perms[2] = (vma->flags & VMA_EXEC) ? 'x' : '-';
+        perms[3] = (vma->flags & VMA_SHARED) ? 's' : 'p';
+        perms[4] = '\0';
+        proc_append(buf, cap, len, "%08x-%08x %s 00000000 00:00 0\n",
+                    vma->start, vma->end, perms);
+    }
+
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
+static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
+{
+    pid_t pid;
+
+    *len = 0;
+
+    switch (ino) {
+        case PROC_INO_MEMINFO: proc_fill_meminfo(buf, cap, len); return 0;
+        case PROC_INO_UPTIME:  proc_fill_uptime(buf, cap, len);  return 0;
+        case PROC_INO_MOUNTS:  proc_fill_mounts(buf, cap, len);  return 0;
+        case PROC_INO_STAT:    proc_fill_stat(buf, cap, len);    return 0;
+        case PROC_INO_TASKS:   proc_fill_tasks(buf, cap, len);   return 0;
+        default: break;
+    }
+
+    if (ino >= PROC_PID_BASE) {
+        pid = proc_ino_pid(ino);
+        if (!proc_pid_exists(pid))
+            return -ENOENT;
+
+        switch (proc_ino_type(ino)) {
+            case PROC_PID_STATUS: proc_fill_pid_status(pid, buf, cap, len); return 0;
+            case PROC_PID_STAT:   proc_fill_pid_stat(pid, buf, cap, len);   return 0;
+            case PROC_PID_MAPS:   proc_fill_pid_maps(pid, buf, cap, len);   return 0;
+        }
+    }
+
+    return -EINVAL;
+}
+
+static int procfs_open(inode_t* inode, file_t* file)
+{
+    proc_file_data_t* data;
+    int ret;
+
+    if (!inode || !file) return -EINVAL;
+    if (S_ISDIR(inode->mode)) return 0;
+
+    data = kmalloc(sizeof(*data));
+    if (!data) return -ENOMEM;
+    data->data = kmalloc(8192);
+    if (!data->data) {
+        kfree(data);
+        return -ENOMEM;
+    }
+
+    ret = proc_generate_file(inode->first_cluster, data->data, 8192, &data->size);
+    if (ret < 0) {
+        kfree(data->data);
+        kfree(data);
+        return ret;
+    }
+
+    file->private_data = data;
+    file->offset = 0;
+    inode->size = data->size;
+    inode->blocks = (data->size + 511) / 512;
+    return 0;
+}
+
+static int procfs_close(file_t* file)
+{
+    proc_file_data_t* data;
+
+    if (!file) return -EINVAL;
+
+    data = (proc_file_data_t*)file->private_data;
+    if (data) {
+        if (data->data) kfree(data->data);
+        kfree(data);
+        file->private_data = NULL;
+    }
+    return 0;
+}
+
+static ssize_t procfs_read(file_t* file, void* buffer, size_t count)
+{
+    proc_file_data_t* data;
+    size_t remaining;
+
+    if (!file || !buffer) return -EINVAL;
+    if (S_ISDIR(file->inode->mode)) return -EISDIR;
+
+    data = (proc_file_data_t*)file->private_data;
+    if (!data || !data->data) return -EINVAL;
+    if (file->offset >= data->size) return 0;
+
+    remaining = data->size - file->offset;
+    if (count > remaining) count = remaining;
+    memcpy(buffer, data->data + file->offset, count);
+    file->offset += count;
+    return (ssize_t)count;
+}
+
+static ssize_t procfs_write(file_t* file, const void* buffer, size_t count)
+{
+    (void)file; (void)buffer; (void)count;
+    return -EROFS;
+}
+
+static off_t procfs_lseek(file_t* file, off_t offset, int whence)
+{
+    proc_file_data_t* data;
+    off_t size;
+    off_t pos;
+
+    if (!file) return -EINVAL;
+    data = (proc_file_data_t*)file->private_data;
+    size = data ? (off_t)data->size : 0;
+
+    switch (whence) {
+        case SEEK_SET: pos = offset; break;
+        case SEEK_CUR: pos = (off_t)file->offset + offset; break;
+        case SEEK_END: pos = size + offset; break;
+        default: return -EINVAL;
+    }
+
+    if (pos < 0) return -EINVAL;
+    file->offset = (uint32_t)pos;
+    return pos;
+}
+
+static void proc_fill_dirent(dirent_t* dirent, uint32_t ino, uint8_t type, const char* name)
+{
+    dirent->d_ino = ino;
+    dirent->d_type = type;
+    dirent->d_reclen = sizeof(*dirent);
+    strncpy(dirent->d_name, name, sizeof(dirent->d_name) - 1);
+    dirent->d_name[sizeof(dirent->d_name) - 1] = '\0';
+}
+
+static int procfs_root_readdir(file_t* file, dirent_t* dirent)
+{
+    static const struct {
+        const char* name;
+        uint32_t ino;
+        uint8_t type;
+    } entries[] = {
+        { ".",       PROC_INO_ROOT,    DT_DIR },
+        { "..",      PROC_INO_ROOT,    DT_DIR },
+        { "meminfo", PROC_INO_MEMINFO, DT_REG },
+        { "uptime",  PROC_INO_UPTIME,  DT_REG },
+        { "mounts",  PROC_INO_MOUNTS,  DT_REG },
+        { "stat",    PROC_INO_STAT,    DT_REG },
+        { "tasks",   PROC_INO_TASKS,   DT_REG },
+    };
+    uint32_t offset = file->offset;
+    uint32_t static_count = sizeof(entries) / sizeof(entries[0]);
+    task_t* task;
+    uint32_t index = 0;
+    uint32_t walked = 0;
+    char pid_name[16];
+    unsigned long flags;
+
+    if (offset < static_count) {
+        proc_fill_dirent(dirent, entries[offset].ino, entries[offset].type,
+                         entries[offset].name);
+        file->offset++;
+        return 1;
+    }
+
+    offset -= static_count;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task = task_list_head;
+    if (!task) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return 0;
+    }
+
+    do {
+        process_t* proc = proc_task_process(task);
+        if (proc && proc->pid > 0) {
+            if (index == offset) {
+                snprintf(pid_name, sizeof(pid_name), "%d", proc->pid);
+                proc_fill_dirent(dirent, proc_pid_ino(proc->pid, PROC_PID_DIR),
+                                 DT_DIR, pid_name);
+                file->offset++;
+                spin_unlock_irqrestore(&task_lock, flags);
+                return 1;
+            }
+            index++;
+        }
+        task = task->next;
+        walked++;
+    } while (task && task != task_list_head && walked < MAX_TASKS);
+
+    spin_unlock_irqrestore(&task_lock, flags);
+    return 0;
+}
+
+static int procfs_pid_readdir(file_t* file, dirent_t* dirent)
+{
+    static const struct {
+        const char* name;
+        uint32_t type;
+        uint8_t d_type;
+    } entries[] = {
+        { ".",      PROC_PID_DIR,    DT_DIR },
+        { "..",     PROC_INO_ROOT,   DT_DIR },
+        { "status", PROC_PID_STATUS, DT_REG },
+        { "stat",   PROC_PID_STAT,   DT_REG },
+        { "maps",   PROC_PID_MAPS,   DT_REG },
+    };
+    uint32_t offset = file->offset;
+    pid_t pid = proc_ino_pid(file->inode->first_cluster);
+
+    if (offset >= sizeof(entries) / sizeof(entries[0]))
+        return 0;
+
+    if (!proc_pid_exists(pid))
+        return 0;
+
+    proc_fill_dirent(dirent,
+                     entries[offset].type == PROC_INO_ROOT
+                         ? PROC_INO_ROOT
+                         : proc_pid_ino(pid, entries[offset].type),
+                     entries[offset].d_type,
+                     entries[offset].name);
+    file->offset++;
+    return 1;
+}
+
+static int procfs_readdir(file_t* file, dirent_t* dirent)
+{
+    uint32_t ino;
+
+    if (!file || !file->inode || !dirent) return -EINVAL;
+    if (!S_ISDIR(file->inode->mode)) return -ENOTDIR;
+
+    ino = file->inode->first_cluster;
+    if (ino == PROC_INO_ROOT)
+        return procfs_root_readdir(file, dirent);
+    if (ino >= PROC_PID_BASE && proc_ino_type(ino) == PROC_PID_DIR)
+        return procfs_pid_readdir(file, dirent);
+
+    return 0;
+}
+
+static inode_operations_t procfs_inode_ops = {
+    .lookup = procfs_lookup,
+    .create = procfs_readonly_create,
+    .mkdir = procfs_readonly_create,
+    .unlink = procfs_readonly_unlink,
+    .rmdir = procfs_readonly_unlink,
+    .rename = procfs_readonly_rename,
+    .readlink = NULL,
+};
+
+static file_operations_t procfs_file_ops = {
+    .read = procfs_read,
+    .write = procfs_write,
+    .open = procfs_open,
+    .close = procfs_close,
+    .lseek = procfs_lseek,
+    .readdir = NULL,
+};
+
+static file_operations_t procfs_dir_ops = {
+    .read = NULL,
+    .write = procfs_write,
+    .open = procfs_open,
+    .close = procfs_close,
+    .lseek = NULL,
+    .readdir = procfs_readdir,
+};
+
+inode_t* procfs_mount(void)
+{
+    return proc_make_inode(PROC_INO_ROOT, S_IFDIR | 0555, 0);
+}
