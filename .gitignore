@@ -28,6 +28,7 @@ userfs/usr/bin/chown
 userfs/usr/bin/cp
 userfs/usr/bin/echo
 userfs/usr/bin/false
+userfs/usr/bin/head
 userfs/usr/bin/kill
 userfs/usr/bin/ln
 userfs/usr/bin/ls
@@ -62,6 +63,7 @@ userland/coreutils/chown
 userland/coreutils/cp
 userland/coreutils/echo
 userland/coreutils/false
+userland/coreutils/head
 userland/coreutils/kill
 userland/coreutils/ln
 userland/coreutils/ls
