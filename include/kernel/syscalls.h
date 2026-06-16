@@ -130,6 +130,8 @@ struct sysinfo_response {
     uint32_t        ready_queue_refused;
     uint32_t        stack_pages_allocated;
     uint32_t        stack_pages_freed;
+    uint32_t        phys_pages_allocated;
+    uint32_t        phys_pages_freed;
     uint32_t        asid_rollovers;
     uint32_t        state_sync_repairs;
     uint32_t        blocked_signal_wakeups;

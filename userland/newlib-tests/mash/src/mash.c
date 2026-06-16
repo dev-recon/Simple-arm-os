@@ -57,6 +57,11 @@ static char shell_env_strings[SHELL_MAX_ENV][SHELL_ENV_NAME_LEN + SHELL_ENV_VALU
 static char* shell_envp[SHELL_MAX_ENV + 1];
 static int shell_pgid = 0;
 
+static void shell_sigchld_handler(int sig)
+{
+    (void)sig;
+}
+
 static void shell_set_foreground_pgid(int pgid) {
     if (pgid >= 0)
         tcsetpgrp(STDIN_FILENO, pgid);
@@ -2101,6 +2106,7 @@ int main() {
     jobs_set_shell_pgid(shell_pgid);
     signal(SIGINT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
+    signal(SIGCHLD, shell_sigchld_handler);
     shell_restore_foreground();
     command_init();
     shell_run();

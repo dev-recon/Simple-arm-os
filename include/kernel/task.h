@@ -16,7 +16,7 @@ struct file;
 #define TASK_NAME_MAX           32              /* Longueur max du nom */
 #define MAX_SIGNALS             32
 
-#define QUANTUM_TICKS           10 
+#define QUANTUM_TICKS           1
 
 typedef struct kernel_lifecycle_stats {
     uint32_t tasks_created;

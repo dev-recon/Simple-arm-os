@@ -10,7 +10,7 @@ static inline int putc_tty(char c) {
 
 static inline int getc_tty(void) {
     char c;
-    return read(0, &c, 1) == 1 ? (unsigned char)c : 0;
+    return read(0, &c, 1) == 1 ? (unsigned char)c : -1;
 }
 
 static inline void pflush(void) {

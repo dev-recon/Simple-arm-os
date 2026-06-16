@@ -5,14 +5,21 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include "../include/mash.h"
+#include "../include/jobs.h"
 
 #define SHELL_HISTORY_SIZE  128
 #define SHELL_COMPLETION_MAX 64
 #define SHELL_HISTORY_FILE "/home/user/.mash_history"
+#define SHELL_COMMAND_CACHE_MAX 128
+#define SHELL_COMMAND_CACHE_NAME_MAX 80
 
 static char shell_history[SHELL_HISTORY_SIZE][SHELL_BUFFER_SIZE];
 static int shell_history_count = 0;
 static char completion_matches[SHELL_COMPLETION_MAX][80];
+static char command_cache[SHELL_COMMAND_CACHE_MAX][SHELL_COMMAND_CACHE_NAME_MAX];
+static int command_cache_count = 0;
+static int command_cache_valid = 0;
+static char command_cache_path[SHELL_BUFFER_SIZE];
 
 static int le_starts_with(const char* s, const char* prefix) {
     while (*prefix) {
@@ -305,6 +312,106 @@ static int shell_path_is_dir(const char* path) {
     return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+static int command_cache_contains(const char* name) {
+    int i;
+
+    for (i = 0; i < command_cache_count; i++) {
+        if (strcmp(command_cache[i], name) == 0)
+            return 1;
+    }
+
+    return 0;
+}
+
+static void command_cache_add(const char* name) {
+    if (!name || !*name || command_cache_count >= SHELL_COMMAND_CACHE_MAX)
+        return;
+
+    if (command_cache_contains(name))
+        return;
+
+    strncpy(command_cache[command_cache_count], name,
+            sizeof(command_cache[0]) - 1);
+    command_cache[command_cache_count][sizeof(command_cache[0]) - 1] = '\0';
+    command_cache_count++;
+}
+
+static void command_cache_scan_dir(const char* dir) {
+    char buf[4096];
+    int fd;
+    int n;
+
+    fd = open(dir, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0)
+        return;
+
+    while ((n = getdents(fd, buf, sizeof(buf))) > 0) {
+        int pos = 0;
+
+        while (pos < n) {
+            struct linux_dirent* entry = (struct linux_dirent*)(buf + pos);
+            const char* name = entry->d_name;
+
+            if (entry->d_reclen == 0)
+                break;
+
+            if (strcmp(name, ".") != 0 && strcmp(name, "..") != 0 &&
+                name[0] != '.') {
+                command_cache_add(name);
+            }
+
+            pos += entry->d_reclen;
+        }
+    }
+
+    close(fd);
+}
+
+static void command_cache_rebuild_if_needed(void) {
+    const char* path = shell_getenv("PATH");
+    const char* entry;
+    int i;
+
+    if (!path || !*path)
+        path = "/bin:/usr/bin";
+
+    if (command_cache_valid && strcmp(command_cache_path, path) == 0)
+        return;
+
+    command_cache_count = 0;
+    strncpy(command_cache_path, path, sizeof(command_cache_path) - 1);
+    command_cache_path[sizeof(command_cache_path) - 1] = '\0';
+
+    for (i = 0; i < command_count_registered(); i++) {
+        command_cache_add(command_name_at(i));
+    }
+
+    entry = path;
+    while (*entry) {
+        const char* next = strchr(entry, ':');
+        int len = next ? (int)(next - entry) : (int)strlen(entry);
+        char dir[SHELL_BUFFER_SIZE];
+
+        if (len <= 0) {
+            strcpy(dir, ".");
+        } else if (len < SHELL_BUFFER_SIZE) {
+            strncpy(dir, entry, len);
+            dir[len] = '\0';
+        } else {
+            dir[0] = '\0';
+        }
+
+        if (dir[0])
+            command_cache_scan_dir(dir);
+
+        if (!next)
+            break;
+        entry = next + 1;
+    }
+
+    command_cache_valid = 1;
+}
+
 static int shell_token_start(const char* line, int cursor) {
     int pos = cursor;
 
@@ -409,40 +516,14 @@ static void shell_scan_dir_matches(const char* dir, const char* partial,
 
 static void shell_scan_path_commands(const char* partial,
                                      completion_result_t* result) {
-    const char* path = shell_getenv("PATH");
-    const char* entry;
     int i;
 
-    for (i = 0; i < command_count_registered(); i++) {
-        const char* name = command_name_at(i);
+    command_cache_rebuild_if_needed();
+
+    for (i = 0; i < command_cache_count; i++) {
+        const char* name = command_cache[i];
         if (name && le_starts_with(name, partial))
             completion_add(result, name, name, 0);
-    }
-
-    if (!path || !*path)
-        path = "/bin:/usr/bin";
-
-    entry = path;
-    while (*entry) {
-        const char* next = strchr(entry, ':');
-        int len = next ? (int)(next - entry) : (int)strlen(entry);
-        char dir[SHELL_BUFFER_SIZE];
-
-        if (len <= 0) {
-            strcpy(dir, ".");
-        } else if (len < SHELL_BUFFER_SIZE) {
-            strncpy(dir, entry, len);
-            dir[len] = '\0';
-        } else {
-            dir[0] = '\0';
-        }
-
-        if (dir[0])
-            shell_scan_dir_matches(dir, partial, "", result, 1);
-
-        if (!next)
-            break;
-        entry = next + 1;
     }
 }
 
@@ -532,15 +613,19 @@ static void shell_complete_line(char* line, int* len, int* cursor) {
 
 static void shell_handle_escape(char* line, int* len, int* cursor,
                                 int* history_index, char* history_draft) {
-    char introducer = getc_tty();
-    char code;
+    int introducer = getc_tty();
+    int code;
 
+    if (introducer < 0)
+        return;
     if (introducer != '[' && introducer != 'O')
         return;
 
     code = getc_tty();
+    if (code < 0)
+        return;
     if (code >= '0' && code <= '9') {
-        char suffix = getc_tty();
+        int suffix = getc_tty();
         if (code == '3' && suffix == '~')
             shell_delete_char(line, len, *cursor);
         return;
@@ -596,13 +681,19 @@ char* shell_read_line(void) {
     int cursor = 0;
     int history_index = shell_history_count;
     char history_draft[SHELL_BUFFER_SIZE];
-    char c;
+    int c;
 
     input_buffer[0] = '\0';
     history_draft[0] = '\0';
 
     while (1) {
         c = getc_tty();
+        if (c < 0) {
+            jobs_reap_background();
+            shell_redraw_line(input_buffer, len, cursor);
+            pflush();
+            continue;
+        }
         if (!c)
             continue;
 

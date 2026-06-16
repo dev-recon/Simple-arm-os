@@ -10,6 +10,8 @@ typedef struct {
     uint32_t free_pages;
     uint32_t start_addr;
     uint32_t bitmap_pages;  /* Nombre de pages utilisees par le bitmap */
+    uint32_t pages_allocated;
+    uint32_t pages_freed;
 } __attribute__((aligned(4))) physical_allocator_t;
 
 /* Virtual Memory Area */
@@ -116,6 +118,8 @@ uint16_t page_ref_dec(void* page_addr);
 uint32_t get_kernel_memory_size(void);
 uint32_t get_free_page_count(void);
 uint32_t get_total_page_count(void);
+uint32_t get_allocated_page_count(void);
+uint32_t get_freed_page_count(void);
 
 
 /* Virtual memory avec support ASID */
@@ -206,6 +210,8 @@ void* kzalloc(size_t size);
 /* Memory info */
 uint32_t get_free_page_count(void);
 uint32_t get_total_page_count(void);
+uint32_t get_allocated_page_count(void);
+uint32_t get_freed_page_count(void);
 
 /* ELF helper functions */
 void zero_fill_bss(vm_space_t* vm, uint32_t vaddr, uint32_t size);

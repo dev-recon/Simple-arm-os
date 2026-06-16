@@ -1311,6 +1311,14 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
         if (rem) {
             elapsed_time = now - start_time;
             uint32_t remaining_ticks = (elapsed_time >= sleep_ticks) ? 0 : sleep_ticks - elapsed_time;
+            /*
+             * Si le signal est observe sur la meme tick que l'echeance, le
+             * calcul discret peut tomber a zero tout en retournant EINTR.
+             * Garder un tick rend rem exploitable pour l'appelant et evite
+             * de confondre interruption et expiration complete.
+             */
+            if (remaining_ticks == 0)
+                remaining_ticks = 1;
             rem->sec = remaining_ticks / TIMER_FREQ;
             rem->nsec = (remaining_ticks % TIMER_FREQ) * (1000000000u / TIMER_FREQ);
         }
@@ -1404,6 +1412,8 @@ int sys_sysinfo(struct sysinfo_response *resp)
     local->ready_queue_refused = kernel_lifecycle_stats.ready_queue_refused;
     local->stack_pages_allocated = kernel_lifecycle_stats.stack_pages_allocated;
     local->stack_pages_freed = kernel_lifecycle_stats.stack_pages_freed;
+    local->phys_pages_allocated = get_allocated_page_count();
+    local->phys_pages_freed = get_freed_page_count();
     local->asid_rollovers = kernel_lifecycle_stats.asid_rollovers;
     local->state_sync_repairs = kernel_lifecycle_stats.state_sync_repairs;
     local->blocked_signal_wakeups = kernel_lifecycle_stats.blocked_signal_wakeups;

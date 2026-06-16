@@ -9,6 +9,10 @@
 #define DEFAULT_KB      512U
 #define DEFAULT_SECONDS 10U
 
+#ifdef ARM_OS_NEWLIB
+static struct sysinfo_response memstress_sysinfo;
+#endif
+
 static void touch_pages(unsigned char *ptr, unsigned size, unsigned seed)
 {
     for (unsigned off = 0; off < size; off += PAGE_SIZE)
@@ -28,13 +32,12 @@ static int check_pages(unsigned char *ptr, unsigned size, unsigned seed)
 static void print_malloc_stats(const char *label)
 {
 #ifdef ARM_OS_NEWLIB
-    struct sysinfo_response info;
-    int n = getsysinfo(&info);
+    int n = getsysinfo(&memstress_sysinfo);
     if (n < 0)
         return;
 
     for (int i = 0; i < n; i++) {
-        struct proc_info *p = &info.procs[i];
+        struct proc_info *p = &memstress_sysinfo.procs[i];
         if (p->pid == getpid()) {
             printf("memstress: %s heap=%uKB rss=%uKB vm=%uKB pf=%u cow=%u\n",
                    label,

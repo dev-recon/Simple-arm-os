@@ -650,8 +650,18 @@ void sys_exit(int status)
     /* Orpheliner tous les enfants vers init (PID 1) - ACCeS CORRECT */
     orphan_children(proc);
 
+    task_t *parent = proc->process->parent;
+    bool parent_waiting = parent && parent->process &&
+        parent->state == TASK_BLOCKED &&
+        parent->process->state == (proc_state_t)PROC_BLOCKED;
+
     /* Reveiller le parent seulement lorsque le nettoyage de sortie est termine. */
     wakeup_parent(proc);
+    if (!parent_waiting && parent && parent->process) {
+        sig_handler_t handler = parent->process->signals.actions[SIGCHLD].sa_handler;
+        if (handler != SIG_DFL && handler != SIG_IGN)
+            send_signal(parent, SIGCHLD);
+    }
 
     /*
      * Ne pas reactiver les IRQ avant d'avoir quitte la pile du zombie: le

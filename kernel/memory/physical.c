@@ -19,6 +19,8 @@ static void reserve_bitmap_pages(void);
 static void reserve_heap_pages(void);
 static void reserve_dtb_pages(void);
 static struct page_info* buddy_page_info(void* ptr);
+static void account_buddy_alloc(size_t pages);
+static void account_buddy_free(size_t pages);
 //static void reserve_mmu_pages(void);
 
 void* early_alloc(uint32_t size, uint32_t align) {
@@ -128,6 +130,8 @@ void* buddy_alloc(size_t num_block) {
                 page_infos[run_start + j].refcount = 1;
             }
 
+            account_buddy_alloc(num_block);
+
             memset((void *)addr, 0, num_block * PAGE_SIZE);
             //kprintf("Found block at 0x%08X\n", addr);
             //kprintf("page_infos[%d].used = %u\n", run_start, page_infos[run_start].used);
@@ -183,7 +187,9 @@ void buddy_free(void* ptr) {
     }
 
     page_infos[index].start = 0;
-    page_infos[index].size = 0;  
+    page_infos[index].size = 0;
+
+    account_buddy_free(block_size);
 }
 
 static struct page_info* buddy_page_info(void* ptr)
@@ -586,6 +592,28 @@ static bool is_page_free(uint32_t page_index)
     return !(phys_alloc.bitmap[word_index] & (1 << bit_index));
 }
 
+static void account_buddy_alloc(size_t pages)
+{
+    if (pages > phys_alloc.free_pages) {
+        phys_alloc.free_pages = 0;
+    } else {
+        phys_alloc.free_pages -= pages;
+    }
+
+    phys_alloc.pages_allocated += pages;
+}
+
+static void account_buddy_free(size_t pages)
+{
+    if (pages > phys_alloc.total_pages - phys_alloc.free_pages) {
+        phys_alloc.free_pages = phys_alloc.total_pages;
+    } else {
+        phys_alloc.free_pages += pages;
+    }
+
+    phys_alloc.pages_freed += pages;
+}
+
 
 void* allocate_page(void)
 {
@@ -644,4 +672,14 @@ uint32_t get_free_page_count(void)
 uint32_t get_total_page_count(void)
 {
     return phys_alloc.total_pages;
+}
+
+uint32_t get_allocated_page_count(void)
+{
+    return phys_alloc.pages_allocated;
+}
+
+uint32_t get_freed_page_count(void)
+{
+    return phys_alloc.pages_freed;
 }

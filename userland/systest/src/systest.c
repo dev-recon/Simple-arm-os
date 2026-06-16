@@ -20,6 +20,17 @@ static int failures = 0;
 static volatile int cow_shared_value = 11;
 static volatile int sleep_signal_seen = 0;
 static struct sysinfo_response sysinfo_scratch;
+static char systest_tmp_root[64];
+
+static const char *tmp_path(const char *name)
+{
+    static char paths[32][128];
+    static int slot = 0;
+    char *out = paths[slot++ & 31];
+
+    snprintf(out, 128, "%s/%s", systest_tmp_root, name);
+    return out;
+}
 
 static void pass(const char *name)
 {
@@ -107,7 +118,7 @@ static int run_ln3(const char *opt, const char *target, const char *link_name)
 
 static void test_file_io(void)
 {
-    const char *path = "/tmp/systest.txt";
+    const char *path = tmp_path("systest.txt");
     char buf[64];
     int fd;
     int n;
@@ -147,7 +158,7 @@ static void test_file_io(void)
 
 static void test_access_umask(void)
 {
-    const char *path = "/tmp/umask.txt";
+    const char *path = tmp_path("umask.txt");
     int old_mask;
     int fd;
 
@@ -189,7 +200,7 @@ static void test_pipe_dup2(void)
     close(pipefd[1]);
 
     saved_stdout = dup(STDOUT_FILENO);
-    fd = open("/tmp/dup2.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    fd = open(tmp_path("dup2.txt"), O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (expect(saved_stdout >= 0 && fd >= 0, "dup/open for dup2", fd) < 0)
         return;
 
@@ -203,13 +214,13 @@ static void test_pipe_dup2(void)
     expect(write_result == 8, "dup2 redirected write syscall", write_result);
     expect(restore_result == STDOUT_FILENO, "restore stdout with dup2", restore_result);
 
-    n = read_file("/tmp/dup2.txt", buf, sizeof(buf));
+    n = read_file(tmp_path("dup2.txt"), buf, sizeof(buf));
     expect(n == 8 && strcmp(buf, "dup2-ok\n") == 0, "dup2 redirected write", n);
 }
 
 static void test_fd_access_modes(void)
 {
-    const char *path = "/tmp/fd-modes.txt";
+    const char *path = tmp_path("fd-modes.txt");
     char c = 0;
     int fd;
 
@@ -260,7 +271,7 @@ static void test_stat_syscalls(void)
 
 static void test_chmod_chown_syscalls(void)
 {
-    const char *path = "/tmp/chmod-chown.txt";
+    const char *path = tmp_path("chmod-chown.txt");
     struct stat st;
     uid_t original_uid = 0;
     int fd;
@@ -298,7 +309,7 @@ static void test_chmod_chown_syscalls(void)
 
 static void test_posix_compat_syscalls(void)
 {
-    const char *path = "/tmp/compat-syscalls.txt";
+    const char *path = tmp_path("compat-syscalls.txt");
     struct stat st;
     struct timeval tv;
     struct timezone tz;
@@ -354,11 +365,11 @@ static void test_posix_compat_syscalls(void)
 
 static void test_ext2_links_and_dirents(void)
 {
-    const char *path = "/tmp/link-target.txt";
-    const char *hard = "/tmp/link-hard.txt";
-    const char *sym = "/tmp/link-sym.txt";
-    const char *cmd_hard = "/tmp/ln-cmd-hard.txt";
-    const char *cmd_sym = "/tmp/ln-cmd-sym.txt";
+    const char *path = tmp_path("link-target.txt");
+    const char *hard = tmp_path("link-hard.txt");
+    const char *sym = tmp_path("link-sym.txt");
+    const char *cmd_hard = tmp_path("ln-cmd-hard.txt");
+    const char *cmd_sym = tmp_path("ln-cmd-sym.txt");
     struct stat st_path;
     struct stat st_hard;
     struct stat st_sym;
@@ -420,7 +431,7 @@ static void test_ext2_links_and_dirents(void)
         expect(strcmp(buf, hard) == 0, "ln -s readlink target", n);
     }
 
-    fd = open("/tmp", O_RDONLY | O_DIRECTORY, 0);
+    fd = open(systest_tmp_root, O_RDONLY | O_DIRECTORY, 0);
     if (expect(fd >= 0, "getdents open /tmp", fd) >= 0) {
         n = getdents(fd, dents, sizeof(dents));
         close(fd);
@@ -456,47 +467,47 @@ static void test_ext2_write_edges(void)
     int n;
     int total;
 
-    unlink("/tmp/ext2-renamed.txt");
-    unlink("/tmp/ext2-edge.txt");
-    unlink("/tmp/ext2-big.bin");
-    rmdir("/tmp/ext2-edge-dir");
+    unlink(tmp_path("ext2-renamed.txt"));
+    unlink(tmp_path("ext2-edge.txt"));
+    unlink(tmp_path("ext2-big.bin"));
+    rmdir(tmp_path("ext2-edge-dir"));
 
-    expect(mkdir("/tmp/ext2-edge-dir", 0755) == 0, "ext2 mkdir edge dir", 0);
-    if (expect(stat("/tmp/ext2-edge-dir", &st) == 0, "ext2 stat new dir", 0) == 0)
+    expect(mkdir(tmp_path("ext2-edge-dir"), 0755) == 0, "ext2 mkdir edge dir", 0);
+    if (expect(stat(tmp_path("ext2-edge-dir"), &st) == 0, "ext2 stat new dir", 0) == 0)
         expect(S_ISDIR(st.st_mode) && st.st_nlink >= 2,
                "ext2 new dir link count", (int)st.st_nlink);
 
-    fd = open("/tmp/ext2-edge-dir/file.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    fd = open(tmp_path("ext2-edge-dir/file.txt"), O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (expect(fd >= 0, "ext2 create file in new dir", fd) >= 0) {
         expect(write(fd, "abcdef", 6) == 6, "ext2 write new file", fd);
         close(fd);
     }
-    if (expect(stat("/tmp/ext2-edge-dir/file.txt", &st) == 0, "ext2 stat new file", 0) == 0)
+    if (expect(stat(tmp_path("ext2-edge-dir/file.txt"), &st) == 0, "ext2 stat new file", 0) == 0)
         expect(S_ISREG(st.st_mode) && st.st_nlink == 1,
                "ext2 new file link count", (int)st.st_nlink);
 
-    expect(rmdir("/tmp/ext2-edge-dir") < 0, "ext2 rmdir non-empty fails", 0);
-    expect(rename("/tmp/ext2-edge-dir/file.txt", "/tmp/ext2-renamed.txt") == 0,
+    expect(rmdir(tmp_path("ext2-edge-dir")) < 0, "ext2 rmdir non-empty fails", 0);
+    expect(rename(tmp_path("ext2-edge-dir/file.txt"), tmp_path("ext2-renamed.txt")) == 0,
            "ext2 rename file out of dir", 0);
-    expect(rmdir("/tmp/ext2-edge-dir") == 0, "ext2 rmdir empty dir", 0);
+    expect(rmdir(tmp_path("ext2-edge-dir")) == 0, "ext2 rmdir empty dir", 0);
 
-    fd = open("/tmp/ext2-renamed.txt", O_WRONLY | O_TRUNC, 0);
+    fd = open(tmp_path("ext2-renamed.txt"), O_WRONLY | O_TRUNC, 0);
     if (expect(fd >= 0, "ext2 open existing with trunc", fd) >= 0) {
         expect(write(fd, "xy", 2) == 2, "ext2 write after trunc", fd);
         close(fd);
     }
 
-    fd = open("/tmp/ext2-renamed.txt", O_WRONLY | O_APPEND, 0);
+    fd = open(tmp_path("ext2-renamed.txt"), O_WRONLY | O_APPEND, 0);
     if (expect(fd >= 0, "ext2 open existing with append", fd) >= 0) {
         expect(write(fd, "z", 1) == 1, "ext2 append write", fd);
         close(fd);
     }
 
-    n = read_file("/tmp/ext2-renamed.txt", buf, sizeof(buf));
+    n = read_file(tmp_path("ext2-renamed.txt"), buf, sizeof(buf));
     expect(n == 3 && strcmp(buf, "xyz") == 0, "ext2 read truncate+append result", n);
 
     memset(bigbuf, 'A', sizeof(bigbuf));
-    fd = open("/tmp/ext2-big.bin", O_CREAT | O_RDWR | O_TRUNC, 0644);
+    fd = open(tmp_path("ext2-big.bin"), O_CREAT | O_RDWR | O_TRUNC, 0644);
     if (expect(fd >= 0, "ext2 double-indirect create", fd) >= 0) {
         total = 0;
         while (total < 300 * 1024) {
@@ -513,10 +524,10 @@ static void test_ext2_write_edges(void)
                "ext2 double-indirect read tail", n);
         close(fd);
     }
-    unlink("/tmp/ext2-big.bin");
+    unlink(tmp_path("ext2-big.bin"));
 
-    expect(unlink("/tmp/ext2-renamed.txt") == 0, "ext2 unlink renamed file", 0);
-    expect(open("/tmp/ext2-renamed.txt", O_RDONLY, 0) < 0, "ext2 unlinked file missing", 0);
+    expect(unlink(tmp_path("ext2-renamed.txt")) == 0, "ext2 unlink renamed file", 0);
+    expect(open(tmp_path("ext2-renamed.txt"), O_RDONLY, 0) < 0, "ext2 unlinked file missing", 0);
 }
 
 static void test_rm_recursive_utility(void)
@@ -524,31 +535,31 @@ static void test_rm_recursive_utility(void)
     struct stat st;
     int fd;
 
-    unlink("/tmp/rm-dir-link");
-    unlink("/tmp/rm-tree/sub/file.txt");
-    rmdir("/tmp/rm-tree/sub");
-    rmdir("/tmp/rm-tree");
+    unlink(tmp_path("rm-dir-link"));
+    unlink(tmp_path("rm-tree/sub/file.txt"));
+    rmdir(tmp_path("rm-tree/sub"));
+    rmdir(tmp_path("rm-tree"));
 
-    expect(mkdir("/tmp/rm-tree", 0755) == 0, "rm -r mkdir root", 0);
-    expect(mkdir("/tmp/rm-tree/sub", 0755) == 0, "rm -r mkdir child", 0);
+    expect(mkdir(tmp_path("rm-tree"), 0755) == 0, "rm -r mkdir root", 0);
+    expect(mkdir(tmp_path("rm-tree/sub"), 0755) == 0, "rm -r mkdir child", 0);
 
-    fd = open("/tmp/rm-tree/sub/file.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    fd = open(tmp_path("rm-tree/sub/file.txt"), O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (expect(fd >= 0, "rm -r create nested file", fd) >= 0) {
         expect(write(fd, "x", 1) == 1, "rm -r write nested file", fd);
         close(fd);
     }
 
-    expect(run_rm1("/tmp/rm-tree") != 0, "rm refuses directory without -r", 0);
-    expect(stat("/tmp/rm-tree/sub/file.txt", &st) == 0, "rm refusal preserves tree", 0);
+    expect(run_rm1(tmp_path("rm-tree")) != 0, "rm refuses directory without -r", 0);
+    expect(stat(tmp_path("rm-tree/sub/file.txt"), &st) == 0, "rm refusal preserves tree", 0);
 
-    expect(symlink("/tmp/rm-tree", "/tmp/rm-dir-link") == 0, "rm symlink-to-dir setup", 0);
-    expect(run_rm2("-rf", "/tmp/rm-dir-link") == 0, "rm -rf removes symlink to dir only", 0);
-    expect(lstat("/tmp/rm-dir-link", &st) < 0, "rm removed symlink itself", 0);
-    expect(stat("/tmp/rm-tree/sub/file.txt", &st) == 0,
+    expect(symlink(tmp_path("rm-tree"), tmp_path("rm-dir-link")) == 0, "rm symlink-to-dir setup", 0);
+    expect(run_rm2("-rf", tmp_path("rm-dir-link")) == 0, "rm -rf removes symlink to dir only", 0);
+    expect(lstat(tmp_path("rm-dir-link"), &st) < 0, "rm removed symlink itself", 0);
+    expect(stat(tmp_path("rm-tree/sub/file.txt"), &st) == 0,
            "rm symlink target tree survives", 0);
 
-    expect(run_rm2("-rf", "/tmp/rm-tree") == 0, "rm -rf removes directory tree", 0);
-    expect(stat("/tmp/rm-tree", &st) < 0, "rm -rf removed root directory", 0);
+    expect(run_rm2("-rf", tmp_path("rm-tree")) == 0, "rm -rf removes directory tree", 0);
+    expect(stat(tmp_path("rm-tree"), &st) < 0, "rm -rf removed root directory", 0);
 }
 
 static void test_fork_wait_kill(void)
@@ -938,13 +949,14 @@ static void test_cow_memory(void)
 
 static void test_shared_memory(void)
 {
-    const char *name = "systest-shm";
+    char name[32];
     int id;
     int pid;
     int status = -1;
     int waited;
     volatile int *shared;
 
+    snprintf(name, sizeof(name), "systest-shm-%d", getpid());
     shm_unlink(name);
     id = shm_open(name, 4096, SHM_O_CREAT | SHM_O_EXCL);
     if (expect(id >= 0, "shm create", id) < 0)
@@ -1383,6 +1395,9 @@ static void test_process_session_info(void)
 int main(void)
 {
     printf("=== syscall smoke tests ===\n");
+    snprintf(systest_tmp_root, sizeof(systest_tmp_root), "/tmp/systest-%d", getpid());
+    run_rm2("-rf", systest_tmp_root);
+    mkdir(systest_tmp_root, 0755);
 
     test_identity();
     test_terminal_process_group();
@@ -1415,10 +1430,12 @@ int main(void)
     test_lifecycle_orphan_reaper();
 
     if (failures == 0) {
+        run_rm2("-rf", systest_tmp_root);
         printf("systest: all tests passed\n");
         exit(0);
     }
 
+    run_rm2("-rf", systest_tmp_root);
     printf("systest: %d failure(s)\n", failures);
     exit(1);
 }
