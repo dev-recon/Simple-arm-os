@@ -12,6 +12,7 @@
 #include <kernel/timer.h>
 #include <kernel/dirent.h>
 #include <kernel/tty.h>
+#include <kernel/spinlock.h>
 #include <asm/mmu.h>
 
 
@@ -26,6 +27,8 @@ extern file_operations_t fat32_file_ops;
 extern inode_operations_t fat32_inode_ops;
 extern file_operations_t ext2_file_ops;
 extern inode_operations_t ext2_inode_ops;
+
+static spinlock_t file_ref_lock = SPINLOCK_INIT("file_ref");
 
 bool inode_permission(inode_t* inode, int mask) {
     /* Root peut tout faire */
@@ -674,23 +677,46 @@ file_t* create_file(void)
     return file;
 }
 
+file_t* get_file(file_t* file)
+{
+    unsigned long flags;
+
+    if (!file) return NULL;
+
+    spin_lock_irqsave(&file_ref_lock, &flags);
+    if (file->ref_count == 0) {
+        spin_unlock_irqrestore(&file_ref_lock, flags);
+        return NULL;
+    }
+    file->ref_count++;
+    spin_unlock_irqrestore(&file_ref_lock, flags);
+
+    return file;
+}
+
 void close_file(file_t* file)
 {
+    bool do_close = false;
+    unsigned long flags;
+
     if (!file) return;
 
+    spin_lock_irqsave(&file_ref_lock, &flags);
     if (file->ref_count == 0) {
+        spin_unlock_irqrestore(&file_ref_lock, flags);
         KERROR("close_file: invalid zero refcount for file %p\n", file);
         return;
     }
     
     file->ref_count--;
-    if (file->ref_count == 0) {
-        if (file->f_op && file->f_op->close) {
+    do_close = (file->ref_count == 0);
+    spin_unlock_irqrestore(&file_ref_lock, flags);
+
+    if (do_close) {
+        if (file->f_op && file->f_op->close)
             file->f_op->close(file);
-        }
-        if (file->inode) {
+        if (file->inode)
             put_inode(file->inode);
-        }
         kfree(file);
     }
 }

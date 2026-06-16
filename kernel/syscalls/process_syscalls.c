@@ -468,8 +468,9 @@ int sys_dup(int oldfd)
     newfd = allocate_fd(current_task);
     if (newfd < 0) return -EMFILE;
     
-    file->ref_count++;
-    current_task->process->files[newfd] = file;
+    current_task->process->files[newfd] = get_file(file);
+    if (!current_task->process->files[newfd])
+        return -EBADF;
     current_task->process->fd_flags[newfd] = 0;
     
     return newfd;
@@ -495,8 +496,9 @@ int sys_dup2(int oldfd, int newfd)
         close_file(old_newfd);
     }
     
-    file->ref_count++;
-    current_task->process->files[newfd] = file;
+    current_task->process->files[newfd] = get_file(file);
+    if (!current_task->process->files[newfd])
+        return -EBADF;
     current_task->process->fd_flags[newfd] = 0;
     
     return newfd;
@@ -522,8 +524,9 @@ int sys_fcntl(int fd, int cmd, uint32_t arg)
             return -EINVAL;
         for (newfd = (int)arg; newfd < MAX_FILES; newfd++) {
             if (!current_task->process->files[newfd]) {
-                file->ref_count++;
-                current_task->process->files[newfd] = file;
+                current_task->process->files[newfd] = get_file(file);
+                if (!current_task->process->files[newfd])
+                    return -EBADF;
                 current_task->process->fd_flags[newfd] = 0;
                 return newfd;
             }
@@ -1283,13 +1286,14 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     start_time = get_system_ticks();
     //KDEBUG("sys_nanosleep: start_time=%u\n", start_time);
     
-    spin_lock(&task_lock);
+    unsigned long sleep_flags;
+    spin_lock_irqsave(&task_lock, &sleep_flags);
         /* Mettre le processus en sommeil */
     current_task->state = TASK_INTERRUPTIBLE;
     if (current_task->process)
         current_task->process->state = (proc_state_t)PROC_INTERRUPTIBLE;
     current_task->wakeup_time = start_time + sleep_ticks;
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, sleep_flags);
     
     yield();
     
@@ -1302,9 +1306,9 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
          current_task->wakeup_time > 0 &&
          now < current_task->wakeup_time);
 
-    spin_lock(&task_lock);
+    spin_lock_irqsave(&task_lock, &sleep_flags);
     current_task->wakeup_time = 0;
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, sleep_flags);
 
     if (interrupted) {
         /* Réveillé prématurément par un signal */

@@ -72,6 +72,7 @@ void free_fd(task_t* proc, int fd);
 int allocate_fd(task_t* process);
 
 /* File operations */
+file_t* get_file(file_t* file);
 void close_file(file_t* file);
 
 /* User space memory functions */

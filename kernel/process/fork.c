@@ -44,9 +44,11 @@ void copy_process_files(task_t* parent, task_t* child)
 
     for (i = 0; i < MAX_FILES; i++) {
         if (parent->process->files[i]) {
-            child->process->files[i] = parent->process->files[i];
-            child->process->fd_flags[i] = parent->process->fd_flags[i];
-            parent->process->files[i]->ref_count++;
+            child->process->files[i] = get_file(parent->process->files[i]);
+            if (child->process->files[i])
+                child->process->fd_flags[i] = parent->process->fd_flags[i];
+            else
+                child->process->fd_flags[i] = 0;
         } else {
             child->process->fd_flags[i] = 0;
         }
@@ -328,10 +330,11 @@ void orphan_children(task_t* proc)
         
         /* Reveiller init si l'enfant est zombie */
         if (child->state == TASK_ZOMBIE && init_proc->state == TASK_BLOCKED) {
-            spin_lock(&task_lock); 
+            unsigned long flags;
+            spin_lock_irqsave(&task_lock, &flags);
             init_proc->state = TASK_READY;
             init_proc->process->state = (proc_state_t)PROC_READY;
-            spin_unlock(&task_lock); 
+            spin_unlock_irqrestore(&task_lock, flags);
             add_to_ready_queue(init_proc);
         }
         
@@ -380,10 +383,11 @@ void wakeup_parent(task_t *proc){
             if (child_matches_waitpid(parent, proc, wait_pid)) {
                 //KINFO("sys_exit: Waking up parent PID=%u\n", parent->process->pid);
                 
-                spin_lock(&task_lock); 
+                unsigned long flags;
+                spin_lock_irqsave(&task_lock, &flags);
                 parent->state = TASK_READY;
                 parent->process->state = (proc_state_t)PROC_READY;
-                spin_unlock(&task_lock); 
+                spin_unlock_irqrestore(&task_lock, flags);
                 
                 /* Ajouter le parent a la ready queue */
                 add_to_ready_queue(parent);

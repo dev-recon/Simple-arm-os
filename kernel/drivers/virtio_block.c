@@ -43,6 +43,8 @@ static bool virtio_blk_failed = false;
 static bool virtio_blk_readonly = false;
 static bool virtio_blk_flush_supported = false;
 static spinlock_t virtio_blk_lock = SPINLOCK_INIT("virtio_blk");
+static volatile bool virtio_blk_busy = false;
+static task_t *virtio_blk_owner = NULL;
 
 typedef struct {
     volatile bool active;
@@ -53,6 +55,48 @@ typedef struct {
 } virtio_blk_pending_t;
 
 static virtio_blk_pending_t virtio_blk_pending = {0};
+
+static void virtio_blk_acquire(void)
+{
+    while (1) {
+        unsigned long flags;
+
+        spin_lock_irqsave(&virtio_blk_lock, &flags);
+        if (!virtio_blk_busy) {
+            virtio_blk_busy = true;
+            virtio_blk_owner = current_task;
+            spin_unlock_irqrestore(&virtio_blk_lock, flags);
+            return;
+        }
+        spin_unlock_irqrestore(&virtio_blk_lock, flags);
+
+        /*
+         * Block operations can sleep in wait_for_used(). Never hold a
+         * spinlock while another request is in flight; wait cooperatively.
+         */
+        if (!current_task) {
+            asm volatile("yield" ::: "memory");
+            continue;
+        }
+
+        yield();
+    }
+}
+
+static void virtio_blk_release(void)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&virtio_blk_lock, &flags);
+    if (!virtio_blk_busy) {
+        KERROR("virtio_blk: release without owner\n");
+    } else if (virtio_blk_owner && current_task && virtio_blk_owner != current_task) {
+        KERROR("virtio_blk: release by non-owner\n");
+    }
+    virtio_blk_busy = false;
+    virtio_blk_owner = NULL;
+    spin_unlock_irqrestore(&virtio_blk_lock, flags);
+}
 
 #define VIRTIO_FALLBACK_PHY_ADDR 0x0A003E00u
 volatile uint32_t *virtio_mmio_base =
@@ -595,11 +639,6 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
             continue;
         }
 
-        if (get_critical_section()) {
-            wait_for_interrupt();
-            continue;
-        }
-
         uint32_t irq_flags = disable_interrupts_save();
         if (virtio_blk_pending.completed || virtio_blk_used_advanced(vq, prev_idx)) {
             restore_interrupts(irq_flags);
@@ -857,9 +896,9 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
     uint32_t bytes = nsectors * sector_size;
     if (bytes == 0) return -1;
 
-    spin_lock(&virtio_blk_lock);
+    virtio_blk_acquire();
     if (virtio_blk_failed) {
-        spin_unlock(&virtio_blk_lock);
+        virtio_blk_release();
         return -1;
     }
 
@@ -867,7 +906,7 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
     uint32_t hdr_pa = 0;
     void *hdr_va = alloc_dma_pages(1, &hdr_pa);
     if (!hdr_va) {
-        spin_unlock(&virtio_blk_lock);
+        virtio_blk_release();
         return -1;
     }
     struct virtio_blk_req *hdr = (struct virtio_blk_req *)hdr_va;
@@ -880,7 +919,7 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
     void *data_va = alloc_dma_pages(npages, &data_pa);
     if (!data_va) {
         free_pages(hdr_va, 1);
-        spin_unlock(&virtio_blk_lock);
+        virtio_blk_release();
         return -1;
     }
 
@@ -903,7 +942,7 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
             free_pages(data_va, npages);
             free_pages(hdr_va, 1);
         }
-        spin_unlock(&virtio_blk_lock);
+        virtio_blk_release();
         return -1;
     }
 
@@ -913,7 +952,7 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
 
     free_pages(data_va, npages);
     free_pages(hdr_va, 1);
-    spin_unlock(&virtio_blk_lock);
+    virtio_blk_release();
     return 0;
 }
 
@@ -934,9 +973,9 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
     if (bytes == 0) return -1;
     if (virtio_blk_readonly) return -1;
 
-    spin_lock(&virtio_blk_lock);
+    virtio_blk_acquire();
     if (virtio_blk_failed) {
-        spin_unlock(&virtio_blk_lock);
+        virtio_blk_release();
         return -1;
     }
 
@@ -944,7 +983,7 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
     uint32_t hdr_pa = 0;
     void *hdr_va = alloc_dma_pages(1, &hdr_pa);
     if (!hdr_va) {
-        spin_unlock(&virtio_blk_lock);
+        virtio_blk_release();
         return -1;
     }
     struct virtio_blk_req *hdr = (struct virtio_blk_req *)hdr_va;
@@ -957,7 +996,7 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
     void *data_va = alloc_dma_pages(npages, &data_pa);
     if (!data_va) {
         free_pages(hdr_va, 1);
-        spin_unlock(&virtio_blk_lock);
+        virtio_blk_release();
         return -1;
     }
 
@@ -977,13 +1016,13 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
             free_pages(data_va, npages);
             free_pages(hdr_va, 1);
         }
-        spin_unlock(&virtio_blk_lock);
+        virtio_blk_release();
         return -1;
     }
 
     free_pages(data_va, npages);
     free_pages(hdr_va, 1);
-    spin_unlock(&virtio_blk_lock);
+    virtio_blk_release();
     return 0;
 }
 
@@ -1033,16 +1072,16 @@ int virtio_blk_flush(void)
     if (!virtio_blk_flush_supported)
         return 0;
 
-    spin_lock(&virtio_blk_lock);
+    virtio_blk_acquire();
     if (virtio_blk_failed) {
-        spin_unlock(&virtio_blk_lock);
+        virtio_blk_release();
         return -1;
     }
 
     uint32_t hdr_pa = 0;
     void *hdr_va = alloc_dma_pages(1, &hdr_pa);
     if (!hdr_va) {
-        spin_unlock(&virtio_blk_lock);
+        virtio_blk_release();
         return -1;
     }
 
@@ -1055,7 +1094,7 @@ int virtio_blk_flush(void)
     if (!virtio_blk_failed)
         free_pages(hdr_va, 1);
 
-    spin_unlock(&virtio_blk_lock);
+    virtio_blk_release();
     return ret;
 }
 
