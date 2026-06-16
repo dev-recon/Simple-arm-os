@@ -322,12 +322,21 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
 task_t* task_create_copy(task_t* parent, bool from_user)
 {
     task_t* child;
+    unsigned long flags;
     
     if (!parent || !parent->process) {
         KERROR("task_create_copy: parent NULL\n");
         KERROR("task_create_copy: Parent NULL Proc\n");
         return NULL;
     }
+
+    spin_lock_irqsave(&task_lock, &flags);
+    if (task_count >= MAX_TASKS) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        KERROR("task_create_copy: Maximum task count reached (%d)\n", MAX_TASKS);
+        return NULL;
+    }
+    spin_unlock_irqrestore(&task_lock, flags);
     
     /* Allouer la structure de tache */
     child = (task_t*)kmalloc(sizeof(task_t));
@@ -949,6 +958,8 @@ void setup_task_context(task_t* task)
  */
 void task_destroy(task_t* task)
 {
+    unsigned long flags;
+
     if (!task) {
         task = current_task;  /* Detruire la tache courante si NULL */
     }
@@ -960,7 +971,7 @@ void task_destroy(task_t* task)
 
     //KDEBUG("DESTROYING TASK %s, with state = %s\n", task->name, task_state_string(task->state));
     
-    spin_lock(&task_lock);
+    spin_lock_irqsave(&task_lock, &flags);
     
     if (task->state != TASK_ZOMBIE && task->state != TASK_TERMINATED) {
         task->state = TASK_ZOMBIE;
@@ -971,12 +982,12 @@ void task_destroy(task_t* task)
     
     /* Si c'est la tache courante, forcer une commutation */
     if (task == (task_t*)current_task) {
-        spin_unlock(&task_lock);
+        spin_unlock_irqrestore(&task_lock, flags);
         schedule();  /* Ne reviendra jamais ici */
         /* NOTREACHED */
     }
     
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, flags);
 
     /* Retirer de la liste */
     remove_task_from_list(task);
@@ -1025,18 +1036,21 @@ void verify_ready_queue_integrity(void)
  */
 void yield(void)
 {
+    unsigned long flags;
 
     if (!scheduler_initialized) {
         return;
     }
     
-    spin_lock(&task_lock);
+    spin_lock_irqsave(&task_lock, &flags);
     /* VÉRIFIEZ: La tâche courante devient READY */
     if (current_task && current_task->state == TASK_RUNNING) {
         //task_set_state(current_task, TASK_READY);
         current_task->state = TASK_READY;
+        if (current_task->type == TASK_TYPE_PROCESS && current_task->process)
+            current_task->process->state = (proc_state_t)PROC_READY;
     }
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, flags);
 
     //task_sleep_ms(500);  // Pause a bit to avoid race conditions.
 
@@ -1203,6 +1217,7 @@ void save_task_context_safe(task_t* task, uint32_t current_sp)
 }
 
 void switch_to_idle(void){
+    unsigned long flags;
     task_t *next_task = schedule_next_task();
 
     if (!next_task ||
@@ -1212,12 +1227,12 @@ void switch_to_idle(void){
         next_task = idle_task;
     }
 
-    spin_lock(&task_lock);
+    spin_lock_irqsave(&task_lock, &flags);
 
     next_task->state = TASK_RUNNING;
     next_task->switch_count++;
 
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, flags);
 
     /*
      * Ne pas sauvegarder une tache morte et ne jamais modifier manuellement
@@ -1230,12 +1245,24 @@ void switch_to_idle(void){
 
 static void for_each_task(task_t* current)
 {
-    task_t* task = current->next;
+    task_t* task;
     uint32_t current_time = get_system_ticks();
     int count = 0;
+
+    if (!current || !current->next)
+        return;
+
+    task = current->next;
     
     /* Chercher la prochaine tache READY avec la meme priorite */
     do {
+        if (!task) {
+            KERROR("for_each_task: broken task list near %s\n",
+                   current ? current->name : "?");
+            kernel_lifecycle_stats.scheduler_refused++;
+            return;
+        }
+
         if ((task->state == TASK_INTERRUPTIBLE ||
              task->state == TASK_UNINTERRUPTIBLE) &&
             task->wakeup_time > 0 &&
@@ -1249,6 +1276,12 @@ static void for_each_task(task_t* current)
             if (task->type == TASK_TYPE_PROCESS && task->process)
                 task->process->state = (proc_state_t)PROC_READY;
             task->wakeup_time = 0;
+        }
+
+        if (!task->next) {
+            KERROR("for_each_task: task %s has NULL next\n", task->name);
+            kernel_lifecycle_stats.scheduler_refused++;
+            return;
         }
         task = task->next;
         count++;
@@ -1268,20 +1301,25 @@ void schedule(void)
     static uint32_t schedule_count = 0;
     schedule_count++;
     
-    if (!scheduler_initialized || !current_task || get_critical_section()) {
+    if (!scheduler_initialized || !current_task) {
         KERROR("SCHED: Not initialized or no current task\n");
         return;
+    }
+
+    if (get_critical_section()) {
+        kernel_lifecycle_stats.scheduler_refused++;
+        unset_critical_section();
     }
 
     //KDEBUG("=== SCHED ==== get_cpu_mode = 0X%02X ==========\n", get_cpu_mode());
     if( get_cpu_mode() == ARM_MODE_IRQ ) return;
 
+    irq_flags = disable_interrupts_save();
+    set_critical_section();
+
     for_each_task(current_task);
 
     //KDEBUG("=== SCHED ==================\n");
-    
-    irq_flags = disable_interrupts_save();
-    set_critical_section();
     
     /* Petit délai pour éviter les race conditions */
     for (volatile int i = 0; i < 1000; i++);
@@ -1354,9 +1392,9 @@ void schedule(void)
         if (current_task->state == TASK_READY) {
             current_task->state = TASK_RUNNING;
         }
-        restore_interrupts(irq_flags);
         spin_unlock(&task_lock);
         unset_critical_section();
+        restore_interrupts(irq_flags);
 
         return;
     }
@@ -1458,12 +1496,12 @@ void schedule_to(task_t *next_task)
         return;
     }
 
+    irq_flags = disable_interrupts_save();
+    set_critical_section();
+
     for_each_task(current_task);
 
     //KDEBUG("=== SCHED ==================\n");
-    
-    irq_flags = disable_interrupts_save();
-    set_critical_section();
     
     /* Petit délai pour éviter les race conditions */
     for (volatile int i = 0; i < 1000; i++);
@@ -1644,6 +1682,7 @@ static task_t* find_next_same_priority_task(task_t* current)
  */
 static task_t* schedule_next_task(void)
 {
+    unsigned long flags;
 
     if (!task_list_head) {
         return idle_task;
@@ -1656,7 +1695,7 @@ static task_t* schedule_next_task(void)
     task_t* fallback = NULL;
     int count = 0;
     
-    spin_lock(&task_lock);
+    spin_lock_irqsave(&task_lock, &flags);
 
     do {
         if (!current) {
@@ -1669,7 +1708,7 @@ static task_t* schedule_next_task(void)
             /* Preferer une tache differente de current_task */
             if (current != (task_t *)current_task) {
                 //KDEBUG("  -> Selected different task: %s\n", current->name);
-                    spin_unlock(&task_lock);
+                    spin_unlock_irqrestore(&task_lock, flags);
 
                 return current;
             } else {
@@ -1693,14 +1732,14 @@ static task_t* schedule_next_task(void)
     /* Si on n'a trouve que current_task, l'utiliser */
     if (fallback) {
         //KDEBUG("  -> Using fallback (current): %s\n", fallback->name);
-        spin_unlock(&task_lock);
+        spin_unlock_irqrestore(&task_lock, flags);
     
         return fallback;
     }
     
     /* Dernier recours : idle */
     //KDEBUG("  -> No ready tasks, returning idle\n");
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, flags);
 
     return idle_task;
 }
@@ -1712,7 +1751,12 @@ static task_t* schedule_next_task(void)
  */
 void add_task_to_list(task_t* task)
 {
-    spin_lock(&task_lock);
+    unsigned long flags;
+
+    if (!task)
+        return;
+
+    spin_lock_irqsave(&task_lock, &flags);
 
     if (!task_list_head) {
         /* Premiere tache */
@@ -1728,7 +1772,7 @@ void add_task_to_list(task_t* task)
     }
     task_count++;
 
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, flags);
 
 }
 
@@ -1740,13 +1784,14 @@ void remove_task_from_list(task_t* task)
     task_t* current;
     bool found = false;
     int count = 0;
+    unsigned long flags;
 
     if (!task || !task_list_head) return;
 
-    spin_lock(&task_lock);
+    spin_lock_irqsave(&task_lock, &flags);
 
     if (!task->next || !task->prev) {
-        spin_unlock(&task_lock);
+        spin_unlock_irqrestore(&task_lock, flags);
         return;
     }
 
@@ -1761,7 +1806,7 @@ void remove_task_from_list(task_t* task)
     } while (current && current != task_list_head && count < MAX_TASKS);
 
     if (!found) {
-        spin_unlock(&task_lock);
+        spin_unlock_irqrestore(&task_lock, flags);
         return;
     }
     
@@ -1782,7 +1827,7 @@ void remove_task_from_list(task_t* task)
     if (task_count > 0)
         task_count--;
 
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, flags);
 
 }
 
@@ -1867,11 +1912,13 @@ task_t* task_find_by_name(const char* name)
  */
 void task_set_priority(task_t* task, uint32_t priority)
 {
+    unsigned long flags;
+
     if (!task) return;
     
-    spin_lock(&task_lock);
+    spin_lock_irqsave(&task_lock, &flags);
     task->priority = priority;
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, flags);
     
     /* Si on change la priorite de la tache courante, re-scheduler */
     if (task == (task_t *)current_task) {
@@ -1907,9 +1954,11 @@ static proc_state_t task_state_to_proc_state(task_state_t state)
 
 void task_set_state(task_t* task, task_state_t state)
 {
+    unsigned long flags;
+
     if (!task) return;
     
-    spin_lock(&task_lock);
+    spin_lock_irqsave(&task_lock, &flags);
     task->state = state;
     if (task->type == TASK_TYPE_PROCESS && task->process) {
         proc_state_t proc_state = task_state_to_proc_state(state);
@@ -1917,7 +1966,7 @@ void task_set_state(task_t* task, task_state_t state)
             kernel_lifecycle_stats.state_sync_repairs++;
         task->process->state = proc_state;
     }
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, flags);
 }
 
 void task_set_ready(task_t* task)
@@ -2734,6 +2783,8 @@ void debug_print_task(task_t *task_in)
  */
 void add_to_ready_queue(task_t* task)
 {
+    unsigned long flags;
+
     if (!task) return;
 
     /* Ne pas ajouter les zombies a la ready queue */
@@ -2752,19 +2803,21 @@ void add_to_ready_queue(task_t* task)
     }
 
     
-    spin_lock(&task_lock);
+    spin_lock_irqsave(&task_lock, &flags);
     
     if (task->state != TASK_READY) {
         task->state = TASK_READY;
+        if (task->type == TASK_TYPE_PROCESS && task->process)
+            task->process->state = (proc_state_t)PROC_READY;
     }
     
-    spin_unlock(&task_lock);
-    
-    /* Si pas encore dans la liste, l'ajouter avec votre fonction */
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    /* Les enfants crees par fork() arrivent volontairement hors liste. */
     if (!task->next && !task->prev && task != task_list_head) {
         add_task_to_list(task);
     }
-    
+
     //KDEBUG("add_to_ready_queue: Task %s added to ready queue\n", task->name);
 }
 
@@ -2773,21 +2826,25 @@ void add_to_ready_queue(task_t* task)
  */
 void remove_from_ready_queue(task_t* task)
 {
+    unsigned long flags;
+
     if (!task) {
         KERROR("remove_from_ready_queue: NULL task\n");
         return;
     }
     
     //KDEBUG("remove_from_ready_queue: Marking task %s as non-ready\n", task->name);
-    spin_lock(&task_lock);
+    spin_lock_irqsave(&task_lock, &flags);
 
     /*  Simplement marquer comme non-READY */
     /* Le scheduler ignorera automatiquement cette tache */
     if (task->state == TASK_READY) {
         task->state = TASK_BLOCKED;  /* ou autre etat approprie */
+        if (task->type == TASK_TYPE_PROCESS && task->process)
+            task->process->state = (proc_state_t)PROC_BLOCKED;
     }
     
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, flags);
 
     //KDEBUG("remove_from_ready_queue: Task %s marked as zombie (state=%d)\n", 
     //       task->name, task->state);

@@ -630,7 +630,8 @@ void sys_exit(int status)
     //set_critical_section();
     //KDEBUG("EXITING TASK %s - Status = %d, with state = %s\n", proc->name, status, task_state_string(proc->state));
 
-    spin_lock(&task_lock);    
+    unsigned long task_flags;
+    spin_lock_irqsave(&task_lock, &task_flags);
     /* CORRECTION: États cohérents avec sys_waitpid */
     proc->process->exit_code = status;
     //task_set_state(proc, TASK_ZOMBIE);
@@ -639,7 +640,7 @@ void sys_exit(int status)
         proc->process->state = (proc_state_t)PROC_ZOMBIE;
         kernel_lifecycle_stats.zombies_created++;
     }
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, task_flags);
 
     /* Fermer tous les fichiers ouverts avant de reveiller le parent */
     close_all_process_files(proc);

@@ -249,22 +249,23 @@ task_t* find_process_by_pid(pid_t pid)
 {
     task_t* task = task_list_head;
     int count = 0;
+    unsigned long flags;
     
     if (!task_list_head) return NULL;
     
-    spin_lock(&task_lock);
+    spin_lock_irqsave(&task_lock, &flags);
     
     do {
         /* ACCeS CORRECT via l'union */
         if (task->type == TASK_TYPE_PROCESS && task->process->pid == pid) {
-            spin_unlock(&task_lock);
+            spin_unlock_irqrestore(&task_lock, flags);
             return task;
         }
         task = task->next;
         count++;
     } while (task != task_list_head && count < MAX_TASKS);
     
-    spin_unlock(&task_lock);
+    spin_unlock_irqrestore(&task_lock, flags);
     return NULL;
 }
 

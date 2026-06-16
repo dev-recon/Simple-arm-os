@@ -12,7 +12,7 @@ struct file;
 
 /* Configuration */
 #define KERNEL_TASK_STACK_SIZE  (16 * 1024)    /* 16KB par tache */
-#define MAX_TASKS               288              /* Maximum de taches */
+#define MAX_TASKS               1024             /* Maximum de taches vivantes */
 #define TASK_NAME_MAX           32              /* Longueur max du nom */
 #define MAX_SIGNALS             32
 
