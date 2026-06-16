@@ -7,6 +7,8 @@
 #include <kernel/stdarg.h>
 #include <kernel/timer.h>
 #include <kernel/file.h>
+#include <kernel/disk_layout.h>
+#include <asm/arm.h>
 
 extern uint32_t task_count;
 extern task_t* task_list_head;
@@ -22,12 +24,23 @@ static file_operations_t procfs_dir_ops;
 #define PROC_INO_MOUNTS     4u
 #define PROC_INO_STAT       5u
 #define PROC_INO_TASKS      6u
+#define PROC_INO_CPUINFO    7u
+#define PROC_INO_FILESYSTEMS 8u
+#define PROC_INO_PARTITIONS 9u
+#define PROC_INO_SELF       10u
 #define PROC_PID_BASE       100000u
-#define PROC_PID_STRIDE     16u
+#define PROC_PID_STRIDE     512u
 #define PROC_PID_DIR        0u
 #define PROC_PID_STATUS     1u
 #define PROC_PID_STAT       2u
 #define PROC_PID_MAPS       3u
+#define PROC_PID_FD_DIR     4u
+#define PROC_PID_CMDLINE    5u
+#define PROC_PID_ENVIRON    6u
+#define PROC_PID_CWD        7u
+#define PROC_PID_EXE        8u
+#define PROC_PID_ROOT       9u
+#define PROC_PID_FD_BASE    128u
 
 typedef struct proc_file_data {
     char* data;
@@ -55,9 +68,29 @@ static bool proc_parse_pid(const char* name, pid_t* out)
     return true;
 }
 
+static bool proc_parse_uint(const char* name, uint32_t* out)
+{
+    uint32_t value = 0;
+
+    if (!name || !name[0]) return false;
+
+    for (const char* p = name; *p; p++) {
+        if (!proc_is_digit(*p)) return false;
+        value = value * 10u + (uint32_t)(*p - '0');
+    }
+
+    if (out) *out = value;
+    return true;
+}
+
 static uint32_t proc_pid_ino(pid_t pid, uint32_t type)
 {
     return PROC_PID_BASE + ((uint32_t)pid * PROC_PID_STRIDE) + type;
+}
+
+static uint32_t proc_pid_fd_ino(pid_t pid, int fd)
+{
+    return proc_pid_ino(pid, PROC_PID_FD_BASE + (uint32_t)fd);
 }
 
 static pid_t proc_ino_pid(uint32_t ino)
@@ -70,6 +103,15 @@ static uint32_t proc_ino_type(uint32_t ino)
 {
     if (ino < PROC_PID_BASE) return ino;
     return (ino - PROC_PID_BASE) % PROC_PID_STRIDE;
+}
+
+static int proc_ino_fd(uint32_t ino)
+{
+    uint32_t type = proc_ino_type(ino);
+    if (type < PROC_PID_FD_BASE ||
+        type >= PROC_PID_FD_BASE + (uint32_t)MAX_FILES)
+        return -1;
+    return (int)(type - PROC_PID_FD_BASE);
 }
 
 static const char* proc_task_state_name(task_state_t state)
@@ -187,6 +229,27 @@ static bool proc_pid_exists(pid_t pid)
     return found;
 }
 
+static pid_t proc_current_pid(void)
+{
+    if (current_task && current_task->process)
+        return current_task->process->pid;
+    return 0;
+}
+
+static uint32_t proc_read_midr(void)
+{
+    uint32_t id;
+    __asm__ volatile("mrc p15, 0, %0, c0, c0, 0" : "=r"(id));
+    return id;
+}
+
+static uint32_t proc_read_mpidr(void)
+{
+    uint32_t id;
+    __asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(id));
+    return id;
+}
+
 static void proc_append(char* buf, size_t cap, size_t* len, const char* fmt, ...)
 {
     va_list args;
@@ -245,6 +308,14 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_STAT, S_IFREG | 0444, 0);
         if (strcmp(name, "tasks") == 0)
             return proc_make_inode(PROC_INO_TASKS, S_IFREG | 0444, 0);
+        if (strcmp(name, "cpuinfo") == 0)
+            return proc_make_inode(PROC_INO_CPUINFO, S_IFREG | 0444, 0);
+        if (strcmp(name, "filesystems") == 0)
+            return proc_make_inode(PROC_INO_FILESYSTEMS, S_IFREG | 0444, 0);
+        if (strcmp(name, "partitions") == 0)
+            return proc_make_inode(PROC_INO_PARTITIONS, S_IFREG | 0444, 0);
+        if (strcmp(name, "self") == 0)
+            return proc_make_inode(PROC_INO_SELF, S_IFLNK | 0777, 0);
         if (proc_parse_pid(name, &pid) && proc_pid_exists(pid))
             return proc_make_inode(proc_pid_ino(pid, PROC_PID_DIR), S_IFDIR | 0555, 0);
         return NULL;
@@ -264,6 +335,47 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(proc_pid_ino(pid, PROC_PID_STAT), S_IFREG | 0444, 0);
         if (strcmp(name, "maps") == 0)
             return proc_make_inode(proc_pid_ino(pid, PROC_PID_MAPS), S_IFREG | 0444, 0);
+        if (strcmp(name, "fd") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_FD_DIR), S_IFDIR | 0555, 0);
+        if (strcmp(name, "cmdline") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_CMDLINE), S_IFREG | 0444, 0);
+        if (strcmp(name, "environ") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_ENVIRON), S_IFREG | 0400, 0);
+        if (strcmp(name, "cwd") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_CWD), S_IFLNK | 0777, 0);
+        if (strcmp(name, "exe") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_EXE), S_IFLNK | 0777, 0);
+        if (strcmp(name, "root") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_ROOT), S_IFLNK | 0777, 0);
+    }
+
+    if (dir_ino >= PROC_PID_BASE && proc_ino_type(dir_ino) == PROC_PID_FD_DIR) {
+        int fd;
+        uint32_t parsed_fd;
+        task_t* task;
+        process_t* proc;
+        unsigned long flags;
+
+        pid = proc_ino_pid(dir_ino);
+        if (strcmp(name, ".") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_FD_DIR), S_IFDIR | 0555, 0);
+        if (strcmp(name, "..") == 0)
+            return proc_make_inode(proc_pid_ino(pid, PROC_PID_DIR), S_IFDIR | 0555, 0);
+        if (!proc_parse_uint(name, &parsed_fd))
+            return NULL;
+        fd = (int)parsed_fd;
+        if (fd < 0 || fd >= MAX_FILES)
+            return NULL;
+
+        spin_lock_irqsave(&task_lock, &flags);
+        task = proc_find_task_locked(pid);
+        proc = task ? proc_task_process(task) : NULL;
+        if (!proc || !proc->files[fd]) {
+            spin_unlock_irqrestore(&task_lock, flags);
+            return NULL;
+        }
+        spin_unlock_irqrestore(&task_lock, flags);
+        return proc_make_inode(proc_pid_fd_ino(pid, fd), S_IFLNK | 0777, 0);
     }
 
     return NULL;
@@ -286,6 +398,133 @@ static int procfs_readonly_rename(inode_t* old_dir, const char* old_name,
 {
     (void)old_dir; (void)old_name; (void)new_dir; (void)new_name;
     return -EROFS;
+}
+
+static int proc_copy_link(char* buf, size_t bufsiz, const char* target)
+{
+    size_t len;
+
+    if (!buf || bufsiz == 0 || !target)
+        return -EINVAL;
+
+    len = strlen(target);
+    if (len > bufsiz)
+        len = bufsiz;
+    memcpy(buf, target, len);
+    return (int)len;
+}
+
+static int proc_fd_target(process_t* proc, int fd, char* target, size_t size)
+{
+    file_t* file;
+
+    if (!proc || fd < 0 || fd >= MAX_FILES || !target || size == 0)
+        return -ENOENT;
+
+    file = proc->files[fd];
+    if (!file)
+        return -ENOENT;
+
+    if (file->inode && file->inode->first_cluster >= PROC_PID_BASE) {
+        uint32_t ino = file->inode->first_cluster;
+        pid_t file_pid = proc_ino_pid(ino);
+        uint32_t type = proc_ino_type(ino);
+
+        if (type == PROC_PID_DIR)
+            snprintf(target, size, "/proc/%d", file_pid);
+        else if (type == PROC_PID_FD_DIR)
+            snprintf(target, size, "/proc/%d/fd", file_pid);
+        else if (type == PROC_PID_STATUS)
+            snprintf(target, size, "/proc/%d/status", file_pid);
+        else if (type == PROC_PID_STAT)
+            snprintf(target, size, "/proc/%d/stat", file_pid);
+        else if (type == PROC_PID_MAPS)
+            snprintf(target, size, "/proc/%d/maps", file_pid);
+        else if (type == PROC_PID_CMDLINE)
+            snprintf(target, size, "/proc/%d/cmdline", file_pid);
+        else if (type == PROC_PID_ENVIRON)
+            snprintf(target, size, "/proc/%d/environ", file_pid);
+        else
+            snprintf(target, size, "/proc");
+        return 0;
+    }
+
+    if (strcmp(file->name, "stdin") == 0 ||
+        strcmp(file->name, "stdout") == 0 ||
+        strcmp(file->name, "stderr") == 0 ||
+        strcmp(file->name, "tty0") == 0) {
+        snprintf(target, size, "/dev/tty0");
+        return 0;
+    }
+
+    if (file->name[0] == '/') {
+        snprintf(target, size, "%s", file->name);
+        return 0;
+    }
+
+    if (file->name[0]) {
+        snprintf(target, size, "%s", file->name);
+        return 0;
+    }
+
+    snprintf(target, size, "anon_inode:[file]");
+    return 0;
+}
+
+static int procfs_readlink(inode_t* inode, char* buf, size_t bufsiz)
+{
+    uint32_t ino;
+    uint32_t type;
+    pid_t pid;
+    int fd;
+    char target[MAX_PATH];
+    unsigned long flags;
+    task_t* task;
+    process_t* proc;
+
+    if (!inode || !buf)
+        return -EINVAL;
+
+    ino = inode->first_cluster;
+    if (ino == PROC_INO_SELF) {
+        snprintf(target, sizeof(target), "%d", proc_current_pid());
+        return proc_copy_link(buf, bufsiz, target);
+    }
+
+    if (ino < PROC_PID_BASE)
+        return -EINVAL;
+
+    pid = proc_ino_pid(ino);
+    type = proc_ino_type(ino);
+    fd = proc_ino_fd(ino);
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task = proc_find_task_locked(pid);
+    proc = task ? proc_task_process(task) : NULL;
+    if (!proc) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return -ENOENT;
+    }
+
+    if (type == PROC_PID_CWD) {
+        snprintf(target, sizeof(target), "%s", proc->cwd[0] ? proc->cwd : "/");
+    } else if (type == PROC_PID_EXE) {
+        snprintf(target, sizeof(target), "%s", proc->exe_path[0] ? proc->exe_path : task->name);
+    } else if (type == PROC_PID_ROOT) {
+        snprintf(target, sizeof(target), "/");
+    } else if (fd >= 0) {
+        int ret = proc_fd_target(proc, fd, target, sizeof(target));
+        if (ret < 0) {
+            spin_unlock_irqrestore(&task_lock, flags);
+            return ret;
+        }
+    } else {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return -EINVAL;
+    }
+
+    spin_unlock_irqrestore(&task_lock, flags);
+    return proc_copy_link(buf, bufsiz, target);
 }
 
 static void proc_fill_meminfo(char* buf, size_t cap, size_t* len)
@@ -315,6 +554,43 @@ static void proc_fill_mounts(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "virtio0p1 / ext2 rw 0 0\n");
     proc_append(buf, cap, len, "proc /proc proc rw,nosuid,nodev,noexec 0 0\n");
     proc_append(buf, cap, len, "virtio0p2 /mnt fat32 rw 0 0\n");
+}
+
+static void proc_fill_cpuinfo(char* buf, size_t cap, size_t* len)
+{
+    proc_append(buf, cap, len, "processor\t: 0\n");
+    proc_append(buf, cap, len, "model name\t: ARM Cortex-A15 @ QEMU virt\n");
+    proc_append(buf, cap, len, "BogoMIPS\t: 125.00\n");
+    proc_append(buf, cap, len, "Features\t: swp half thumb fastmult vfp edsp neon vfpv4 tls\n");
+    proc_append(buf, cap, len, "CPU implementer\t: 0x%02x\n", (proc_read_midr() >> 24) & 0xff);
+    proc_append(buf, cap, len, "CPU architecture: 7\n");
+    proc_append(buf, cap, len, "CPU part\t: 0x%03x\n", (proc_read_midr() >> 4) & 0xfff);
+    proc_append(buf, cap, len, "CPU revision\t: %u\n", proc_read_midr() & 0xf);
+    proc_append(buf, cap, len, "Hardware\t: ArmOS QEMU virt\n");
+    proc_append(buf, cap, len, "Revision\t: 0000\n");
+    proc_append(buf, cap, len, "MPIDR\t\t: 0x%08x\n", proc_read_mpidr());
+}
+
+static void proc_fill_filesystems(char* buf, size_t cap, size_t* len)
+{
+    proc_append(buf, cap, len, "nodev\tproc\n");
+    proc_append(buf, cap, len, "\text2\n");
+    proc_append(buf, cap, len, "\tfat32\n");
+}
+
+static void proc_fill_partitions(char* buf, size_t cap, size_t* len)
+{
+    proc_append(buf, cap, len, "major minor  #blocks  name\n\n");
+
+    for (uint32_t i = 0; i < DISK_PART_COUNT; i++) {
+        const disk_partition_t* part = disk_partition_get((disk_partition_id_t)i);
+        if (!part)
+            continue;
+        proc_append(buf, cap, len, " 254 %5u %8u %s\n",
+                    i + 1,
+                    (uint32_t)(part->sector_count >> 1),
+                    part->name);
+    }
 }
 
 static void proc_fill_stat(char* buf, size_t cap, size_t* len)
@@ -470,6 +746,39 @@ static void proc_fill_pid_maps(pid_t pid, char* buf, size_t cap, size_t* len)
     spin_unlock_irqrestore(&task_lock, flags);
 }
 
+static void proc_fill_pid_blob(pid_t pid, uint32_t type, char* buf, size_t cap, size_t* len)
+{
+    unsigned long flags;
+    task_t* task;
+    process_t* proc;
+    size_t src_len;
+    const char* src;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task = proc_find_task_locked(pid);
+    proc = task ? proc_task_process(task) : NULL;
+    if (!proc) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return;
+    }
+
+    if (type == PROC_PID_CMDLINE) {
+        src = proc->cmdline;
+        src_len = proc->cmdline_len;
+    } else {
+        src = proc->environ;
+        src_len = proc->environ_len;
+    }
+
+    if (src_len > cap - *len)
+        src_len = cap - *len;
+    if (src_len > 0) {
+        memcpy(buf + *len, src, src_len);
+        *len += src_len;
+    }
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
 static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
 {
     pid_t pid;
@@ -482,6 +791,9 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_MOUNTS:  proc_fill_mounts(buf, cap, len);  return 0;
         case PROC_INO_STAT:    proc_fill_stat(buf, cap, len);    return 0;
         case PROC_INO_TASKS:   proc_fill_tasks(buf, cap, len);   return 0;
+        case PROC_INO_CPUINFO: proc_fill_cpuinfo(buf, cap, len); return 0;
+        case PROC_INO_FILESYSTEMS: proc_fill_filesystems(buf, cap, len); return 0;
+        case PROC_INO_PARTITIONS: proc_fill_partitions(buf, cap, len); return 0;
         default: break;
     }
 
@@ -494,6 +806,10 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
             case PROC_PID_STATUS: proc_fill_pid_status(pid, buf, cap, len); return 0;
             case PROC_PID_STAT:   proc_fill_pid_stat(pid, buf, cap, len);   return 0;
             case PROC_PID_MAPS:   proc_fill_pid_maps(pid, buf, cap, len);   return 0;
+            case PROC_PID_CMDLINE:
+            case PROC_PID_ENVIRON:
+                proc_fill_pid_blob(pid, proc_ino_type(ino), buf, cap, len);
+                return 0;
         }
     }
 
@@ -615,6 +931,10 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         { "mounts",  PROC_INO_MOUNTS,  DT_REG },
         { "stat",    PROC_INO_STAT,    DT_REG },
         { "tasks",   PROC_INO_TASKS,   DT_REG },
+        { "cpuinfo", PROC_INO_CPUINFO, DT_REG },
+        { "filesystems", PROC_INO_FILESYSTEMS, DT_REG },
+        { "partitions", PROC_INO_PARTITIONS, DT_REG },
+        { "self",    PROC_INO_SELF,    DT_LNK },
     };
     uint32_t offset = file->offset;
     uint32_t static_count = sizeof(entries) / sizeof(entries[0]);
@@ -673,6 +993,12 @@ static int procfs_pid_readdir(file_t* file, dirent_t* dirent)
         { "status", PROC_PID_STATUS, DT_REG },
         { "stat",   PROC_PID_STAT,   DT_REG },
         { "maps",   PROC_PID_MAPS,   DT_REG },
+        { "fd",     PROC_PID_FD_DIR, DT_DIR },
+        { "cmdline", PROC_PID_CMDLINE, DT_REG },
+        { "environ", PROC_PID_ENVIRON, DT_REG },
+        { "cwd",    PROC_PID_CWD,    DT_LNK },
+        { "exe",    PROC_PID_EXE,    DT_LNK },
+        { "root",   PROC_PID_ROOT,   DT_LNK },
     };
     uint32_t offset = file->offset;
     pid_t pid = proc_ino_pid(file->inode->first_cluster);
@@ -693,6 +1019,54 @@ static int procfs_pid_readdir(file_t* file, dirent_t* dirent)
     return 1;
 }
 
+static int procfs_fd_readdir(file_t* file, dirent_t* dirent)
+{
+    uint32_t offset = file->offset;
+    pid_t pid = proc_ino_pid(file->inode->first_cluster);
+    task_t* task;
+    process_t* proc;
+    uint32_t seen = 0;
+    char fd_name[16];
+    unsigned long flags;
+
+    if (offset == 0) {
+        proc_fill_dirent(dirent, file->inode->first_cluster, DT_DIR, ".");
+        file->offset++;
+        return 1;
+    }
+    if (offset == 1) {
+        proc_fill_dirent(dirent, proc_pid_ino(pid, PROC_PID_DIR), DT_DIR, "..");
+        file->offset++;
+        return 1;
+    }
+
+    offset -= 2;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task = proc_find_task_locked(pid);
+    proc = task ? proc_task_process(task) : NULL;
+    if (!proc) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return 0;
+    }
+
+    for (int fd = 0; fd < MAX_FILES; fd++) {
+        if (!proc->files[fd])
+            continue;
+        if (seen == offset) {
+            snprintf(fd_name, sizeof(fd_name), "%d", fd);
+            proc_fill_dirent(dirent, proc_pid_fd_ino(pid, fd), DT_LNK, fd_name);
+            file->offset++;
+            spin_unlock_irqrestore(&task_lock, flags);
+            return 1;
+        }
+        seen++;
+    }
+
+    spin_unlock_irqrestore(&task_lock, flags);
+    return 0;
+}
+
 static int procfs_readdir(file_t* file, dirent_t* dirent)
 {
     uint32_t ino;
@@ -705,6 +1079,8 @@ static int procfs_readdir(file_t* file, dirent_t* dirent)
         return procfs_root_readdir(file, dirent);
     if (ino >= PROC_PID_BASE && proc_ino_type(ino) == PROC_PID_DIR)
         return procfs_pid_readdir(file, dirent);
+    if (ino >= PROC_PID_BASE && proc_ino_type(ino) == PROC_PID_FD_DIR)
+        return procfs_fd_readdir(file, dirent);
 
     return 0;
 }
@@ -716,7 +1092,7 @@ static inode_operations_t procfs_inode_ops = {
     .unlink = procfs_readonly_unlink,
     .rmdir = procfs_readonly_unlink,
     .rename = procfs_readonly_rename,
-    .readlink = NULL,
+    .readlink = procfs_readlink,
 };
 
 static file_operations_t procfs_file_ops = {

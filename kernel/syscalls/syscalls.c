@@ -171,6 +171,53 @@ static void rename_task_from_exec_path(task_t *task, const char *path)
     task->name[TASK_NAME_MAX - 1] = '\0';
 }
 
+static size_t snapshot_exec_vector(char *dst, size_t cap, char **vec)
+{
+    size_t len = 0;
+
+    if (!dst || cap == 0)
+        return 0;
+
+    dst[0] = '\0';
+    if (!vec)
+        return 0;
+
+    for (uint32_t i = 0; vec[i]; i++) {
+        size_t slen = strlen(vec[i]) + 1;
+        if (len + slen > cap)
+            break;
+        memcpy(dst + len, vec[i], slen);
+        len += slen;
+    }
+
+    return len;
+}
+
+static void snapshot_exec_metadata(task_t *task, const char *filename,
+                                   char **argv, char **envp)
+{
+    process_t *proc;
+
+    if (!task || !task->process)
+        return;
+
+    proc = task->process;
+
+    strncpy(proc->exe_path, filename ? filename : task->name, MAX_PATH - 1);
+    proc->exe_path[MAX_PATH - 1] = '\0';
+
+    proc->cmdline_len = snapshot_exec_vector(proc->cmdline,
+                                             sizeof(proc->cmdline), argv);
+    if (proc->cmdline_len == 0 && filename) {
+        strncpy(proc->cmdline, filename, sizeof(proc->cmdline) - 1);
+        proc->cmdline[sizeof(proc->cmdline) - 1] = '\0';
+        proc->cmdline_len = strlen(proc->cmdline) + 1;
+    }
+
+    proc->environ_len = snapshot_exec_vector(proc->environ,
+                                             sizeof(proc->environ), envp);
+}
+
 void dump_svc_stack(task_t *task, uint32_t *sp) {
     kprintf("SVC stack @%08x:\n", (unsigned)sp);
     for (int i=0;i<12;i++) {
@@ -486,6 +533,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     instruction_sync_barrier();
 
     rename_task_from_exec_path(proc, kernel_filename);
+    snapshot_exec_metadata(proc, kernel_filename, kernel_argv, kernel_envp);
 
     /* Nettoyer les ressources temporaires */
     put_inode(exe_inode);

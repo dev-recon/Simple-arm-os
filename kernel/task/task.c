@@ -380,6 +380,11 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             child->process->umask = parent->process->umask;
             child->process->state = (proc_state_t)PROC_READY;
             strcpy(child->process->cwd, parent->process->cwd);    // Setting Current Working Directory
+            strcpy(child->process->exe_path, parent->process->exe_path);
+            memcpy(child->process->cmdline, parent->process->cmdline, sizeof(child->process->cmdline));
+            child->process->cmdline_len = parent->process->cmdline_len;
+            memcpy(child->process->environ, parent->process->environ, sizeof(child->process->environ));
+            child->process->environ_len = parent->process->environ_len;
             
             /* Initialiser la table des fichiers (sera copiee plus tard) */
             memset(child->process->files, 0, sizeof(child->process->files));
@@ -907,6 +912,13 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         task->process->waitpid_iteration = 0;
         task->process->waitpid_caller_lr = 0;
         strcpy(task->process->cwd, "/");    // Setting Current Working Directory
+        strncpy(task->process->exe_path, name ? name : task->name, MAX_PATH - 1);
+        task->process->exe_path[MAX_PATH - 1] = '\0';
+        strncpy(task->process->cmdline, name ? name : task->name, PROC_CMDLINE_MAX - 1);
+        task->process->cmdline[PROC_CMDLINE_MAX - 1] = '\0';
+        task->process->cmdline_len = strlen(task->process->cmdline) + 1;
+        task->process->environ[0] = '\0';
+        task->process->environ_len = 0;
         
         /* Initialiser les signaux */
         init_process_signals(task);

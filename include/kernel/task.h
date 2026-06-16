@@ -15,6 +15,8 @@ struct file;
 #define MAX_TASKS               1024             /* Maximum de taches vivantes */
 #define TASK_NAME_MAX           32              /* Longueur max du nom */
 #define MAX_SIGNALS             32
+#define PROC_CMDLINE_MAX        512
+#define PROC_ENVIRON_MAX        512
 
 #define QUANTUM_TICKS           1
 
@@ -256,6 +258,11 @@ typedef struct {
     uint32_t waitpid_caller_lr; /* LR pour retourner apres waitpid */
 
     char cwd[MAX_PATH];   /* Current Working Directory */
+    char exe_path[MAX_PATH];
+    char cmdline[PROC_CMDLINE_MAX];
+    size_t cmdline_len;
+    char environ[PROC_ENVIRON_MAX];
+    size_t environ_len;
 
 } __attribute__((aligned(8))) process_t;
 
