@@ -35,7 +35,7 @@ bool get_critical_section(void)
 void init_timer_software(void)
 {
     extern int kprintf(const char *format, ...);
-    kprintf("[TIMER] Initializing SOFTWARE timer (no IRQ)...\n");
+    KINFO("[TIMER] Initializing SOFTWARE timer (no IRQ)...\n");
     
     /* Lire la fréquence du timer ARM Generic Timer */
     uint32_t timer_freq;
@@ -45,7 +45,7 @@ void init_timer_software(void)
         timer_freq = 62500000;  /* 62.5MHz par défaut QEMU */
     }
     
-    kprintf("[TIMER] Timer frequency: %u Hz\n", timer_freq);
+    KINFO("[TIMER] Timer frequency: %u Hz\n", timer_freq);
     
     /* PAS d'activation du timer hardware */
     /* PAS d'activation IRQ 30 */
@@ -56,8 +56,8 @@ void init_timer_software(void)
     software_system_ticks = 0;
     timer_software_initialized = true;
     
-    kprintf("[TIMER] Software timer initialized (polling mode)\n");
-    kprintf("[TIMER] Base count: %u%u\n", 
+    KINFO("[TIMER] Software timer initialized (polling mode)\n");
+    KINFO("[TIMER] Base count: %u%u\n", 
             (uint32_t)(last_timer_count >> 32), 
             (uint32_t)last_timer_count);
 }
@@ -114,7 +114,7 @@ void trigger_timer_interrupt(void)
 {
     extern int kprintf(const char *format, ...);
     
-    kprintf("[TIMER] Forcing timer interrupt...\n");
+    KINFO("[TIMER] Forcing timer interrupt...\n");
     
     /* Programmer une interruption dans 200 ticks */
     uint64_t current = get_timer_count();
@@ -124,7 +124,7 @@ void trigger_timer_interrupt(void)
     __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(target));  /* Set */
     __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(1));  /* Enable */
     
-    kprintf("[TIMER] Timer interrupt scheduled in 200 ticks\n");
+    KINFO("[TIMER] Timer interrupt scheduled in 200 ticks\n");
 }
 
 void timer_set_timeout(uint64_t timeout_ticks)
@@ -147,22 +147,22 @@ void timer_set_timeout(uint64_t timeout_ticks)
 void init_timer(void)
 {
     extern int kprintf(const char *format, ...);
-    kprintf("[TIMER] Starting ARM Generic Timer initialization...\n");
+    KINFO("[TIMER] Starting ARM Generic Timer initialization...\n");
     
     /* 1. Lire la frequence du timer */
     uint32_t timer_freq;
     __asm__ volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(timer_freq));
     
     if (timer_freq == 0) {
-        kprintf("[TIMER] Warning: Timer frequency is 0, using default 62.5MHz\n");
+        KWARN("[TIMER] Timer frequency is 0, using default 62.5MHz\n");
         timer_freq = 62500000;  // Frequence par defaut QEMU
     }
     
-    kprintf("[TIMER] Timer frequency: %u Hz\n", timer_freq);
+    KINFO("[TIMER] Timer frequency: %u Hz\n", timer_freq);
     
     /* 2. Calculer l'interval pour TIMER_FREQ Hz */
     uint32_t interval = timer_freq / TIMER_FREQ;
-    kprintf("[TIMER] Timer interval: %u counter ticks (%u us)\n",
+    KINFO("[TIMER] Timer interval: %u counter ticks (%u us)\n",
             interval, 1000000 / TIMER_FREQ);
     
     /* 3. Configurer le timer EL1 (non-secure) */
@@ -178,10 +178,10 @@ void init_timer(void)
     timer_ctrl = 0x1;  // Enable bit
     __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
     
-    kprintf("[TIMER] ARM Generic Timer configured\n");
+    KINFO("[TIMER] ARM Generic Timer configured\n");
     
     /* 4. Activer l'IRQ 30 dans le GIC */
-    kprintf("[TIMER] Enabling timer IRQ (30) in GIC...\n");
+    KINFO("[TIMER] Enabling timer IRQ (30) in GIC...\n");
 
     /* 3. Activer l'IRQ du timer dans le GIC */
     gic_enable_irq_kernel(VIRT_TIMER_NS_EL1_IRQ);  // IRQ 30
@@ -193,7 +193,7 @@ void init_timer(void)
     /* 5. Activer les interruptions au niveau CPU */
     __asm__ volatile("cpsie i" ::: "memory");
     
-    kprintf("[TIMER] Timer initialization complete OK\n");
+    KINFO("[TIMER] Timer initialization complete OK\n");
 }
 
 void timer_irq_handler(void)
@@ -222,7 +222,7 @@ void timer_irq_handler(void)
     
     /* 5. RÉDUIRE drastiquement les messages */
     if (system_ticks % (TIMER_FREQ * 10) == 0) {  /* Toutes les 10 secondes seulement */
-        //kprintf("[TIMER] System uptime: %u seconds -> %s\n", system_ticks / TIMER_FREQ, current_task->name);
+        //KINFO("[TIMER] System uptime: %u seconds -> %s\n", system_ticks / TIMER_FREQ, current_task->name);
     }
     
     /* 6. Scheduling sans messages debug */
@@ -247,7 +247,7 @@ void timer_irq_handler(void)
 void timer_enable_scheduling(void)
 {
     extern int kprintf(const char *format, ...);
-    kprintf("[TIMER] Process scheduling enabled OK\n");
+    KINFO("[TIMER] Process scheduling enabled OK\n");
     process_system_ready = true;
 }
 
@@ -302,30 +302,30 @@ void debug_timer_state(void)
 {
     extern int kprintf(const char *format, ...);
     
-    kprintf("[TIMER] === TIMER STATE DEBUG ===\n");
+    KINFO("[TIMER] === TIMER STATE DEBUG ===\n");
     
     /* Lire le registre de controle */
     uint32_t timer_ctrl;
     __asm__ volatile("mrc p15, 0, %0, c14, c2, 1" : "=r"(timer_ctrl));
     
-    kprintf("[TIMER] Control register: 0x%08X\n", timer_ctrl);
-    kprintf("[TIMER]   Enable: %s\n", (timer_ctrl & 0x1) ? "YES" : "NO");
-    kprintf("[TIMER]   Mask: %s\n", (timer_ctrl & 0x2) ? "YES" : "NO");
-    kprintf("[TIMER]   Status: %s\n", (timer_ctrl & 0x4) ? "PENDING" : "CLEAR");
+    KINFO("[TIMER] Control register: 0x%08X\n", timer_ctrl);
+    KINFO("[TIMER]   Enable: %s\n", (timer_ctrl & 0x1) ? "YES" : "NO");
+    KINFO("[TIMER]   Mask: %s\n", (timer_ctrl & 0x2) ? "YES" : "NO");
+    KINFO("[TIMER]   Status: %s\n", (timer_ctrl & 0x4) ? "PENDING" : "CLEAR");
     
     /* Lire la valeur de comparaison */
     uint32_t timer_value;
     __asm__ volatile("mrc p15, 0, %0, c14, c2, 0" : "=r"(timer_value));
-    kprintf("[TIMER] Compare value: %u\n", timer_value);
+    KINFO("[TIMER] Compare value: %u\n", timer_value);
     
     /* Lire le compteur actuel */
     uint64_t counter = get_timer_count();
-    kprintf("[TIMER] Current count: %u%u\n", (uint32_t)(counter >> 32), (uint32_t)counter);
+    KINFO("[TIMER] Current count: %u%u\n", (uint32_t)(counter >> 32), (uint32_t)counter);
     
-    kprintf("[TIMER] System ticks: %u\n", system_ticks);
-    kprintf("[TIMER] Timer frequency: %u Hz\n", get_timer_frequency());
+    KINFO("[TIMER] System ticks: %u\n", system_ticks);
+    KINFO("[TIMER] Timer frequency: %u Hz\n", get_timer_frequency());
     
-    kprintf("[TIMER] === END DEBUG ===\n");
+    KINFO("[TIMER] === END DEBUG ===\n");
 }
 
 /* Stub temporaire pour wake_up_sleeping_processes */

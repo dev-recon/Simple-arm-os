@@ -114,6 +114,8 @@ uint16_t page_ref_count(void* page_addr);
 int page_ref_inc(void* page_addr);
 uint16_t page_ref_dec(void* page_addr);
 uint32_t get_kernel_memory_size(void);
+uint32_t get_free_page_count(void);
+uint32_t get_total_page_count(void);
 
 
 /* Virtual memory avec support ASID */

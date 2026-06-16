@@ -35,10 +35,10 @@ void init_kernel_heap(void)
     heap_base = (uint8_t*)ALIGN_UP((uintptr_t)&__heap_start, 8);
     heap_size = (size_t)&__heap_size;
     
-    kprintf("=== HEAP INITIALIZATION WITH GLOBALS ===\n");
-    kprintf("Heap configuration:\n");
-    kprintf("  Base address: %p\n", heap_base);
-    kprintf("  Size:         %u MB (%u bytes)\n", 
+    KINFO("=== HEAP INITIALIZATION WITH GLOBALS ===\n");
+    KINFO("Heap configuration:\n");
+    KINFO("  Base address: %p\n", heap_base);
+    KINFO("  Size:         %u MB (%u bytes)\n", 
             heap_size / (1024*1024), heap_size);
     
     /* Verifications */
@@ -58,7 +58,7 @@ void init_kernel_heap(void)
     free_list = initial_block;
     heap_initialized = true;
     
-    kprintf("Heap ready: %u bytes available\n", initial_block->size);
+    KINFO("Heap ready: %u bytes available\n", initial_block->size);
 }
 
 
@@ -73,7 +73,7 @@ void* kmalloc(size_t size)
     free_block_t* current = free_list;
 
     if (((uintptr_t)current & 0x7) != 0) {
-        kprintf("KO kmalloc() misaligned: %p\n", current);
+        KERROR("kmalloc() misaligned: %p\n", current);
     }
 
     while (current) {
@@ -107,7 +107,7 @@ void* kmalloc(size_t size)
             size_t padding = (uint8_t*)aligned_ptr - (uint8_t*)raw_ptr;
             if (padding != 0) {
                 // Impossible dans ton alloc actuel sans deplacer header, donc on peut juste assert ici
-                kprintf("KO kmalloc(): alignment padding detected, allocator not designed for this!\n");
+                KERROR("kmalloc(): alignment padding detected, allocator not designed for this!\n");
             }
 
             return aligned_ptr;
@@ -129,7 +129,7 @@ void kfree(void* ptr)
 
     // Verifier les canaries
     if (header->magic_start != ALLOC_MAGIC_START || header->magic_end != ALLOC_MAGIC_END) {
-        kprintf("KO kfree(): canary corruption at %p!\n", ptr);
+        KERROR("kfree(): canary corruption at %p!\n", ptr);
         return;
     }
 

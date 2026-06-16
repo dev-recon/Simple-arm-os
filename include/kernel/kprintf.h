@@ -19,6 +19,35 @@ int kvprintf(const char *format, va_list args);
 void set_debug(int enable);
 int get_debug(void);
 void kprintf_test(void);
+void kboot_statusf(const char* status, const char* format, ...) __attribute__((format(printf, 2, 3)));
+
+/* Niveaux de log runtime. Le boot normal garde WARN/ERROR + KBOOT. */
+#define KLOG_ERROR 0
+#define KLOG_WARN  1
+#define KLOG_INFO  2
+#define KLOG_DEBUG 3
+
+extern int DEBUG;
+extern int kernel_log_level;
+
+#define KBOOT_COLOR_RESET "\033[0m"
+#define KBOOT_COLOR_OK    "\033[1;32m"
+#define KBOOT_COLOR_WARN  "\033[1;33m"
+#define KBOOT_COLOR_FAIL  "\033[1;31m"
+#define KBOOT_COLOR_INFO  "\033[1;36m"
+
+#define KBOOT_STATUS_OK   KBOOT_COLOR_OK   "[ OK ]"   KBOOT_COLOR_RESET
+#define KBOOT_STATUS_WARN KBOOT_COLOR_WARN "[WARN]"   KBOOT_COLOR_RESET
+#define KBOOT_STATUS_FAIL KBOOT_COLOR_FAIL "[FAIL]"   KBOOT_COLOR_RESET
+#define KBOOT_STATUS_INFO KBOOT_COLOR_INFO "[INFO]"   KBOOT_COLOR_RESET
+
+#define KBOOT(fmt, ...) kprintf(fmt, ##__VA_ARGS__)
+#define KBOOT_OK(label)   kprintf("%-56s " KBOOT_STATUS_OK "\n", label)
+#define KBOOT_WARN(label) kprintf("%-56s " KBOOT_STATUS_WARN "\n", label)
+#define KBOOT_FAIL(label) kprintf("%-56s " KBOOT_STATUS_FAIL "\n", label)
+#define KBOOT_OKF(fmt, ...)   kboot_statusf(KBOOT_STATUS_OK, fmt, ##__VA_ARGS__)
+#define KBOOT_WARNF(fmt, ...) kboot_statusf(KBOOT_STATUS_WARN, fmt, ##__VA_ARGS__)
+#define KBOOT_FAILF(fmt, ...) kboot_statusf(KBOOT_STATUS_FAIL, fmt, ##__VA_ARGS__)
 
 /*
  * Fonctions de convenance avec prefixes
@@ -40,13 +69,16 @@ int kwarn(const char *format, ...) __attribute__((format(printf, 1, 2)));    /* 
 
 /* Macros de debug */
 #define KDEBUG(fmt, ...) do { \
-    int DEBUG=1; \
-    if (DEBUG) { \
+    if (DEBUG || kernel_log_level >= KLOG_DEBUG) { \
         kprintf("[DEBUG] %s:%d: " fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
     } \
 } while(0)
 
-#define KINFO(fmt, ...) kprintf("[INFO] " fmt, ##__VA_ARGS__)
+#define KINFO(fmt, ...) do { \
+    if (kernel_log_level >= KLOG_INFO) { \
+        kprintf("[INFO] " fmt, ##__VA_ARGS__); \
+    } \
+} while(0)
 #define KWARN(fmt, ...) kprintf("[WARN] " fmt, ##__VA_ARGS__)
 #define KERROR(fmt, ...) kprintf("[ERROR] " fmt, ##__VA_ARGS__)
 

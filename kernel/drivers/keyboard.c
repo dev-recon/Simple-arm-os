@@ -7,6 +7,7 @@
 #include <kernel/signal.h>
 #include <kernel/kernel.h>
 #include <kernel/process.h>
+#include <kernel/kprintf.h>
 
 /* Scancode to ASCII mapping for Mac FR (AZERTY) - version ASCII pure */
 static char scancode_to_ascii_mac_fr[55] = {
@@ -55,7 +56,7 @@ void init_keyboard(void)
     kbd_state.tail = 0;
     kbd_state.waiters = NULL;
     
-    uart_puts("Keyboard initialized (Mac FR layout - ASCII)\n");
+    KINFO("Keyboard initialized (Mac FR layout - ASCII)\n");
 }
 
 void keyboard_irq_handler(void)

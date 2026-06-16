@@ -11,6 +11,7 @@ extern void putchar_kernel(char c);
 
 /* Variable globale de debug */
 int DEBUG = 0;
+int kernel_log_level = KLOG_WARN;
 
 /* Fonctions externes supposees existantes */
 extern void putchar_kernel(char c);
@@ -363,6 +364,26 @@ int kprintf(const char *format, ...) {
     int result = kvprintf(safe_buffer, args);
     va_end(args);
     return result;
+}
+
+void kboot_statusf(const char* status, const char* format, ...)
+{
+    va_list args;
+    int label_len;
+
+    if (!status || !format)
+        return;
+
+    va_start(args, format);
+    label_len = kvprintf(format, args);
+    va_end(args);
+
+    while (label_len < 56) {
+        putchar_kernel(' ');
+        label_len++;
+    }
+
+    kprintf(" %s\n", status);
 }
 
 /* Fonctions de gestion du debug */

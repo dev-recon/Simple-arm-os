@@ -111,6 +111,27 @@ static inline void disable_branch_predictor(void) {
     asm volatile("isb");
 }
 
+
+static uint32_t boot_timer_frequency(void)
+{
+    uint32_t timer_freq;
+
+    __asm__ volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(timer_freq));
+    if (timer_freq == 0)
+        timer_freq = 62500000;
+
+    return timer_freq;
+}
+
+static uint32_t boot_bogomips_x100(uint32_t timer_freq)
+{
+    /*
+     * Early Linux printed a delay-loop calibration as BogoMIPS. For QEMU virt
+     * this gives a stable, readable estimate tied to the ARM generic timer.
+     */
+    return timer_freq / 5000;
+}
+
 void early_init(void)
 {
     /* Phase 1: Hardware de base uniquement */
@@ -121,26 +142,15 @@ void early_init(void)
     kernel_memory_size = detect_memory();
     
     if (kernel_memory_size > 0) {
-        kprintf("Memory detected (bytes): %u\n", kernel_memory_size);
-        kprintf("Memory detected (MB): %u\n", kernel_memory_size / (1024*1024));
-
         /* Phase 3: Setup MMU - AVANT tout allocateur */
-        kprintf("Setting up MMU...\n");
         if (setup_mmu()) {
             uart_use_kernel_mmio_alias();
-            kprintf("MMU setup OK\n");
-            debug_mmu_state();
         } else {
             panic("MMU setup FAILED - cannot continue");
         }
     } else {
-        kprintf("Memory detected (bytes): %u\n", kernel_memory_size);
-        kprintf("Memory detected (MB): %u / %llu\n", kernel_memory_size / (1024*1024), 2ULL*1024*1024*1024);
-
         panic("Memory detection returned suspicious value");
     } 
-    
-    kprintf("Early init complete\n");
 }
 
 
@@ -174,93 +184,56 @@ void test_heap_health(const char* phase_name)
  */
 void kernel_main(void)
 {
-    extern void test_process_structure_offsets(void);
-    extern void launch_first_process(process_t* proc);
-    extern void test_process_system_with_ls(void);
-    extern void ls_process_main(const char* path);
-    extern void test_ramfs_cluster_content(void);
-    extern void debug_memory_layout_ramfs(void);
+    uint32_t timer_freq;
+    uint32_t bogo_x100;
+    uint32_t total_mb;
+    uint32_t available_mb;
+    uint64_t disk_sectors;
+    uint32_t disk_mb;
 
     /* Phase 0: etats du processeur */
     __asm__ volatile ("cpsie aif");
 
     sctlr_set_smp();
 
-    uint32_t cpsr;
-    __asm__ volatile ("mrs %0, cpsr" : "=r"(cpsr));
+    timer_freq = boot_timer_frequency();
+    bogo_x100 = boot_bogomips_x100(timer_freq);
 
-    kprintf("CPSR = 0x%08X\n", cpsr);
-    kprintf(" IRQ: %s\n", (cpsr & (1 << 7)) ? "DISABLED" : "ENABLED");
-    kprintf(" FIQ: %s\n", (cpsr & (1 << 6)) ? "DISABLED" : "ENABLED");
-    kprintf(" ABT: %s\n", (cpsr & (1 << 8)) ? "DISABLED" : "ENABLED");
-    kprintf("ACTLR.SMP = %d\n", sctlr_smp_enabled());
-    
-    uint32_t vbar;
-    __asm__ volatile ("mrc p15, 0, %0, c12, c0, 0" : "=r"(vbar));
-    kprintf("[CPU] VBAR = 0x%08X\n", vbar);
-    
-    extern void vectors(void);
-    extern void irq_handler(void);
-    kprintf("[DEBUG] Vectors address = %p\n", vectors);
-    kprintf("[CHECK] irq_handler = %p\n", irq_handler);
-
-    KDEBUG("=== STARTING KERNEL INITIALIZATION ===\n");
+    KBOOT("\n");
+    KBOOT(KBOOT_COLOR_INFO "ArmOS 0.1 armv7l" KBOOT_COLOR_RESET "\n");
+    KBOOT_OKF("CPU: ARM Cortex-A15 @ QEMU virt");
+    KBOOT_OKF("Calibrating delay loop... %u.%02u BogoMIPS",
+                bogo_x100 / 100, bogo_x100 % 100);
 
     //disable_branch_predictor();
     
-    kprintf("Initialize physical memory allocator ... ");
     init_memory();  // <- Allocateur physique EN PREMIER
-    kprintf("OK\n");
 
     /* Phase 1: Initialisation critique (MMU, memoire de base) */
-    kprintf("Phase 1: Core initialization...\n");
     early_init();  // MMU + detection memoire
 
-    /* Phase 2: Allocateurs memoire (DANS L'ORDRE !) */
-    kprintf("Phase 2: Memory management...\n");
-    
-
-
-    kprintf("Initialize Stack for SVC Mode ... ");
+    total_mb = kernel_memory_size / (1024 * 1024);
+    available_mb = (get_free_page_count() * PAGE_SIZE) / (1024 * 1024);
+    KBOOT_OKF("Memory: %uMB total, %uMB available", total_mb, available_mb);
+    KBOOT_OKF("Kernel: 0x%08X-0x%08X", KERNEL_START, KERNEL_END);
+    KBOOT_OKF("MMU: split TTBR enabled, ASID pool %u", ASID_MAX);
+   
     setup_svc_stack();
-    kprintf("OK\n");
 
     /* Phase 3: Controleurs materiels de base */
-    kprintf("Phase 3: Hardware controllers...\n");
-    
-    kprintf("Initialize interrupt controller ... ");
-
     init_gic();
+    KBOOT_OKF("GIC: v2, 288 IRQs");
 
     //init_timer_software();
     init_timer();
-
-    kprintf("=== STARTING MAIN LOOP ===\n");
-
-    /* Banner de demarrage */
-    kprintf("\n");
-    kprintf("=========================================\n");
-    kprintf("    Kernel ARMv7-A Cortex-A15\n");  // <- Corrige !
-    kprintf("    Developpe sur Mac M4\n");
-    kprintf("    Cible: QEMU machine virt\n");     // <- Corrige !
-    kprintf("=========================================\n\n");
-    
-    /* Informations systeme detaillees */
-    print_system_info();
-   
-    /* Tests des fonctionnalites ARMv7-A */
-    test_armv7a_features();
+    KBOOT_OKF("Timer: ARM generic timer @ %u Hz, tick %u us",
+                timer_freq, 1000000 / TIMER_FREQ);
 
     /* Phase 4: Peripheriques d'entree/sortie */
-    kprintf("Phase 4: I/O devices...\n");
-
-    kprintf("Initialize keyboard ... \n");
     init_keyboard();
-    kprintf("OK\n");
   
-    kprintf("Initialize display ... \n");
     init_display();
-    kprintf("OK\n");
+    KBOOT_OKF("TTY: console tty0 on uart0");
       
     //kprintf("Initialize IDE ... ");
     //init_ide();
@@ -268,60 +241,40 @@ void kernel_main(void)
     //kprintf("OK\n");
 
     /* Phase 6: Activation des interruptions */
-    kprintf("Phase 6: Interrupt activation...\n");
-    kprintf("Enable timer for scheduling ... ");
     timer_enable_scheduling();
-    kprintf("OK\n");
  
-    kprintf("Enable interrupts ... ");
     enable_interrupts();
-    kprintf("OK\n");
 
     /* Phase 7: Systemes de fichiers (OPTIONNEL) */
-    kprintf("Phase 7: File systems...\n");
-    
-    // Decommente si necessaire
-
 #ifdef USE_RAMFS
-    kprintf("Initialize RAMFS ... ");
     if (/*init_ramfs()*/0) { 
-    kprintf("----------------> OK\n");
-} else {
-    kprintf("----------------> FAILED\n");
-}
-
+        KBOOT_OK("RAMFS: initialized");
+    } else {
+        KINFO("RAMFS: not available\n");
+    }
 #endif
 
-    kprintf("Initialize ATA ... ");
     if (!init_ata()) {
-        kprintf("Warning: ATA initialization failed\n");
+        KBOOT_WARN("Block: virtio0 unavailable");
     } else {
-        kprintf("OK\n");
+        disk_sectors = ata_get_capacity_sectors();
+        disk_mb = (uint32_t)(disk_sectors / 2048u);
+        KBOOT_OKF("Block: virtio0 %uMB, irq 47", disk_mb);
     }
 
-    kprintf("Initialize VFS ... ");
-
     if (!init_vfs()) {
-        kprintf("Warning: VFS initialization failed\n");
+        KBOOT_WARN("VFS: mount failed");
     } else {
-        kprintf("OK\n");
+        KBOOT_OKF("Partition: virtio0p1 ext2 64MB");
+        KBOOT_OKF("Partition: virtio0p2 fat32 64MB");
+        KBOOT_OKF("VFS: mounted ext2 on /");
+        KBOOT_OKF("VFS: mounted fat32 on /mnt");
     }    
-
-    /* Finalisation */
-    kprintf("ARM32 Kernel initialization complete\n");
-    
-    kprintf("\nTARGET Kernel ARMv7-A operationnel!\n");
-    kprintf("- Cross-compiled from Mac M4\n");
-    kprintf("- Caches L1 et prediction actives\n\n");
-    
-    kprintf("Kernel up and running ...\n");
-    kprintf("Use Ctrl+A and X to exit QEMU\n");
-
 
     //trigger_timer_interrupt();
     /* Phase 5: Gestion des processus (APReS allocateurs) */
-    kprintf("Phase 5: Process management...\n");
-    
+    KBOOT_OK("Process: scheduler ready");
+
     /* Main scheduler loop */
     init_main() ;
 

@@ -27,7 +27,7 @@ static bool test_memory_block(uint32_t addr, uint32_t size);
 /* Stub pour compilation si necessaire */
 void init_memory_detection(void)
 {
-    kprintf("[DEBUG] Memory detection initialized for machine virt\n");
+    KDEBUG("Memory detection initialized for machine virt\n");
 }
 
 bool fdt_node_matches(const char* node_name, const char* prefix) {
@@ -159,7 +159,7 @@ uint32_t detect_memory(void)
     if( kernel_memory_size )
         return kernel_memory_size ;
     
-    kprintf("[INFO] Starting memory detection for machine virt...\n");
+    KINFO("Starting memory detection for machine virt...\n");
     
     /* 1. Afficher les informations CPU Cortex-A15 */
     print_cpu_memory_features();
@@ -171,7 +171,7 @@ uint32_t detect_memory(void)
     if (dtb && dtb != (void*)0) {
         uint32_t dtb_memory = detect_memory_from_dtb(dtb);
         if (dtb_memory > 0) {
-            kprintf("[INFO] Memory from DTB: %d MB\n", dtb_memory / (1024*1024));
+            KINFO("Memory from DTB: %d MB\n", dtb_memory / (1024*1024));
             kernel_memory_size = dtb_memory ;
             return dtb_memory;
         }
@@ -179,7 +179,7 @@ uint32_t detect_memory(void)
     
     /* 3. Detection intelligente par sondage */
     uint32_t detected = detect_memory_intelligent();
-    kprintf("[INFO] Total detected memory: %d MB\n", detected / (1024*1024));
+    KINFO("Total detected memory: %d MB\n", detected / (1024*1024));
     kernel_memory_size = detected;
     return detected;
 }
@@ -188,25 +188,25 @@ uint32_t detect_memory(void)
 static uint32_t detect_memory_from_dtb(void* dtb_ptr)
 {
     if (!dtb_ptr) {
-        kprintf("[WARN] No DTB provided\n");
+        KWARN("No DTB provided\n");
         return 0;
     }
 
     uint32_t *addr = (uint32_t*)dtb_ptr;
     uint32_t content = *addr ;
  
-    kprintf("[INFO] Trying detection from DTB at %p - 0x%08X\n", dtb_ptr, content);
+    KINFO("Trying detection from DTB at %p - 0x%08X\n", dtb_ptr, content);
 
     struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
     
     /* Verifier la signature DTB */
     if (__builtin_bswap32(fdt->magic) != 0xd00dfeed) {
-        kprintf("[DEBUG] Invalid DTB magic: 0x%08x\n", fdt->magic);
+        KDEBUG("Invalid DTB magic: 0x%08x\n", fdt->magic);
         return 0;
     }
     
-    kprintf("[INFO] Valid DTB found at %p\n", dtb_ptr);
-    kprintf("[INFO] DTB size: %ld bytes\n", __builtin_bswap32(fdt->totalsize));
+    KINFO("Valid DTB found at %p\n", dtb_ptr);
+    KINFO("DTB size: %ld bytes\n", __builtin_bswap32(fdt->totalsize));
 
     void* node = fdt_find_node_by_name(dtb_ptr, "memory");
     if (node) {
@@ -217,14 +217,14 @@ static uint32_t detect_memory_from_dtb(void* dtb_ptr)
             uint64_t size64 = ((uint64_t)__builtin_bswap32(reg[2]) << 32) | __builtin_bswap32(reg[3]);
 
             if ((base64 >> 32) != 0 || (size64 >> 32) != 0) {
-                kprintf("[ERROR] 64-bit memory range not supported on ARMv7: base=0x%llx, size=0x%llx\n", base64, size64);
+                KERROR("64-bit memory range not supported on ARMv7: base=0x%llx, size=0x%llx\n", base64, size64);
                 return -1;
             }
 
             uint32_t base = (uint32_t)(base64 & 0xFFFFFFFF);
             uint32_t size = (uint32_t)(size64 & 0xFFFFFFFF);
 
-            kprintf("[INFO] Memory region: base=0x%08X, size=0x%08X\n", base, size);
+            KINFO("Memory region: base=0x%08X, size=0x%08X\n", base, size);
 
             return size;
             
@@ -259,18 +259,18 @@ static void print_cpu_memory_features(void)
 {
     cpu_memory_info_t info = get_cpu_memory_info();
     
-    kprintf("=== Cortex-A15 Memory Features ===\n");
-    kprintf("Cache Info:     0x%08x\n", info.cache_info);
-    kprintf("TLB Info:       0x%08x\n", info.tlb_info);
-    kprintf("Memory Model:   0x%08x\n", info.memory_model);
-    kprintf("Debug Features: 0x%08x\n", info.debug_features);
+    KINFO("=== Cortex-A15 Memory Features ===\n");
+    KINFO("Cache Info:     0x%08x\n", info.cache_info);
+    KINFO("TLB Info:       0x%08x\n", info.tlb_info);
+    KINFO("Memory Model:   0x%08x\n", info.memory_model);
+    KINFO("Debug Features: 0x%08x\n", info.debug_features);
     
     /* Decoder les informations cache Cortex-A15 */
     uint32_t icache_line = 4 << ((info.cache_info >> 0) & 0xF);
     uint32_t dcache_line = 4 << ((info.cache_info >> 16) & 0xF);
     
-    kprintf("I-Cache line:   %d bytes\n", icache_line);
-    kprintf("D-Cache line:   %d bytes\n", dcache_line);
+    KINFO("I-Cache line:   %d bytes\n", icache_line);
+    KINFO("D-Cache line:   %d bytes\n", dcache_line);
     
     /* Informations specifiques Cortex-A15 */
     //kprintf("L2 Cache line:  64 bytes (Cortex-A15)\n");
@@ -279,7 +279,7 @@ static void print_cpu_memory_features(void)
 
 static uint32_t detect_memory_intelligent(void)
 {
-    kprintf("[INFO] Intelligent memory detection for machine virt...\n");
+    KINFO("Intelligent memory detection for machine virt...\n");
     
     /* Zones memoire pour machine virt - tester de facon progressive */
     struct memory_range {
@@ -298,32 +298,32 @@ static uint32_t detect_memory_intelligent(void)
     for (i = 0; i < 3; i++) {
         uint32_t end_addr = ranges[i].start + (ranges[i].size_mb * 1024 * 1024);
         
-        kprintf("[DEBUG] Testing %s range: 0x%08X-0x%08X (%u MB)\n",
+        KDEBUG("Testing %s range: 0x%08X-0x%08X (%u MB)\n",
                 ranges[i].name, ranges[i].start, end_addr, ranges[i].size_mb);
         
         uint32_t detected = probe_memory_range(ranges[i].start, end_addr);
         
         if (detected > max_detected) {
             max_detected = detected;
-            kprintf("[INFO] Found %d MB in %s range\n", 
+            KINFO("Found %d MB in %s range\n", 
                     detected / (1024*1024), ranges[i].name);
             
             /* Si on a detecte moins que la taille theorique, pas la peine de continuer */
             if (detected < ranges[i].size_mb * 1024 * 1024) {
-                kprintf("[INFO] Memory appears limited to %d MB, stopping detection\n", 
+                KINFO("Memory appears limited to %d MB, stopping detection\n", 
                         detected / (1024*1024));
                 break;
             }
         } else {
             /* Pas de gain, arreter */
-            kprintf("[DEBUG] No additional memory found, stopping at %d MB\n", 
+            KDEBUG("No additional memory found, stopping at %d MB\n", 
                     max_detected / (1024*1024));
             break;
         }
     }
     
     if (max_detected == 0) {
-        kprintf("[WARN] No memory detected, using fallback\n");
+        KWARN("No memory detected, using fallback\n");
         max_detected = 1024 * 1024 * 1024; /* 1GB fallback */
     }
     
@@ -335,7 +335,7 @@ static uint32_t probe_memory_range(uint32_t start, uint32_t end)
     uint32_t total_size = 0;
     uint32_t addr;
     
-    kprintf("[DEBUG] Probing memory from 0x%08X to 0x%08X\n", start, end);
+    KDEBUG("Probing memory from 0x%08X to 0x%08X\n", start, end);
     
     /* Commencer juste apres le kernel pour eviter de corrompre le code en cours */
     uint32_t safe_start = MAX(start, KERNEL_END + 0x100000); /* 1MB apres le kernel */
@@ -344,15 +344,15 @@ static uint32_t probe_memory_range(uint32_t start, uint32_t end)
     for (addr = safe_start; addr + 0x1000000 <= end; addr += 0x1000000) {
         /* Verifier que le test ne depassera pas la limite */
         if (addr + 0x100000 > end) {
-            //kprintf("[DEBUG] Block at 0x%08X: SKIPPED - would exceed limit 0x%08X\n", addr, end);
+            //KDEBUG("Block at 0x%08X: SKIPPED - would exceed limit 0x%08X\n", addr, end);
             break;
         }
         
         if (test_memory_block(addr, 0x100000)) { /* Test sur 1MB seulement */
             total_size += 0x1000000; /* Mais compte 16MB si succes */
-            //kprintf("[DEBUG] Block at 0x%08X: OK\n", addr);
+            //KDEBUG("Block at 0x%08X: OK\n", addr);
         } else {
-            //kprintf("[DEBUG] Block at 0x%08X: FAILED - stopping\n", addr);
+            //KDEBUG("Block at 0x%08X: FAILED - stopping\n", addr);
             break; /* Arreter au premier echec */
         }
     }
@@ -362,7 +362,7 @@ static uint32_t probe_memory_range(uint32_t start, uint32_t end)
         total_size += (safe_start - start);
     }
     
-    kprintf("[DEBUG] Total detected in range: %u MB\n", total_size / (1024*1024));
+    KDEBUG("Total detected in range: %u MB\n", total_size / (1024*1024));
     return total_size;
 }
 
