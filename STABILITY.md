@@ -119,3 +119,103 @@ Follow-up items:
   to reduce transient `ls -l /proc` noise under fork/exit storms.
 - Profile the perceived lag with 1 ms quantum separately for block I/O,
   terminal output, and procfs traversal before changing scheduler policy again.
+
+## Notes From 2026-06-17 Long Idle Run
+
+Observed after leaving the kernel idle at the shell prompt for roughly one hour:
+
+- Typing a command such as `ps` still displays the characters before submit.
+- Pressing Enter (`\r` on the serial console) moves the cursor/prompt to the
+  next line, but the command does not appear to execute.
+- After that point there is no visible echo/output from the shell.
+- `Ctrl+C` does not recover the foreground shell/command.
+- The QEMU session must be exited with `Ctrl+A`, then `x`.
+
+This should be treated as a stability issue distinct from fork/exec stress:
+the system survives active workloads, but can lose interactive progress after a
+long idle period.
+
+Follow-up hypotheses to check:
+
+- TTY read path stuck waiting after receiving `\r`, or line discipline state not
+  waking the foreground process.
+- Foreground process group/session state becoming stale while idle.
+- Timer or sleep wakeup accounting drifting after long idle time.
+- Shell blocked in `waitpid`, `read`, or job-control bookkeeping with signals no
+  longer interrupting it.
+- UART/TTY interrupt or polling state losing input delivery after prolonged
+  inactivity.
+
+Reproduction target:
+
+1. Boot normally and leave `mash` idle at the prompt for at least one hour.
+2. Type `ps` and submit with serial Enter (`\r`).
+3. If it hangs, capture `ps` counters before the idle run in a prior session and
+   compare with a shorter idle interval.
+
+## Shell/Userland Command Notes
+
+Future `ps` split:
+
+- Keep the current detailed ArmOS diagnostic process view, but rename it to
+  `lps` ("local ps" / "long ps").
+- Add a POSIX-like `ps` command with the compact default format:
+
+```text
+  PID TTY           TIME CMD
+ 2152 ttys000    0:01.22 -zsh
+ 2171 ttys000    0:00.01 -zsh
+```
+
+Rationale:
+
+- The current `ps` is very useful for kernel debugging but much more verbose
+  than the expected Unix/POSIX default.
+- A compact `ps` makes scripts and interactive usage feel more familiar.
+- `lps` does not appear to conflict with a common POSIX command name and is a
+  reasonable ArmOS-specific diagnostic alias.
+
+## TODO: TTY Hardening
+
+Priority order:
+
+1. Fix long-idle TTY/read wakeups.
+   - Reproduce the one-hour idle shell hang.
+   - Inspect shell task state, TTY input buffer, foreground process group,
+     ready queue membership, IRQ state, and timer counters when the hang occurs.
+   - Confirm whether `mash` is blocked in `read`, `waitpid`, job-control logic,
+     or not being woken by the TTY path.
+
+2. Add minimal termios support.
+   - Implement `tcgetattr` / `tcsetattr` or compatible ioctl-backed support.
+   - Support at least `ICANON`, `ECHO`, `ISIG`, `OPOST`, and `ONLCR`.
+   - Make newline/carriage-return behavior explicit and consistent on the
+     serial console.
+
+3. Complete terminal signal behavior.
+   - `Ctrl+C` sends `SIGINT` to the foreground process group.
+   - `Ctrl+\` sends `SIGQUIT`.
+   - `Ctrl+Z` sends `SIGTSTP`.
+   - `SIGCONT` resumes stopped foreground/background jobs cleanly.
+
+4. Strengthen foreground process group handling.
+   - Keep `tcgetpgrp` / `tcsetpgrp` behavior consistent.
+   - Detect stale foreground process groups.
+   - Decide how strictly to enforce background TTY reads/writes.
+
+5. Clean up device nodes.
+   - Provide stable `/dev/tty`, `/dev/tty0`, and `/dev/console` semantics.
+   - Keep UART-backed console support as the practical transport for QEMU.
+   - Add/verify `isatty()` and `ttyname()` userland behavior.
+
+6. Improve interactive line editing in `mash`.
+   - History navigation with robust redraw.
+   - Tab completion without lag.
+   - Cursor movement, delete/backspace in the middle of the line, Home/End.
+   - Prompt redraw when background jobs complete while the user is typing.
+
+7. Prepare raw mode for future tools.
+   - Add non-canonical input path.
+   - Support no-echo mode.
+   - Prepare enough terminal control for future `less`, `vi`, or ncurses-like
+     programs.
