@@ -1,74 +1,107 @@
-# Contributor Covenant Code of Conduct
+# ArmOS Code of Conduct
 
 ## Our Pledge
 
-In the interest of fostering an open and welcoming environment, we as
-contributors and maintainers pledge to making participation in our project and
-our community a harassment-free experience for everyone, regardless of age, body
-size, disability, ethnicity, gender identity and expression, level of experience,
-nationality, personal appearance, race, religion, or sexual identity and
-orientation.
+We as contributors, maintainers, and participants pledge to make participation
+in the ArmOS project a respectful and harassment-free experience for everyone.
+
+ArmOS is a technical project, and technical disagreement is expected. The
+standard is simple: be direct, be rigorous, and stay respectful.
 
 ## Our Standards
 
-Examples of behavior that contributes to creating a positive environment
-include:
+Examples of behavior that contributes to a healthy project environment:
 
-* Using welcoming and inclusive language
-* Being respectful of differing viewpoints and experiences
-* Gracefully accepting constructive criticism
-* Focusing on what is best for the community
-* Showing empathy towards other community members
+- using welcoming and inclusive language
+- being respectful of different viewpoints and experience levels
+- giving and accepting constructive technical feedback
+- focusing criticism on code, design, tests, and documentation rather than on
+  people
+- being clear about assumptions, tradeoffs, and known risks
+- helping keep discussions useful, factual, and actionable
 
-Examples of unacceptable behavior by participants include:
+Examples of unacceptable behavior:
 
-* The use of sexualized language or imagery and unwelcome sexual attention or
-advances
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or electronic
-  address, without explicit permission
-* Other conduct which could reasonably be considered inappropriate in a
-  professional setting
-
-## Our Responsibilities
-
-Project maintainers are responsible for clarifying the standards of acceptable
-behavior and are expected to take appropriate and fair corrective action in
-response to any instances of unacceptable behavior.
-
-Project maintainers have the right and responsibility to remove, edit, or
-reject comments, commits, code, wiki edits, issues, and other contributions
-that are not aligned to this Code of Conduct, or to ban temporarily or
-permanently any contributor for other behaviors that they deem inappropriate,
-threatening, offensive, or harmful.
+- harassment, intimidation, threats, or sustained disruption
+- insulting, demeaning, or personal attacks
+- sexualized language or imagery in project spaces
+- publishing private information without explicit permission
+- deliberately derailing technical discussions
+- bad-faith behavior such as repeated trolling or knowingly misleading reports
+- any conduct that would reasonably be considered inappropriate in a
+  professional open-source project
 
 ## Scope
 
-This Code of Conduct applies both within project spaces and in public spaces
-when an individual is representing the project or its community. Examples of
-representing a project or community include using an official project e-mail
-address, posting via an official social media account, or acting as an appointed
-representative at an online or offline event. Representation of a project may be
-further defined and clarified by project maintainers.
+This Code of Conduct applies in all ArmOS project spaces, including:
+
+- GitHub issues, pull requests, discussions, and comments
+- commit messages and code review
+- project documentation
+- community chat or email channels if they are created later
+- public spaces when someone is clearly representing the ArmOS project
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported by contacting the project team at <opensource@github.com>. All
-complaints will be reviewed and investigated and will result in a response that
-is deemed necessary and appropriate to the circumstances. The project team is
-obligated to maintain confidentiality with regard to the reporter of an incident.
-Further details of specific enforcement policies may be posted separately.
+Project maintainers are responsible for clarifying and enforcing acceptable
+behavior. Maintainers may remove, edit, or reject comments, commits, issues,
+pull requests, or other contributions that do not align with this Code of
+Conduct.
 
-Project maintainers who do not follow or enforce the Code of Conduct in good
-faith may face temporary or permanent repercussions as determined by other
-members of the project's leadership.
+Possible enforcement actions include:
+
+- a private clarification or warning
+- a public moderation note
+- temporary restriction from project spaces
+- permanent ban from project spaces
+- closing or locking a discussion when it is no longer productive
+
+Enforcement should be proportional, consistent, and focused on protecting the
+project community and its technical work.
+
+## Reporting
+
+If you need to report unacceptable behavior, contact the project maintainer
+privately through the repository owner contact channels:
+
+```text
+https://github.com/dev-recon
+```
+
+Do not post sensitive reports publicly in GitHub issues.
+
+Reports should include:
+
+- what happened
+- where it happened
+- who was involved
+- links or screenshots if available
+- whether there is an ongoing safety or privacy concern
+
+Reports will be reviewed with discretion. The maintainer will make a reasonable
+effort to protect the privacy of the reporter and other affected people.
+
+## Contributor Responsibilities
+
+Contributors are expected to:
+
+- keep discussions technical and constructive
+- assume honest mistakes before bad intent when reasonable
+- accept maintainer decisions even when disagreeing
+- disclose uncertainty in bug reports and technical claims
+- avoid pressuring maintainers for unpaid urgent support
+
+## Maintainer Responsibilities
+
+Maintainers are expected to:
+
+- apply the Code of Conduct consistently
+- explain project decisions when practical
+- separate technical disagreement from personal conflict
+- protect project spaces from harassment and bad-faith participation
+- document contribution expectations clearly
 
 ## Attribution
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4,
-available at [http://contributor-covenant.org/version/1/4][version]
-
-[homepage]: http://contributor-covenant.org
-[version]: http://contributor-covenant.org/version/1/4/
+This Code of Conduct is inspired by the Contributor Covenant and adapted for
+the ArmOS project.
