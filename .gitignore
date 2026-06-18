@@ -28,6 +28,7 @@ userfs/usr/bin/chown
 userfs/usr/bin/cp
 userfs/usr/bin/echo
 userfs/usr/bin/false
+userfs/usr/bin/grep
 userfs/usr/bin/head
 userfs/usr/bin/keytest
 userfs/usr/bin/kilo
@@ -69,6 +70,7 @@ userland/coreutils/chown
 userland/coreutils/cp
 userland/coreutils/echo
 userland/coreutils/false
+userland/coreutils/grep
 userland/coreutils/head
 userland/coreutils/keytest
 userland/coreutils/kilo
