@@ -6,6 +6,7 @@
 #include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/uart.h>
+#include <kernel/tty.h>
 
 
 /* Flag pour savoir si le systeme de processus est pret */
@@ -219,6 +220,14 @@ void timer_irq_handler(void)
     
     /* 4. Incrément système */
     system_ticks++;
+
+    /*
+     * PL011 TX interrupts are edge/level sensitive enough to miss a wake-up in
+     * QEMU under dense console bursts. Poll the TTY TX ring from the periodic
+     * timer as a safety net; the check keeps the idle path cheap.
+     */
+    if (tty_has_pending_output())
+        tty_drain_output();
     
     /* 5. RÉDUIRE drastiquement les messages */
     if (system_ticks % (TIMER_FREQ * 10) == 0) {  /* Toutes les 10 secondes seulement */

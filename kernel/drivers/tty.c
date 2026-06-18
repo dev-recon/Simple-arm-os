@@ -225,6 +225,18 @@ void tty_get_tx_stats(uint32_t *enqueued, uint32_t *drained,
     spin_unlock_irqrestore(&tty0.lock, flags);
 }
 
+bool tty_has_pending_output(void)
+{
+    unsigned long flags;
+    bool pending;
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    pending = !tty_output_empty_locked();
+    spin_unlock_irqrestore(&tty0.lock, flags);
+
+    return pending;
+}
+
 /* Appelé par l'IRQ UART (ou polling) */
 void tty_input_char(char c) {
     task_t* reader = NULL;

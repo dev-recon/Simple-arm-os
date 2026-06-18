@@ -120,6 +120,7 @@ extern struct tty_struct tty0;
 
 void tty_init(void);
 void tty_input_char(char c);
+bool tty_has_pending_output(void);
 void tty_drain_output(void);
 ssize_t tty_read(char *buf, size_t count);
 ssize_t tty_write(const char *buf, size_t count);
