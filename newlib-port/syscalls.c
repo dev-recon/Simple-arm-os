@@ -97,12 +97,19 @@ char **environ = __env;
 #define TCSETS  0x5402
 #define TCSETSW 0x5403
 #define TCSETSF 0x5404
+#define TCFLSH  0x540B
 #endif
 
 #ifndef TCSANOW
 #define TCSANOW   0
 #define TCSADRAIN 1
 #define TCSAFLUSH 2
+#endif
+
+#ifndef TCIFLUSH
+#define TCIFLUSH  0
+#define TCOFLUSH  1
+#define TCIOFLUSH 2
 #endif
 
 struct os_stat {
@@ -585,6 +592,11 @@ int tcsetattr(int fd, int optional_actions, const void *termios_p)
         request = TCSETSF;
 
     return ioctl(fd, request, termios_p);
+}
+
+int tcflush(int fd, int queue_selector)
+{
+    return ret_errno(sys_ioctl(fd, TCFLSH, (void *)queue_selector));
 }
 
 int tcsetpgrp(int fd, pid_t pgrp)

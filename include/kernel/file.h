@@ -76,6 +76,7 @@
 #define TCSETS      0x5402
 #define TCSETSW     0x5403
 #define TCSETSF     0x5404
+#define TCFLSH      0x540B
 #define TIOCGWINSZ  0x5413
 
 struct winsize {

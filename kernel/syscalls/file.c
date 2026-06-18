@@ -83,6 +83,7 @@ int sys_write(int fd, const void* buf, size_t count)
     void *kbuf = NULL;
     const void *write_buf = buf;
     bool is_fifo = false;
+    bool is_char_device = false;
     
     if (count == 0) return 0;
     if (!buf) return -EFAULT;
@@ -94,6 +95,8 @@ int sys_write(int fd, const void* buf, size_t count)
     if (!can_write(file)) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
     is_fifo = file->inode && S_ISFIFO(file->inode->mode);
+    is_char_device = (file->inode == NULL) ||
+                     (file->inode && S_ISCHR(file->inode->mode));
 
     if (IS_KERNEL_ADDR((uint32_t)buf)) {
         write_buf = buf;
@@ -109,7 +112,7 @@ int sys_write(int fd, const void* buf, size_t count)
         write_buf = kbuf;
     }
 
-    if (is_fifo) {
+    if (is_fifo || is_char_device) {
         result = file->f_op->write(file, write_buf, count);
     } else {
         uint32_t irq_flags = disable_interrupts_save();

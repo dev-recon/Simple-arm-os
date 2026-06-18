@@ -128,6 +128,26 @@ void uart_putc(char c)
     spin_unlock_irqrestore(&uart_lock, flags);
 }
 
+bool uart_tx_ready(void)
+{
+    return (UART_FR & UART_FR_TXFF) == 0;
+}
+
+bool uart_try_putc(char c)
+{
+    unsigned long flags;
+    bool written = false;
+
+    spin_lock_irqsave(&uart_lock, &flags);
+    if ((UART_FR & UART_FR_TXFF) == 0) {
+        UART_DR = c;
+        written = true;
+    }
+    spin_unlock_irqrestore(&uart_lock, flags);
+
+    return written;
+}
+
 /*
  * Envoyer une chaine de caracteres
  */

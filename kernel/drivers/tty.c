@@ -6,14 +6,38 @@
 #include <kernel/process.h>
 #include <kernel/vfs.h>
 #include <kernel/signal.h>
+#include <kernel/timer.h>
 
 struct tty_struct tty0;
+
+static void tty_init_termios(struct termios *tio)
+{
+    memset(tio, 0, sizeof(*tio));
+    tio->c_iflag = ICRNL | IXON;
+    tio->c_oflag = OPOST | ONLCR;
+    tio->c_cflag = CS8 | CREAD | HUPCL;
+    /* mash owns line echo/editing today; keep ECHO disabled by default. */
+    tio->c_lflag = ICANON | ISIG | ECHOE | ECHOK | ECHOCTL | ECHOKE;
+    tio->c_cc[VINTR] = 0x03;   /* Ctrl-C */
+    tio->c_cc[VQUIT] = 0x1C;   /* Ctrl-\ */
+    tio->c_cc[VERASE] = 0x7F;  /* DEL */
+    tio->c_cc[VKILL] = 0x0B;   /* Ctrl-K */
+    tio->c_cc[VEOF] = 0x04;    /* Ctrl-D */
+    tio->c_cc[VTIME] = 0;
+    tio->c_cc[VMIN] = 1;
+    tio->c_cc[VSTART] = 0x11;  /* Ctrl-Q */
+    tio->c_cc[VSTOP] = 0x13;   /* Ctrl-S */
+    tio->c_cc[VSUSP] = 0x1A;   /* Ctrl-Z */
+    tio->c_cc[VEOL] = 0;
+    tio->c_cc[VEOL2] = 0;
+    tio->c_ispeed = 115200;
+    tio->c_ospeed = 115200;
+}
 
 void tty_init(void) {
     memset(&tty0, 0, sizeof(tty0));
     
-    /* mash echoe deja les caracteres lus ; le TTY garde le buffering ligne. */
-    tty0.c_lflag = ICANON | ISIG;
+    tty_init_termios(&tty0.termios);
     tty0.foreground_pgid = 0;
     
     init_spinlock(&tty0.lock);
@@ -79,7 +103,7 @@ int tty_get_termios(struct termios *tio)
     memset(tio, 0, sizeof(*tio));
 
     spin_lock_irqsave(&tty0.lock, &flags);
-    tio->c_lflag = tty0.c_lflag;
+    *tio = tty0.termios;
     spin_unlock_irqrestore(&tty0.lock, flags);
 
     return 0;
@@ -88,20 +112,47 @@ int tty_get_termios(struct termios *tio)
 int tty_set_termios(const struct termios *tio, int flush_input)
 {
     unsigned long flags;
-    uint32_t allowed_lflag;
+    struct termios next;
 
     if (!tio)
         return -EINVAL;
 
-    allowed_lflag = tio->c_lflag & (ECHO | ICANON | ISIG);
+    next = *tio;
+    next.c_iflag &= (INLCR | IGNCR | ICRNL | IXON | IXOFF);
+    next.c_oflag &= (OPOST | ONLCR | OCRNL | ONOCR | ONLRET);
+    next.c_lflag &= (ECHO | ICANON | ISIG | IEXTEN |
+                     ECHOE | ECHOK | ECHOCTL | ECHOKE);
+    next.c_cflag &= (CS8 | CREAD | HUPCL);
+    if (next.c_cc[VMIN] == 0 && next.c_cc[VTIME] == 0)
+        next.c_cc[VMIN] = 1;
 
     spin_lock_irqsave(&tty0.lock, &flags);
-    tty0.c_lflag = allowed_lflag;
+    tty0.termios = next;
     if (flush_input) {
         tty0.input_head = 0;
         tty0.input_tail = 0;
     }
     spin_unlock_irqrestore(&tty0.lock, flags);
+
+    return 0;
+}
+
+int tty_flush(int queue_selector)
+{
+    unsigned long flags;
+
+    if (queue_selector != TCIFLUSH &&
+        queue_selector != TCOFLUSH &&
+        queue_selector != TCIOFLUSH)
+        return -EINVAL;
+
+    if (queue_selector == TCIFLUSH || queue_selector == TCIOFLUSH) {
+        spin_lock_irqsave(&tty0.lock, &flags);
+        tty0.input_head = 0;
+        tty0.input_tail = 0;
+        tty0.read_wait = NULL;
+        spin_unlock_irqrestore(&tty0.lock, flags);
+    }
 
     return 0;
 }
@@ -139,10 +190,23 @@ void tty_input_char(char c) {
     task_t* reader = NULL;
     pid_t signal_pgid = 0;
     int signal_num = 0;
+    struct termios tio;
     unsigned long flags;
     spin_lock_irqsave(&tty0.lock, &flags);
+    tio = tty0.termios;
 
-    if ((tty0.c_lflag & ISIG) && c == 0x03) {
+    if (c == '\r') {
+        if (tio.c_iflag & IGNCR) {
+            spin_unlock_irqrestore(&tty0.lock, flags);
+            return;
+        }
+        if (tio.c_iflag & ICRNL)
+            c = '\n';
+    } else if (c == '\n' && (tio.c_iflag & INLCR)) {
+        c = '\r';
+    }
+
+    if ((tio.c_lflag & ISIG) && c == tio.c_cc[VINTR]) {
         int delivered;
         signal_pgid = tty0.foreground_pgid;
         signal_num = SIGINT;
@@ -162,7 +226,7 @@ void tty_input_char(char c) {
         return;
     }
 
-    if ((tty0.c_lflag & ISIG) && c == 0x1A) {
+    if ((tio.c_lflag & ISIG) && c == tio.c_cc[VSUSP]) {
         int delivered;
         signal_pgid = tty0.foreground_pgid;
         signal_num = SIGTSTP;
@@ -183,7 +247,7 @@ void tty_input_char(char c) {
     }
     
     /* In raw/no-echo mode, pass editing keys to userland. mash owns line editing. */
-    if ((tty0.c_lflag & ECHO) && (c == '\b' || c == 127)) {
+    if ((tio.c_lflag & ECHO) && (c == '\b' || c == tio.c_cc[VERASE])) {
         if (tty0.input_head != tty0.input_tail) {
             tty0.input_head = (tty0.input_head - 1) % TTY_INPUT_BUF_SIZE;
             uart_puts("\b \b");
@@ -193,7 +257,7 @@ void tty_input_char(char c) {
     }
 
     /* Echo si activé */
-    if (tty0.c_lflag & ECHO) {
+    if (tio.c_lflag & ECHO) {
         uart_putc(c);
     }
     
@@ -247,31 +311,54 @@ ssize_t tty_read(char *buf, size_t count) {
         
         /* Buffer vide ? */
         if (tty0.input_head == tty0.input_tail) {
+            struct termios tio = tty0.termios;
+            bool noncanon_no_min = !(tio.c_lflag & ICANON) && tio.c_cc[VMIN] == 0;
+            uint32_t timeout_ticks = (uint32_t)tio.c_cc[VTIME] * (TIMER_FREQ / 10);
+
             if (read > 0 || !current_task) {
+                spin_unlock_irqrestore(&tty0.lock, flags);
+                break;
+            }
+
+            if (noncanon_no_min && timeout_ticks == 0) {
                 spin_unlock_irqrestore(&tty0.lock, flags);
                 break;
             }
 
             tty0.read_wait = current_task;
             task_set_interruptible(current_task);
+            if (noncanon_no_min)
+                current_task->wakeup_time = get_system_ticks() + timeout_ticks;
             spin_unlock_irqrestore(&tty0.lock, flags);
 
             schedule();
+            spin_lock_irqsave(&tty0.lock, &flags);
+            if (tty0.read_wait == current_task)
+                tty0.read_wait = NULL;
+            spin_unlock_irqrestore(&tty0.lock, flags);
+
             if (has_pending_signals(current_task))
                 return read > 0 ? (ssize_t)read : (ssize_t)-EINTR;
+            if (noncanon_no_min &&
+                current_task->wakeup_time != 0 &&
+                get_system_ticks() >= current_task->wakeup_time) {
+                current_task->wakeup_time = 0;
+                break;
+            }
+            current_task->wakeup_time = 0;
             continue;
         }
         
         /* Lire un caractère */
         char c = tty0.input_buf[tty0.input_tail];
-        uint32_t lflag = tty0.c_lflag;
+        struct termios tio = tty0.termios;
         tty0.input_tail = (tty0.input_tail + 1) % TTY_INPUT_BUF_SIZE;
         
         spin_unlock_irqrestore(&tty0.lock, flags);
         
         buf[read++] = c;
 
-        if (!(lflag & ICANON)) {
+        if (!(tio.c_lflag & ICANON)) {
             break;
         }
         
@@ -285,13 +372,40 @@ ssize_t tty_read(char *buf, size_t count) {
 }
 
 ssize_t tty_write(const char *buf, size_t count) {
+    uint32_t oflag;
+    unsigned long flags;
+    size_t written = 0;
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    oflag = tty0.termios.c_oflag;
+    spin_unlock_irqrestore(&tty0.lock, flags);
+
     for (size_t i = 0; i < count; i++) {
-        if (buf[i] == '\n') {
-            uart_putc('\r');
+        if ((oflag & OPOST) && (oflag & ONLCR) && buf[i] == '\n') {
+            while (!uart_try_putc('\r')) {
+                if (current_task && has_pending_signals(current_task))
+                    return written > 0 ? (ssize_t)written : (ssize_t)-EINTR;
+                if (current_task)
+                    yield();
+                else {
+                    uart_putc('\r');
+                    break;
+                }
+            }
         }
-        uart_putc(buf[i]);
+        while (!uart_try_putc(buf[i])) {
+            if (current_task && has_pending_signals(current_task))
+                return written > 0 ? (ssize_t)written : (ssize_t)-EINTR;
+            if (current_task)
+                yield();
+            else {
+                uart_putc(buf[i]);
+                break;
+            }
+        }
+        written++;
     }
-    return count;
+    return (ssize_t)written;
 }
 
 static ssize_t tty_file_read(file_t* file, void* buf, size_t count) {

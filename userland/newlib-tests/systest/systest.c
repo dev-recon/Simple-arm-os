@@ -403,6 +403,8 @@ static void test_posix_compat_syscalls(void)
 
         expect(ioctl(fd, TCGETS, &tio) < 0 && errno == ENOTTY,
                "ioctl TCGETS rejects regular file", errno);
+        expect(tcflush(fd, TCIFLUSH) < 0 && errno == ENOTTY,
+               "tcflush rejects regular file", errno);
         close(fd);
     }
 
@@ -415,12 +417,20 @@ static void test_posix_compat_syscalls(void)
     expect(tcgetattr(STDIN_FILENO, &tio) == 0, "tcgetattr accepts tty", 0);
     expect((tio.c_lflag & ICANON) != 0, "tcgetattr reports canonical mode", tio.c_lflag);
     expect((tio.c_lflag & ISIG) != 0, "tcgetattr reports signal mode", tio.c_lflag);
+    expect((tio.c_iflag & ICRNL) != 0, "tcgetattr reports CR-to-NL input mode", tio.c_iflag);
+    expect((tio.c_oflag & OPOST) != 0, "tcgetattr reports output post-processing", tio.c_oflag);
+    expect((tio.c_oflag & ONLCR) != 0, "tcgetattr reports NL-to-CRNL output mode", tio.c_oflag);
+    expect(tio.c_cc[VMIN] == 1, "tcgetattr reports VMIN=1", tio.c_cc[VMIN]);
+    expect(tio.c_cc[VINTR] == 3, "tcgetattr reports VINTR Ctrl-C", tio.c_cc[VINTR]);
+    expect(tcflush(STDIN_FILENO, TCIFLUSH) == 0, "tcflush accepts tty input queue", 0);
     {
         struct termios saved_tio = tio;
         struct termios raw_tio = tio;
         struct termios check_tio;
 
         raw_tio.c_lflag &= ~(ICANON | ECHO);
+        raw_tio.c_iflag &= ~ICRNL;
+        raw_tio.c_oflag &= ~OPOST;
         expect(tcsetattr(STDIN_FILENO, TCSANOW, &raw_tio) == 0,
                "tcsetattr clears canonical/echo", 0);
         if (expect(tcgetattr(STDIN_FILENO, &check_tio) == 0,
@@ -431,6 +441,10 @@ static void test_posix_compat_syscalls(void)
                    "tcgetattr observes echo disabled", check_tio.c_lflag);
             expect((check_tio.c_lflag & ISIG) != 0,
                    "tcsetattr preserves signal mode", check_tio.c_lflag);
+            expect((check_tio.c_iflag & ICRNL) == 0,
+                   "tcgetattr observes ICRNL disabled", check_tio.c_iflag);
+            expect((check_tio.c_oflag & OPOST) == 0,
+                   "tcgetattr observes OPOST disabled", check_tio.c_oflag);
         }
         expect(tcsetattr(STDIN_FILENO, TCSANOW, &saved_tio) == 0,
                "tcsetattr restores tty mode", 0);

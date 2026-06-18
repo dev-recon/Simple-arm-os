@@ -14,8 +14,22 @@
 
 #define NCCS 32
 
-#define VMIN  16
-#define VTIME 17
+#define VINTR     0
+#define VQUIT     1
+#define VERASE    2
+#define VKILL     3
+#define VEOF      4
+#define VTIME     5
+#define VMIN      6
+#define VSTART    8
+#define VSTOP     9
+#define VSUSP     10
+#define VEOL      11
+#define VREPRINT  12
+#define VDISCARD  13
+#define VWERASE   14
+#define VLNEXT    15
+#define VEOL2     16
 
 typedef uint32_t tcflag_t;
 typedef uint8_t cc_t;
@@ -38,8 +52,8 @@ struct tty_struct {
     uint32_t input_head;
     uint32_t input_tail;
     
-    /* Flags */
-    uint32_t c_lflag;  /* Local flags */
+    /* POSIX-ish terminal state. */
+    struct termios termios;
     pid_t foreground_pgid;
     
     /* Wait queue pour read bloquant */
@@ -60,11 +74,39 @@ struct tty_struct {
     spinlock_t lock;
 };
 
-/* Flags pour c_lflag */
-#define ECHO    0x0001
-#define ICANON  0x0002  /* Mode ligne (buffering jusqu'à \n) */
-#define ISIG    0x0004  /* Generer SIGINT/SIGTSTP depuis les caracteres de controle */
-#define IEXTEN  0x0008
+/* c_iflag */
+#define INLCR   0x00000040
+#define IGNCR   0x00000080
+#define ICRNL   0x00000100
+#define IXON    0x00000200
+#define IXOFF   0x00000400
+
+/* c_oflag */
+#define OPOST   0x00000001
+#define ONLCR   0x00000002
+#define OCRNL   0x00000004
+#define ONOCR   0x00000008
+#define ONLRET  0x00000010
+
+/* c_lflag */
+#define ECHO    0x00000001
+#define ICANON  0x00000002  /* Mode ligne (buffering jusqu'a \n) */
+#define ISIG    0x00000004  /* Generer SIGINT/SIGTSTP depuis les caracteres de controle */
+#define IEXTEN  0x00000008
+#define ECHOE   0x00000010
+#define ECHOK   0x00000020
+#define ECHOCTL 0x00000040
+#define ECHOKE  0x00000080
+
+/* c_cflag */
+#define CS8     0x00000300
+#define CREAD   0x00000800
+#define HUPCL   0x00001000
+
+/* tcflush queue selectors */
+#define TCIFLUSH  0
+#define TCOFLUSH  1
+#define TCIOFLUSH 2
 
 extern struct tty_struct tty0;
 
@@ -74,6 +116,7 @@ ssize_t tty_read(char *buf, size_t count);
 ssize_t tty_write(const char *buf, size_t count);
 int tty_get_termios(struct termios *tio);
 int tty_set_termios(const struct termios *tio, int flush_input);
+int tty_flush(int queue_selector);
 int tty_set_foreground_pgid(pid_t pgid);
 pid_t tty_get_foreground_pgid(void);
 pid_t tty_get_read_wait_pid(void);

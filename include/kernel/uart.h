@@ -22,6 +22,8 @@
 void uart_init(void);
 void uart_use_kernel_mmio_alias(void);
 void uart_putc(char c);
+bool uart_try_putc(char c);
+bool uart_tx_ready(void);
 void uart_puts(const char* str);
 int uart_getc(void);
 bool uart_has_data(void);

@@ -620,6 +620,11 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
         if (copy_from_user(&tio, (void*)arg, sizeof(tio)) < 0)
             return -EFAULT;
         return tty_set_termios(&tio, 1);
+
+    case TCFLSH:
+        if (!is_tty)
+            return -ENOTTY;
+        return tty_flush((int)arg);
     default:
         return -ENOTTY;
     }
