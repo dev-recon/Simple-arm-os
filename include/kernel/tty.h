@@ -66,6 +66,7 @@ struct tty_struct {
     
     /* Wait queue pour read bloquant */
     task_t *read_wait;
+    bool eof_pending;
 
     /* Diagnostic counters for long-idle / foreground signal issues. */
     uint32_t input_chars;

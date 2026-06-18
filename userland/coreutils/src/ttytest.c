@@ -34,6 +34,87 @@ static void expect_true(int cond, const char *name, int detail)
         fail(name, detail);
 }
 
+static int line_equals(const char *line, const char *expected)
+{
+    return strcmp(line, expected) == 0;
+}
+
+static int read_interactive_line(const char *prompt, char *buf, size_t size)
+{
+    ssize_t n;
+
+    printf("%s", prompt);
+    fflush(stdout);
+
+    memset(buf, 0, size);
+    errno = 0;
+    n = read(STDIN_FILENO, buf, size - 1);
+    if (n < 0) {
+        fail(prompt, errno);
+        return -1;
+    }
+
+    buf[n] = '\0';
+    return (int)n;
+}
+
+static int run_interactive_canon_test(void)
+{
+    struct termios canon;
+    char line[128];
+    int n;
+
+    printf("ttytest: interactive canonical test\n");
+    printf("This test temporarily enables kernel canonical echo/editing.\n");
+
+    if (tcgetattr(STDIN_FILENO, &saved_termios) < 0) {
+        fail("tcgetattr stdin", errno);
+        return 1;
+    }
+    have_saved_termios = 1;
+    atexit(restore_terminal);
+
+    canon = saved_termios;
+    canon.c_lflag |= ICANON | ECHO | ECHOE | ECHOK | ECHOCTL;
+    canon.c_iflag |= ICRNL;
+    canon.c_oflag |= OPOST | ONLCR;
+    canon.c_cc[VERASE] = 0x7F;
+    canon.c_cc[VKILL] = 0x15;
+    canon.c_cc[VEOF] = 0x04;
+    canon.c_cc[VMIN] = 1;
+    canon.c_cc[VTIME] = 0;
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &canon) < 0) {
+        fail("tcsetattr canonical interactive mode", errno);
+        return 1;
+    }
+    ok("tcsetattr canonical interactive mode");
+
+    printf("1) Type: abc, Backspace, d, Enter. Expected line: abd\n");
+    n = read_interactive_line("> ", line, sizeof(line));
+    if (n >= 0)
+        expect_true(line_equals(line, "abd\n"), "canonical erase edits line", n);
+
+    printf("2) Type: garbage, Ctrl-U, ok, Enter. Expected line: ok\n");
+    n = read_interactive_line("> ", line, sizeof(line));
+    if (n >= 0)
+        expect_true(line_equals(line, "ok\n"), "canonical kill-line edits line", n);
+
+    printf("3) Press Ctrl-D on an empty line. Expected EOF read length 0.\n");
+    n = read_interactive_line("> ", line, sizeof(line));
+    if (n >= 0)
+        expect_true(n == 0, "canonical Ctrl-D returns EOF", n);
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_termios) == 0)
+        ok("tcsetattr restores terminal");
+    else
+        fail("tcsetattr restores terminal", errno);
+
+    have_saved_termios = 0;
+    printf("ttytest interactive: %s\n", failures ? "failed" : "all tests passed");
+    return failures ? 1 : 0;
+}
+
 static void test_tcflush_selectors(void)
 {
     if (tcflush(STDIN_FILENO, TCIFLUSH) == 0)
@@ -173,9 +254,16 @@ static void test_control_chars_preserved(void)
                 "termios preserves VSUSP", check.c_cc[VSUSP]);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct termios tio;
+
+    if (argc > 1) {
+        if (strcmp(argv[1], "--interactive-canon") == 0)
+            return run_interactive_canon_test();
+        printf("usage: ttytest [--interactive-canon]\n");
+        return 1;
+    }
 
     printf("ttytest: termios smoke test\n");
 

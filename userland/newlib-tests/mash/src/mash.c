@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include "../include/mash.h"
 #include "../include/jobs.h"
 
@@ -67,6 +68,35 @@ static void shell_set_foreground_pgid(int pgid) {
         tcsetpgrp(STDIN_FILENO, pgid);
 }
 
+static void shell_restore_tty_mode(void)
+{
+    struct termios tio;
+
+    if (tcgetattr(STDIN_FILENO, &tio) < 0)
+        return;
+
+    tio.c_iflag |= ICRNL;
+    tio.c_oflag |= OPOST | ONLCR;
+
+    /*
+     * mash owns line editing/history/completion in userland. Keep ECHO off so
+     * escape sequences and editing keys are consumed by shell_read_line(), not
+     * by the terminal line discipline. ICANON remains set for a POSIX-ish
+     * default, but the kernel only performs canonical editing when ECHO is on.
+     */
+    tio.c_lflag |= ICANON | ISIG | ECHOE | ECHOK | ECHOCTL | ECHOKE;
+    tio.c_lflag &= ~ECHO;
+    tio.c_cc[VMIN] = 1;
+    tio.c_cc[VTIME] = 0;
+    tio.c_cc[VINTR] = 0x03;
+    tio.c_cc[VERASE] = 0x7F;
+    tio.c_cc[VKILL] = 0x15;
+    tio.c_cc[VEOF] = 0x04;
+    tio.c_cc[VSUSP] = 0x1A;
+
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &tio);
+}
+
 static int shell_prepare_child_pgid(int child_pid)
 {
     if (child_pid <= 0)
@@ -100,6 +130,7 @@ static int shell_wait_foreground_child(int child_pid, int* status)
 
 static void shell_restore_foreground(void) {
     shell_set_foreground_pgid(shell_pgid);
+    shell_restore_tty_mode();
 }
 
 typedef struct shell_redirs {
@@ -2118,6 +2149,7 @@ void shell_run(void) {
     
     while (shell_running) {
         jobs_reap_background();
+        shell_restore_tty_mode();
         shell_print_prompt();
         
         char* line = shell_read_line();
@@ -2148,6 +2180,7 @@ int main() {
     signal(SIGTSTP, SIG_IGN);
     signal(SIGCHLD, shell_sigchld_handler);
     shell_restore_foreground();
+    shell_restore_tty_mode();
     command_init();
     shell_run();
 

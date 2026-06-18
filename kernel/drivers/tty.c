@@ -15,6 +15,11 @@ static uint32_t tty_output_next(uint32_t pos)
     return (pos + 1) % TTY_OUTPUT_BUF_SIZE;
 }
 
+static uint32_t tty_input_prev(uint32_t pos)
+{
+    return pos == 0 ? TTY_INPUT_BUF_SIZE - 1 : pos - 1;
+}
+
 static bool tty_output_empty_locked(void)
 {
     return tty0.output_head == tty0.output_tail;
@@ -36,7 +41,7 @@ static void tty_init_termios(struct termios *tio)
     tio->c_cc[VINTR] = 0x03;   /* Ctrl-C */
     tio->c_cc[VQUIT] = 0x1C;   /* Ctrl-\ */
     tio->c_cc[VERASE] = 0x7F;  /* DEL */
-    tio->c_cc[VKILL] = 0x0B;   /* Ctrl-K */
+    tio->c_cc[VKILL] = 0x15;   /* Ctrl-U */
     tio->c_cc[VEOF] = 0x04;    /* Ctrl-D */
     tio->c_cc[VTIME] = 0;
     tio->c_cc[VMIN] = 1;
@@ -163,6 +168,7 @@ int tty_flush(int queue_selector)
         spin_lock_irqsave(&tty0.lock, &flags);
         tty0.input_head = 0;
         tty0.input_tail = 0;
+        tty0.eof_pending = false;
         tty0.read_wait = NULL;
         spin_unlock_irqrestore(&tty0.lock, flags);
     }
@@ -241,9 +247,12 @@ void tty_input_char(char c) {
     pid_t signal_pgid = 0;
     int signal_num = 0;
     struct termios tio;
+    bool canonical_echo;
+    bool should_wake = true;
     unsigned long flags;
     spin_lock_irqsave(&tty0.lock, &flags);
     tio = tty0.termios;
+    canonical_echo = (tio.c_lflag & ICANON) && (tio.c_lflag & ECHO);
 
     if (c == '\r') {
         if (tio.c_iflag & IGNCR) {
@@ -296,10 +305,43 @@ void tty_input_char(char c) {
         return;
     }
     
-    /* In raw/no-echo mode, pass editing keys to userland. mash owns line editing. */
-    if ((tio.c_lflag & ECHO) && (c == '\b' || c == tio.c_cc[VERASE])) {
+    if (canonical_echo && c == tio.c_cc[VEOF]) {
+        tty0.eof_pending = true;
+        if (tty0.read_wait && tty0.read_wait->state == TASK_INTERRUPTIBLE) {
+            reader = tty0.read_wait;
+            tty0.read_wait = NULL;
+        }
+        spin_unlock_irqrestore(&tty0.lock, flags);
+
+        if (reader) {
+            reader->wakeup_time = 0;
+            if (reader->process)
+                reader->process->state = (proc_state_t)PROC_READY;
+            add_to_ready_queue(reader);
+        }
+        return;
+    }
+
+    /* In canonical echo mode, the kernel owns basic line editing. mash keeps
+     * ECHO disabled and still receives raw editing keys for its own editor. */
+    if (canonical_echo && (c == '\b' || c == tio.c_cc[VERASE])) {
         if (tty0.input_head != tty0.input_tail) {
-            tty0.input_head = (tty0.input_head - 1) % TTY_INPUT_BUF_SIZE;
+            uint32_t prev = tty_input_prev(tty0.input_head);
+            if (tty0.input_buf[prev] != '\n' && tty0.input_buf[prev] != '\r') {
+                tty0.input_head = prev;
+                uart_puts("\b \b");
+            }
+        }
+        spin_unlock_irqrestore(&tty0.lock, flags);
+        return;
+    }
+
+    if (canonical_echo && c == tio.c_cc[VKILL]) {
+        while (tty0.input_head != tty0.input_tail) {
+            uint32_t prev = tty_input_prev(tty0.input_head);
+            if (tty0.input_buf[prev] == '\n' || tty0.input_buf[prev] == '\r')
+                break;
+            tty0.input_head = prev;
             uart_puts("\b \b");
         }
         spin_unlock_irqrestore(&tty0.lock, flags);
@@ -317,12 +359,14 @@ void tty_input_char(char c) {
         tty0.input_buf[tty0.input_head] = c;
         tty0.input_head = next_head;
         tty0.input_chars++;
+        if (canonical_echo)
+            should_wake = (c == '\n' || c == '\r');
         
         /* read(0, &c, 1) doit être réveillé dès qu'un caractère arrive.
          * Ne pas conserver un waiter mort ou qui n'attend plus le TTY: après
          * un signal, il doit revenir en userland via -EINTR plutôt que voler
          * le prochain caractère du shell. */
-        if (tty0.read_wait) {
+        if (should_wake && tty0.read_wait) {
             if (tty0.read_wait->state == TASK_INTERRUPTIBLE) {
                 reader = tty0.read_wait;
                 tty0.read_wait = NULL;
@@ -365,6 +409,12 @@ ssize_t tty_read(char *buf, size_t count) {
             bool noncanon_no_min = !(tio.c_lflag & ICANON) && tio.c_cc[VMIN] == 0;
             uint32_t timeout_ticks = (uint32_t)tio.c_cc[VTIME] * (TIMER_FREQ / 10);
             uint32_t deadline = 0;
+
+            if (tty0.eof_pending) {
+                tty0.eof_pending = false;
+                spin_unlock_irqrestore(&tty0.lock, flags);
+                break;
+            }
 
             if (read > 0 || !current_task) {
                 spin_unlock_irqrestore(&tty0.lock, flags);
