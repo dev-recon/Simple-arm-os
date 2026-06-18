@@ -32,6 +32,7 @@ static uintptr_t uart_mmio_base = VIRT_UART_BASE;
 
 /* Bits UART interrupt PL011 */
 #define UART_INT_RX     (1 << 4)  /* Receive FIFO interrupt */
+#define UART_INT_TX     (1 << 5)  /* Transmit FIFO interrupt */
 #define UART_INT_RT     (1 << 6)  /* Receive timeout interrupt */
 #define UART_INT_ERR    ((1 << 7) | (1 << 8) | (1 << 9) | (1 << 10))
 
@@ -146,6 +147,18 @@ bool uart_try_putc(char c)
     spin_unlock_irqrestore(&uart_lock, flags);
 
     return written;
+}
+
+void uart_set_tx_irq_enabled(bool enabled)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&uart_lock, &flags);
+    if (enabled)
+        UART_IMSC |= UART_INT_TX;
+    else
+        UART_IMSC &= ~UART_INT_TX;
+    spin_unlock_irqrestore(&uart_lock, flags);
 }
 
 /*
@@ -466,7 +479,7 @@ file_t* create_uart_console_file(const char* name, int flags) {
 /* Dans uart.c */
 void uart_irq_handler(void) {
     uint32_t mis = UART_MIS;  /* Masked Interrupt Status */
-    uint32_t handled = mis & (UART_INT_RX | UART_INT_RT | UART_INT_ERR);
+    uint32_t handled = mis & (UART_INT_RX | UART_INT_RT | UART_INT_TX | UART_INT_ERR);
     
     /* RX ou timeout de reception ? */
     if (mis & (UART_INT_RX | UART_INT_RT)) {
@@ -478,6 +491,10 @@ void uart_irq_handler(void) {
             /* Envoyer au TTY */
             tty_input_char((char)c);
         }
+    }
+
+    if (mis & UART_INT_TX) {
+        tty_drain_output();
     }
     
     if (handled) {

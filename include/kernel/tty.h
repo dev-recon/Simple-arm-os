@@ -51,6 +51,10 @@ struct tty_struct {
     char input_buf[TTY_INPUT_BUF_SIZE];
     uint32_t input_head;
     uint32_t input_tail;
+
+    char output_buf[TTY_OUTPUT_BUF_SIZE];
+    uint32_t output_head;
+    uint32_t output_tail;
     
     /* POSIX-ish terminal state. */
     struct termios termios;
@@ -112,6 +116,7 @@ extern struct tty_struct tty0;
 
 void tty_init(void);
 void tty_input_char(char c);
+void tty_drain_output(void);
 ssize_t tty_read(char *buf, size_t count);
 ssize_t tty_write(const char *buf, size_t count);
 int tty_get_termios(struct termios *tio);

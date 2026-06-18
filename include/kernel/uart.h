@@ -27,6 +27,7 @@ bool uart_tx_ready(void);
 void uart_puts(const char* str);
 int uart_getc(void);
 bool uart_has_data(void);
+void uart_set_tx_irq_enabled(bool enabled);
 void uart_put_hex(unsigned long value);
 void uart_put_dec(int num);
 void uart_irq_handler(void);

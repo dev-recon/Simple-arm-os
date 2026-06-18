@@ -10,6 +10,21 @@
 
 struct tty_struct tty0;
 
+static uint32_t tty_output_next(uint32_t pos)
+{
+    return (pos + 1) % TTY_OUTPUT_BUF_SIZE;
+}
+
+static bool tty_output_empty_locked(void)
+{
+    return tty0.output_head == tty0.output_tail;
+}
+
+static bool tty_output_full_locked(void)
+{
+    return tty_output_next(tty0.output_head) == tty0.output_tail;
+}
+
 static void tty_init_termios(struct termios *tio)
 {
     memset(tio, 0, sizeof(*tio));
@@ -152,6 +167,14 @@ int tty_flush(int queue_selector)
         tty0.input_tail = 0;
         tty0.read_wait = NULL;
         spin_unlock_irqrestore(&tty0.lock, flags);
+    }
+
+    if (queue_selector == TCOFLUSH || queue_selector == TCIOFLUSH) {
+        spin_lock_irqsave(&tty0.lock, &flags);
+        tty0.output_head = 0;
+        tty0.output_tail = 0;
+        spin_unlock_irqrestore(&tty0.lock, flags);
+        uart_set_tx_irq_enabled(false);
     }
 
     return 0;
@@ -314,6 +337,7 @@ ssize_t tty_read(char *buf, size_t count) {
             struct termios tio = tty0.termios;
             bool noncanon_no_min = !(tio.c_lflag & ICANON) && tio.c_cc[VMIN] == 0;
             uint32_t timeout_ticks = (uint32_t)tio.c_cc[VTIME] * (TIMER_FREQ / 10);
+            uint32_t deadline = 0;
 
             if (read > 0 || !current_task) {
                 spin_unlock_irqrestore(&tty0.lock, flags);
@@ -327,8 +351,10 @@ ssize_t tty_read(char *buf, size_t count) {
 
             tty0.read_wait = current_task;
             task_set_interruptible(current_task);
-            if (noncanon_no_min)
-                current_task->wakeup_time = get_system_ticks() + timeout_ticks;
+            if (noncanon_no_min) {
+                deadline = get_system_ticks() + timeout_ticks;
+                current_task->wakeup_time = deadline;
+            }
             spin_unlock_irqrestore(&tty0.lock, flags);
 
             schedule();
@@ -339,9 +365,7 @@ ssize_t tty_read(char *buf, size_t count) {
 
             if (has_pending_signals(current_task))
                 return read > 0 ? (ssize_t)read : (ssize_t)-EINTR;
-            if (noncanon_no_min &&
-                current_task->wakeup_time != 0 &&
-                get_system_ticks() >= current_task->wakeup_time) {
+            if (noncanon_no_min && get_system_ticks() >= deadline) {
                 current_task->wakeup_time = 0;
                 break;
             }
@@ -382,7 +406,18 @@ ssize_t tty_write(const char *buf, size_t count) {
 
     for (size_t i = 0; i < count; i++) {
         if ((oflag & OPOST) && (oflag & ONLCR) && buf[i] == '\n') {
-            while (!uart_try_putc('\r')) {
+            while (1) {
+                spin_lock_irqsave(&tty0.lock, &flags);
+                if (!tty_output_full_locked()) {
+                    tty0.output_buf[tty0.output_head] = '\r';
+                    tty0.output_head = tty_output_next(tty0.output_head);
+                    spin_unlock_irqrestore(&tty0.lock, flags);
+                    uart_set_tx_irq_enabled(true);
+                    tty_drain_output();
+                    break;
+                }
+                spin_unlock_irqrestore(&tty0.lock, flags);
+                tty_drain_output();
                 if (current_task && has_pending_signals(current_task))
                     return written > 0 ? (ssize_t)written : (ssize_t)-EINTR;
                 if (current_task)
@@ -393,7 +428,19 @@ ssize_t tty_write(const char *buf, size_t count) {
                 }
             }
         }
-        while (!uart_try_putc(buf[i])) {
+
+        while (1) {
+            spin_lock_irqsave(&tty0.lock, &flags);
+            if (!tty_output_full_locked()) {
+                tty0.output_buf[tty0.output_head] = buf[i];
+                tty0.output_head = tty_output_next(tty0.output_head);
+                spin_unlock_irqrestore(&tty0.lock, flags);
+                uart_set_tx_irq_enabled(true);
+                tty_drain_output();
+                break;
+            }
+            spin_unlock_irqrestore(&tty0.lock, flags);
+            tty_drain_output();
             if (current_task && has_pending_signals(current_task))
                 return written > 0 ? (ssize_t)written : (ssize_t)-EINTR;
             if (current_task)
@@ -406,6 +453,34 @@ ssize_t tty_write(const char *buf, size_t count) {
         written++;
     }
     return (ssize_t)written;
+}
+
+void tty_drain_output(void)
+{
+    unsigned long flags;
+
+    while (1) {
+        char c;
+        bool sent;
+
+        spin_lock_irqsave(&tty0.lock, &flags);
+        if (tty_output_empty_locked()) {
+            spin_unlock_irqrestore(&tty0.lock, flags);
+            uart_set_tx_irq_enabled(false);
+            return;
+        }
+
+        c = tty0.output_buf[tty0.output_tail];
+        sent = uart_try_putc(c);
+        if (sent)
+            tty0.output_tail = tty_output_next(tty0.output_tail);
+        spin_unlock_irqrestore(&tty0.lock, flags);
+
+        if (!sent) {
+            uart_set_tx_irq_enabled(true);
+            return;
+        }
+    }
 }
 
 static ssize_t tty_file_read(file_t* file, void* buf, size_t count) {
