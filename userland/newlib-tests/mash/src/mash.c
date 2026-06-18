@@ -153,6 +153,16 @@ static int token_is_special(char c) {
     return c == '<' || c == '>' || c == '&' || c == '|' || c == ';';
 }
 
+static int shell_backslash_escapes(char quote, char next) {
+    if (!next)
+        return 0;
+    if (quote == '\'')
+        return 0;
+    if (quote == '"')
+        return next == '"' || next == '\\' || next == '$';
+    return 1;
+}
+
 static int token_has_slash(const char* s) {
     while (*s) {
         if (*s == '/')
@@ -1279,7 +1289,7 @@ static int shell_parse_line_into(char* line, char* argv[],
                         break;
                 }
 
-                if (*readp == '\\' && readp[1]) {
+                if (*readp == '\\' && shell_backslash_escapes(quote, readp[1])) {
                     readp++;
                 }
                 if (!quote && writep == token_start && *readp == '~' &&
@@ -2112,10 +2122,42 @@ static void shell_strip_comment(char* line) {
     }
 }
 
+static char shell_unmatched_quote(const char* line) {
+    char quote = 0;
+    const char* p = line;
+
+    while (*p) {
+        if (quote) {
+            if (*p == quote) {
+                quote = 0;
+                p++;
+                continue;
+            }
+            if (*p == '\\' && shell_backslash_escapes(quote, p[1])) {
+                p += 2;
+                continue;
+            }
+        } else {
+            if (*p == '\'' || *p == '"') {
+                quote = *p++;
+                continue;
+            }
+            if (*p == '\\' && shell_backslash_escapes(quote, p[1])) {
+                p += 2;
+                continue;
+            }
+        }
+        p++;
+    }
+
+    return quote;
+}
+
 int shell_execute_line(char* line) {
     char local_tokens[SHELL_BUFFER_SIZE];
     char* local_argv[SHELL_MAX_ARGS];
     char* trimmed;
+    char quote;
     int argc;
     int result;
 
@@ -2126,6 +2168,13 @@ int shell_execute_line(char* line) {
     trimmed = trim_spaces(line);
     if (!*trimmed)
         return SHELL_OK;
+
+    quote = shell_unmatched_quote(trimmed);
+    if (quote) {
+        printf("mash: unmatched %c quote\n", quote);
+        shell_status = 2;
+        return 2;
+    }
 
     if (starts_with(trimmed, "for "))
         return shell_execute_for_line(trimmed);

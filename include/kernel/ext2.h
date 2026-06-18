@@ -112,7 +112,10 @@ typedef struct {
     bool     mounted;
 } ext2_fs_t;
 
+struct statfs;
+
 inode_t* ext2_mount(uint64_t lba_start);
+int ext2_statfs(struct statfs* st);
 inode_t* ext2_create_file(inode_t* parent, const char* name, mode_t mode);
 int ext2_link_inode(inode_t* parent, const char* name, inode_t* target);
 int ext2_create_symlink(inode_t* parent, const char* name, const char* target);

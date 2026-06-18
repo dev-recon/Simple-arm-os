@@ -157,6 +157,8 @@ uint32_t fat32_date_to_unix(uint16_t fat_date, uint16_t fat_time);
 uint32_t get_fat32_bytes_per_cluster(void);
 uint32_t get_fat32_sectors_per_cluster(void);
 bool is_fat32_mounted(void);
+struct statfs;
+int fat32_statfs(struct statfs* st);
 
 /* Macro pour verifier l'alignement des structures au compile-time */
 #define CHECK_FAT32_ALIGNMENT() do { \

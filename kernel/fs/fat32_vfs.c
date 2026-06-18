@@ -1202,6 +1202,36 @@ uint32_t fat32_get_total_clusters(void) {
     return data_sectors / fat32_fs.sectors_per_cluster;
 }
 
+int fat32_statfs(struct statfs* st)
+{
+    uint32_t total_clusters;
+    uint32_t data_clusters;
+    uint32_t free_clusters = 0;
+
+    if (!st)
+        return -EINVAL;
+    if (!fat32_fs.mounted || !fat32_fs.fat_table)
+        return -ENODEV;
+
+    total_clusters = fat32_get_total_clusters();
+    data_clusters = total_clusters > 2 ? total_clusters - 2 : 0;
+
+    for (uint32_t cluster = 2; cluster < total_clusters; cluster++) {
+        if (fat32_get_cluster_value(cluster) == FAT32_FREE_CLUSTER)
+            free_clusters++;
+    }
+
+    memset(st, 0, sizeof(*st));
+    st->f_type = 0x4D44; /* MSDOS/FAT */
+    st->f_bsize = fat32_fs.bytes_per_cluster;
+    st->f_blocks = data_clusters;
+    st->f_bfree = free_clusters;
+    st->f_bavail = free_clusters;
+    st->f_namelen = FAT32_MAX_FILENAME;
+    st->f_frsize = fat32_fs.bytes_per_cluster;
+    return 0;
+}
+
 uint32_t fat32_alloc_cluster(void) {
     if (!fat32_fs.mounted) {
         KERROR("fat32_alloc_cluster: FS not mounted\n");

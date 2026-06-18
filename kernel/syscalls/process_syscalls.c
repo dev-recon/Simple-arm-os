@@ -12,6 +12,7 @@
 #include <kernel/ext2.h>
 #include <kernel/tty.h>
 #include <kernel/mount.h>
+#include <kernel/virtio_block.h>
 
 #define PIPE_BUF_SIZE 4096
 
@@ -46,6 +47,12 @@ static file_operations_t pipe_write_fops = {
 
 extern char* resolve_path(const char* path);
 extern inode_operations_t ext2_inode_ops;
+
+int sys_sync(void)
+{
+    int ret = virtio_blk_flush();
+    return ret < 0 ? -EIO : 0;
+}
 
 int sys_mount(const char* source, const char* target, const char* fstype,
               uint32_t flags, const void* data)
@@ -110,6 +117,36 @@ int sys_umount(const char* target)
     ret = vfs_umount(full_target);
     kfree(full_target);
     return ret;
+}
+
+int sys_statfs(const char* path, struct statfs* buf)
+{
+    char* kpath;
+    char* full_path;
+    struct statfs st;
+    int ret;
+
+    if (!buf)
+        return -EFAULT;
+
+    kpath = copy_string_from_user(path);
+    if (!kpath)
+        return -EFAULT;
+
+    full_path = resolve_path(kpath);
+    kfree(kpath);
+    if (!full_path)
+        return -ENOENT;
+
+    path_canonicalize(full_path);
+    ret = vfs_statfs(full_path, &st);
+    kfree(full_path);
+    if (ret < 0)
+        return ret;
+
+    if (copy_to_user(buf, &st, sizeof(st)) < 0)
+        return -EFAULT;
+    return 0;
 }
 
 static int pipe_wait_interruptible(void)

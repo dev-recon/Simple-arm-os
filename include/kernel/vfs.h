@@ -55,6 +55,18 @@ struct process;
 #define DT_SOCK     12
 #define DT_WHT      14
 
+struct statfs {
+    uint32_t f_type;
+    uint32_t f_bsize;
+    uint32_t f_blocks;
+    uint32_t f_bfree;
+    uint32_t f_bavail;
+    uint32_t f_files;
+    uint32_t f_ffree;
+    uint32_t f_namelen;
+    uint32_t f_frsize;
+};
+
 
 
 /* VFS functions */
@@ -65,6 +77,7 @@ int  vfs_mount_ex(const char* path, inode_t* root, const char* source,
 int  vfs_umount(const char* path);
 bool vfs_is_mounted(const char* path);
 void vfs_format_mounts(char* buf, size_t cap, size_t* len);
+int  vfs_statfs(const char* path, struct statfs* st);
 inode_t* create_inode(void);
 inode_t* get_inode(uint32_t ino);
 inode_t* get_root_inode(void);

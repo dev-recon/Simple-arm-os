@@ -33,6 +33,7 @@ extern long sys_mount(const char *source, const char *target,
                       const char *filesystemtype, unsigned long mountflags,
                       const void *data);
 extern long sys_umount(const char *target);
+extern long sys_time(void *tloc);
 extern long sys_lseek(int fd, long offset, int whence);
 extern long sys_unlink(const char *pathname);
 extern long sys_rename(const char *oldpath, const char *newpath);
@@ -41,6 +42,7 @@ extern long sys_rmdir(const char *pathname);
 extern long sys_symlink(const char *target, const char *linkpath);
 extern long sys_readlink(const char *pathname, char *buf, unsigned long bufsiz);
 extern long sys_ftruncate(int fd, long length);
+extern long sys_statfs(const char *path, void *buf);
 extern long sys_stat(const char *pathname, void *st);
 extern long sys_lstat(const char *pathname, void *st);
 extern long sys_fstat(int fd, void *st);
@@ -61,6 +63,7 @@ extern long sys_waitpid(int pid, int *status, int options);
 extern long sys_brk(unsigned long brk);
 extern long sys_link(const char *oldpath, const char *newpath);
 extern long sys_access(const char *pathname, int mode);
+extern long sys_sync(void);
 extern long sys_chdir(const char *path);
 extern long sys_getcwd(char *buf, unsigned long size);
 extern long sys_chmod(const char *path, int mode);
@@ -130,6 +133,16 @@ struct os_stat {
     uint32_t os_atime;
     uint32_t os_mtime;
     uint32_t os_ctime;
+};
+
+struct os_timeval {
+    int32_t tv_sec;
+    uint32_t tv_usec;
+};
+
+struct os_timezone {
+    int tz_minuteswest;
+    int tz_dsttime;
 };
 
 struct os_sigaction {
@@ -375,6 +388,11 @@ int stat(const char *pathname, struct stat *st)
     return _stat(pathname, st);
 }
 
+int statfs(const char *path, void *buf)
+{
+    return ret_errno(sys_statfs(path, buf));
+}
+
 int lstat(const char *pathname, struct stat *st)
 {
     return _lstat(pathname, st);
@@ -404,14 +422,55 @@ int _isatty(int fd)
     return 0;
 }
 
+time_t time(time_t *tloc)
+{
+    long ret = sys_time(NULL);
+
+    if (ret < 0) {
+        errno = (int)-ret;
+        return (time_t)-1;
+    }
+
+    if (tloc)
+        *tloc = (time_t)ret;
+    return (time_t)ret;
+}
+
 int _gettimeofday(struct timeval *tv, void *tz)
 {
-    return ret_errno(sys_gettimeofday(tv, tz));
+    struct os_timeval otv;
+    struct os_timezone otz;
+    long ret;
+
+    ret = sys_gettimeofday(tv ? (struct timeval *)&otv : NULL,
+                           tz ? &otz : NULL);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+
+    if (tv) {
+        tv->tv_sec = (time_t)otv.tv_sec;
+        tv->tv_usec = (suseconds_t)otv.tv_usec;
+    }
+
+    if (tz) {
+        struct timezone *ntz = (struct timezone *)tz;
+        ntz->tz_minuteswest = otz.tz_minuteswest;
+        ntz->tz_dsttime = otz.tz_dsttime;
+    }
+
+    return 0;
 }
 
 int access(const char *pathname, int mode)
 {
     return ret_errno(sys_access(pathname, mode));
+}
+
+void sync(void)
+{
+    (void)sys_sync();
 }
 
 int chdir(const char *path)

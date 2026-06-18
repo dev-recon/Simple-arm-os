@@ -74,6 +74,7 @@ struct process;
 #define __NR_symlink             83
 #define __NR_readlink            85
 #define __NR_ftruncate           93
+#define __NR_statfs              99
 #define __NR_stat               106
 #define __NR_lstat              107
 #define __NR_fstat              108
@@ -168,6 +169,7 @@ int sys_stat(const char* pathname, struct stat* statbuf);
 int sys_lstat(const char* pathname, struct stat* statbuf);
 int sys_fstat(int fd, struct stat* statbuf);
 int sys_ftruncate(int fd, off_t length);
+int sys_statfs(const char* path, struct statfs* buf);
 int sys_print(const char* msg);
 int sys_mount(const char* source, const char* target, const char* fstype,
               uint32_t flags, const void* data);
@@ -181,6 +183,7 @@ int sys_readlink(const char* pathname, char* buf, size_t bufsiz);
 int sys_rename(const char* oldpath, const char* newpath);
 int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count);
 int sys_access(const char* pathname, int mode);
+int sys_sync(void);
 int sys_umask(int mask);
 int sys_chmod(const char* pathname, mode_t mode);
 int sys_chown(const char* pathname, uid_t owner, gid_t group);

@@ -331,6 +331,30 @@ static int ext2_write_superblock(const ext2_superblock_t* in)
     return ret;
 }
 
+int ext2_statfs(struct statfs* st)
+{
+    ext2_superblock_t sb;
+
+    if (!st)
+        return -EINVAL;
+    if (!ext2_fs.mounted)
+        return -ENODEV;
+    if (ext2_read_superblock(&sb) < 0)
+        return -EIO;
+
+    memset(st, 0, sizeof(*st));
+    st->f_type = EXT2_MAGIC;
+    st->f_bsize = ext2_fs.block_size;
+    st->f_blocks = sb.s_blocks_count;
+    st->f_bfree = sb.s_free_blocks_count;
+    st->f_bavail = sb.s_free_blocks_count;
+    st->f_files = sb.s_inodes_count;
+    st->f_ffree = sb.s_free_inodes_count;
+    st->f_namelen = MAX_NAME;
+    st->f_frsize = ext2_fs.block_size;
+    return 0;
+}
+
 static int ext2_read_group_desc(uint32_t group, ext2_group_desc_t* out)
 {
     if (!out || group >= ext2_fs.groups_count) return -1;

@@ -67,7 +67,20 @@ struct sysinfo_response {
     struct proc_info procs[64];
 };
 
+struct statfs {
+    unsigned f_type;
+    unsigned f_bsize;
+    unsigned f_blocks;
+    unsigned f_bfree;
+    unsigned f_bavail;
+    unsigned f_files;
+    unsigned f_ffree;
+    unsigned f_namelen;
+    unsigned f_frsize;
+};
+
 int getsysinfo(struct sysinfo_response *resp);
+int statfs(const char *path, struct statfs *buf);
 int getdents(int fd, void *dirp, size_t count);
 int tcsetpgrp(int fd, pid_t pgrp);
 pid_t tcgetpgrp(int fd);
@@ -83,6 +96,7 @@ int symlink(const char *target, const char *linkpath);
 int readlink(const char *pathname, char *buf, size_t bufsiz);
 int getpgrp(void);
 int setpgid(pid_t pid, pid_t pgid);
+void sync(void);
 int sys_shutdown(void);
 int mount(const char *source, const char *target, const char *filesystemtype,
           unsigned long mountflags, const void *data);

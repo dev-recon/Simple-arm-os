@@ -170,6 +170,51 @@ void vfs_format_mounts(char* buf, size_t cap, size_t* len)
     }
 }
 
+static bool vfs_path_is_mount_child(const char* path, const char* mount_path)
+{
+    size_t len;
+
+    if (!path || !mount_path)
+        return false;
+    if (strcmp(mount_path, "/") == 0)
+        return true;
+
+    len = strlen(mount_path);
+    if (strncmp(path, mount_path, len) != 0)
+        return false;
+    return path[len] == '\0' || path[len] == '/';
+}
+
+int vfs_statfs(const char* path, struct statfs* st)
+{
+    int best = -1;
+    size_t best_len = 0;
+
+    if (!path || !st)
+        return -EINVAL;
+
+    for (int i = 0; i < mount_count; i++) {
+        size_t len = strlen(mount_table[i].path);
+        if (len > best_len && vfs_path_is_mount_child(path, mount_table[i].path)) {
+            best = i;
+            best_len = len;
+        }
+    }
+
+    if (best >= 0) {
+        if (strcmp(mount_table[best].fstype, "fat32") == 0)
+            return fat32_statfs(st);
+        if (strcmp(mount_table[best].fstype, "ext2") == 0)
+            return ext2_statfs(st);
+        return -ENOSYS;
+    }
+
+    if (vfs_path_is_mount_child(path, "/"))
+        return ext2_statfs(st);
+
+    return -ENOENT;
+}
+
 /* File operations for FAT32 */
 extern file_operations_t fat32_file_ops;
 extern file_operations_t fat32_dir_ops;
