@@ -333,6 +333,7 @@ void schedule(void);                        /* Forcer une commutation */
 void sched_start(void);                     /* Demarrer le scheduler */
 void task_sleep_ms(uint32_t ms);
 void schedule_to(task_t *next_task);
+uint64_t task_runtime_ticks(task_t* task);  /* Temps CPU cumule en ticks */
 
 /* Acces aux taches */
 task_t* task_find_by_id(uint32_t task_id);  /* Trouver par ID */

@@ -50,6 +50,14 @@ void setup_task_context(task_t* task);
 static task_t* schedule_next_task2(void);
 bool is_in_ready_queue(task_t* task);
 
+uint64_t task_runtime_ticks(task_t* task)
+{
+    if (!task)
+        return 0;
+
+    return task->total_runtime;
+}
+
 void debug_context_switch_entry(void);
 void debug_context_switch_middle(void);
 void debug_context_switch_first_exec(void);
@@ -1445,7 +1453,7 @@ void schedule(void)
         unset_critical_section();
         return;
     }
-            spin_lock(&task_lock);
+    spin_lock(&task_lock);
     next_task->state = TASK_RUNNING;
     next_task->switch_count++;
     //old_task = current_task;

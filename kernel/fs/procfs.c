@@ -723,6 +723,7 @@ static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "VmRSS:\t%u kB\n", proc_vm_rss_kb(vm));
     proc_append(buf, cap, len, "L2Tables:\t%u\n", proc_vm_l2_tables(vm));
     proc_append(buf, cap, len, "CtxSwitches:\t%u\n", task->switch_count);
+    proc_append(buf, cap, len, "RuntimeTicks:\t%u\n", (uint32_t)task_runtime_ticks(task));
     proc_append(buf, cap, len, "PageFaults:\t%u\n", task->page_faults);
     proc_append(buf, cap, len, "CowFaults:\t%u\n", task->cow_faults);
     proc_append(buf, cap, len, "StackFaults:\t%u\n", task->stack_faults);
@@ -743,7 +744,7 @@ static void proc_fill_pid_stat(pid_t pid, char* buf, size_t cap, size_t* len)
     }
 
     proc = proc_task_process(task);
-    proc_append(buf, cap, len, "%d (%s) %c %d %d %d %d %u %u %u %u\n",
+    proc_append(buf, cap, len, "%d (%s) %c %d %d %d %d %u %u %u %u %u\n",
                 proc ? proc->pid : 0,
                 task->name,
                 proc_task_state_char(task->state),
@@ -754,7 +755,8 @@ static void proc_fill_pid_stat(pid_t pid, char* buf, size_t cap, size_t* len)
                 task->page_faults,
                 task->cow_faults,
                 task->stack_faults,
-                task->switch_count);
+                task->switch_count,
+                (uint32_t)task_runtime_ticks(task));
     spin_unlock_irqrestore(&task_lock, flags);
 }
 

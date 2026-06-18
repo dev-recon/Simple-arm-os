@@ -7,6 +7,7 @@
 #include <dirent.h>
 
 #define PROC_BUF_SIZE 4096
+#define PROC_HZ 1000
 
 static int is_digit(char c)
 {
@@ -60,7 +61,8 @@ static const char *parse_int(const char *p, int *out)
     return p;
 }
 
-static int parse_proc_stat(const char *buf, int *pid, int *tty, char *name, int name_size)
+static int parse_proc_stat(const char *buf, int *pid, int *tty,
+                           int *runtime_ticks, char *name, int name_size)
 {
     const char *p;
     const char *start;
@@ -105,7 +107,41 @@ static int parse_proc_stat(const char *buf, int *pid, int *tty, char *name, int 
     p = parse_int(p, tty);
     if (!p) return -1;
 
+    *runtime_ticks = 0;
+    p = parse_int(p, &dummy); /* page_faults */
+    if (!p) return 0;
+    p = parse_int(p, &dummy); /* cow_faults */
+    if (!p) return 0;
+    p = parse_int(p, &dummy); /* stack_faults */
+    if (!p) return 0;
+    p = parse_int(p, &dummy); /* ctx switches */
+    if (!p) return 0;
+    p = parse_int(p, runtime_ticks); /* runtime ticks */
+
     return 0;
+}
+
+static void format_time(int runtime_ticks, char *buf, int size)
+{
+    unsigned int ticks;
+    unsigned int centis;
+    unsigned int minutes;
+    unsigned int seconds;
+    unsigned int hundredths;
+
+    if (!buf || size <= 0)
+        return;
+
+    if (runtime_ticks < 0)
+        runtime_ticks = 0;
+
+    ticks = (unsigned int)runtime_ticks;
+    centis = (ticks * 100u) / PROC_HZ;
+    minutes = centis / 6000u;
+    seconds = (centis / 100u) % 60u;
+    hundredths = centis % 100u;
+
+    snprintf(buf, (size_t)size, "%u:%02u.%02u", minutes, seconds, hundredths);
 }
 
 static void print_tty(int tty)
@@ -145,8 +181,10 @@ int main(void)
             struct linux_dirent *e = (struct linux_dirent *)ptr;
             char path[64];
             char name[64];
+            char timebuf[16];
             int pid;
             int tty;
+            int runtime_ticks;
 
             if (e->d_reclen == 0)
                 break;
@@ -154,10 +192,11 @@ int main(void)
             if (e->d_ino != 0 && is_digit(e->d_name[0])) {
                 sprintf(path, "/proc/%s/stat", e->d_name);
                 if (read_file(path, statbuf, sizeof(statbuf)) >= 0 &&
-                    parse_proc_stat(statbuf, &pid, &tty, name, sizeof(name)) == 0) {
+                    parse_proc_stat(statbuf, &pid, &tty, &runtime_ticks, name, sizeof(name)) == 0) {
+                    format_time(runtime_ticks, timebuf, sizeof(timebuf));
                     printf("%5d ", pid);
                     print_tty(tty);
-                    printf("%*s %8s %s\n", tty >= 0 ? 4 : 7, "", "0:00.00", name);
+                    printf("%*s %8s %s\n", tty >= 0 ? 4 : 7, "", timebuf, name);
                 }
             }
 

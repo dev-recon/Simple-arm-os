@@ -229,6 +229,10 @@ void timer_irq_handler(void)
     if (process_system_ready) {
         extern task_t* current_task;
         
+        if (current_task && current_task->state == TASK_RUNNING) {
+            current_task->total_runtime++;
+        }
+
         if (current_task && !in_critical_section) {
             current_task->quantum_left--;
 
