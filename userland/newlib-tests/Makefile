@@ -1,4 +1,4 @@
-COREUTILS := cat echo pwd true false rm touch write mkdir rmdir sleep kill ls cp mv ps lps stat shutdown memstress chmod chown ln head grep which keytest ttytest ttyinfo screen_demo kilo
+COREUTILS := cat echo pwd true false rm touch write mkdir rmdir sleep kill ls cp mv ps lps stat shutdown memstress chmod chown ln head grep mount mount-fat32 umount which keytest ttytest ttyinfo screen_demo kilo
 PROGRAMS := nl-hello nl-systest nl-mash $(COREUTILS:%=nl-%)
 UNPREFIXED_LINKS := nl-systest nl-mash $(COREUTILS:%=nl-%)
 ARCH ?= arm-none-eabi-

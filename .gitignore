@@ -39,6 +39,8 @@ userfs/usr/bin/lps
 userfs/usr/bin/mash
 userfs/usr/bin/memstress
 userfs/usr/bin/mkdir
+userfs/usr/bin/mount
+userfs/usr/bin/mount-fat32
 userfs/usr/bin/mv
 userfs/usr/bin/ps
 userfs/usr/bin/pwd
@@ -52,6 +54,7 @@ userfs/usr/bin/systest
 userfs/usr/bin/ttyinfo
 userfs/usr/bin/touch
 userfs/usr/bin/true
+userfs/usr/bin/umount
 userfs/usr/bin/which
 userfs/usr/bin/write
 userfs/usr/bin/nl-*
@@ -80,6 +83,8 @@ userland/coreutils/ls
 userland/coreutils/lps
 userland/coreutils/memstress
 userland/coreutils/mkdir
+userland/coreutils/mount
+userland/coreutils/mount-fat32
 userland/coreutils/mv
 userland/coreutils/ps
 userland/coreutils/pwd
@@ -92,6 +97,7 @@ userland/coreutils/stat
 userland/coreutils/ttyinfo
 userland/coreutils/touch
 userland/coreutils/true
+userland/coreutils/umount
 userland/coreutils/which
 userland/coreutils/write
 userland/systest/systest

@@ -84,5 +84,8 @@ int readlink(const char *pathname, char *buf, size_t bufsiz);
 int getpgrp(void);
 int setpgid(pid_t pid, pid_t pgid);
 int sys_shutdown(void);
+int mount(const char *source, const char *target, const char *filesystemtype,
+          unsigned long mountflags, const void *data);
+int umount(const char *target);
 
 #endif

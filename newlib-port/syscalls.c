@@ -29,6 +29,10 @@ extern long sys_write(int fd, const void *buf, unsigned long count);
 extern long sys_open(const char *pathname, int flags, int mode);
 extern long sys_creat(const char *pathname, int mode);
 extern long sys_close(int fd);
+extern long sys_mount(const char *source, const char *target,
+                      const char *filesystemtype, unsigned long mountflags,
+                      const void *data);
+extern long sys_umount(const char *target);
 extern long sys_lseek(int fd, long offset, int whence);
 extern long sys_unlink(const char *pathname);
 extern long sys_rename(const char *oldpath, const char *newpath);
@@ -243,6 +247,17 @@ int creat(const char *pathname, mode_t mode)
 int _close(int fd)
 {
     return ret_errno(sys_close(fd));
+}
+
+int mount(const char *source, const char *target, const char *filesystemtype,
+          unsigned long mountflags, const void *data)
+{
+    return ret_errno(sys_mount(source, target, filesystemtype, mountflags, data));
+}
+
+int umount(const char *target)
+{
+    return ret_errno(sys_umount(target));
 }
 
 off_t _lseek(int fd, off_t offset, int whence)

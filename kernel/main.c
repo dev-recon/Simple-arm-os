@@ -269,7 +269,7 @@ void kernel_main(void)
         KBOOT_OKF("Partition: virtio0p2 fat32 64MB");
         KBOOT_OKF("VFS: mounted ext2 on /");
         KBOOT_OKF("VFS: mounted proc on /proc");
-        KBOOT_OKF("VFS: mounted fat32 on /mnt");
+        KBOOT_OKF("VFS: fat32 available on /mnt (manual)");
     }    
 
     //trigger_timer_interrupt();

@@ -26,20 +26,148 @@ static spinlock_t vfs_lock;
 #define MAX_MOUNTS 8
 typedef struct {
     char     path[128];
+    char     source[64];
+    char     fstype[16];
+    char     options[64];
     inode_t* root;
 } mount_entry_t;
 static mount_entry_t mount_table[MAX_MOUNTS];
 static int mount_count = 0;
 
-int vfs_mount(const char* path, inode_t* root)
+static void vfs_mount_defaults(const char* path, char* source, size_t source_size,
+                               char* fstype, size_t fstype_size,
+                               char* options, size_t options_size)
 {
-    if (!path || !root || mount_count >= MAX_MOUNTS) return -1;
+    if (strcmp(path, "/proc") == 0) {
+        strncpy(source, "proc", source_size - 1);
+        strncpy(fstype, "proc", fstype_size - 1);
+        strncpy(options, "rw,nosuid,nodev,noexec", options_size - 1);
+    } else if (strcmp(path, "/mnt") == 0) {
+        strncpy(source, "virtio0p2", source_size - 1);
+        strncpy(fstype, "fat32", fstype_size - 1);
+        strncpy(options, "rw", options_size - 1);
+    } else {
+        strncpy(source, "none", source_size - 1);
+        strncpy(fstype, "unknown", fstype_size - 1);
+        strncpy(options, "rw", options_size - 1);
+    }
+
+    source[source_size - 1] = '\0';
+    fstype[fstype_size - 1] = '\0';
+    options[options_size - 1] = '\0';
+}
+
+bool vfs_is_mounted(const char* path)
+{
+    if (!path)
+        return false;
+
+    for (int i = 0; i < mount_count; i++) {
+        if (strcmp(path, mount_table[i].path) == 0)
+            return true;
+    }
+
+    return false;
+}
+
+int vfs_mount_ex(const char* path, inode_t* root, const char* source,
+                 const char* fstype, const char* options)
+{
+    if (!path || !root)
+        return -EINVAL;
+    if (mount_count >= MAX_MOUNTS)
+        return -ENOSPC;
+    if (strcmp(path, "/") == 0 || vfs_is_mounted(path))
+        return -EBUSY;
+
     strncpy(mount_table[mount_count].path, path, 127);
     mount_table[mount_count].path[127] = '\0';
+    if (source && fstype && options) {
+        strncpy(mount_table[mount_count].source, source,
+                sizeof(mount_table[mount_count].source) - 1);
+        strncpy(mount_table[mount_count].fstype, fstype,
+                sizeof(mount_table[mount_count].fstype) - 1);
+        strncpy(mount_table[mount_count].options, options,
+                sizeof(mount_table[mount_count].options) - 1);
+        mount_table[mount_count].source[sizeof(mount_table[mount_count].source) - 1] = '\0';
+        mount_table[mount_count].fstype[sizeof(mount_table[mount_count].fstype) - 1] = '\0';
+        mount_table[mount_count].options[sizeof(mount_table[mount_count].options) - 1] = '\0';
+    } else {
+        vfs_mount_defaults(path,
+                           mount_table[mount_count].source,
+                           sizeof(mount_table[mount_count].source),
+                           mount_table[mount_count].fstype,
+                           sizeof(mount_table[mount_count].fstype),
+                           mount_table[mount_count].options,
+                           sizeof(mount_table[mount_count].options));
+    }
     mount_table[mount_count].root = root;
     mount_count++;
     KINFO("[VFS] Mounted '%s'\n", path);
     return 0;
+}
+
+int vfs_mount(const char* path, inode_t* root)
+{
+    return vfs_mount_ex(path, root, NULL, NULL, NULL);
+}
+
+int vfs_umount(const char* path)
+{
+    if (!path || strcmp(path, "/") == 0)
+        return -EINVAL;
+
+    for (int i = 0; i < mount_count; i++) {
+        if (strcmp(path, mount_table[i].path) == 0) {
+            inode_t* root = mount_table[i].root;
+
+            for (int j = i + 1; j < mount_count; j++)
+                mount_table[j - 1] = mount_table[j];
+
+            mount_count--;
+            memset(&mount_table[mount_count], 0, sizeof(mount_table[mount_count]));
+            put_inode(root);
+            KINFO("[VFS] Unmounted '%s'\n", path);
+            return 0;
+        }
+    }
+
+    return -EINVAL;
+}
+
+static void vfs_mounts_append(char* buf, size_t cap, size_t* len,
+                              const char* fmt, ...)
+{
+    va_list args;
+    int written;
+
+    if (!buf || !len || *len >= cap)
+        return;
+
+    va_start(args, fmt);
+    written = vsnprintf(buf + *len, (int)(cap - *len), fmt, args);
+    va_end(args);
+
+    if (written < 0)
+        return;
+
+    if ((size_t)written >= cap - *len)
+        *len = cap - 1;
+    else
+        *len += (size_t)written;
+}
+
+void vfs_format_mounts(char* buf, size_t cap, size_t* len)
+{
+    vfs_mounts_append(buf, cap, len, "virtio0p1 / ext2 rw 0 0\n");
+
+    for (int i = 0; i < mount_count; i++) {
+        vfs_mounts_append(buf, cap, len, "%s %s %s %s 0 0\n",
+                          mount_table[i].source,
+                          mount_table[i].path,
+                          mount_table[i].fstype,
+                          mount_table[i].options);
+    }
 }
 
 /* File operations for FAT32 */
@@ -83,7 +211,6 @@ static void vfs_get_inode_ref(inode_t* inode)
 bool init_vfs(void)
 {
     const disk_partition_t* ext2_part;
-    const disk_partition_t* fat32_part;
     inode_t* proc_root;
     int fstab_mounts;
 
@@ -92,8 +219,7 @@ bool init_vfs(void)
     init_spinlock(&vfs_lock);
 
     ext2_part = disk_partition_get(DISK_PART_EXT2_ROOT);
-    fat32_part = disk_partition_get(DISK_PART_FAT32_MNT);
-    if (!ext2_part || !fat32_part) {
+    if (!ext2_part) {
         KERROR("[VFS] Disk layout is invalid\n");
         return false;
     }
@@ -126,13 +252,8 @@ bool init_vfs(void)
     //test_root_directory();
 
     fstab_mounts = vfs_mount_from_fstab(FSTAB_PATH);
-    if (fstab_mounts <= 0) {
-        KINFO("[VFS] Mounting static fallback for %s\n", fat32_part->mountpoint);
-        if (vfs_mount_fat32_partition(fat32_part) != 0) {
-            KERROR("[VFS] FAT32 fallback mount failed\n");
-            return false;
-        }
-    }
+    if (fstab_mounts < 0)
+        KINFO("[VFS] No optional fstab mounts loaded (%d)\n", fstab_mounts);
 
     proc_root = procfs_mount();
     if (!proc_root || vfs_mount("/proc", proc_root) != 0) {

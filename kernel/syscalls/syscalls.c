@@ -11,6 +11,7 @@
 #include <kernel/tty.h>
 #include <kernel/signal.h>
 #include <kernel/file.h>
+#include <kernel/mount.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 #include <kernel/timer.h>
@@ -30,6 +31,8 @@ static syscall_func_t syscall_table[256] = {
     [__NR_creat] = (syscall_func_t)sys_creat,
     [__NR_close] = (syscall_func_t)sys_close,
     [__NR_waitpid] = (syscall_func_t)sys_waitpid,
+    [__NR_mount] = (syscall_func_t)sys_mount,
+    [__NR_umount] = (syscall_func_t)sys_umount,
     [__NR_link] = (syscall_func_t)sys_link,
     [__NR_execve] = (syscall_func_t)sys_execve,
     [__NR_lseek] = (syscall_func_t)sys_lseek,

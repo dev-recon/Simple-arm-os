@@ -169,6 +169,9 @@ int sys_lstat(const char* pathname, struct stat* statbuf);
 int sys_fstat(int fd, struct stat* statbuf);
 int sys_ftruncate(int fd, off_t length);
 int sys_print(const char* msg);
+int sys_mount(const char* source, const char* target, const char* fstype,
+              uint32_t flags, const void* data);
+int sys_umount(const char* target);
 int sys_mkdir(const char* pathname, mode_t mode);
 int sys_rmdir(const char* pathname);
 int sys_link(const char* oldpath, const char* newpath);

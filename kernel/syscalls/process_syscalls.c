@@ -11,6 +11,7 @@
 #include <kernel/timer.h>
 #include <kernel/ext2.h>
 #include <kernel/tty.h>
+#include <kernel/mount.h>
 
 #define PIPE_BUF_SIZE 4096
 
@@ -45,6 +46,71 @@ static file_operations_t pipe_write_fops = {
 
 extern char* resolve_path(const char* path);
 extern inode_operations_t ext2_inode_ops;
+
+int sys_mount(const char* source, const char* target, const char* fstype,
+              uint32_t flags, const void* data)
+{
+    char* ksource;
+    char* ktarget;
+    char* kfstype;
+    char* full_target;
+    int ret;
+
+    ksource = copy_string_from_user(source);
+    if (!ksource)
+        return -EFAULT;
+
+    ktarget = copy_string_from_user(target);
+    if (!ktarget) {
+        kfree(ksource);
+        return -EFAULT;
+    }
+
+    kfstype = copy_string_from_user(fstype);
+    if (!kfstype) {
+        kfree(ksource);
+        kfree(ktarget);
+        return -EFAULT;
+    }
+
+    full_target = resolve_path(ktarget);
+    if (!full_target) {
+        kfree(ksource);
+        kfree(ktarget);
+        kfree(kfstype);
+        return -ENOENT;
+    }
+    path_canonicalize(full_target);
+
+    ret = vfs_mount_user(ksource, full_target, kfstype, flags, data);
+
+    kfree(ksource);
+    kfree(ktarget);
+    kfree(kfstype);
+    kfree(full_target);
+    return ret;
+}
+
+int sys_umount(const char* target)
+{
+    char* ktarget;
+    char* full_target;
+    int ret;
+
+    ktarget = copy_string_from_user(target);
+    if (!ktarget)
+        return -EFAULT;
+
+    full_target = resolve_path(ktarget);
+    kfree(ktarget);
+    if (!full_target)
+        return -ENOENT;
+
+    path_canonicalize(full_target);
+    ret = vfs_umount(full_target);
+    kfree(full_target);
+    return ret;
+}
 
 static int pipe_wait_interruptible(void)
 {

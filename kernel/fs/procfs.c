@@ -552,9 +552,7 @@ static void proc_fill_uptime(char* buf, size_t cap, size_t* len)
 
 static void proc_fill_mounts(char* buf, size_t cap, size_t* len)
 {
-    proc_append(buf, cap, len, "virtio0p1 / ext2 rw 0 0\n");
-    proc_append(buf, cap, len, "proc /proc proc rw,nosuid,nodev,noexec 0 0\n");
-    proc_append(buf, cap, len, "virtio0p2 /mnt fat32 rw 0 0\n");
+    vfs_format_mounts(buf, cap, len);
 }
 
 static void proc_fill_cpuinfo(char* buf, size_t cap, size_t* len)

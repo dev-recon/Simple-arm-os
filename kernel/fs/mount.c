@@ -6,6 +6,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/memory.h>
 #include <kernel/string.h>
+#include <kernel/procfs.h>
 
 #define FSTAB_MAX_SIZE   2048
 #define FSTAB_FIELD_MAX  64
@@ -159,7 +160,7 @@ int vfs_mount_fat32_partition(const disk_partition_t* part)
         return -ENOMEM;
     }
 
-    if (vfs_mount(part->mountpoint, fat32_root) != 0) {
+    if (vfs_mount_ex(part->mountpoint, fat32_root, part->name, "fat32", "rw") != 0) {
         KERROR("[VFS] vfs_mount %s failed\n", part->mountpoint);
         put_inode(fat32_root);
         return -EIO;
@@ -242,4 +243,70 @@ int vfs_mount_from_fstab(const char* path)
     }
 
     return mounted;
+}
+
+int vfs_mount_user(const char* source, const char* target, const char* fstype,
+                   uint32_t flags, const void* data)
+{
+    const disk_partition_t* part;
+    inode_t* target_inode;
+    inode_t* proc_root;
+
+    (void)flags;
+    (void)data;
+
+    if (!source || !target || !fstype)
+        return -EINVAL;
+    if (strcmp(target, "/") == 0)
+        return -EBUSY;
+    if (vfs_is_mounted(target))
+        return -EBUSY;
+
+    if (strcmp(fstype, "proc") == 0) {
+        if (strcmp(source, "proc") != 0 && strcmp(source, "none") != 0)
+            return -EINVAL;
+
+        target_inode = path_lookup(target);
+        if (target_inode) {
+            if (!S_ISDIR(target_inode->mode)) {
+                put_inode(target_inode);
+                return -ENOTDIR;
+            }
+            put_inode(target_inode);
+        }
+
+        proc_root = procfs_mount();
+        if (!proc_root)
+            return -ENOMEM;
+
+        if (vfs_mount_ex(target, proc_root, "proc", "proc",
+                         "rw,nosuid,nodev,noexec") != 0) {
+            put_inode(proc_root);
+            return -EIO;
+        }
+        return 0;
+    }
+
+    target_inode = path_lookup(target);
+    if (!target_inode)
+        return -ENOENT;
+    if (!S_ISDIR(target_inode->mode)) {
+        put_inode(target_inode);
+        return -ENOTDIR;
+    }
+    put_inode(target_inode);
+
+    if (strcmp(fstype, "fat32") == 0) {
+        part = vfs_find_partition_by_device(source);
+        if (!part || part->fs_type != DISK_FS_FAT32)
+            return -ENODEV;
+        if (strcmp(target, part->mountpoint) != 0)
+            return -EINVAL;
+        return vfs_mount_fat32_partition(part);
+    }
+
+    if (strcmp(fstype, "ext2") == 0)
+        return -EBUSY;
+
+    return -ENODEV;
 }
