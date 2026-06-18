@@ -373,7 +373,7 @@ static void command_cache_rebuild_if_needed(void) {
     int i;
 
     if (!path || !*path)
-        path = "/bin:/usr/bin";
+        path = "/bin";
 
     if (command_cache_valid && strcmp(command_cache_path, path) == 0)
         return;
@@ -743,11 +743,14 @@ char* shell_read_line(void) {
     input_buffer[len] = '\0';
     if (len > 0) {
         shell_history_add(input_buffer);
-        shell_history_save();
     }
     return input_buffer;
 }
 
 void shell_line_edit_init(void) {
     shell_history_load();
+}
+
+void shell_line_edit_shutdown(void) {
+    shell_history_save();
 }

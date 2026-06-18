@@ -47,6 +47,7 @@ void shell_pop_script_args(void);
 void shell_print_prompt(void);
 char* shell_read_line(void);
 void shell_line_edit_init(void);
+void shell_line_edit_shutdown(void);
 
 #define SHELL_BUFFER_SIZE 256
 #define SHELL_MAX_ARGS      16

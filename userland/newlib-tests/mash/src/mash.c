@@ -318,9 +318,10 @@ static char** shell_build_envp(void) {
 static void shell_init_env(void) {
     script_frames[0].name = "mash";
     script_frames[0].argc = 0;
-    shell_setenv("PATH", "/usr/bin:/bin");
+    shell_setenv("PATH", "/bin");
     shell_setenv("HOME", "/home/user");
     shell_setenv("USER", "user");
+    shell_setenv("PWD", "/");
     shell_setenv("PS1", "mash$> ");
 }
 
@@ -674,7 +675,7 @@ static void exec_external_or_die(int argc, char* argv[]) {
     } else {
         path = shell_getenv("PATH");
         if (!path || !*path)
-            path = "/bin:/usr/bin";
+            path = "/bin";
 
         entry = path;
         while (*entry) {
@@ -710,7 +711,7 @@ static int external_command_exists(const char* name) {
 
     path = shell_getenv("PATH");
     if (!path || !*path)
-        path = "/bin:/usr/bin";
+        path = "/bin";
 
     entry = path;
     while (*entry) {
@@ -1228,15 +1229,58 @@ void shell_print_banner(void) {
     printf(" |_|  |_/_/   \\_\\____/|_| |_|\n");
     printf("\033[0m");
     printf(" arm-os shell on newlib\n");
-    printf(" type 'help' for builtins, PATH=/usr/bin:/bin\n");
+    printf(" type 'help' for builtins, PATH=/bin\n");
     printf("\n");
 }
 
 // Display the prompt
 void shell_print_prompt(void) {
     const char* ps1 = shell_getenv("PS1");
+    char status_buf[16];
 
-    printf("%s", ps1 ? ps1 : "mash$> ");
+    if (!ps1)
+        ps1 = "mash$> ";
+
+    while (*ps1) {
+        if (*ps1 == '\\' && ps1[1] == 'w') {
+            const char* cwd = shell_getenv("PWD");
+            printf("%s", cwd && *cwd ? cwd : "/");
+            ps1 += 2;
+            continue;
+        }
+
+        if (*ps1 == '$') {
+            char name[SHELL_ENV_NAME_LEN];
+            int len = 0;
+            const char* value;
+
+            ps1++;
+            if (*ps1 == '?') {
+                snprintf(status_buf, sizeof(status_buf), "%d", shell_status);
+                printf("%s", status_buf);
+                ps1++;
+                continue;
+            }
+
+            if (!shell_var_start(*ps1)) {
+                putchar('$');
+                continue;
+            }
+
+            while (shell_var_char(*ps1) && len < SHELL_ENV_NAME_LEN - 1)
+                name[len++] = *ps1++;
+            while (shell_var_char(*ps1))
+                ps1++;
+            name[len] = '\0';
+
+            value = shell_getenv(name);
+            if (value)
+                printf("%s", value);
+            continue;
+        }
+
+        putchar(*ps1++);
+    }
     pflush();
 }
 
@@ -2211,7 +2255,8 @@ void shell_run(void) {
             break;
         }
     }
-    
+
+    shell_line_edit_shutdown();
     printf("Shell closed\n");
 }
 
