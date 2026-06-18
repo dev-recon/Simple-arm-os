@@ -53,6 +53,10 @@ typedef struct proc_counters {
     unsigned signal_wake;
     unsigned tty_stale;
     unsigned unintr_timeout;
+    unsigned tty_tx_enqueued;
+    unsigned tty_tx_drained;
+    unsigned tty_tx_full_waits;
+    unsigned tty_tx_drain_calls;
 } proc_counters_t;
 
 static int is_digit(char c)
@@ -217,6 +221,14 @@ static void parse_proc_stat(proc_counters_t *c)
     if (p) parse_uint(p, &c->tty_stale);
     p = line_after_key(buf, "unintr_timeout ");
     if (p) parse_uint(p, &c->unintr_timeout);
+
+    p = line_after_key(buf, "tty_tx ");
+    if (p) {
+        p = parse_uint(p, &c->tty_tx_enqueued);
+        if (p) p = parse_uint(p, &c->tty_tx_drained);
+        if (p) p = parse_uint(p, &c->tty_tx_full_waits);
+        if (p) parse_uint(p, &c->tty_tx_drain_calls);
+    }
 }
 
 static void parse_passwd(user_entry_t *users, int *count)
@@ -499,6 +511,12 @@ int main(void)
            "signal-wake", c.signal_wake,
            "tty-stale", c.tty_stale,
            "unintr-timeout", c.unintr_timeout);
+    printf("\033[1m%-6s\033[0m %-12s %7u   %-12s %7u   %-12s %7u   %-12s %7u\n\n",
+           "TTY:",
+           "tx-enq", c.tty_tx_enqueued,
+           "tx-drain", c.tty_tx_drained,
+           "tx-full", c.tty_tx_full_waits,
+           "drain-calls", c.tty_tx_drain_calls);
 
     printf("\033[1m%4s %4s %4s %4s %3s %-8s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %5s %4s %4s %4s %-6s %s\033[0m\n",
            "PID", "TID", "PPID", "SID", "TTY", "USER", "GID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",

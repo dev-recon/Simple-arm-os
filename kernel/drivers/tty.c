@@ -208,6 +208,23 @@ int tty_get_read_wait_state(void)
     return state;
 }
 
+void tty_get_tx_stats(uint32_t *enqueued, uint32_t *drained,
+                      uint32_t *full_waits, uint32_t *drain_calls)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    if (enqueued)
+        *enqueued = tty0.output_enqueued;
+    if (drained)
+        *drained = tty0.output_drained;
+    if (full_waits)
+        *full_waits = tty0.output_full_waits;
+    if (drain_calls)
+        *drain_calls = tty0.output_drain_calls;
+    spin_unlock_irqrestore(&tty0.lock, flags);
+}
+
 /* Appelé par l'IRQ UART (ou polling) */
 void tty_input_char(char c) {
     task_t* reader = NULL;
@@ -411,11 +428,13 @@ ssize_t tty_write(const char *buf, size_t count) {
                 if (!tty_output_full_locked()) {
                     tty0.output_buf[tty0.output_head] = '\r';
                     tty0.output_head = tty_output_next(tty0.output_head);
+                    tty0.output_enqueued++;
                     spin_unlock_irqrestore(&tty0.lock, flags);
                     uart_set_tx_irq_enabled(true);
                     tty_drain_output();
                     break;
                 }
+                tty0.output_full_waits++;
                 spin_unlock_irqrestore(&tty0.lock, flags);
                 tty_drain_output();
                 if (current_task && has_pending_signals(current_task))
@@ -434,11 +453,13 @@ ssize_t tty_write(const char *buf, size_t count) {
             if (!tty_output_full_locked()) {
                 tty0.output_buf[tty0.output_head] = buf[i];
                 tty0.output_head = tty_output_next(tty0.output_head);
+                tty0.output_enqueued++;
                 spin_unlock_irqrestore(&tty0.lock, flags);
                 uart_set_tx_irq_enabled(true);
                 tty_drain_output();
                 break;
             }
+            tty0.output_full_waits++;
             spin_unlock_irqrestore(&tty0.lock, flags);
             tty_drain_output();
             if (current_task && has_pending_signals(current_task))
@@ -459,6 +480,10 @@ void tty_drain_output(void)
 {
     unsigned long flags;
 
+    spin_lock_irqsave(&tty0.lock, &flags);
+    tty0.output_drain_calls++;
+    spin_unlock_irqrestore(&tty0.lock, flags);
+
     while (1) {
         char c;
         bool sent;
@@ -472,8 +497,10 @@ void tty_drain_output(void)
 
         c = tty0.output_buf[tty0.output_tail];
         sent = uart_try_putc(c);
-        if (sent)
+        if (sent) {
             tty0.output_tail = tty_output_next(tty0.output_tail);
+            tty0.output_drained++;
+        }
         spin_unlock_irqrestore(&tty0.lock, flags);
 
         if (!sent) {

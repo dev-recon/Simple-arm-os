@@ -55,6 +55,10 @@ struct tty_struct {
     char output_buf[TTY_OUTPUT_BUF_SIZE];
     uint32_t output_head;
     uint32_t output_tail;
+    uint32_t output_enqueued;
+    uint32_t output_drained;
+    uint32_t output_full_waits;
+    uint32_t output_drain_calls;
     
     /* POSIX-ish terminal state. */
     struct termios termios;
@@ -126,6 +130,8 @@ int tty_set_foreground_pgid(pid_t pgid);
 pid_t tty_get_foreground_pgid(void);
 pid_t tty_get_read_wait_pid(void);
 int tty_get_read_wait_state(void);
+void tty_get_tx_stats(uint32_t *enqueued, uint32_t *drained,
+                      uint32_t *full_waits, uint32_t *drain_calls);
 file_t* create_tty_console_file(const char* name, int flags);
 
 #endif

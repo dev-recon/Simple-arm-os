@@ -605,6 +605,13 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
     uint32_t phys_alloc = get_allocated_page_count();
     uint32_t phys_free = get_freed_page_count();
     uint32_t live_phys = phys_alloc - phys_free;
+    uint32_t tty_tx_enqueued = 0;
+    uint32_t tty_tx_drained = 0;
+    uint32_t tty_tx_full_waits = 0;
+    uint32_t tty_tx_drain_calls = 0;
+
+    tty_get_tx_stats(&tty_tx_enqueued, &tty_tx_drained,
+                     &tty_tx_full_waits, &tty_tx_drain_calls);
 
     proc_append(buf, cap, len, "uptime_ticks %u\n", get_system_ticks());
     proc_append(buf, cap, len, "tasks %u %u %u\n",
@@ -631,6 +638,11 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "signal_wake %u\n", kernel_lifecycle_stats.blocked_signal_wakeups);
     proc_append(buf, cap, len, "tty_stale %u\n", kernel_lifecycle_stats.tty_stale_waiters);
     proc_append(buf, cap, len, "unintr_timeout %u\n", kernel_lifecycle_stats.uninterruptible_timeouts);
+    proc_append(buf, cap, len, "tty_tx %u %u %u %u\n",
+                tty_tx_enqueued,
+                tty_tx_drained,
+                tty_tx_full_waits,
+                tty_tx_drain_calls);
     proc_append(buf, cap, len,
                 "tty_diag fg_pgid %d read_wait_pid %d read_wait_state %d input %u ctrl_c %u sigint_delivered %u sigint_missed %u ctrl_z %u sigtstp_delivered %u sigtstp_missed %u last_signal %d last_pgid %d last_delivered %d\n",
                 tty_get_foreground_pgid(),
