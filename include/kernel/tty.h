@@ -134,6 +134,10 @@ pid_t tty_get_read_wait_pid(void);
 int tty_get_read_wait_state(void);
 void tty_get_tx_stats(uint32_t *enqueued, uint32_t *drained,
                       uint32_t *full_waits, uint32_t *drain_calls);
+void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
+                         uint32_t *eof_pending, uint32_t *iflag,
+                         uint32_t *oflag, uint32_t *lflag,
+                         uint32_t *vmin, uint32_t *vtime);
 file_t* create_tty_console_file(const char* name, int flags);
 
 #endif

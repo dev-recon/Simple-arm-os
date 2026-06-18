@@ -229,6 +229,40 @@ void tty_get_tx_stats(uint32_t *enqueued, uint32_t *drained,
     spin_unlock_irqrestore(&tty0.lock, flags);
 }
 
+void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
+                         uint32_t *eof_pending, uint32_t *iflag,
+                         uint32_t *oflag, uint32_t *lflag,
+                         uint32_t *vmin, uint32_t *vtime)
+{
+    unsigned long flags;
+    uint32_t head;
+    uint32_t tail;
+    struct termios tio;
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    head = tty0.input_head;
+    tail = tty0.input_tail;
+    tio = tty0.termios;
+
+    if (depth)
+        *depth = head >= tail ? head - tail : TTY_INPUT_BUF_SIZE - tail + head;
+    if (capacity)
+        *capacity = TTY_INPUT_BUF_SIZE - 1;
+    if (eof_pending)
+        *eof_pending = tty0.eof_pending ? 1 : 0;
+    if (iflag)
+        *iflag = tio.c_iflag;
+    if (oflag)
+        *oflag = tio.c_oflag;
+    if (lflag)
+        *lflag = tio.c_lflag;
+    if (vmin)
+        *vmin = tio.c_cc[VMIN];
+    if (vtime)
+        *vtime = tio.c_cc[VTIME];
+    spin_unlock_irqrestore(&tty0.lock, flags);
+}
+
 bool tty_has_pending_output(void)
 {
     unsigned long flags;

@@ -57,6 +57,14 @@ typedef struct proc_counters {
     unsigned tty_tx_drained;
     unsigned tty_tx_full_waits;
     unsigned tty_tx_drain_calls;
+    unsigned tty_input_depth;
+    unsigned tty_input_capacity;
+    unsigned tty_eof_pending;
+    unsigned tty_iflag;
+    unsigned tty_oflag;
+    unsigned tty_lflag;
+    unsigned tty_vmin;
+    unsigned tty_vtime;
 } proc_counters_t;
 
 static int is_digit(char c)
@@ -228,6 +236,18 @@ static void parse_proc_stat(proc_counters_t *c)
         if (p) p = parse_uint(p, &c->tty_tx_drained);
         if (p) p = parse_uint(p, &c->tty_tx_full_waits);
         if (p) parse_uint(p, &c->tty_tx_drain_calls);
+    }
+
+    p = line_after_key(buf, "tty_in ");
+    if (p) {
+        p = parse_uint(p, &c->tty_input_depth);
+        if (p) p = parse_uint(p, &c->tty_input_capacity);
+        if (p) p = parse_uint(p, &c->tty_eof_pending);
+        if (p) p = parse_uint(p, &c->tty_iflag);
+        if (p) p = parse_uint(p, &c->tty_oflag);
+        if (p) p = parse_uint(p, &c->tty_lflag);
+        if (p) p = parse_uint(p, &c->tty_vmin);
+        if (p) parse_uint(p, &c->tty_vtime);
     }
 }
 
@@ -517,6 +537,18 @@ int main(void)
            "tx-drain", c.tty_tx_drained,
            "tx-full", c.tty_tx_full_waits,
            "drain-calls", c.tty_tx_drain_calls);
+    printf("%-6s %-12s %7u   %-12s %7u   %-12s %7u   %-12s %7u   %-12s %7u\n",
+           "",
+           "in-depth", c.tty_input_depth,
+           "in-cap", c.tty_input_capacity,
+           "eof", c.tty_eof_pending,
+           "vmin", c.tty_vmin,
+           "vtime", c.tty_vtime);
+    printf("%-6s %-12s %7u   %-12s %7u   %-12s %7u\n\n",
+           "",
+           "iflag", c.tty_iflag,
+           "oflag", c.tty_oflag,
+           "lflag", c.tty_lflag);
 
     printf("\033[1m%4s %4s %4s %4s %3s %-8s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %5s %4s %4s %4s %-6s %s\033[0m\n",
            "PID", "TID", "PPID", "SID", "TTY", "USER", "GID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",
