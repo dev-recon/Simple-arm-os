@@ -7,6 +7,13 @@
 
 #define FILE_BUF_SIZE 4096
 #define MAX_TASKS_VIEW 128
+#define MAX_USERS_VIEW 16
+#define USER_NAME_LEN 16
+
+typedef struct user_entry {
+    unsigned uid;
+    char name[USER_NAME_LEN];
+} user_entry_t;
 
 typedef struct task_row {
     int pid;
@@ -14,6 +21,8 @@ typedef struct task_row {
     int ppid;
     int sid;
     int tty;
+    unsigned uid;
+    unsigned gid;
     unsigned priority;
     unsigned kstack_kb;
     unsigned heap_kb;
@@ -210,6 +219,66 @@ static void parse_proc_stat(proc_counters_t *c)
     if (p) parse_uint(p, &c->unintr_timeout);
 }
 
+static void parse_passwd(user_entry_t *users, int *count)
+{
+    char buf[FILE_BUF_SIZE];
+    const char *p;
+
+    *count = 0;
+    if (read_file("/etc/passwd", buf, sizeof(buf)) < 0)
+        return;
+
+    p = buf;
+    while (*p && *count < MAX_USERS_VIEW) {
+        const char *name_start = p;
+        const char *uid_start;
+        int name_len;
+        unsigned uid;
+
+        while (*p && *p != ':' && *p != '\n')
+            p++;
+        if (*p != ':')
+            goto next_line;
+
+        name_len = (int)(p - name_start);
+        p++; /* password */
+        while (*p && *p != ':' && *p != '\n')
+            p++;
+        if (*p != ':')
+            goto next_line;
+        p++;
+
+        uid_start = p;
+        if (!parse_uint(uid_start, &uid))
+            goto next_line;
+
+        if (name_len >= USER_NAME_LEN)
+            name_len = USER_NAME_LEN - 1;
+        memcpy(users[*count].name, name_start, (size_t)name_len);
+        users[*count].name[name_len] = '\0';
+        users[*count].uid = uid;
+        (*count)++;
+
+next_line:
+        while (*p && *p != '\n')
+            p++;
+        if (*p == '\n')
+            p++;
+    }
+}
+
+static const char *user_name_for_uid(user_entry_t *users, int count, unsigned uid,
+                                     char *fallback, int fallback_size)
+{
+    for (int i = 0; i < count; i++) {
+        if (users[i].uid == uid)
+            return users[i].name;
+    }
+
+    snprintf(fallback, fallback_size, "%u", uid);
+    return fallback;
+}
+
 static void parse_tasks(task_row_t *rows, int *count)
 {
     char buf[FILE_BUF_SIZE];
@@ -323,6 +392,8 @@ static void enrich_row_from_status(task_row_t *r)
     status_int_value(buf, "PPid:", &r->ppid);
     status_int_value(buf, "Sid:", &r->sid);
     status_int_value(buf, "Tty:", &r->tty);
+    status_uint_value(buf, "Uid:", &r->uid);
+    status_uint_value(buf, "Gid:", &r->gid);
     status_uint_value(buf, "Priority:", &r->priority);
     status_uint_value(buf, "KStack:", &r->kstack_kb);
     status_uint_value(buf, "Heap:", &r->heap_kb);
@@ -381,7 +452,9 @@ int main(void)
 {
     proc_counters_t c;
     task_row_t rows[MAX_TASKS_VIEW];
+    user_entry_t users[MAX_USERS_VIEW];
     int count = 0;
+    int user_count = 0;
     unsigned used_kb;
     unsigned pct_x10;
 
@@ -390,6 +463,7 @@ int main(void)
 
     parse_meminfo(&c);
     parse_proc_stat(&c);
+    parse_passwd(users, &user_count);
     parse_tasks(rows, &count);
     for (int i = 0; i < count; i++)
         enrich_row_from_status(&rows[i]);
@@ -426,17 +500,21 @@ int main(void)
            "tty-stale", c.tty_stale,
            "unintr-timeout", c.unintr_timeout);
 
-    printf("\033[1m%4s %4s %4s %4s %3s %-6s %3s %5s %5s %5s %5s %5s %2s %5s %4s %4s %4s %-6s %s\033[0m\n",
-           "PID", "TID", "PPID", "SID", "TTY", "KIND", "PRI", "%CPU", "KSTK", "HEAP",
+    printf("\033[1m%4s %4s %4s %4s %3s %-8s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %5s %4s %4s %4s %-6s %s\033[0m\n",
+           "PID", "TID", "PPID", "SID", "TTY", "USER", "GID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",
            "VM", "RSS", "L2", "CTX", "PF", "COW", "STK", "STATE", "NAME");
-    printf("----------------------------------------------------------------------------------------------------------------\n");
+    printf("--------------------------------------------------------------------------------------------------------------------------\n");
 
     for (int i = 0; i < count; i++) {
         task_row_t *p = &rows[i];
         const char *pfcolor = p->page_faults ? "\033[1;35m" : "\033[0m";
+        char user_fallback[USER_NAME_LEN];
+        const char *user = user_name_for_uid(users, user_count, p->uid,
+                                             user_fallback, sizeof(user_fallback));
 
-        printf("%4d %4d %4d %4d %3d %s%-6s\033[0m %3u %3u.%u %4uK %4uK %4uK %4uK %2u %5u %s%4u\033[0m %4u %4u %s%-6s\033[0m %s\n",
+        printf("%4d %4d %4d %4d %3d %-8s %4u %s%-6s\033[0m %3u %3u.%u %4uK %4uK %4uK %4uK %2u %5u %s%4u\033[0m %4u %4u %s%-6s\033[0m %s\n",
                p->pid, p->tid, p->ppid, p->sid, p->tty,
+               user, p->gid,
                kind_color(p->kind), kind_name(p->kind),
                p->priority,
                0u, 0u,
