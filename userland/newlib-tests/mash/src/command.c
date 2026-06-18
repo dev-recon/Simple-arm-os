@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <signal.h>
+#include "arm_os_abi.h"
 #include "../include/mash.h"
 #include "../include/jobs.h"
 
@@ -29,6 +30,7 @@ static int cmd_cd(int argc, char *argv[]);
 static int cmd_export(int argc, char* argv[]);
 static int cmd_env(int argc, char* argv[]);
 static int cmd_unset(int argc, char* argv[]);
+static int cmd_set(int argc, char* argv[]);
 static int cmd_source(int argc, char* argv[]);
 static int cmd_test(int argc, char* argv[]);
 
@@ -57,9 +59,11 @@ int command_init(void) {
     register_command("export", "Set or print shell environment", cmd_export);
     register_command("env", "Print shell environment", cmd_env);
     register_command("unset", "Remove shell environment variables", cmd_unset);
+    register_command("set", "Print or set shell variables", cmd_set);
     register_command("source", "Execute commands from a file", cmd_source);
     register_command(".", "Execute commands from a file", cmd_source);
     register_command("test", "Evaluate simple file tests", cmd_test);
+    register_command("[", "Evaluate simple file tests", cmd_test);
     register_command("jobs", "List background jobs", jobs_builtin);
     register_command("fg", "Bring a background job to the foreground", jobs_fg_builtin);
     register_command("bg", "Resume a background job", jobs_bg_builtin);
@@ -128,6 +132,8 @@ void list_commands(void) {
 
 static int cmd_cd(int argc, char* argv[]) {
     const char* target;
+    char oldpwd[256];
+    char newpwd[256];
 
     if (argc < 2) {
         target = shell_getenv("HOME");
@@ -144,7 +150,19 @@ static int cmd_cd(int argc, char* argv[]) {
         target = argv[1];
     }
 
-    return chdir(target);
+    if (!getcwd(oldpwd, sizeof(oldpwd)))
+        oldpwd[0] = '\0';
+
+    if (chdir(target) < 0)
+        return 1;
+
+    if (getcwd(newpwd, sizeof(newpwd))) {
+        if (oldpwd[0])
+            shell_setenv("OLDPWD", oldpwd);
+        shell_setenv("PWD", newpwd);
+    }
+
+    return 0;
 
 }
 
@@ -235,26 +253,122 @@ static int cmd_unset(int argc, char* argv[]) {
     return 0;
 }
 
-static int cmd_test(int argc, char* argv[]) {
+static int cmd_set(int argc, char* argv[]) {
+    int status = 0;
+
+    if (argc == 1)
+        return cmd_env(argc, argv);
+
+    for (int i = 1; i < argc; i++) {
+        char* eq = strchr(argv[i], '=');
+        if (!eq) {
+            printf("set: expected NAME=VALUE, got '%s'\n", argv[i]);
+            status = 1;
+            continue;
+        }
+
+        *eq = '\0';
+        if (!command_valid_env_name(argv[i]) || shell_setenv(argv[i], eq + 1) < 0) {
+            printf("set: cannot set '%s'\n", argv[i]);
+            status = 1;
+        }
+        *eq = '=';
+    }
+
+    return status;
+}
+
+static int test_path(const char* op, const char* path)
+{
     struct stat st;
+    int ret;
+
+    if (strcmp(op, "-e") == 0)
+        return lstat(path, &st) == 0 ? 0 : 1;
+
+    ret = stat(path, &st);
+    if (ret < 0)
+        return 1;
+
+    if (strcmp(op, "-f") == 0)
+        return S_ISREG(st.st_mode) ? 0 : 1;
+    if (strcmp(op, "-d") == 0)
+        return S_ISDIR(st.st_mode) ? 0 : 1;
+    if (strcmp(op, "-x") == 0)
+        return (st.st_mode & 0111) ? 0 : 1;
+    if (strcmp(op, "-r") == 0)
+        return (st.st_mode & 0444) ? 0 : 1;
+    if (strcmp(op, "-w") == 0)
+        return (st.st_mode & 0222) ? 0 : 1;
+
+    return -1;
+}
+
+static int parse_int(const char* s, int* out)
+{
+    int sign = 1;
+    int value = 0;
+
+    if (!s || !*s || !out)
+        return -1;
+    if (*s == '-') {
+        sign = -1;
+        s++;
+    }
+    if (!*s)
+        return -1;
+    while (*s) {
+        if (*s < '0' || *s > '9')
+            return -1;
+        value = value * 10 + (*s - '0');
+        s++;
+    }
+    *out = sign * value;
+    return 0;
+}
+
+static int cmd_test(int argc, char* argv[]) {
+    int bracket = argc > 0 && strcmp(argv[0], "[") == 0;
+    int a;
+    int b;
+
+    if (bracket) {
+        if (argc < 2 || strcmp(argv[argc - 1], "]") != 0) {
+            printf("[: missing ']'\n");
+            return 2;
+        }
+        argc--;
+    }
+
+    if (argc == 1)
+        return 1;
 
     if (argc == 2)
-        return stat(argv[1], &st) == 0 ? 0 : 1;
+        return argv[1][0] ? 0 : 1;
 
-    if (argc == 3 && strcmp(argv[1], "-f") == 0) {
-        if (stat(argv[2], &st) < 0)
-            return 1;
-        return S_ISREG(st.st_mode) ? 0 : 1;
+    if (argc == 3 && argv[1][0] == '-') {
+        int ret = test_path(argv[1], argv[2]);
+        if (ret >= 0)
+            return ret;
     }
 
-    if (argc == 3 && strcmp(argv[1], "-d") == 0) {
-        if (stat(argv[2], &st) < 0)
-            return 1;
-        return S_ISDIR(st.st_mode) ? 0 : 1;
+    if (argc == 4) {
+        if (strcmp(argv[2], "=") == 0)
+            return strcmp(argv[1], argv[3]) == 0 ? 0 : 1;
+        if (strcmp(argv[2], "!=") == 0)
+            return strcmp(argv[1], argv[3]) != 0 ? 0 : 1;
+        if (strcmp(argv[2], "-eq") == 0 ||
+            strcmp(argv[2], "-ne") == 0) {
+            if (parse_int(argv[1], &a) < 0 || parse_int(argv[3], &b) < 0)
+                return 2;
+            if (strcmp(argv[2], "-eq") == 0)
+                return a == b ? 0 : 1;
+            return a != b ? 0 : 1;
+        }
     }
 
-    printf("Usage: test [-f|-d] path\n");
-    return 1;
+    printf("Usage: test EXPR\n");
+    return 2;
 }
 
 static int source_is_word_char(char c) {

@@ -14,8 +14,7 @@ fi
 
 USERFS_DIR="userfs"
 USERLAND_DIR="userland"
-LIBC_DIR="libc"
-BUILD_NEWLIB="${BUILD_NEWLIB:-0}"
+BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
@@ -25,7 +24,7 @@ echo "=== RUN KERNEL SCRIPT ==="
 
 cd "$ROOT_DIR"
 
-for dir in "$USERFS_DIR" "$USERLAND_DIR" "$LIBC_DIR"; do
+for dir in "$USERFS_DIR" "$USERLAND_DIR"; do
     if [ ! -d "$dir" ]; then
         echo "Error: $dir directory not found!"
         exit 1
@@ -38,10 +37,6 @@ for tool in make arm-none-eabi-gcc arm-none-eabi-ld arm-none-eabi-objcopy arm-no
         exit 1
     fi
 done
-
-echo "=== Rebuilding libc ==="
-make -C "$LIBC_DIR" distclean
-make -C "$LIBC_DIR" install
 
 if [ "$BUILD_NEWLIB" = "1" ]; then
     if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_SYSROOT/lib/libc.a" ]; then

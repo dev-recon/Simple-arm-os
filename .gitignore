@@ -21,6 +21,7 @@ userfs/etc/os.conf
 build/
 newlib-port/build/
 userfs/bin/
+userfs/legacy/bin-libc/
 userfs/opt/newlib/bin/nl-*
 userfs/usr/bin/cat
 userfs/usr/bin/chmod

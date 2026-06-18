@@ -70,7 +70,7 @@ static int find_command(const char *name, char *out, int out_size)
 
     path = getenv("PATH");
     if (!path || !*path)
-        path = "/usr/bin:/bin";
+        path = "/bin";
 
     entry = path;
     while (1) {

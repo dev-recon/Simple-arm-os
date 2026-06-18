@@ -1,5 +1,5 @@
 # nl-mash startup environment
-export PATH=/usr/bin:/bin
+export PATH=/bin
 export HOME=/home/user
 export USER=user
 export PS1="mash$> "

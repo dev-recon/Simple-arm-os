@@ -10,9 +10,8 @@ Suggested usage:
 - Build scripts
 
 Available system:
-- Compiler toolchain in /usr/bin
-- Libraries in /usr/lib  
-- System tools in /bin
+- User commands in /bin
+- Newlib-prefixed copies in /opt/newlib/bin
 - Configuration in /etc
 
 Happy kernel development! -

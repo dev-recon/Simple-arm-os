@@ -21,7 +21,7 @@ ASFLAGS = -g -Iinclude
 CFLAGS = -std=gnu99 $(ARCH_FLAGS) $(FPU_FLAGS) $(MATH_FLAGS) $(ARM_MATH_FLAGS) \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
          -Wall -Wextra -Werror -g -O0 -fno-omit-frame-pointer -Wformat -Wformat-security \
-         -fno-builtin -fstack-protector -Wno-error=unused-function \
+         -fno-builtin -fstack-protector -Wno-unused-function \
          -MMD -MP \
          -fno-pic -fno-pie \
          -Iinclude \
@@ -188,7 +188,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	       case "$$relpath" in dev/tty0|dev/console) continue ;; esac; \
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
 	       case "$$relpath" in \
-	           bin/*|usr/bin/*|opt/newlib/bin/*|init.sh) mode=0100755 ;; \
+	           bin/*|opt/newlib/bin/*|legacy/bin-libc/*|init.sh) mode=0100755 ;; \
 	           home/user/copy_renamed) mode=0100755 ;; \
 	           *) mode=0100644 ;; \
 	       esac; \

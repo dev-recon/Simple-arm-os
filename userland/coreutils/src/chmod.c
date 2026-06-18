@@ -1,7 +1,12 @@
 #include <errno.h>
+#include <dirent.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
+
+#define PATH_BUF 512
 
 static int parse_octal_mode(const char *s, mode_t *out)
 {
@@ -85,29 +90,80 @@ static int parse_mode_for_path(const char *spec, const char *path, mode_t *out)
     return parse_symbolic_mode(spec, st.st_mode & 07777, out);
 }
 
-int main(int argc, char **argv)
+static void join_path(char* out, size_t out_size, const char* dir, const char* name)
 {
+    size_t len = strlen(dir);
+    snprintf(out, out_size, "%s%s%s", dir, (len > 0 && dir[len - 1] == '/') ? "" : "/", name);
+}
+
+static int chmod_path(const char* path, const char* spec, int recursive)
+{
+    struct stat st;
+    mode_t mode;
     int status = 0;
 
-    if (argc < 3) {
-        printf("Usage: chmod MODE FILE...\n");
+    if (parse_mode_for_path(spec, path, &mode) < 0) {
+        printf("chmod: invalid mode '%s' or cannot stat '%s'\n", spec, path);
         return 1;
     }
 
-    for (int i = 2; i < argc; i++) {
-        mode_t mode;
+    errno = 0;
+    if (chmod(path, mode) < 0) {
+        printf("chmod: cannot change mode of '%s' (errno=%d)\n", path, errno);
+        status = 1;
+    }
 
-        if (parse_mode_for_path(argv[1], argv[i], &mode) < 0) {
-            printf("chmod: invalid mode '%s' or cannot stat '%s'\n", argv[1], argv[i]);
-            status = 1;
-            continue;
-        }
+    if (!recursive || lstat(path, &st) < 0 || !S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode))
+        return status;
 
-        errno = 0;
-        if (chmod(argv[i], mode) < 0) {
-            printf("chmod: cannot change mode of '%s' (errno=%d)\n", argv[i], errno);
-            status = 1;
+    int fd = open(path, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0)
+        return 1;
+
+    char buf[1024];
+    int n;
+    while ((n = getdents(fd, buf, sizeof(buf))) > 0) {
+        int pos = 0;
+        while (pos < n) {
+            struct linux_dirent* entry = (struct linux_dirent*)(buf + pos);
+            char child[PATH_BUF];
+
+            if (entry->d_reclen == 0)
+                break;
+            if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+                join_path(child, sizeof(child), path, entry->d_name);
+                if (chmod_path(child, spec, recursive) != 0)
+                    status = 1;
+            }
+            pos += entry->d_reclen;
         }
+    }
+
+    if (n < 0)
+        status = 1;
+    close(fd);
+    return status;
+}
+
+int main(int argc, char **argv)
+{
+    int status = 0;
+    int recursive = 0;
+    int mode_index = 1;
+
+    if (argc > 1 && strcmp(argv[1], "-R") == 0) {
+        recursive = 1;
+        mode_index = 2;
+    }
+
+    if (argc < mode_index + 2) {
+        printf("Usage: chmod [-R] MODE FILE...\n");
+        return 1;
+    }
+
+    for (int i = mode_index + 1; i < argc; i++) {
+        if (chmod_path(argv[i], argv[mode_index], recursive) != 0)
+            status = 1;
     }
 
     return status;

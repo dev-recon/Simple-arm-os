@@ -1,4 +1,4 @@
-COREUTILS := cat echo pwd true false rm touch write mkdir rmdir sleep kill ls cp mv ps lps stat shutdown memstress chmod chown ln head tail wc grep sed sort uniq basename dirname env printf date df du sync find cmp tee uptime free uname killall whoami who mount mount-fat32 umount which keytest ttytest ttyinfo screen_demo kilo
+COREUTILS := cat echo pwd true false rm touch write mkdir rmdir sleep kill ls cp mv ps lps stat shutdown memstress chmod chown ln readlink head tail wc grep sed sort uniq basename dirname env printf date df du sync find cmp tee uptime free uname killall whoami who mount mount-fat32 umount which keytest ttytest ttyinfo screen_demo kilo dmesg fsck-lite
 PROGRAMS := nl-hello nl-systest nl-mash $(COREUTILS:%=nl-%)
 UNPREFIXED_LINKS := nl-systest nl-mash $(COREUTILS:%=nl-%)
 ARCH ?= arm-none-eabi-
@@ -7,7 +7,7 @@ CC := $(ARCH)gcc
 BUILD_DIR := ../../build/newlib-tests
 NEWLIB_PORT := ../../newlib-port
 USERFS_ROOT := ../../userfs
-USERFS_USR_BIN := $(USERFS_ROOT)/usr/bin
+USERFS_BIN := $(USERFS_ROOT)/bin
 USERFS_NEWLIB_BIN := $(USERFS_ROOT)/opt/newlib/bin
 
 ARCH_FLAGS := -mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft
@@ -45,7 +45,7 @@ check-newlib:
 	fi
 
 newlib-port:
-	$(MAKE) -C $(NEWLIB_PORT) NEWLIB_SYSROOT="$(NEWLIB_SYSROOT)"
+	$(MAKE) -C $(NEWLIB_PORT) ARCH="$(ARCH)" NEWLIB_SYSROOT="$(NEWLIB_SYSROOT)" NEWLIB_LIBC="$(NEWLIB_LIBC)"
 
 $(BUILD_DIR)/hello $(BUILD_DIR)/systest $(BUILD_DIR)/mash $(BUILD_DIR)/coreutils:
 	mkdir -p $@
@@ -75,16 +75,11 @@ nl-%: newlib-port $(BUILD_DIR)/coreutils/%.o
 	$(CC) $(LDFLAGS) -o $@ $(PORT_OBJECTS) $(BUILD_DIR)/coreutils/$*.o "$(NEWLIB_LIBC)" "$(LIBGCC)"
 
 install: $(PROGRAMS)
-	mkdir -p $(USERFS_USR_BIN) $(USERFS_NEWLIB_BIN)
+	mkdir -p $(USERFS_BIN) $(USERFS_NEWLIB_BIN)
 	@for prog in $(PROGRAMS); do \
+		name=$${prog#nl-}; \
 		cp $$prog $(USERFS_NEWLIB_BIN)/$$prog; \
-		ln -sfn ../../opt/newlib/bin/$$prog $(USERFS_USR_BIN)/$$prog; \
-		case " $(UNPREFIXED_LINKS) " in \
-			*" $$prog "*) \
-				name=$${prog#nl-}; \
-				ln -sfn ../../opt/newlib/bin/$$prog $(USERFS_USR_BIN)/$$name; \
-				;; \
-		esac; \
+		cp $$prog $(USERFS_BIN)/$$name; \
 	done
 
 clean:

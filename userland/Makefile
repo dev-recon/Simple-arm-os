@@ -1,40 +1,21 @@
-# Makefile principal pour tous les programmes userspace
+# Main userland Makefile.
+#
+# Newlib is the supported ArmOS userspace ABI. Legacy home-grown libc
+# programs are kept under userland/legacy for reference only.
 
-PROGRAMS = ansy_tty coreutils hello malloc mash readfile systest term_dmo
 NEWLIB_PROGRAMS = newlib-tests
 BUILD_NEWLIB ?= 0
+ARCH ?= arm-none-eabi-
+NEWLIB_SYSROOT ?= ../build/newlib-sysroot/arm-none-eabi
+NEWLIB_LIBC ?= $(NEWLIB_SYSROOT)/lib/libc.a
 
-BUILD_DIR = ../build
-LIBC_DIR = ../libc
-
-# Vérifier que libc est installée
-.PHONY: all check-libc $(PROGRAMS) $(NEWLIB_PROGRAMS) clean install-newlib
-
-all: check-libc $(PROGRAMS)
-
-ifeq ($(BUILD_NEWLIB),1)
 all: $(NEWLIB_PROGRAMS)
-endif
-
-check-libc:
-	echo "Building and installing libc..."; \
-	$(MAKE) -C $(LIBC_DIR) clean; \
-	$(MAKE) -C $(LIBC_DIR) install; \
-
-
-$(PROGRAMS):
-	@echo "Building program: $@"
-	$(MAKE) -C $@
 
 $(NEWLIB_PROGRAMS):
-	@echo "Building newlib program: $@"
-	$(MAKE) -C $@ NEWLIB_SYSROOT="$(NEWLIB_SYSROOT)"
+	@echo "Building userland: $@"
+	$(MAKE) -C $@ ARCH="$(ARCH)" NEWLIB_SYSROOT="$(NEWLIB_SYSROOT)" NEWLIB_LIBC="$(NEWLIB_LIBC)"
 
 clean:
-	@for prog in $(PROGRAMS); do \
-		echo "Cleaning $$prog..."; \
-		$(MAKE) -C $$prog clean; \
-	done
 	@for prog in $(NEWLIB_PROGRAMS); do \
 		if [ -d "$$prog" ]; then \
 			echo "Cleaning $$prog..."; \
@@ -43,17 +24,11 @@ clean:
 	done
 
 install: all
-	@for prog in $(PROGRAMS); do \
+	@for prog in $(NEWLIB_PROGRAMS); do \
 		echo "Installing $$prog..."; \
-		$(MAKE) -C $$prog install; \
+		$(MAKE) -C $$prog install ARCH="$(ARCH)" NEWLIB_SYSROOT="$(NEWLIB_SYSROOT)" NEWLIB_LIBC="$(NEWLIB_LIBC)"; \
 	done
-	@if [ "$(BUILD_NEWLIB)" = "1" ]; then \
-		for prog in $(NEWLIB_PROGRAMS); do \
-			echo "Installing $$prog..."; \
-			$(MAKE) -C $$prog install; \
-		done; \
-	fi
 
 install-newlib:
-	$(MAKE) -C newlib-tests install
+	$(MAKE) -C newlib-tests install ARCH="$(ARCH)" NEWLIB_SYSROOT="$(NEWLIB_SYSROOT)" NEWLIB_LIBC="$(NEWLIB_LIBC)"
 	

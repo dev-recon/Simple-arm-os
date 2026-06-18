@@ -13,6 +13,8 @@ static void usage(void)
 static int print_mounts(void)
 {
     char buf[512];
+    char line[160];
+    int line_len = 0;
     int fd;
     int n;
     int status = 0;
@@ -24,10 +26,32 @@ static int print_mounts(void)
     }
 
     while ((n = read(fd, buf, sizeof(buf))) > 0) {
-        if (write(STDOUT_FILENO, buf, n) != n) {
-            status = 1;
-            break;
+        for (int i = 0; i < n; i++) {
+            if (buf[i] == '\n' || line_len >= (int)sizeof(line) - 1) {
+                char source[64];
+                char target[64];
+                char type[32];
+                char opts[48] = "rw";
+
+                line[line_len] = '\0';
+                if (sscanf(line, "%63s %63s %31s %47s", source, target, type, opts) >= 3) {
+                    printf("%s on %s type %s (%s)\n", source, target, type, opts);
+                }
+                line_len = 0;
+            } else {
+                line[line_len++] = buf[i];
+            }
         }
+    }
+
+    if (line_len > 0) {
+        char source[64];
+        char target[64];
+        char type[32];
+        char opts[48] = "rw";
+        line[line_len] = '\0';
+        if (sscanf(line, "%63s %63s %31s %47s", source, target, type, opts) >= 3)
+            printf("%s on %s type %s (%s)\n", source, target, type, opts);
     }
 
     if (n < 0)

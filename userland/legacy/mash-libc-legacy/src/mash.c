@@ -275,6 +275,7 @@ static void shell_init_env(void) {
     shell_setenv("PATH", "/bin:/usr/bin");
     shell_setenv("HOME", "/home/user");
     shell_setenv("USER", "user");
+    shell_setenv("PWD", "/");
     shell_setenv("PS1", "mash$> ");
 }
 
@@ -1185,8 +1186,51 @@ void shell_print_banner(void) {
 // Display the prompt
 void shell_print_prompt(void) {
     const char* ps1 = shell_getenv("PS1");
+    char status_buf[16];
 
-    printf("%s", ps1 ? ps1 : "mash$> ");
+    if (!ps1)
+        ps1 = "mash$> ";
+
+    while (*ps1) {
+        if (*ps1 == '\\' && ps1[1] == 'w') {
+            const char* cwd = shell_getenv("PWD");
+            printf("%s", cwd && *cwd ? cwd : "/");
+            ps1 += 2;
+            continue;
+        }
+
+        if (*ps1 == '$') {
+            char name[SHELL_ENV_NAME_LEN];
+            int len = 0;
+            const char* value;
+
+            ps1++;
+            if (*ps1 == '?') {
+                snprintf(status_buf, sizeof(status_buf), "%d", shell_status);
+                printf("%s", status_buf);
+                ps1++;
+                continue;
+            }
+
+            if (!shell_var_start(*ps1)) {
+                putchar('$');
+                continue;
+            }
+
+            while (shell_var_char(*ps1) && len < SHELL_ENV_NAME_LEN - 1)
+                name[len++] = *ps1++;
+            while (shell_var_char(*ps1))
+                ps1++;
+            name[len] = '\0';
+
+            value = shell_getenv(name);
+            if (value)
+                printf("%s", value);
+            continue;
+        }
+
+        putchar(*ps1++);
+    }
     pflush();
 }
 

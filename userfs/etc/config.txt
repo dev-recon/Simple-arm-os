@@ -7,8 +7,8 @@ userfs_enabled=true
 [filesystem]
 type=userfs
 base_dir=./userfs
-executable_dirs=/bin,/usr/bin
-library_dirs=/usr/lib
+executable_dirs=/bin
+library_dirs=/lib
 
 [development]
 compile_target=arm-none-eabi

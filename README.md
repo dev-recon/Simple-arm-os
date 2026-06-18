@@ -68,7 +68,7 @@ Typical layout:
 - `/dev` for device nodes
 - `/home/user` as the default user home directory
 - `/tmp` for temporary files
-- `/usr/bin` and `/opt/newlib/bin` for userland commands depending on build path
+- `/bin` for official userland commands, with prefixed `nl-*` copies kept in `/opt/newlib/bin`
 
 Ext2 supports normal files, directories, links, permissions, and writable
 operations used by the current userland. FAT32 remains useful as a compatibility
