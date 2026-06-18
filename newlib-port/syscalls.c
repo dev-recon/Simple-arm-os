@@ -36,6 +36,7 @@ extern long sys_mkdir(const char *pathname, int mode);
 extern long sys_rmdir(const char *pathname);
 extern long sys_symlink(const char *target, const char *linkpath);
 extern long sys_readlink(const char *pathname, char *buf, unsigned long bufsiz);
+extern long sys_ftruncate(int fd, long length);
 extern long sys_stat(const char *pathname, void *st);
 extern long sys_lstat(const char *pathname, void *st);
 extern long sys_fstat(int fd, void *st);
@@ -360,6 +361,16 @@ int lstat(const char *pathname, struct stat *st)
 int fstat(int fd, struct stat *st)
 {
     return _fstat(fd, st);
+}
+
+int ftruncate(int fd, off_t length)
+{
+    return ret_errno(sys_ftruncate(fd, (long)length));
+}
+
+int _ftruncate(int fd, off_t length)
+{
+    return ftruncate(fd, length);
 }
 
 int _isatty(int fd)

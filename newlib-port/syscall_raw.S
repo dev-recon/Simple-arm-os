@@ -57,6 +57,7 @@ RAW_SYSCALL sys_sigaction, 67
 RAW_SYSCALL sys_gettimeofday, 78
 RAW_SYSCALL sys_symlink, 83
 RAW_SYSCALL sys_readlink, 85
+RAW_SYSCALL sys_ftruncate, 93
 RAW_SYSCALL sys_stat, 106
 RAW_SYSCALL sys_lstat, 107
 RAW_SYSCALL sys_fstat, 108

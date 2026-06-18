@@ -98,6 +98,7 @@ struct file_operations {
     int (*close)(file_t* file);
     off_t (*lseek)(file_t* file, off_t offset, int whence);
     int (*readdir)(file_t* file, dirent_t* dirent);
+    int (*truncate)(file_t* file, off_t length);
 };
 
 /* Inode operations */

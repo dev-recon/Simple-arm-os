@@ -73,6 +73,7 @@ struct process;
 #define __NR_gettimeofday        78
 #define __NR_symlink             83
 #define __NR_readlink            85
+#define __NR_ftruncate           93
 #define __NR_stat               106
 #define __NR_lstat              107
 #define __NR_fstat              108
@@ -166,6 +167,7 @@ off_t sys_lseek(int fd, off_t offset, int whence);
 int sys_stat(const char* pathname, struct stat* statbuf);
 int sys_lstat(const char* pathname, struct stat* statbuf);
 int sys_fstat(int fd, struct stat* statbuf);
+int sys_ftruncate(int fd, off_t length);
 int sys_print(const char* msg);
 int sys_mkdir(const char* pathname, mode_t mode);
 int sys_rmdir(const char* pathname);

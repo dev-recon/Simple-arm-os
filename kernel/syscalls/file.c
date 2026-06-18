@@ -160,6 +160,33 @@ int sys_close(int fd)
     return 0;
 }
 
+int sys_ftruncate(int fd, off_t length)
+{
+    file_t* file;
+    int result;
+    uint32_t irq_flags;
+
+    if (length < 0) return -EINVAL;
+    if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+
+    file = current_task->process->files[fd];
+    if (!file) return -EBADF;
+    if (!can_write(file)) return -EBADF;
+    if (!file->inode) return -EINVAL;
+    if (S_ISDIR(file->inode->mode)) return -EISDIR;
+    if (!file->f_op || !file->f_op->truncate) return -ENOSYS;
+
+    irq_flags = disable_interrupts_save();
+    set_critical_section();
+
+    result = file->f_op->truncate(file, length);
+
+    unset_critical_section();
+    restore_interrupts(irq_flags);
+
+    return result;
+}
+
 /**
  * Séparer un chemin en répertoire parent et nom de fichier
  */

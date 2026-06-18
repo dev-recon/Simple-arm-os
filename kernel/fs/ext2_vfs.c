@@ -44,6 +44,7 @@ static ssize_t  ext2_file_write(file_t* file, const void* buffer, size_t count);
 static int      ext2_file_open(inode_t* inode, file_t* file);
 static int      ext2_file_close(file_t* file);
 static off_t    ext2_file_lseek(file_t* file, off_t offset, int whence);
+static int      ext2_file_truncate(file_t* file, off_t length);
 static int      ext2_dir_readdir(file_t* file, dirent_t* dirent);
 static ssize_t  ext2_file_write_op(file_t* file, const void* buffer, size_t count);
 
@@ -54,6 +55,7 @@ file_operations_t ext2_file_ops = {
     .close   = ext2_file_close,
     .lseek   = ext2_file_lseek,
     .readdir = NULL,
+    .truncate = ext2_file_truncate,
 };
 
 file_operations_t ext2_dir_ops = {
@@ -2111,6 +2113,261 @@ int ext2_truncate_inode(inode_t* inode)
 
     ext2_op_acquire();
     ret = ext2_truncate_inode_unlocked(inode);
+    ext2_op_release();
+
+    return ret;
+}
+
+static bool ext2_block_ptrs_empty(const uint32_t* ptrs, uint32_t count)
+{
+    for (uint32_t i = 0; i < count; i++) {
+        if (ptrs[i] != 0)
+            return false;
+    }
+    return true;
+}
+
+static int ext2_queue_block_free(uint32_t* blocks, uint32_t* count,
+                                 uint32_t capacity, uint32_t block)
+{
+    if (block == 0)
+        return 0;
+    if (*count >= capacity)
+        return -EFBIG;
+
+    blocks[(*count)++] = block;
+    return 0;
+}
+
+static int ext2_file_truncate_unlocked(file_t* file, off_t length)
+{
+    if (!file || !file->inode) return -EBADF;
+    if (length < 0) return -EINVAL;
+    if (S_ISDIR(file->inode->mode)) return -EISDIR;
+
+    ext2_inode_t* di = (ext2_inode_t*)file->private_data;
+    if (!ext2_valid_disk_inode_ptr(di)) return -EBADF;
+
+    uint32_t new_size = (uint32_t)length;
+    uint32_t old_size = di->i_size;
+
+    if (new_size == old_size)
+        return 0;
+    if (new_size > old_size)
+        return -ENOSYS; /* no sparse/zero-extension support yet */
+
+    if (new_size == 0) {
+        int ret = ext2_truncate_inode_unlocked(file->inode);
+        if (ret < 0)
+            return ret;
+        if (ext2_read_disk_inode(file->inode->first_cluster, di) < 0)
+            return -EIO;
+        file->offset = 0;
+        return 0;
+    }
+
+    if (di->i_block[14])
+        return -EFBIG; /* triple-indirect truncation is not implemented yet */
+
+    uint32_t ptrs_per_block = ext2_ptrs_per_block();
+    uint32_t keep_blocks = (new_size + ext2_fs.block_size - 1) / ext2_fs.block_size;
+    uint32_t free_capacity = ext2_max_supported_file_blocks() + 2 + ptrs_per_block;
+    uint32_t* blocks = kmalloc(free_capacity * sizeof(uint32_t));
+    if (!blocks) return -ENOMEM;
+
+    uint32_t free_count = 0;
+    int ret = 0;
+
+    for (uint32_t i = 0; i < 12; i++) {
+        if (i >= keep_blocks && di->i_block[i] != 0) {
+            ret = ext2_queue_block_free(blocks, &free_count, free_capacity, di->i_block[i]);
+            if (ret < 0) goto out;
+            di->i_block[i] = 0;
+        }
+    }
+
+    if (di->i_block[12] != 0) {
+        uint32_t* indirect = kmalloc(ext2_fs.block_size);
+        if (!indirect) {
+            ret = -ENOMEM;
+            goto out;
+        }
+
+        if (ext2_read_block(di->i_block[12], indirect) < 0) {
+            kfree(indirect);
+            ret = -EIO;
+            goto out;
+        }
+
+        bool changed = false;
+        for (uint32_t i = 0; i < ptrs_per_block; i++) {
+            uint32_t logical = 12 + i;
+            if (logical >= keep_blocks && indirect[i] != 0) {
+                ret = ext2_queue_block_free(blocks, &free_count, free_capacity, indirect[i]);
+                if (ret < 0) {
+                    kfree(indirect);
+                    goto out;
+                }
+                indirect[i] = 0;
+                changed = true;
+            }
+        }
+
+        if (ext2_block_ptrs_empty(indirect, ptrs_per_block)) {
+            ret = ext2_queue_block_free(blocks, &free_count, free_capacity, di->i_block[12]);
+            if (ret < 0) {
+                kfree(indirect);
+                goto out;
+            }
+            di->i_block[12] = 0;
+        } else if (changed && ext2_write_block(di->i_block[12], indirect) < 0) {
+            kfree(indirect);
+            ret = -EIO;
+            goto out;
+        }
+
+        kfree(indirect);
+    }
+
+    if (di->i_block[13] != 0) {
+        uint32_t* dbl = kmalloc(ext2_fs.block_size);
+        uint32_t* indirect = kmalloc(ext2_fs.block_size);
+        if (!dbl || !indirect) {
+            if (dbl) kfree(dbl);
+            if (indirect) kfree(indirect);
+            ret = -ENOMEM;
+            goto out;
+        }
+
+        if (ext2_read_block(di->i_block[13], dbl) < 0) {
+            kfree(dbl);
+            kfree(indirect);
+            ret = -EIO;
+            goto out;
+        }
+
+        bool dbl_changed = false;
+        for (uint32_t first = 0; first < ptrs_per_block; first++) {
+            if (dbl[first] == 0)
+                continue;
+
+            if (ext2_read_block(dbl[first], indirect) < 0) {
+                kfree(dbl);
+                kfree(indirect);
+                ret = -EIO;
+                goto out;
+            }
+
+            bool indirect_changed = false;
+            for (uint32_t second = 0; second < ptrs_per_block; second++) {
+                uint32_t logical = 12 + ptrs_per_block + first * ptrs_per_block + second;
+                if (logical >= keep_blocks && indirect[second] != 0) {
+                    ret = ext2_queue_block_free(blocks, &free_count, free_capacity, indirect[second]);
+                    if (ret < 0) {
+                        kfree(dbl);
+                        kfree(indirect);
+                        goto out;
+                    }
+                    indirect[second] = 0;
+                    indirect_changed = true;
+                }
+            }
+
+            if (ext2_block_ptrs_empty(indirect, ptrs_per_block)) {
+                ret = ext2_queue_block_free(blocks, &free_count, free_capacity, dbl[first]);
+                if (ret < 0) {
+                    kfree(dbl);
+                    kfree(indirect);
+                    goto out;
+                }
+                dbl[first] = 0;
+                dbl_changed = true;
+            } else if (indirect_changed && ext2_write_block(dbl[first], indirect) < 0) {
+                kfree(dbl);
+                kfree(indirect);
+                ret = -EIO;
+                goto out;
+            }
+        }
+
+        if (ext2_block_ptrs_empty(dbl, ptrs_per_block)) {
+            ret = ext2_queue_block_free(blocks, &free_count, free_capacity, di->i_block[13]);
+            if (ret < 0) {
+                kfree(dbl);
+                kfree(indirect);
+                goto out;
+            }
+            di->i_block[13] = 0;
+        } else if (dbl_changed && ext2_write_block(di->i_block[13], dbl) < 0) {
+            kfree(dbl);
+            kfree(indirect);
+            ret = -EIO;
+            goto out;
+        }
+
+        kfree(dbl);
+        kfree(indirect);
+    }
+
+    uint32_t tail = new_size % ext2_fs.block_size;
+    if (tail != 0) {
+        uint32_t blk = ext2_get_block_at(di, new_size / ext2_fs.block_size);
+        if (blk != 0) {
+            uint8_t* blkbuf = kmalloc(ext2_fs.block_size);
+            if (!blkbuf) {
+                ret = -ENOMEM;
+                goto out;
+            }
+            if (ext2_read_block(blk, blkbuf) < 0) {
+                kfree(blkbuf);
+                ret = -EIO;
+                goto out;
+            }
+            memset(blkbuf + tail, 0, ext2_fs.block_size - tail);
+            if (ext2_write_block(blk, blkbuf) < 0) {
+                kfree(blkbuf);
+                ret = -EIO;
+                goto out;
+            }
+            kfree(blkbuf);
+        }
+    }
+
+    if (free_count > 0) {
+        ret = ext2_free_block_list(blocks, free_count);
+        if (ret < 0)
+            goto out;
+    }
+
+    di->i_size = new_size;
+    if (di->i_blocks >= free_count * ext2_fs.sectors_per_block)
+        di->i_blocks -= free_count * ext2_fs.sectors_per_block;
+    else
+        di->i_blocks = 0;
+    di->i_mtime = get_current_time();
+    di->i_ctime = di->i_mtime;
+
+    file->inode->size = di->i_size;
+    file->inode->blocks = di->i_blocks;
+    file->inode->mtime = di->i_mtime;
+    file->inode->ctime = di->i_ctime;
+    if (file->offset > new_size)
+        file->offset = new_size;
+
+    if (ext2_write_disk_inode(file->inode->first_cluster, di) < 0)
+        ret = -EIO;
+
+out:
+    kfree(blocks);
+    return ret;
+}
+
+static int ext2_file_truncate(file_t* file, off_t length)
+{
+    int ret;
+
+    ext2_op_acquire();
+    ret = ext2_file_truncate_unlocked(file, length);
     ext2_op_release();
 
     return ret;

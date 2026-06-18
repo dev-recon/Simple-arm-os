@@ -53,6 +53,7 @@ static syscall_func_t syscall_table[256] = {
     [__NR_rmdir] = (syscall_func_t)sys_rmdir,
     [__NR_symlink] = (syscall_func_t)sys_symlink,
     [__NR_readlink] = (syscall_func_t)sys_readlink,
+    [__NR_ftruncate] = (syscall_func_t)sys_ftruncate,
     [__NR_unlink] = (syscall_func_t)sys_unlink,
     [__NR_access] = (syscall_func_t)sys_access,
     [__NR_umask] = (syscall_func_t)sys_umask,

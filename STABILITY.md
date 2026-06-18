@@ -3,6 +3,17 @@
 This file records runtime baselines that are useful when changing scheduler,
 MMU, VFS, block I/O or process lifecycle code.
 
+## Test Discipline
+
+- Prefer local build and unit/smoke coverage from the host when it is enough.
+- Ask the developer to run trivial interactive QEMU checks, such as simple
+  shell commands, editor keystrokes, and visual confirmation flows.
+- Reserve assistant-driven interactive QEMU sessions for subtle debugging:
+  scheduler, TTY wakeups, signal delivery, MMU faults, VFS races, VirtIO, or
+  cases where kernel logs and precise timing matter.
+- When asking for manual interactive validation, provide a short command
+  checklist and the expected result.
+
 ## Current Stress Baseline
 
 Configuration:

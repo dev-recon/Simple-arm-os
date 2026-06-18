@@ -847,12 +847,11 @@ int editorOpen(char *filename) {
 int editorSave(void) {
     int len;
     char *buf = editorRowsToString(&len);
-    int fd = open(E.filename,O_WRONLY|O_CREAT|O_TRUNC,0644);
+    int fd = open(E.filename,O_RDWR|O_CREAT,0644);
     if (fd == -1) goto writeerr;
 
-    /* ArmOS does not expose ftruncate() yet; O_TRUNC gives Kilo the same
-     * whole-file rewrite behavior for now. */
     if (write(fd,buf,len) != len) goto writeerr;
+    if (ftruncate(fd,len) == -1) goto writeerr;
 
     close(fd);
     free(buf);

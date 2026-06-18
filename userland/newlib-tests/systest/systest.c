@@ -162,6 +162,17 @@ static void test_file_io(void)
 
     n = read_file(path, buf, sizeof(buf));
     expect(n == 13 && strcmp(buf, "second\nthird\n") == 0, "O_APPEND extends file", n);
+
+    fd = open(path, O_RDWR, 0);
+    if (expect(fd >= 0, "open existing for ftruncate", fd) < 0)
+        return;
+
+    expect(write(fd, "tiny", 4) == 4, "write shorter replacement", 0);
+    expect(ftruncate(fd, 4) == 0, "ftruncate shrinks file", 0);
+    close(fd);
+
+    n = read_file(path, buf, sizeof(buf));
+    expect(n == 4 && strcmp(buf, "tiny") == 0, "ftruncate removed old tail", n);
 }
 
 static void test_access_umask(void)
