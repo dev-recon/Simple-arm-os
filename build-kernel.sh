@@ -19,6 +19,9 @@ for tool in make "${ARCH}gcc" "${ARCH}ld" "${ARCH}objcopy" "${ARCH}objdump"; do
     fi
 done
 
+echo "=== Cleaning kernel build ==="
+make clean ARCH="$ARCH" CROSS_COMPILE="$ARCH"
+
 make kernel.bin ARCH="$ARCH" CROSS_COMPILE="$ARCH"
 
 echo "=== KERNEL BUILD DONE ==="
