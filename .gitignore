@@ -48,6 +48,7 @@ userfs/usr/bin/shutdown
 userfs/usr/bin/sleep
 userfs/usr/bin/stat
 userfs/usr/bin/systest
+userfs/usr/bin/ttyinfo
 userfs/usr/bin/touch
 userfs/usr/bin/true
 userfs/usr/bin/which
@@ -86,6 +87,7 @@ userland/coreutils/screen_demo
 userland/coreutils/shutdown
 userland/coreutils/sleep
 userland/coreutils/stat
+userland/coreutils/ttyinfo
 userland/coreutils/touch
 userland/coreutils/true
 userland/coreutils/which
