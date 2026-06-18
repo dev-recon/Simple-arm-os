@@ -203,10 +203,11 @@ static int ls_dir(const char *path, int long_fmt, int show_all)
         }
     }
 
+    close(fd);
+
     if (!long_fmt)
         print_simple_entries(entries, entry_count);
 
-    close(fd);
     free(entries);
     free(buf);
     return n < 0 ? 1 : 0;

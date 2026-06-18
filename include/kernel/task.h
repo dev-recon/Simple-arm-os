@@ -18,7 +18,7 @@ struct file;
 #define PROC_CMDLINE_MAX        512
 #define PROC_ENVIRON_MAX        512
 
-#define QUANTUM_TICKS           5
+#define QUANTUM_TICKS           10
 
 typedef struct kernel_lifecycle_stats {
     uint32_t tasks_created;

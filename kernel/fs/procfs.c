@@ -219,6 +219,19 @@ static task_t* proc_find_task_locked(pid_t pid)
     return NULL;
 }
 
+static bool proc_try_lock_tasks(unsigned long* flags)
+{
+    if (!flags) return false;
+
+    *flags = disable_interrupts_save();
+    if (!spin_trylock(&task_lock)) {
+        restore_interrupts((uint32_t)*flags);
+        return false;
+    }
+
+    return true;
+}
+
 static bool proc_pid_exists(pid_t pid)
 {
     bool found;
@@ -1020,6 +1033,7 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
     task_t* task;
     uint32_t index = 0;
     uint32_t walked = 0;
+    pid_t found_pid = 0;
     char pid_name[16];
     unsigned long flags;
 
@@ -1032,7 +1046,9 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
 
     offset -= static_count;
 
-    spin_lock_irqsave(&task_lock, &flags);
+    if (!proc_try_lock_tasks(&flags))
+        return 0;
+
     task = task_list_head;
     if (!task) {
         spin_unlock_irqrestore(&task_lock, flags);
@@ -1043,11 +1059,12 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         process_t* proc = proc_task_process(task);
         if (proc && proc->pid > 0) {
             if (index == offset) {
-                snprintf(pid_name, sizeof(pid_name), "%d", proc->pid);
-                proc_fill_dirent(dirent, proc_pid_ino(proc->pid, PROC_PID_DIR),
+                found_pid = proc->pid;
+                spin_unlock_irqrestore(&task_lock, flags);
+                snprintf(pid_name, sizeof(pid_name), "%d", found_pid);
+                proc_fill_dirent(dirent, proc_pid_ino(found_pid, PROC_PID_DIR),
                                  DT_DIR, pid_name);
                 file->offset++;
-                spin_unlock_irqrestore(&task_lock, flags);
                 return 1;
             }
             index++;
