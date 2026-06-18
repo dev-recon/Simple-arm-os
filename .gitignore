@@ -30,6 +30,7 @@ userfs/usr/bin/echo
 userfs/usr/bin/false
 userfs/usr/bin/head
 userfs/usr/bin/keytest
+userfs/usr/bin/kilo
 userfs/usr/bin/kill
 userfs/usr/bin/ln
 userfs/usr/bin/ls
@@ -42,6 +43,7 @@ userfs/usr/bin/ps
 userfs/usr/bin/pwd
 userfs/usr/bin/rm
 userfs/usr/bin/rmdir
+userfs/usr/bin/screen_demo
 userfs/usr/bin/shutdown
 userfs/usr/bin/sleep
 userfs/usr/bin/stat
@@ -68,6 +70,7 @@ userland/coreutils/echo
 userland/coreutils/false
 userland/coreutils/head
 userland/coreutils/keytest
+userland/coreutils/kilo
 userland/coreutils/kill
 userland/coreutils/ln
 userland/coreutils/ls
@@ -79,6 +82,7 @@ userland/coreutils/ps
 userland/coreutils/pwd
 userland/coreutils/rm
 userland/coreutils/rmdir
+userland/coreutils/screen_demo
 userland/coreutils/shutdown
 userland/coreutils/sleep
 userland/coreutils/stat

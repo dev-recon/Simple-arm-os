@@ -76,6 +76,14 @@
 #define TCSETS      0x5402
 #define TCSETSW     0x5403
 #define TCSETSF     0x5404
+#define TIOCGWINSZ  0x5413
+
+struct winsize {
+    uint16_t ws_row;
+    uint16_t ws_col;
+    uint16_t ws_xpixel;
+    uint16_t ws_ypixel;
+};
 
 /* Modes (mode_t) — permissions POSIX */
 #ifndef S_IRUSR

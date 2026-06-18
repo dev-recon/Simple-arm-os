@@ -562,6 +562,7 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
     file_t* file;
     bool is_tty;
     struct termios tio;
+    struct winsize wsz;
 
     if (!current_task || !current_task->process)
         return -EINVAL;
@@ -579,6 +580,17 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
               strcmp(file->name, "tty0") == 0);
 
     switch (request) {
+    case TIOCGWINSZ:
+        if (!is_tty)
+            return -ENOTTY;
+        if (!arg)
+            return -EFAULT;
+        wsz.ws_row = 24;
+        wsz.ws_col = 80;
+        wsz.ws_xpixel = 0;
+        wsz.ws_ypixel = 0;
+        return copy_to_user((void*)arg, &wsz, sizeof(wsz)) < 0 ? -EFAULT : 0;
+
     case TCGETS:
         if (!is_tty)
             return -ENOTTY;

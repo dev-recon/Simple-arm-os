@@ -14,6 +14,9 @@
 
 #define NCCS 32
 
+#define VMIN  16
+#define VTIME 17
+
 typedef uint32_t tcflag_t;
 typedef uint8_t cc_t;
 typedef uint32_t speed_t;
@@ -61,6 +64,7 @@ struct tty_struct {
 #define ECHO    0x0001
 #define ICANON  0x0002  /* Mode ligne (buffering jusqu'à \n) */
 #define ISIG    0x0004  /* Generer SIGINT/SIGTSTP depuis les caracteres de controle */
+#define IEXTEN  0x0008
 
 extern struct tty_struct tty0;
 

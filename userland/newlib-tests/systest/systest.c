@@ -322,6 +322,7 @@ static void test_posix_compat_syscalls(void)
     struct timeval tv;
     struct timezone tz;
     struct termios tio;
+    struct winsize wsz;
     time_t now = 0;
     int fd;
     int dupfd;
@@ -361,6 +362,11 @@ static void test_posix_compat_syscalls(void)
     }
 
     expect(ioctl(STDIN_FILENO, TCGETS, &tio) == 0, "ioctl TCGETS accepts tty", 0);
+    if (expect(ioctl(STDOUT_FILENO, TIOCGWINSZ, &wsz) == 0,
+               "ioctl TIOCGWINSZ accepts tty", 0) == 0) {
+        expect(wsz.ws_col == 80, "ioctl TIOCGWINSZ reports 80 columns", wsz.ws_col);
+        expect(wsz.ws_row == 24, "ioctl TIOCGWINSZ reports 24 rows", wsz.ws_row);
+    }
     expect(tcgetattr(STDIN_FILENO, &tio) == 0, "tcgetattr accepts tty", 0);
     expect((tio.c_lflag & ICANON) != 0, "tcgetattr reports canonical mode", tio.c_lflag);
     expect((tio.c_lflag & ISIG) != 0, "tcgetattr reports signal mode", tio.c_lflag);

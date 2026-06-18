@@ -713,7 +713,7 @@ char* shell_read_line(void) {
             len = cursor;
             shell_redraw_line(input_buffer, len, cursor);
         } else if (c == 0x0C) {
-            printf("\033[2J\033[H");
+            printf("\033[H\033[2J\033[3J");
             shell_redraw_line(input_buffer, len, cursor);
         } else if (c == 0x15) {
             le_memmove(input_buffer, input_buffer + cursor, len - cursor + 1);
