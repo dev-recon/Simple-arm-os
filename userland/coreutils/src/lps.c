@@ -65,6 +65,9 @@ typedef struct proc_counters {
     unsigned tty_lflag;
     unsigned tty_vmin;
     unsigned tty_vtime;
+    unsigned tty_char_wakeups;
+    unsigned tty_line_wakeups;
+    unsigned tty_eof_wakeups;
 } proc_counters_t;
 
 static int is_digit(char c)
@@ -248,6 +251,13 @@ static void parse_proc_stat(proc_counters_t *c)
         if (p) p = parse_uint(p, &c->tty_lflag);
         if (p) p = parse_uint(p, &c->tty_vmin);
         if (p) parse_uint(p, &c->tty_vtime);
+    }
+
+    p = line_after_key(buf, "tty_wake ");
+    if (p) {
+        p = parse_uint(p, &c->tty_char_wakeups);
+        if (p) p = parse_uint(p, &c->tty_line_wakeups);
+        if (p) parse_uint(p, &c->tty_eof_wakeups);
     }
 }
 
@@ -549,6 +559,11 @@ int main(void)
            "iflag", c.tty_iflag,
            "oflag", c.tty_oflag,
            "lflag", c.tty_lflag);
+    printf("%-6s %-12s %7u   %-12s %7u   %-12s %7u\n\n",
+           "",
+           "char-wake", c.tty_char_wakeups,
+           "line-wake", c.tty_line_wakeups,
+           "eof-wake", c.tty_eof_wakeups);
 
     printf("\033[1m%4s %4s %4s %4s %3s %-8s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %5s %4s %4s %4s %-6s %s\033[0m\n",
            "PID", "TID", "PPID", "SID", "TTY", "USER", "GID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",

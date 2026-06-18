@@ -70,6 +70,9 @@ struct tty_struct {
 
     /* Diagnostic counters for long-idle / foreground signal issues. */
     uint32_t input_chars;
+    uint32_t char_wakeups;
+    uint32_t line_wakeups;
+    uint32_t eof_wakeups;
     uint32_t ctrl_c_seen;
     uint32_t ctrl_z_seen;
     uint32_t sigint_delivered;
@@ -137,7 +140,10 @@ void tty_get_tx_stats(uint32_t *enqueued, uint32_t *drained,
 void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
                          uint32_t *eof_pending, uint32_t *iflag,
                          uint32_t *oflag, uint32_t *lflag,
-                         uint32_t *vmin, uint32_t *vtime);
+                         uint32_t *vmin, uint32_t *vtime,
+                         uint32_t *char_wakeups,
+                         uint32_t *line_wakeups,
+                         uint32_t *eof_wakeups);
 file_t* create_tty_console_file(const char* name, int flags);
 
 #endif

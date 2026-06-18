@@ -149,6 +149,7 @@ int tty_set_termios(const struct termios *tio, int flush_input)
     if (flush_input) {
         tty0.input_head = 0;
         tty0.input_tail = 0;
+        tty0.eof_pending = false;
     }
     spin_unlock_irqrestore(&tty0.lock, flags);
 
@@ -232,7 +233,10 @@ void tty_get_tx_stats(uint32_t *enqueued, uint32_t *drained,
 void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
                          uint32_t *eof_pending, uint32_t *iflag,
                          uint32_t *oflag, uint32_t *lflag,
-                         uint32_t *vmin, uint32_t *vtime)
+                         uint32_t *vmin, uint32_t *vtime,
+                         uint32_t *char_wakeups,
+                         uint32_t *line_wakeups,
+                         uint32_t *eof_wakeups)
 {
     unsigned long flags;
     uint32_t head;
@@ -260,6 +264,12 @@ void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
         *vmin = tio.c_cc[VMIN];
     if (vtime)
         *vtime = tio.c_cc[VTIME];
+    if (char_wakeups)
+        *char_wakeups = tty0.char_wakeups;
+    if (line_wakeups)
+        *line_wakeups = tty0.line_wakeups;
+    if (eof_wakeups)
+        *eof_wakeups = tty0.eof_wakeups;
     spin_unlock_irqrestore(&tty0.lock, flags);
 }
 
@@ -344,6 +354,7 @@ void tty_input_char(char c) {
         if (tty0.read_wait && tty0.read_wait->state == TASK_INTERRUPTIBLE) {
             reader = tty0.read_wait;
             tty0.read_wait = NULL;
+            tty0.eof_wakeups++;
         }
         spin_unlock_irqrestore(&tty0.lock, flags);
 
@@ -404,6 +415,10 @@ void tty_input_char(char c) {
             if (tty0.read_wait->state == TASK_INTERRUPTIBLE) {
                 reader = tty0.read_wait;
                 tty0.read_wait = NULL;
+                if (canonical_echo)
+                    tty0.line_wakeups++;
+                else
+                    tty0.char_wakeups++;
             } else if (tty0.read_wait->state == TASK_ZOMBIE ||
                        tty0.read_wait->state == TASK_TERMINATED ||
                        tty0.read_wait->state == TASK_READY ||

@@ -617,12 +617,17 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
     uint32_t tty_lflag = 0;
     uint32_t tty_vmin = 0;
     uint32_t tty_vtime = 0;
+    uint32_t tty_char_wakeups = 0;
+    uint32_t tty_line_wakeups = 0;
+    uint32_t tty_eof_wakeups = 0;
 
     tty_get_tx_stats(&tty_tx_enqueued, &tty_tx_drained,
                      &tty_tx_full_waits, &tty_tx_drain_calls);
     tty_get_input_stats(&tty_input_depth, &tty_input_capacity,
                         &tty_eof_pending, &tty_iflag, &tty_oflag,
-                        &tty_lflag, &tty_vmin, &tty_vtime);
+                        &tty_lflag, &tty_vmin, &tty_vtime,
+                        &tty_char_wakeups, &tty_line_wakeups,
+                        &tty_eof_wakeups);
 
     proc_append(buf, cap, len, "uptime_ticks %u\n", get_system_ticks());
     proc_append(buf, cap, len, "tasks %u %u %u\n",
@@ -663,6 +668,10 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
                 tty_lflag,
                 tty_vmin,
                 tty_vtime);
+    proc_append(buf, cap, len, "tty_wake %u %u %u\n",
+                tty_char_wakeups,
+                tty_line_wakeups,
+                tty_eof_wakeups);
     proc_append(buf, cap, len,
                 "tty_diag fg_pgid %d read_wait_pid %d read_wait_state %d input %u ctrl_c %u sigint_delivered %u sigint_missed %u ctrl_z %u sigtstp_delivered %u sigtstp_missed %u last_signal %d last_pgid %d last_delivered %d\n",
                 tty_get_foreground_pgid(),
