@@ -47,6 +47,7 @@ userfs/usr/bin/stat
 userfs/usr/bin/systest
 userfs/usr/bin/touch
 userfs/usr/bin/true
+userfs/usr/bin/which
 userfs/usr/bin/write
 userfs/usr/bin/nl-*
 userland/*/*.o
@@ -81,6 +82,7 @@ userland/coreutils/sleep
 userland/coreutils/stat
 userland/coreutils/touch
 userland/coreutils/true
+userland/coreutils/which
 userland/coreutils/write
 userland/systest/systest
 userland/newlib-tests/nl-*

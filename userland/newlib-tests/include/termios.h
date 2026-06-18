@@ -24,8 +24,11 @@ struct termios {
 #define TCSADRAIN 1
 #define TCSAFLUSH 2
 
+#define ECHO    0x0001
+#define ICANON  0x0002
+#define ISIG    0x0004
+
 int tcgetattr(int fd, struct termios *termios_p);
 int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
 
 #endif
-

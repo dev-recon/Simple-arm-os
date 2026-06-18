@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -8,6 +9,7 @@
 #define MAX_CHUNKS      256U
 #define DEFAULT_KB      512U
 #define DEFAULT_SECONDS 10U
+#define MAX_TARGET_KB   (CHUNK_KB * MAX_CHUNKS)
 
 #ifdef ARM_OS_NEWLIB
 static struct sysinfo_response memstress_sysinfo;
@@ -65,36 +67,117 @@ static void print_malloc_stats(const char *label)
 #endif
 }
 
+static unsigned parse_positive_arg(const char *arg, unsigned fallback)
+{
+    int value;
+
+    if (!arg)
+        return fallback;
+
+    value = atoi(arg);
+    if (value <= 0)
+        return fallback;
+
+    return (unsigned)value;
+}
+
+static void print_usage(const char *prog)
+{
+    printf("Usage:\n");
+    printf("  %s [memory_kb] [hold_seconds]\n", prog);
+    printf("  %s --cpu [seconds]\n", prog);
+}
+
+static int run_cpu_stress(unsigned seconds)
+{
+    volatile unsigned acc = 0x12345678U;
+    unsigned loops = 0;
+    time_t start = time(NULL);
+
+    printf("memstress: pid=%d cpu-bound hold=%us\n", getpid(), seconds);
+    printf("memstress: run ps/lps now; TIME and CTX should increase\n");
+
+    if (start == (time_t)-1) {
+        for (unsigned sec = 0; sec < seconds; sec++) {
+            for (unsigned batch = 0; batch < 1600U; batch++) {
+                for (unsigned i = 0; i < 4096U; i++) {
+                    acc ^= (acc << 5) + (acc >> 2) + i + batch;
+                    acc = (acc << 7) | (acc >> 25);
+                }
+                loops++;
+            }
+            if ((sec + 1U) % 5U == 0 || sec + 1U == seconds)
+                printf("memstress: cpu progress %us/%us loops=%u acc=0x%08x\n",
+                       sec + 1U, seconds, loops, (unsigned)acc);
+        }
+        printf("memstress: cpu done loops=%u acc=0x%08x\n", loops, (unsigned)acc);
+        return 0;
+    }
+
+    while ((unsigned)(time(NULL) - start) < seconds) {
+        for (unsigned batch = 0; batch < 128U; batch++) {
+            for (unsigned i = 0; i < 4096U; i++) {
+                acc ^= (acc << 5) + (acc >> 2) + i + batch;
+                acc = (acc << 7) | (acc >> 25);
+            }
+            loops++;
+        }
+    }
+
+    printf("memstress: cpu done loops=%u acc=0x%08x\n", loops, (unsigned)acc);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     unsigned total_kb = DEFAULT_KB;
     unsigned seconds = DEFAULT_SECONDS;
+    unsigned requested_kb;
     unsigned chunk_count;
     unsigned chunk_bytes = CHUNK_KB * 1024U;
     unsigned live_kb = 0;
     unsigned char *chunks[MAX_CHUNKS];
     int ok = 1;
 
-    if (argc > 1) {
-        int value = atoi(argv[1]);
-        if (value > 0)
-            total_kb = (unsigned)value;
-    }
-    if (argc > 2) {
-        int value = atoi(argv[2]);
-        if (value > 0)
-            seconds = (unsigned)value;
+    if (argc > 1 &&
+        (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
+        print_usage(argv[0]);
+        return 0;
     }
 
+    if (argc > 1 && strcmp(argv[1], "--cpu") == 0) {
+        seconds = parse_positive_arg(argc > 2 ? argv[2] : NULL, DEFAULT_SECONDS);
+        return run_cpu_stress(seconds);
+    }
+
+    if (argc > 1) {
+        total_kb = parse_positive_arg(argv[1], DEFAULT_KB);
+    }
+    if (argc > 2) {
+        seconds = parse_positive_arg(argv[2], DEFAULT_SECONDS);
+    }
+
+    requested_kb = total_kb;
     chunk_count = (total_kb + CHUNK_KB - 1) / CHUNK_KB;
-    if (chunk_count > MAX_CHUNKS)
+    if (chunk_count > MAX_CHUNKS) {
         chunk_count = MAX_CHUNKS;
+        total_kb = MAX_TARGET_KB;
+    } else {
+        total_kb = chunk_count * CHUNK_KB;
+    }
 
     for (unsigned i = 0; i < MAX_CHUNKS; i++)
         chunks[i] = NULL;
 
-    printf("memstress: pid=%d target=%uKB chunks=%u hold=%us\n",
-           getpid(), chunk_count * CHUNK_KB, chunk_count, seconds);
+    if (requested_kb != total_kb) {
+        printf("memstress: requested %uKB, rounded/capped to %uKB "
+               "(max=%uKB, chunk=%uKB)\n",
+               requested_kb, total_kb, MAX_TARGET_KB, CHUNK_KB);
+    }
+
+    printf("memstress: pid=%d target=%uKB chunks=%u hold=%us x2 total~%us\n",
+           getpid(), total_kb, chunk_count, seconds, seconds * 2U);
+    printf("memstress: hold phases sleep; use '--cpu N' to test ps TIME/CTX\n");
     print_malloc_stats("initial");
 
     for (unsigned i = 0; i < chunk_count; i++) {

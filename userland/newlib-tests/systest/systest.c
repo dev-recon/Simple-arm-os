@@ -362,6 +362,28 @@ static void test_posix_compat_syscalls(void)
 
     expect(ioctl(STDIN_FILENO, TCGETS, &tio) == 0, "ioctl TCGETS accepts tty", 0);
     expect(tcgetattr(STDIN_FILENO, &tio) == 0, "tcgetattr accepts tty", 0);
+    expect((tio.c_lflag & ICANON) != 0, "tcgetattr reports canonical mode", tio.c_lflag);
+    expect((tio.c_lflag & ISIG) != 0, "tcgetattr reports signal mode", tio.c_lflag);
+    {
+        struct termios saved_tio = tio;
+        struct termios raw_tio = tio;
+        struct termios check_tio;
+
+        raw_tio.c_lflag &= ~(ICANON | ECHO);
+        expect(tcsetattr(STDIN_FILENO, TCSANOW, &raw_tio) == 0,
+               "tcsetattr clears canonical/echo", 0);
+        if (expect(tcgetattr(STDIN_FILENO, &check_tio) == 0,
+                   "tcgetattr observes tcsetattr", 0) == 0) {
+            expect((check_tio.c_lflag & ICANON) == 0,
+                   "tcgetattr observes noncanonical mode", check_tio.c_lflag);
+            expect((check_tio.c_lflag & ECHO) == 0,
+                   "tcgetattr observes echo disabled", check_tio.c_lflag);
+            expect((check_tio.c_lflag & ISIG) != 0,
+                   "tcsetattr preserves signal mode", check_tio.c_lflag);
+        }
+        expect(tcsetattr(STDIN_FILENO, TCSANOW, &saved_tio) == 0,
+               "tcsetattr restores tty mode", 0);
+    }
 
     expect(time(&now) != (time_t)-1 && now != 0, "time returns timestamp", (int)now);
     expect(gettimeofday(&tv, &tz) == 0, "gettimeofday succeeds", 0);

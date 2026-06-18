@@ -10,6 +10,7 @@
 #include <kernel/file.h>
 #include <kernel/timer.h>
 #include <kernel/ext2.h>
+#include <kernel/tty.h>
 
 #define PIPE_BUF_SIZE 4096
 
@@ -560,8 +561,7 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
 {
     file_t* file;
     bool is_tty;
-
-    (void)arg;
+    struct termios tio;
 
     if (!current_task || !current_task->process)
         return -EINVAL;
@@ -580,10 +580,34 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
 
     switch (request) {
     case TCGETS:
-    case TCSETS:
+        if (!is_tty)
+            return -ENOTTY;
+        if (!arg)
+            return -EFAULT;
+        if (tty_get_termios(&tio) < 0)
+            return -EINVAL;
+        return copy_to_user((void*)arg, &tio, sizeof(tio)) < 0 ? -EFAULT : 0;
+
     case TCSETSW:
+        /* Drain is a no-op for the UART-backed console for now. */
+        /* fall through */
+    case TCSETS:
+        if (!is_tty)
+            return -ENOTTY;
+        if (!arg)
+            return -EFAULT;
+        if (copy_from_user(&tio, (void*)arg, sizeof(tio)) < 0)
+            return -EFAULT;
+        return tty_set_termios(&tio, 0);
+
     case TCSETSF:
-        return is_tty ? 0 : -ENOTTY;
+        if (!is_tty)
+            return -ENOTTY;
+        if (!arg)
+            return -EFAULT;
+        if (copy_from_user(&tio, (void*)arg, sizeof(tio)) < 0)
+            return -EFAULT;
+        return tty_set_termios(&tio, 1);
     default:
         return -ENOTTY;
     }

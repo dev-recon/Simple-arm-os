@@ -6,14 +6,10 @@ decisions.
 
 ## Near-Term Stability
 
-- Investigate the long-idle shell hang:
-  - after roughly one hour idle, typing a command and pressing serial Enter
-    (`\r`) moves to the next line but the command does not run;
-  - echo/output stops after that point;
-  - `Ctrl+C` does not recover;
-  - QEMU must be exited with `Ctrl+A`, then `x`.
-- Confirm whether the blocked path is TTY `read`, shell job-control,
-  foreground process group state, UART input delivery, or timer/sleep wakeup.
+- Keep validating the long-idle TTY/read wakeup fix with longer soak tests.
+  The previous hang after idle input has been addressed in the TTY/job-control
+  path and validated in short idle runs, but one-hour-plus runs should remain
+  part of the stability checklist.
 - Keep tracking scheduler counters after stress:
   - live tasks/zombies;
   - kernel stack page balance;
@@ -68,7 +64,7 @@ Unix-like TTY model to userland.
 
 Priority order:
 
-1. Fix long-idle TTY/read wakeups.
+1. Keep long-idle TTY/read wakeups under soak-test coverage.
 2. Add minimal termios support:
    - `tcgetattr`;
    - `tcsetattr`;
@@ -121,39 +117,130 @@ Rationale:
 - `lps` keeps the ArmOS-specific diagnostic view available.
 - `lps` does not appear to conflict with a common POSIX command name.
 
-## Editor Path
+## Kilo Editor Roadmap
 
-Long-term ambition: run a real terminal editor in ArmOS.
+Goal: make ArmOS capable of running a small full-screen terminal editor before
+attempting heavier ncurses/nano work. `kilo` is the preferred first target
+because it is a compact C editor that talks directly to the terminal with
+`read()`, `write()`, and ANSI/VT100 escape sequences.
 
-Recommended sequence:
+### Phase 0: Source Audit
 
-1. Implement termios/raw mode well enough for direct terminal control.
-2. Port or write a small `kilo`-style editor:
-   - no ncurses dependency;
-   - direct `read()` / `write()`;
-   - ANSI/VT100 escape sequences;
-   - open/save files;
-   - cursor movement;
-   - insert/delete;
-   - simple search later.
-3. Use the small editor to harden:
-   - raw mode;
-   - terminal redraw;
-   - file writes/truncation;
-   - malloc/realloc under interactive workloads.
-4. Attempt a reduced `ncurses` port:
-   - one terminal type first (`ansi`, `vt100`, or `xterm`);
-   - minimal terminfo/termcap support;
-   - no locale/NLS at first.
-5. Port `nano` after the TTY and curses layers are stable.
+- Keep a local review copy of upstream `kilo`.
+- Identify assumptions that differ from ArmOS:
+  - POSIX termios availability;
+  - `ioctl(TIOCGWINSZ)` / window size;
+  - non-blocking or raw terminal reads;
+  - `errno` coverage;
+  - file open/truncate/write behavior;
+  - `malloc`, `realloc`, and line-buffer growth behavior.
+- Decide whether the first port is:
+  - an imported `kilo` with small compatibility patches; or
+  - a tiny in-tree `aedit`/`kilo-armos` fork using the same design.
+
+Done when:
+
+- The syscall/libc gaps are listed.
+- The first porting strategy is selected.
+
+### Phase 1: Minimal Termios/TTY Contract
+
+Implement enough terminal behavior for fullscreen tools:
+
+- `tcgetattr()` and `tcsetattr()` wrappers through newlib.
+- `ICANON` off for raw/non-canonical input.
+- `ECHO` off.
+- `ISIG` behavior defined while raw mode is active.
+- `VMIN` / `VTIME` minimal semantics, even if initially simplified.
+- Output post-processing policy:
+  - preserve `\r` vs `\n` behavior on the serial console;
+  - keep `ONLCR` behavior explicit.
+- Restore terminal settings when a process exits or receives a terminating
+  signal, where practical.
+
+Done when:
+
+- A test program can enter raw mode, read one byte at a time, print key codes,
+  and restore normal shell behavior on exit.
+- `Ctrl+C` policy in raw mode is documented and tested.
+
+### Phase 2: ANSI/VT100 Screen Basics
+
+Support the terminal escape sequences needed by `kilo`:
+
+- clear screen;
+- cursor movement;
+- hide/show cursor;
+- clear line;
+- basic color passthrough;
+- query cursor position if feasible.
+
+ArmOS can continue to rely on the QEMU host terminal for actual rendering. The
+kernel does not need a framebuffer terminal for this phase.
+
+Done when:
+
+- A userland demo can redraw a full-screen buffer without corrupting the shell
+  prompt after exit.
+- Arrow keys, Home/End if supported, Backspace/Delete, Enter, and printable
+  characters are decoded consistently.
+
+### Phase 3: File Editing MVP
+
+Port the smallest useful subset:
+
+- open a text file;
+- display file contents;
+- move cursor;
+- insert printable characters;
+- Backspace/Delete;
+- save with truncation/rewrite;
+- quit cleanly.
+
+Useful first command name:
+
+- `kilo` if close to upstream behavior;
+- `aedit` if it is an ArmOS-specific adaptation.
+
+Done when:
+
+- `kilo /tmp/test.txt` can edit and save a file.
+- The file survives reboot when stored on ext2.
+- Returning to `mash` leaves the terminal usable.
+
+### Phase 4: Robustness Pass
+
+Use the editor to stress interactive kernel/userland paths:
+
+- repeated open/save cycles;
+- editing files larger than one page;
+- malloc/realloc growth and shrink;
+- interrupted editor with `Ctrl+C` / signal;
+- background job output while editor is foreground;
+- terminal resize fallback when no window-size syscall exists.
+
+Done when:
+
+- No shell prompt corruption after repeated editor exits.
+- No file truncation corruption.
+- No leaked foreground process group or stuck TTY state.
+- `lps` and `/proc` counters remain sane after editor stress.
+
+### Phase 5: Path Toward Nano/Ncurses
+
+Only after the kilo path is stable:
+
+- add a minimal window-size API (`ioctl(TIOCGWINSZ)` or equivalent);
+- evaluate a reduced termcap/terminfo strategy;
+- attempt a small ncurses build with one terminal type first;
+- use `nano` as a maturity target, not as the first editor port.
 
 Notes:
 
-- `kilo` is a tiny C editor by Salvatore Sanfilippo. It is a better first
-  target than `nano` because it does not require ncurses.
-- `nano + ncurses` is a good medium-term maturity test, not a small first step.
-- A tiny in-tree editor is acceptable as an intermediate tool even if the
-  eventual goal is to run standard packages.
+- `kilo` is the practical bridge between the current shell and a real editor.
+- A working small editor will expose TTY bugs faster than synthetic tests.
+- The first editor does not need to be perfectly POSIX; it needs to be small,
+  inspectable, and brutal on the terminal path.
 
 ## Newlib Direction
 

@@ -12,6 +12,23 @@
 #define TTY_STTY_SET_FOREGROUND_PGID 1
 #define TTY_GTTY_GET_FOREGROUND_PGID 1
 
+#define NCCS 32
+
+typedef uint32_t tcflag_t;
+typedef uint8_t cc_t;
+typedef uint32_t speed_t;
+
+struct termios {
+    tcflag_t c_iflag;
+    tcflag_t c_oflag;
+    tcflag_t c_cflag;
+    tcflag_t c_lflag;
+    cc_t c_line;
+    cc_t c_cc[NCCS];
+    speed_t c_ispeed;
+    speed_t c_ospeed;
+};
+
 struct tty_struct {
     /* Buffers circulaires */
     char input_buf[TTY_INPUT_BUF_SIZE];
@@ -51,6 +68,8 @@ void tty_init(void);
 void tty_input_char(char c);
 ssize_t tty_read(char *buf, size_t count);
 ssize_t tty_write(const char *buf, size_t count);
+int tty_get_termios(struct termios *tio);
+int tty_set_termios(const struct termios *tio, int flush_input);
 int tty_set_foreground_pgid(pid_t pgid);
 pid_t tty_get_foreground_pgid(void);
 pid_t tty_get_read_wait_pid(void);

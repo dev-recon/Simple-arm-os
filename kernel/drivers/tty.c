@@ -69,6 +69,43 @@ pid_t tty_get_foreground_pgid(void)
     return pgid;
 }
 
+int tty_get_termios(struct termios *tio)
+{
+    unsigned long flags;
+
+    if (!tio)
+        return -EINVAL;
+
+    memset(tio, 0, sizeof(*tio));
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    tio->c_lflag = tty0.c_lflag;
+    spin_unlock_irqrestore(&tty0.lock, flags);
+
+    return 0;
+}
+
+int tty_set_termios(const struct termios *tio, int flush_input)
+{
+    unsigned long flags;
+    uint32_t allowed_lflag;
+
+    if (!tio)
+        return -EINVAL;
+
+    allowed_lflag = tio->c_lflag & (ECHO | ICANON | ISIG);
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    tty0.c_lflag = allowed_lflag;
+    if (flush_input) {
+        tty0.input_head = 0;
+        tty0.input_tail = 0;
+    }
+    spin_unlock_irqrestore(&tty0.lock, flags);
+
+    return 0;
+}
+
 pid_t tty_get_read_wait_pid(void)
 {
     unsigned long flags;
@@ -227,14 +264,19 @@ ssize_t tty_read(char *buf, size_t count) {
         
         /* Lire un caractère */
         char c = tty0.input_buf[tty0.input_tail];
+        uint32_t lflag = tty0.c_lflag;
         tty0.input_tail = (tty0.input_tail + 1) % TTY_INPUT_BUF_SIZE;
         
         spin_unlock_irqrestore(&tty0.lock, flags);
         
         buf[read++] = c;
+
+        if (!(lflag & ICANON)) {
+            break;
+        }
         
         /* En mode ligne, s'arrêter au '\n' */
-        if ((tty0.c_lflag & ICANON) && (c == '\n' || c == '\r')) {
+        if (c == '\n' || c == '\r') {
             break;
         }
     }
