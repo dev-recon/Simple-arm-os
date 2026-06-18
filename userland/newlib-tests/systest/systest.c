@@ -288,6 +288,40 @@ static void test_stat_syscalls(void)
     expect(stat("/bin/does-not-exist", &st) < 0, "stat missing file fails", 0);
 }
 
+static void test_dev_null(void)
+{
+    struct stat st;
+    struct stat fst;
+    char c = 0x5a;
+    int fd;
+
+    if (expect(stat("/dev/null", &st) == 0, "stat /dev/null", 0) == 0) {
+        expect(S_ISCHR(st.st_mode), "/dev/null is char device", st.st_mode);
+        expect((st.st_mode & 0777) == 0666, "/dev/null mode is 666", st.st_mode & 0777);
+    }
+
+    fd = open("/dev/null", O_RDONLY, 0);
+    if (expect(fd >= 0, "open /dev/null read-only", fd) >= 0) {
+        expect(read(fd, &c, 1) == 0, "read /dev/null returns EOF", c);
+        if (expect(fstat(fd, &fst) == 0, "fstat /dev/null", 0) == 0)
+            expect(S_ISCHR(fst.st_mode), "fstat /dev/null is char device", fst.st_mode);
+        close(fd);
+    }
+
+    fd = open("/dev/null", O_WRONLY, 0);
+    if (expect(fd >= 0, "open /dev/null write-only", fd) >= 0) {
+        expect(write(fd, "discard", 7) == 7, "write /dev/null discards bytes", 0);
+        close(fd);
+    }
+
+    fd = open("/dev/null", O_RDWR, 0);
+    if (expect(fd >= 0, "open /dev/null read-write", fd) >= 0) {
+        expect(write(fd, "x", 1) == 1, "write /dev/null read-write", 0);
+        expect(read(fd, &c, 1) == 0, "read /dev/null read-write EOF", c);
+        close(fd);
+    }
+}
+
 static void test_chmod_chown_syscalls(void)
 {
     const char *path = tmp_path("chmod-chown.txt");
@@ -1492,6 +1526,7 @@ int main(void)
     test_pipe_dup2();
     test_fd_access_modes();
     test_stat_syscalls();
+    test_dev_null();
     test_chmod_chown_syscalls();
     test_posix_compat_syscalls();
     test_ext2_links_and_dirents();

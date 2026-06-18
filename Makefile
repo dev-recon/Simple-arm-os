@@ -66,6 +66,7 @@ KERNEL_OBJS = \
 	kernel/drivers/console.o \
 	kernel/drivers/uart.o \
 	kernel/drivers/tty.o \
+	kernel/drivers/null.o \
 	kernel/drivers/power.o \
 	kernel/drivers/ide.o \
 	kernel/drivers/ramfs.o \
@@ -213,6 +214,10 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	   printf 'set_inode_field tty0 mode 020666\n'; \
 	   printf 'set_inode_field tty0 uid 0\n'; \
 	   printf 'set_inode_field tty0 gid 0\n'; \
+	   printf 'mknod null c 1 3\n'; \
+	   printf 'set_inode_field null mode 020666\n'; \
+	   printf 'set_inode_field null uid 0\n'; \
+	   printf 'set_inode_field null gid 0\n'; \
 	   printf 'quit\n' ) | $(DEBUGFS) -w -f - $(EXT2_IMG) >/dev/null
 	$(DEBUGFS) -R 'ls -l /bin' $(EXT2_IMG) >/dev/null
 	@echo "ext2 image created"

@@ -408,6 +408,8 @@ static uint8_t ext2_file_type_from_mode(mode_t mode)
 {
     if (S_ISDIR(mode)) return EXT2_FT_DIR;
     if (S_ISLNK(mode)) return EXT2_FT_SYMLINK;
+    if (S_ISCHR(mode)) return EXT2_FT_CHRDEV;
+    if (S_ISBLK(mode)) return EXT2_FT_BLKDEV;
     return EXT2_FT_REG_FILE;
 }
 

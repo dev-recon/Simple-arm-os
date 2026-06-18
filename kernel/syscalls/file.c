@@ -12,6 +12,7 @@
 #include <kernel/timer.h>
 #include <kernel/dirent.h>
 #include <kernel/tty.h>
+#include <kernel/null.h>
 #include <kernel/spinlock.h>
 #include <asm/mmu.h>
 
@@ -503,6 +504,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     char* kernel_path;
     char* full_path;
     file_t* tty_file;
+    file_t* null_file;
 
     int fd;
 
@@ -534,6 +536,31 @@ int sys_open(const char* pathname, int flags, mode_t mode)
         }
 
         current_task->process->files[fd] = tty_file;
+        current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
+        kfree(full_path);
+        return fd;
+    }
+
+    if (is_null_device_path(full_path)) {
+        if (flags & O_DIRECTORY) {
+            kfree(full_path);
+            return -ENOTDIR;
+        }
+
+        fd = allocate_fd(current_task);
+        if (fd < 0) {
+            kfree(full_path);
+            return fd;
+        }
+
+        null_file = create_null_device_file("null", flags & ~O_CLOEXEC);
+        if (!null_file) {
+            free_fd(current_task, fd);
+            kfree(full_path);
+            return -ENOMEM;
+        }
+
+        current_task->process->files[fd] = null_file;
         current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
         kfree(full_path);
         return fd;
@@ -598,10 +625,11 @@ static void fill_stat_from_inode(struct stat* kstat, inode_t* inode)
     kstat->st_nlink = inode->nlink ? inode->nlink : 1;
     kstat->st_uid = inode->uid;
     kstat->st_gid = inode->gid;
-    kstat->st_rdev = 0;
+    kstat->st_rdev = (S_ISCHR(inode->mode) || S_ISBLK(inode->mode)) ? inode->parent_cluster : 0;
     kstat->st_size = inode->size;
     kstat->st_blksize = 1024;
-    kstat->st_blocks = inode->blocks ? inode->blocks : (inode->size + 511) / 512;
+    kstat->st_blocks = (S_ISCHR(inode->mode) || S_ISBLK(inode->mode)) ? 0 :
+        (inode->blocks ? inode->blocks : (inode->size + 511) / 512);
     kstat->st_atime = inode->atime;
     kstat->st_mtime = inode->mtime;
     kstat->st_ctime = inode->ctime;
@@ -620,6 +648,17 @@ int sys_stat(const char* pathname, struct stat* statbuf)
     /* Résoudre le chemin (absolu ou relatif) */
     full_path = resolve_path(kernel_path);
     kfree(kernel_path);
+
+    if (!full_path) return -ENOENT;
+
+    if (is_null_device_path(full_path)) {
+        fill_null_device_stat(&kstat);
+        kfree(full_path);
+        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
     
     inode = path_lookup(full_path);
     kfree(full_path);
@@ -651,6 +690,15 @@ int sys_lstat(const char* pathname, struct stat* statbuf)
     full_path = resolve_path(kernel_path);
     kfree(kernel_path);
     if (!full_path) return -ENOENT;
+
+    if (is_null_device_path(full_path)) {
+        fill_null_device_stat(&kstat);
+        kfree(full_path);
+        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
 
     inode = path_lookup_ex(full_path, false);
     kfree(full_path);

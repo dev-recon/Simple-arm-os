@@ -11,12 +11,16 @@
 /* i_mode flags */
 #define EXT2_S_IFREG        0x8000
 #define EXT2_S_IFDIR        0x4000
+#define EXT2_S_IFCHR        0x2000
+#define EXT2_S_IFBLK        0x6000
 #define EXT2_S_IFLNK        0xA000
 
 /* dir_entry file_type */
 #define EXT2_FT_UNKNOWN     0
 #define EXT2_FT_REG_FILE    1
 #define EXT2_FT_DIR         2
+#define EXT2_FT_CHRDEV      3
+#define EXT2_FT_BLKDEV      4
 #define EXT2_FT_SYMLINK     7
 
 /* Superblock — only the fields we actually use */
