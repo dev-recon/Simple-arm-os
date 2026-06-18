@@ -1,21 +1,63 @@
-#!/bin/bash
-# build.sh - recompile tout sans lancer QEMU
+#!/usr/bin/env bash
+# build.sh - rebuild ArmOS without launching QEMU.
 
-set -e
+set -euo pipefail
 
-echo "=== BUILD SCRIPT ==="
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ARCH="${ARCH:-arm-none-eabi-}"
+BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
+DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
+NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$DEFAULT_NEWLIB_SYSROOT}"
 
-cd libc
-make distclean
-make install
-cd ..
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
-cd userland
-make clean
-make install
-cd ..
+if [ -d /opt/homebrew/opt/e2fsprogs/sbin ]; then
+    export PATH="/opt/homebrew/opt/e2fsprogs/sbin:$PATH"
+fi
+if [ -d /usr/local/opt/e2fsprogs/sbin ]; then
+    export PATH="/usr/local/opt/e2fsprogs/sbin:$PATH"
+fi
 
-make disk.img
+cd "$ROOT_DIR"
+
+echo "=== BUILD ARMOS ==="
+
+for dir in userfs userland kernel newlib-port; do
+    if [ ! -d "$dir" ]; then
+        echo "Error: $dir directory not found" >&2
+        exit 1
+    fi
+done
+
+for tool in make "${ARCH}gcc" "${ARCH}ld" "${ARCH}objcopy" "${ARCH}objdump" mkfs.fat mcopy mmd mke2fs debugfs; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "Error: required tool '$tool' not found in PATH" >&2
+        exit 1
+    fi
+done
+
+if [ "$BUILD_NEWLIB" = "1" ]; then
+    if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_SYSROOT/lib/libc.a" ]; then
+        echo "=== Building repo-local newlib sysroot ==="
+        ARCH="$ARCH" NEWLIB_INSTALL_ROOT="$ROOT_DIR/build/newlib-sysroot" ./tools/build_newlib.sh
+    fi
+fi
+
+echo "=== Rebuilding userland ==="
+make -C userland clean
+make -C userland install \
+    BUILD_NEWLIB="$BUILD_NEWLIB" \
+    ARCH="$ARCH" \
+    NEWLIB_SYSROOT="$NEWLIB_SYSROOT" \
+    NEWLIB_LIBC="$NEWLIB_SYSROOT/lib/libc.a"
+
+echo "=== Rebuilding kernel ==="
+make kernel.bin ARCH="$ARCH" CROSS_COMPILE="$ARCH"
+
+echo "=== Recreating disk image ==="
+rm -f disk.img fat32.img ext2.img
+make disk.img ARCH="$ARCH" CROSS_COMPILE="$ARCH"
 
 echo "=== BUILD DONE ==="
-echo "Lancer QEMU avec: make run-userfs"
+echo "Boot existing build with: ./boot.sh"
+echo "Rebuild and boot with:    ./run.sh"
