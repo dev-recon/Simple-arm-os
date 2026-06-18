@@ -45,7 +45,6 @@
 #include <errno.h>
 #include <string.h>
 #include <ctype.h>
-#include <time.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
@@ -105,7 +104,7 @@ struct editorConfig {
     int dirty;      /* File modified but not saved. */
     char *filename; /* Currently open filename */
     char statusmsg[80];
-    time_t statusmsg_time;
+    int statusmsg_refreshes;
     struct editorSyntax *syntax;    /* Current syntax highlight, or NULL. */
 };
 
@@ -988,11 +987,14 @@ void editorRefreshScreen(void) {
     }
     abAppend(&ab,"\x1b[0m\r\n",6);
 
-    /* Second row depends on E.statusmsg and the status message update time. */
+    /* Second row depends on E.statusmsg. Use a refresh counter instead of
+     * wall-clock time so status messages stay reliable on early ArmOS libc. */
     abAppend(&ab,"\x1b[0K",4);
     int msglen = strlen(E.statusmsg);
-    if (msglen && time(NULL)-E.statusmsg_time < 5)
+    if (msglen && E.statusmsg_refreshes > 0) {
         abAppend(&ab,E.statusmsg,msglen <= E.screencols ? msglen : E.screencols);
+        E.statusmsg_refreshes--;
+    }
 
     /* Put cursor at its current position. Note that the horizontal position
      * at which the cursor is displayed may be different compared to 'E.cx'
@@ -1021,7 +1023,7 @@ void editorSetStatusMessage(const char *fmt, ...) {
     va_start(ap,fmt);
     vsnprintf(E.statusmsg,sizeof(E.statusmsg),fmt,ap);
     va_end(ap);
-    E.statusmsg_time = time(NULL);
+    E.statusmsg_refreshes = E.statusmsg[0] ? 50 : 0;
 }
 
 /* =============================== Find mode ================================ */
@@ -1213,8 +1215,11 @@ void editorProcessKeypress(int fd) {
         editorInsertNewline();
         break;
     case CTRL_C:        /* Ctrl-c */
-        /* We ignore ctrl-c, it can't be so simple to lose the changes
-         * to the edited file. */
+        if (E.dirty) {
+            editorSetStatusMessage("Unsaved changes. Press Ctrl-Q to quit or Ctrl-S to save.");
+            return;
+        }
+        exit(130);
         break;
     case CTRL_Q:        /* Ctrl-q */
         /* Quit if the file was already saved. */
