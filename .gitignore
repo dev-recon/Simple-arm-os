@@ -29,6 +29,7 @@ userfs/usr/bin/cp
 userfs/usr/bin/echo
 userfs/usr/bin/false
 userfs/usr/bin/head
+userfs/usr/bin/keytest
 userfs/usr/bin/kill
 userfs/usr/bin/ln
 userfs/usr/bin/ls
@@ -66,6 +67,7 @@ userland/coreutils/cp
 userland/coreutils/echo
 userland/coreutils/false
 userland/coreutils/head
+userland/coreutils/keytest
 userland/coreutils/kill
 userland/coreutils/ln
 userland/coreutils/ls
