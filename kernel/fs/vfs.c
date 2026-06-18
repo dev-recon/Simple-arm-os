@@ -334,7 +334,7 @@ bool init_vfs2(void)
     KDEBUG("create_inode Ok ....\n");
 
     root_inode->ino = 1;
-    root_inode->mode = S_IFDIR | 0755;
+    root_inode->mode = S_IFDIR | 0777;
     root_inode->uid = 0;
     root_inode->gid = 0;
     root_inode->size = 0;

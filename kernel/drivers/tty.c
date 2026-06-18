@@ -475,6 +475,17 @@ ssize_t tty_read(char *buf, size_t count) {
                 break;
             }
 
+            if (tty0.read_wait && tty0.read_wait != current_task) {
+                if (tty0.read_wait->state != TASK_INTERRUPTIBLE) {
+                    tty0.read_wait = NULL;
+                    kernel_lifecycle_stats.tty_stale_waiters++;
+                } else {
+                    spin_unlock_irqrestore(&tty0.lock, flags);
+                    yield();
+                    continue;
+                }
+            }
+
             tty0.read_wait = current_task;
             task_set_interruptible(current_task);
             if (noncanon_no_min) {

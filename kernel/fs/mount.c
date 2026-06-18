@@ -23,7 +23,7 @@ static inode_t* vfs_create_fat32_root_inode(void)
     }
 
     fat32_root->ino = 1;
-    fat32_root->mode = S_IFDIR | 0755;
+    fat32_root->mode = S_IFDIR | 0777;
     fat32_root->uid = 0;
     fat32_root->gid = 0;
     fat32_root->size = 0;

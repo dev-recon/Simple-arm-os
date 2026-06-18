@@ -338,6 +338,7 @@ int fat32_inode_mkdir(inode_t* dir, const char* name, uint16_t mode) {
     
     /* Initialiser le nouveau répertoire avec . et .. */
     if (fat32_init_directory(new_cluster, dir->first_cluster) != 0) {
+        fat32_remove_dir_entry(dir->first_cluster, name);
         fat32_free_cluster(new_cluster);
         kfree(entry);
         return -EIO;
@@ -535,19 +536,7 @@ int fat32_convert_name_to_83(const char* long_name, char* short_name) {
 
 /* Vérification des permissions */
 bool fat32_inode_permission(inode_t* inode, int mask) {
-    /* Implémentation simplifiée - toujours autoriser pour root */
-    if (current_uid() == 0) return true;
-    
-    /* Vérifier les permissions du propriétaire */
-    if (current_uid() == inode->uid) {
-        if (mask & MAY_READ && !(inode->mode & 0400)) return false;
-        if (mask & MAY_WRITE && !(inode->mode & 0200)) return false;
-        if (mask & MAY_EXEC && !(inode->mode & 0100)) return false;
-        return true;
-    }
-    
-    /* Permissions du groupe et autres... */
-    return false;  /* Simplification */
+    return inode_permission(inode, mask);
 }
 
 /* Initialiser un cluster de répertoire vide */
@@ -624,20 +613,22 @@ int fat32_add_dir_entry(uint32_t parent_cluster, fat32_dir_entry_t* new_entry) {
         for (int i = 0; i < entries_per_cluster; i++) {
             fat32_dir_entry_t* entry = &entries[i];
             
-            /* Entrée libre ou fin des entrées */
+            /* Entree libre ou fin des entrees */
             if (entry->name[0] == FAT32_END_OF_ENTRIES || 
                 entry->name[0] == FAT32_DELETED_ENTRY) {
+                bool was_end = (entry->name[0] == FAT32_END_OF_ENTRIES);
                 
-                /* Copier la nouvelle entrée */
+                /* Copier la nouvelle entree */
                 memcpy(entry, new_entry, sizeof(fat32_dir_entry_t));
                 
-                /* Si c'était la fin, marquer la suivante comme fin */
-                if (i + 1 < entries_per_cluster && 
-                    entry->name[0] == FAT32_END_OF_ENTRIES) {
+                /* Si c'etait la fin, marquer la suivante comme fin. Il faut
+                 * memoriser l'etat avant memcpy(), car entry contient
+                 * maintenant le nouveau nom. */
+                if (was_end && i + 1 < entries_per_cluster) {
                     entries[i + 1].name[0] = FAT32_END_OF_ENTRIES;
                 }
                 
-                /* Écrire le cluster modifié */
+                /* Ecrire le cluster modifie */
                 int result = fat32_write_cluster(cluster, cluster_data);
                 kfree(cluster_data);
                 return result;
@@ -1415,6 +1406,8 @@ int fat32_set_cluster_value(uint32_t cluster, uint32_t value) {
 
 
 int fat32_write_cluster(uint32_t cluster, const char* data) {
+    uint32_t bytes_per_sector;
+
     if (cluster < 2 || cluster >= fat32_get_total_clusters()) {
         return -EINVAL;
     }
@@ -1439,12 +1432,14 @@ int fat32_write_cluster(uint32_t cluster, const char* data) {
     }
 
     
-    /* Écrire tous les secteurs du cluster */
-    for (uint32_t i = 0; i < get_fat32_sectors_per_cluster(); i++) {
-        //KDEBUG("Writing sector %u with data starting with: %.64s\n", 
-        //       start_sector + i, data + (i * get_fat32_bytes_per_cluster()));
+    bytes_per_sector = fat32_fs.boot_sector.bytes_per_sector;
+    if (bytes_per_sector == 0)
+        bytes_per_sector = FAT32_SECTOR_SIZE;
 
-        if (blk_write_sector(start_sector + i, (void *)(data + (i * get_fat32_bytes_per_cluster()))) != 0) {
+    /* Write each sector from the cluster buffer. The buffer offset must
+     * advance by sector size, not by full cluster size. */
+    for (uint32_t i = 0; i < get_fat32_sectors_per_cluster(); i++) {
+        if (blk_write_sector(start_sector + i, (void *)(data + (i * bytes_per_sector))) != 0) {
             return -EIO;
         }
     }
@@ -1931,7 +1926,7 @@ static inode_t* fat32_inode_lookup(inode_t* dir, const char* name)
     first_cluster = (entry->first_cluster_hi << 16) | entry->first_cluster_lo;
     
     inode->mode = (entry->attr & FAT_ATTR_DIRECTORY) ? S_IFDIR : S_IFREG;
-    inode->mode |= 0755; /* rwxrw-rw- */
+    inode->mode |= 0777;
     inode->uid = 0;
     inode->gid = 0;
     inode->size = entry->file_size;

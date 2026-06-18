@@ -793,8 +793,8 @@ void simple_shell_task(void* arg) {
 
     (void)arg;
 
-    const char* primary_path = "/usr/bin/mash";
-    const char* fallback_path = "/bin/mash";
+    const char* primary_path = "/bin/mash";
+    const char* fallback_path = "/usr/bin/mash";
     char* primary_name = "mash";
     char* fallback_name = "mash";
     int result = 0;

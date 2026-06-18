@@ -35,7 +35,7 @@ void run_pointer_arithmetic_test(const fat32_raw_sector_t* raw) ;
 
 extern bool is_fat_dirty(void);
 extern bool is_dirty_inodes(void);
-extern void sync_fat_to_disk(void);
+extern int sync_fat_to_disk(void);
 extern void sync_dirty_inodes(void);
 extern uint32_t fat32_get_total_clusters(void);
 

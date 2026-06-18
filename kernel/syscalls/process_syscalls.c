@@ -10,6 +10,7 @@
 #include <kernel/file.h>
 #include <kernel/timer.h>
 #include <kernel/ext2.h>
+#include <kernel/fat32.h>
 #include <kernel/tty.h>
 #include <kernel/mount.h>
 #include <kernel/virtio_block.h>
@@ -50,8 +51,19 @@ extern inode_operations_t ext2_inode_ops;
 
 int sys_sync(void)
 {
-    int ret = virtio_blk_flush();
-    return ret < 0 ? -EIO : 0;
+    int ret = 0;
+    int blk_ret;
+
+    if (is_dirty_inodes())
+        sync_dirty_inodes();
+    if (is_fat_dirty() && sync_fat_to_disk() < 0)
+        ret = -EIO;
+
+    blk_ret = virtio_blk_flush();
+    if (blk_ret < 0)
+        ret = -EIO;
+
+    return ret;
 }
 
 int sys_mount(const char* source, const char* target, const char* fstype,
@@ -1384,7 +1396,12 @@ int sys_mkdir(const char* pathname, mode_t mode)
         return -ENOTDIR;
     }
 
-    result = parent_inode->i_op->mkdir(parent_inode, dir_name, mode | S_IFDIR);
+    if (!inode_permission(parent_inode, MAY_WRITE))
+        result = -EACCES;
+    else if (!parent_inode->i_op || !parent_inode->i_op->mkdir)
+        result = -ENOSYS;
+    else
+        result = parent_inode->i_op->mkdir(parent_inode, dir_name, mode | S_IFDIR);
 
     put_inode(parent_inode);
     kfree(abs_path);

@@ -13,6 +13,8 @@
 /* Compteur global pour verifier que les IRQ arrivent */
 static volatile uint32_t irq_count = 0;
 static volatile uint32_t last_irq_id = 0;
+#define GIC_IRQ_COUNTERS 1024
+static volatile uint32_t irq_counts[GIC_IRQ_COUNTERS];
 
 /* Acces runtime via l'alias MMIO prive TTBR1. */
 #define LOCAL_GICD_BASE     KERNEL_MMIO_GIC_DIST_BASE
@@ -162,6 +164,8 @@ void irq_c_handler(void)
     /* Compteur global */
     irq_count++;
     last_irq_id = int_id;
+    if (int_id < GIC_IRQ_COUNTERS)
+        irq_counts[int_id]++;
     
     /* Debug : afficher l'IRQ recue */
     //kprintf("[IRQ] DONE IRQ %u received! (count=%u)\n", int_id, irq_count);
@@ -219,6 +223,23 @@ void irq_c_handler(void)
     
     /* CRITIQUE : Acquitter l'IRQ */
     gicc[0x010/4] = irq_id;  /* GICC_EOIR */
+}
+
+uint32_t gic_get_irq_count(uint32_t irq)
+{
+    if (irq >= GIC_IRQ_COUNTERS)
+        return 0;
+    return irq_counts[irq];
+}
+
+uint32_t gic_get_total_irq_count(void)
+{
+    return irq_count;
+}
+
+uint32_t gic_get_last_irq_id(void)
+{
+    return last_irq_id;
 }
 
 void enable_irq(uint32_t irq)

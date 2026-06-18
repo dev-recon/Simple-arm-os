@@ -2284,19 +2284,37 @@ void task_list_all(void)
 
 void task_sleep_ms(uint32_t ms)
 {
-    /* Version amelioree qui cede le processeur */
-    uint32_t iterations_per_ms = 1000;  /* Ajustez selon votre CPU */
-    uint32_t total_iterations = ms * iterations_per_ms;
-    uint32_t yield_interval = 10000;  /* Ceder toutes les 1000 iterations */
-    
-    for (volatile uint32_t i = 0; i < total_iterations; i++) {
-        __asm__ volatile("nop");
-        
-        /* Ceder le processeur regulierement */
-        if (i % yield_interval == 0) {
-            //yield();
-        }
+    unsigned long flags;
+    uint32_t ticks;
+
+    if (!current_task || ms == 0) {
+        yield();
+        return;
     }
+
+    if (!scheduler_initialized) {
+        volatile uint32_t total = ms * 1000;
+        for (volatile uint32_t i = 0; i < total; i++)
+            __asm__ volatile("nop");
+        return;
+    }
+
+    ticks = (ms * TIMER_FREQ + 999) / 1000;
+    if (ticks == 0)
+        ticks = 1;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    current_task->wakeup_time = get_system_ticks() + ticks;
+    current_task->state = TASK_INTERRUPTIBLE;
+    if (current_task->type == TASK_TYPE_PROCESS && current_task->process)
+        current_task->process->state = (proc_state_t)PROC_INTERRUPTIBLE;
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    schedule();
+
+    spin_lock_irqsave(&task_lock, &flags);
+    current_task->wakeup_time = 0;
+    spin_unlock_irqrestore(&task_lock, flags);
 }
 
 /**

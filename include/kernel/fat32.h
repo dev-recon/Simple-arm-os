@@ -159,6 +159,11 @@ uint32_t get_fat32_sectors_per_cluster(void);
 bool is_fat32_mounted(void);
 struct statfs;
 int fat32_statfs(struct statfs* st);
+bool is_dirty_inodes(void);
+void sync_dirty_inodes(void);
+bool is_fat_dirty(void);
+int sync_fat_to_disk(void);
+void mark_fat_dirty(void);
 
 /* Macro pour verifier l'alignement des structures au compile-time */
 #define CHECK_FAT32_ALIGNMENT() do { \

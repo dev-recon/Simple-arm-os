@@ -13,8 +13,45 @@ extern void putchar_kernel(char c);
 int DEBUG = 0;
 int kernel_log_level = KLOG_WARN;
 
-/* Fonctions externes supposees existantes */
-extern void putchar_kernel(char c);
+#define KMSG_BUF_SIZE 8192
+static char kmsg_buf[KMSG_BUF_SIZE];
+static uint32_t kmsg_head = 0;
+static uint32_t kmsg_count = 0;
+
+static void kmsg_putc(char c)
+{
+    kmsg_buf[kmsg_head] = c;
+    kmsg_head = (kmsg_head + 1) % KMSG_BUF_SIZE;
+    if (kmsg_count < KMSG_BUF_SIZE)
+        kmsg_count++;
+}
+
+size_t kmsg_read(char* out, size_t max)
+{
+    uint32_t start;
+    size_t n;
+
+    if (!out || max == 0)
+        return 0;
+
+    n = kmsg_count;
+    if (n > max)
+        n = max;
+
+    start = (kmsg_head + KMSG_BUF_SIZE - kmsg_count) % KMSG_BUF_SIZE;
+    for (size_t i = 0; i < n; i++)
+        out[i] = kmsg_buf[(start + i) % KMSG_BUF_SIZE];
+
+    return n;
+}
+
+static void kprintf_emit_char(char c)
+{
+    kmsg_putc(c);
+    putchar_kernel(c);
+}
+
+#define putchar_kernel(c) kprintf_emit_char(c)
 
 /* Fonctions utilitaires internes */
 static int itoa_local(long val, char *str) {

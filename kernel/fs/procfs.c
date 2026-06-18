@@ -9,6 +9,9 @@
 #include <kernel/file.h>
 #include <kernel/disk_layout.h>
 #include <kernel/tty.h>
+#include <kernel/interrupt.h>
+#include <kernel/kernel.h>
+#include <kernel/virtio_block.h>
 #include <asm/arm.h>
 
 extern uint32_t task_count;
@@ -29,6 +32,9 @@ static file_operations_t procfs_dir_ops;
 #define PROC_INO_FILESYSTEMS 8u
 #define PROC_INO_PARTITIONS 9u
 #define PROC_INO_SELF       10u
+#define PROC_INO_DMESG      11u
+#define PROC_INO_INTERRUPTS 12u
+#define PROC_INO_TTY        13u
 #define PROC_PID_BASE       100000u
 #define PROC_PID_STRIDE     512u
 #define PROC_PID_DIR        0u
@@ -328,6 +334,12 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_FILESYSTEMS, S_IFREG | 0444, 0);
         if (strcmp(name, "partitions") == 0)
             return proc_make_inode(PROC_INO_PARTITIONS, S_IFREG | 0444, 0);
+        if (strcmp(name, "dmesg") == 0)
+            return proc_make_inode(PROC_INO_DMESG, S_IFREG | 0444, 0);
+        if (strcmp(name, "interrupts") == 0)
+            return proc_make_inode(PROC_INO_INTERRUPTS, S_IFREG | 0444, 0);
+        if (strcmp(name, "tty") == 0)
+            return proc_make_inode(PROC_INO_TTY, S_IFREG | 0444, 0);
         if (strcmp(name, "self") == 0)
             return proc_make_inode(PROC_INO_SELF, S_IFLNK | 0777, 0);
         if (proc_parse_pid(name, &pid) && proc_pid_exists(pid))
@@ -549,6 +561,9 @@ static void proc_fill_meminfo(char* buf, size_t cap, size_t* len)
 
     proc_append(buf, cap, len, "MemTotal:       %u kB\n", total);
     proc_append(buf, cap, len, "MemFree:        %u kB\n", free);
+    proc_append(buf, cap, len, "MemAvailable:   %u kB\n", free);
+    proc_append(buf, cap, len, "Buffers:        0 kB\n");
+    proc_append(buf, cap, len, "Cached:         0 kB\n");
     proc_append(buf, cap, len, "MemUsed:        %u kB\n", used);
     proc_append(buf, cap, len, "PageSize:       %u\n", PAGE_SIZE);
     proc_append(buf, cap, len, "PhysAllocPages: %u\n", get_allocated_page_count());
@@ -605,6 +620,86 @@ static void proc_fill_partitions(char* buf, size_t cap, size_t* len)
     }
 }
 
+static void proc_fill_dmesg(char* buf, size_t cap, size_t* len)
+{
+    *len = kmsg_read(buf, cap > 0 ? cap - 1 : 0);
+    if (cap > 0)
+        buf[*len] = '\0';
+}
+
+static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
+{
+    uint32_t virtio_irq = virtio_blk_get_irq();
+
+    proc_append(buf, cap, len, "           CPU0\n");
+    proc_append(buf, cap, len, "%3u: %10u GICv2  timer\n",
+                VIRT_TIMER_NS_EL1_IRQ,
+                gic_get_irq_count(VIRT_TIMER_NS_EL1_IRQ));
+    proc_append(buf, cap, len, "%3u: %10u GICv2  uart0\n",
+                VIRT_UART_IRQ,
+                gic_get_irq_count(VIRT_UART_IRQ));
+    proc_append(buf, cap, len, "%3u: %10u GICv2  uart0-legacy\n",
+                IRQ_KEYBOARD,
+                gic_get_irq_count(IRQ_KEYBOARD));
+    proc_append(buf, cap, len, "%3u: %10u GICv2  virtio-blk\n",
+                virtio_irq,
+                gic_get_irq_count(virtio_irq));
+    proc_append(buf, cap, len, "TOT: %10u\n", gic_get_total_irq_count());
+    proc_append(buf, cap, len, "LAST:%10u\n", gic_get_last_irq_id());
+}
+
+static void proc_fill_tty(char* buf, size_t cap, size_t* len)
+{
+    uint32_t tty_tx_enqueued = 0;
+    uint32_t tty_tx_drained = 0;
+    uint32_t tty_tx_full_waits = 0;
+    uint32_t tty_tx_drain_calls = 0;
+    uint32_t tty_input_depth = 0;
+    uint32_t tty_input_capacity = 0;
+    uint32_t tty_eof_pending = 0;
+    uint32_t tty_iflag = 0;
+    uint32_t tty_oflag = 0;
+    uint32_t tty_lflag = 0;
+    uint32_t tty_vmin = 0;
+    uint32_t tty_vtime = 0;
+    uint32_t tty_char_wakeups = 0;
+    uint32_t tty_line_wakeups = 0;
+    uint32_t tty_eof_wakeups = 0;
+
+    tty_get_tx_stats(&tty_tx_enqueued, &tty_tx_drained,
+                     &tty_tx_full_waits, &tty_tx_drain_calls);
+    tty_get_input_stats(&tty_input_depth, &tty_input_capacity,
+                        &tty_eof_pending, &tty_iflag, &tty_oflag,
+                        &tty_lflag, &tty_vmin, &tty_vtime,
+                        &tty_char_wakeups, &tty_line_wakeups,
+                        &tty_eof_wakeups);
+
+    proc_append(buf, cap, len, "tty0\n");
+    proc_append(buf, cap, len, "input depth %u capacity %u chars %u eof %u\n",
+                tty_input_depth, tty_input_capacity, tty0.input_chars, tty_eof_pending);
+    proc_append(buf, cap, len, "wake char %u line %u eof %u\n",
+                tty_char_wakeups, tty_line_wakeups, tty_eof_wakeups);
+    proc_append(buf, cap, len, "output enq %u drain %u full %u drain_calls %u\n",
+                tty_tx_enqueued, tty_tx_drained, tty_tx_full_waits, tty_tx_drain_calls);
+    proc_append(buf, cap, len, "flags iflag %u oflag %u lflag %u vmin %u vtime %u\n",
+                tty_iflag, tty_oflag, tty_lflag, tty_vmin, tty_vtime);
+    proc_append(buf, cap, len, "jobctl fg_pgid %d read_wait_pid %d read_wait_state %d\n",
+                tty_get_foreground_pgid(),
+                tty_get_read_wait_pid(),
+                tty_get_read_wait_state());
+    proc_append(buf, cap, len,
+                "signal ctrl_c %u delivered %u missed %u ctrl_z %u delivered %u missed %u last %d pgid %d delivered %d\n",
+                tty0.ctrl_c_seen,
+                tty0.sigint_delivered,
+                tty0.sigint_missed,
+                tty0.ctrl_z_seen,
+                tty0.sigtstp_delivered,
+                tty0.sigtstp_missed,
+                tty0.last_signal,
+                tty0.last_signal_pgid,
+                tty0.last_signal_delivered);
+}
+
 static void proc_fill_stat(char* buf, size_t cap, size_t* len)
 {
     uint32_t live_tasks = kernel_lifecycle_stats.tasks_created -
@@ -640,6 +735,13 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
                         &tty_char_wakeups, &tty_line_wakeups,
                         &tty_eof_wakeups);
 
+    proc_append(buf, cap, len, "cpu  0 0 0 %u 0 0 0 0 0 0\n", get_system_ticks());
+    proc_append(buf, cap, len, "intr %u\n", gic_get_total_irq_count());
+    proc_append(buf, cap, len, "ctxt %u\n",
+                current_task ? current_task->switch_count : 0);
+    proc_append(buf, cap, len, "processes %u\n", kernel_lifecycle_stats.tasks_created);
+    proc_append(buf, cap, len, "procs_running %u\n", task_count);
+    proc_append(buf, cap, len, "procs_blocked 0\n");
     proc_append(buf, cap, len, "uptime_ticks %u\n", get_system_ticks());
     proc_append(buf, cap, len, "tasks %u %u %u\n",
                 live_tasks,
@@ -886,6 +988,9 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_CPUINFO: proc_fill_cpuinfo(buf, cap, len); return 0;
         case PROC_INO_FILESYSTEMS: proc_fill_filesystems(buf, cap, len); return 0;
         case PROC_INO_PARTITIONS: proc_fill_partitions(buf, cap, len); return 0;
+        case PROC_INO_DMESG:   proc_fill_dmesg(buf, cap, len); return 0;
+        case PROC_INO_INTERRUPTS: proc_fill_interrupts(buf, cap, len); return 0;
+        case PROC_INO_TTY:     proc_fill_tty(buf, cap, len); return 0;
         default: break;
     }
 
@@ -1026,6 +1131,9 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         { "cpuinfo", PROC_INO_CPUINFO, DT_REG },
         { "filesystems", PROC_INO_FILESYSTEMS, DT_REG },
         { "partitions", PROC_INO_PARTITIONS, DT_REG },
+        { "dmesg",   PROC_INO_DMESG,  DT_REG },
+        { "interrupts", PROC_INO_INTERRUPTS, DT_REG },
+        { "tty",     PROC_INO_TTY,    DT_REG },
         { "self",    PROC_INO_SELF,    DT_LNK },
     };
     uint32_t offset = file->offset;

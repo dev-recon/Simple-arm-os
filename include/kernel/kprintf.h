@@ -16,6 +16,7 @@
 /* Fonctions principales */
 int kprintf(const char *format, ...) __attribute__((format(printf, 1, 2)));
 int kvprintf(const char *format, va_list args);
+size_t kmsg_read(char* out, size_t max);
 void set_debug(int enable);
 int get_debug(void);
 void kprintf_test(void);

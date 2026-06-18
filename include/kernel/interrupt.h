@@ -23,6 +23,9 @@ void clear_irq(uint32_t irq);
 void irq_c_handler(void);
 void fiq_c_handler(void);
 
+uint32_t gic_get_irq_count(uint32_t irq);
+uint32_t gic_get_total_irq_count(void);
+uint32_t gic_get_last_irq_id(void);
 
 void complete_gic_debug(void);
 
