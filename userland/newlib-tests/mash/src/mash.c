@@ -67,6 +67,37 @@ static void shell_set_foreground_pgid(int pgid) {
         tcsetpgrp(STDIN_FILENO, pgid);
 }
 
+static int shell_prepare_child_pgid(int child_pid)
+{
+    if (child_pid <= 0)
+        return -1;
+
+    errno = 0;
+    if (setpgid(child_pid, child_pid) == 0)
+        return 0;
+
+    /*
+     * With a preemptive kernel, a very short-lived child can exit before the
+     * parent gets scheduled again. That is not fatal: waitpid will reap it and
+     * there is no foreground process group left to hand the terminal to.
+     */
+    if (errno == ESRCH)
+        return 1;
+
+    return -1;
+}
+
+static int shell_wait_foreground_child(int child_pid, int* status)
+{
+    int waited;
+
+    do {
+        waited = waitpid(child_pid, status, WUNTRACED);
+    } while (waited < 0 && errno == EINTR);
+
+    return waited;
+}
+
 static void shell_restore_foreground(void) {
     shell_set_foreground_pgid(shell_pgid);
 }
@@ -862,7 +893,7 @@ static int run_pipeline(int argc, char* argv[], int background) {
         pids[i] = pid;
         if (i == 0) {
             pgid = pid;
-            setpgid(pid, pgid);
+            shell_prepare_child_pgid(pid);
         } else {
             setpgid(pid, pgid);
         }
@@ -880,11 +911,14 @@ static int run_pipeline(int argc, char* argv[], int background) {
         return SHELL_OK;
     }
 
-    shell_set_foreground_pgid(pgid);
+    if (pgid > 0)
+        shell_set_foreground_pgid(pgid);
     while (reported < command_count) {
         int waited = waitpid(-pgid, &status, WUNTRACED);
         int idx;
 
+        if (waited < 0 && errno == EINTR)
+            continue;
         if (waited <= 0)
             break;
 
@@ -1393,6 +1427,11 @@ int shell_execute(int argc, char* argv[]) {
     }
     
     int child_pid = fork();
+    if (child_pid < 0) {
+        printf("mash: fork failed: errno=%d\n", errno);
+        return SHELL_ERROR;
+    }
+
     if (child_pid == 0) {
         setpgid(0, 0);
         signal(SIGINT, SIG_DFL);
@@ -1403,8 +1442,7 @@ int shell_execute(int argc, char* argv[]) {
         exec_external_or_die(argc, argv);
         
     } else {
-
-        setpgid(child_pid, child_pid);
+        shell_prepare_child_pgid(child_pid);
 
         if (background) {
             char command[JOBS_COMMAND_LEN];
@@ -1422,7 +1460,9 @@ int shell_execute(int argc, char* argv[]) {
 
         jobs_build_command(argc, argv, command, sizeof(command));
         shell_set_foreground_pgid(child_pid);
-        if (waitpid(child_pid, &status, WUNTRACED) == child_pid &&
+
+        int waited_pid = shell_wait_foreground_child(child_pid, &status);
+        if (waited_pid == child_pid &&
             WIFSTOPPED(status)) {
             stopped_status = status;
             was_stopped = 1;

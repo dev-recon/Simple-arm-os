@@ -24,6 +24,18 @@ struct tty_struct {
     
     /* Wait queue pour read bloquant */
     task_t *read_wait;
+
+    /* Diagnostic counters for long-idle / foreground signal issues. */
+    uint32_t input_chars;
+    uint32_t ctrl_c_seen;
+    uint32_t ctrl_z_seen;
+    uint32_t sigint_delivered;
+    uint32_t sigint_missed;
+    uint32_t sigtstp_delivered;
+    uint32_t sigtstp_missed;
+    pid_t last_signal_pgid;
+    int last_signal;
+    int last_signal_delivered;
     
     spinlock_t lock;
 };
@@ -41,6 +53,8 @@ ssize_t tty_read(char *buf, size_t count);
 ssize_t tty_write(const char *buf, size_t count);
 int tty_set_foreground_pgid(pid_t pgid);
 pid_t tty_get_foreground_pgid(void);
+pid_t tty_get_read_wait_pid(void);
+int tty_get_read_wait_state(void);
 file_t* create_tty_console_file(const char* name, int flags);
 
 #endif

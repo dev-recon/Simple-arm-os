@@ -69,6 +69,34 @@ pid_t tty_get_foreground_pgid(void)
     return pgid;
 }
 
+pid_t tty_get_read_wait_pid(void)
+{
+    unsigned long flags;
+    task_t* waiter;
+    pid_t pid = 0;
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    waiter = tty0.read_wait;
+    if (waiter && waiter->process)
+        pid = waiter->process->pid;
+    spin_unlock_irqrestore(&tty0.lock, flags);
+    return pid;
+}
+
+int tty_get_read_wait_state(void)
+{
+    unsigned long flags;
+    task_t* waiter;
+    int state = -1;
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    waiter = tty0.read_wait;
+    if (waiter)
+        state = (int)waiter->state;
+    spin_unlock_irqrestore(&tty0.lock, flags);
+    return state;
+}
+
 /* Appelé par l'IRQ UART (ou polling) */
 void tty_input_char(char c) {
     task_t* reader = NULL;
@@ -78,20 +106,42 @@ void tty_input_char(char c) {
     spin_lock_irqsave(&tty0.lock, &flags);
 
     if ((tty0.c_lflag & ISIG) && c == 0x03) {
+        int delivered;
         signal_pgid = tty0.foreground_pgid;
         signal_num = SIGINT;
+        tty0.ctrl_c_seen++;
+        tty0.last_signal_pgid = signal_pgid;
+        tty0.last_signal = signal_num;
         spin_unlock_irqrestore(&tty0.lock, flags);
         uart_puts("^C\n");
-        tty_signal_process_group(signal_pgid, signal_num);
+        delivered = tty_signal_process_group(signal_pgid, signal_num);
+        spin_lock_irqsave(&tty0.lock, &flags);
+        tty0.last_signal_delivered = delivered;
+        if (delivered > 0)
+            tty0.sigint_delivered += delivered;
+        else
+            tty0.sigint_missed++;
+        spin_unlock_irqrestore(&tty0.lock, flags);
         return;
     }
 
     if ((tty0.c_lflag & ISIG) && c == 0x1A) {
+        int delivered;
         signal_pgid = tty0.foreground_pgid;
         signal_num = SIGTSTP;
+        tty0.ctrl_z_seen++;
+        tty0.last_signal_pgid = signal_pgid;
+        tty0.last_signal = signal_num;
         spin_unlock_irqrestore(&tty0.lock, flags);
         uart_puts("^Z\n");
-        tty_signal_process_group(signal_pgid, signal_num);
+        delivered = tty_signal_process_group(signal_pgid, signal_num);
+        spin_lock_irqsave(&tty0.lock, &flags);
+        tty0.last_signal_delivered = delivered;
+        if (delivered > 0)
+            tty0.sigtstp_delivered += delivered;
+        else
+            tty0.sigtstp_missed++;
+        spin_unlock_irqrestore(&tty0.lock, flags);
         return;
     }
     
@@ -115,6 +165,7 @@ void tty_input_char(char c) {
     if (next_head != tty0.input_tail) {
         tty0.input_buf[tty0.input_head] = c;
         tty0.input_head = next_head;
+        tty0.input_chars++;
         
         /* read(0, &c, 1) doit être réveillé dès qu'un caractère arrive.
          * Ne pas conserver un waiter mort ou qui n'attend plus le TTY: après

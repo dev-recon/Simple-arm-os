@@ -8,6 +8,7 @@
 #include <kernel/timer.h>
 #include <kernel/file.h>
 #include <kernel/disk_layout.h>
+#include <kernel/tty.h>
 #include <asm/arm.h>
 
 extern uint32_t task_count;
@@ -617,6 +618,21 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "signal_wake %u\n", kernel_lifecycle_stats.blocked_signal_wakeups);
     proc_append(buf, cap, len, "tty_stale %u\n", kernel_lifecycle_stats.tty_stale_waiters);
     proc_append(buf, cap, len, "unintr_timeout %u\n", kernel_lifecycle_stats.uninterruptible_timeouts);
+    proc_append(buf, cap, len,
+                "tty_diag fg_pgid %d read_wait_pid %d read_wait_state %d input %u ctrl_c %u sigint_delivered %u sigint_missed %u ctrl_z %u sigtstp_delivered %u sigtstp_missed %u last_signal %d last_pgid %d last_delivered %d\n",
+                tty_get_foreground_pgid(),
+                tty_get_read_wait_pid(),
+                tty_get_read_wait_state(),
+                tty0.input_chars,
+                tty0.ctrl_c_seen,
+                tty0.sigint_delivered,
+                tty0.sigint_missed,
+                tty0.ctrl_z_seen,
+                tty0.sigtstp_delivered,
+                tty0.sigtstp_missed,
+                tty0.last_signal,
+                tty0.last_signal_pgid,
+                tty0.last_signal_delivered);
 }
 
 static void proc_fill_tasks(char* buf, size_t cap, size_t* len)

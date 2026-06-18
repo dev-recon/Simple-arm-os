@@ -26,6 +26,7 @@ static void terminate_process(task_t* proc, int sig);
 static void dump_core(task_t* proc);
 static void stop_process(task_t* proc, int sig);
 static void continue_process(task_t* proc);
+static uint32_t signal_deliverable_mask(task_t* proc);
 
 /* Actions par defaut pour chaque signal */
 static sig_default_action_t default_signal_actions[MAX_SIGNALS] = {
@@ -297,6 +298,11 @@ int send_signal(task_t* target, int sig)
         continue_process(target);
     }
 
+    if (target->process->signals.actions[sig].sa_handler == SIG_IGN) {
+        target->process->signals.pending &= ~(1u << sig);
+        return 0;
+    }
+
     /* Verifier si le signal est bloque */
     if (target->process->signals.blocked & (1 << sig)) {
         target->process->signals.pending |= (1 << sig);
@@ -348,8 +354,30 @@ bool has_pending_signals(task_t* proc)
          return false;
     }
     
-    /* ACCeS CORRECT */
-    return (proc->process->signals.pending & ~proc->process->signals.blocked) != 0;
+    return signal_deliverable_mask(proc) != 0;
+}
+
+static uint32_t signal_deliverable_mask(task_t* proc)
+{
+    signal_state_t* sig;
+    uint32_t deliverable;
+    int i;
+
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
+        return 0;
+
+    sig = &proc->process->signals;
+    deliverable = sig->pending & ~sig->blocked;
+
+    for (i = 1; i < MAX_SIGNALS; i++) {
+        if ((deliverable & (1u << i)) &&
+            sig->actions[i].sa_handler == SIG_IGN) {
+            sig->pending &= ~(1u << i);
+            deliverable &= ~(1u << i);
+        }
+    }
+
+    return deliverable;
 }
 
 
@@ -707,7 +735,7 @@ signal_check_result_t check_pending_signals(void)
     if (sig->in_handler != 0) return SIGNAL_CHECK_DEFERRED;
     
     /* Trouver les signaux delivrables */
-    deliverable = sig->pending & ~sig->blocked;
+    deliverable = signal_deliverable_mask(proc);
     if (!deliverable) return SIGNAL_CHECK_NONE;
 
     //KDEBUG("[SIGNAL] Deliverable signals found %u PID=%u\n", deliverable, proc->process->pid);
