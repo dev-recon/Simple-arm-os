@@ -47,6 +47,7 @@ userfs/usr/bin/pwd
 userfs/usr/bin/rm
 userfs/usr/bin/rmdir
 userfs/usr/bin/screen_demo
+userfs/usr/bin/sed
 userfs/usr/bin/shutdown
 userfs/usr/bin/sleep
 userfs/usr/bin/stat
@@ -91,6 +92,7 @@ userland/coreutils/pwd
 userland/coreutils/rm
 userland/coreutils/rmdir
 userland/coreutils/screen_demo
+userland/coreutils/sed
 userland/coreutils/shutdown
 userland/coreutils/sleep
 userland/coreutils/stat
