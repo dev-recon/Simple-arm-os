@@ -1,138 +1,171 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <fcntl.h>
 #include <unistd.h>
+#include <dirent.h>
 
-static const char *state_name(char state)
+#define PROC_BUF_SIZE 4096
+
+static int is_digit(char c)
 {
-    switch (state) {
-        case 'R': return "run";
-        case 'Z': return "zombie";
-        case 'T': return "term";
-        case 't': return "stop";
-        case 'D': return "wait";
-        default:  return "sleep";
-    }
+    return c >= '0' && c <= '9';
 }
 
-static const char *state_color(char state)
+static int read_file(const char *path, char *buf, int size)
 {
-    switch (state) {
-        case 'R': return "\033[1;32m";
-        case 'Z': return "\033[1;31m";
-        case 'T': return "\033[0;31m";
-        case 't': return "\033[1;33m";
-        case 'D': return "\033[1;33m";
-        default:  return "\033[0;37m";
-    }
+    int fd;
+    int n;
+
+    if (!buf || size <= 1)
+        return -1;
+
+    fd = open(path, O_RDONLY, 0);
+    if (fd < 0)
+        return -1;
+
+    n = read(fd, buf, size - 1);
+    close(fd);
+
+    if (n < 0)
+        return -1;
+
+    buf[n] = '\0';
+    return n;
 }
 
-static const char *kind_name(char type)
+static const char *parse_int(const char *p, int *out)
 {
-    switch (type) {
-        case 'P': return "proc";
-        case 'T': return "thread";
-        default:  return "kthr";
+    int sign = 1;
+    int value = 0;
+
+    while (*p == ' ' || *p == '\t')
+        p++;
+
+    if (*p == '-') {
+        sign = -1;
+        p++;
     }
+
+    if (!is_digit(*p))
+        return NULL;
+
+    while (is_digit(*p)) {
+        value = value * 10 + (*p - '0');
+        p++;
+    }
+
+    *out = value * sign;
+    return p;
 }
 
-static const char *kind_color(char type)
+static int parse_proc_stat(const char *buf, int *pid, int *tty, char *name, int name_size)
 {
-    switch (type) {
-        case 'P': return "\033[1;36m";
-        case 'T': return "\033[1;35m";
-        default:  return "\033[0;36m";
-    }
+    const char *p;
+    const char *start;
+    const char *end;
+    int dummy;
+    int len;
+
+    p = parse_int(buf, pid);
+    if (!p)
+        return -1;
+
+    while (*p == ' ')
+        p++;
+    if (*p != '(')
+        return -1;
+
+    start = ++p;
+    end = start;
+    while (*end && *end != ')')
+        end++;
+    if (*end != ')')
+        return -1;
+
+    len = (int)(end - start);
+    if (len >= name_size)
+        len = name_size - 1;
+    memcpy(name, start, (size_t)len);
+    name[len] = '\0';
+
+    p = end + 1;
+    while (*p == ' ')
+        p++;
+    if (*p)
+        p++; /* state */
+
+    p = parse_int(p, &dummy); /* ppid */
+    if (!p) return -1;
+    p = parse_int(p, &dummy); /* pgid */
+    if (!p) return -1;
+    p = parse_int(p, &dummy); /* sid */
+    if (!p) return -1;
+    p = parse_int(p, tty);
+    if (!p) return -1;
+
+    return 0;
+}
+
+static void print_tty(int tty)
+{
+    if (tty >= 0)
+        printf("tty%d", tty);
+    else
+        printf("?");
 }
 
 int main(void)
 {
-    struct sysinfo_response *info = malloc(sizeof(struct sysinfo_response));
-    if (!info) { printf("ps: out of memory\n"); return 1; }
+    char *dirbuf;
+    char statbuf[512];
+    int fd;
+    int n;
 
-    int n = getsysinfo(info);
-    if (n < 0) {
-        printf("ps: getsysinfo failed\n");
-        free(info);
+    dirbuf = malloc(PROC_BUF_SIZE);
+    if (!dirbuf) {
+        printf("ps: out of memory\n");
         return 1;
     }
 
-    /* Ligne mémoire */
-    unsigned used_kb = info->mem_total_kb - info->mem_free_kb;
-    unsigned pct_x10 = info->mem_total_kb ? (used_kb * 1000 / info->mem_total_kb) : 0;
-    unsigned pct = pct_x10 / 10;
-    unsigned pct_frac = pct_x10 % 10;
-    unsigned live_tasks = info->tasks_created >= info->tasks_destroyed
-                        ? info->tasks_created - info->tasks_destroyed : 0;
-    unsigned live_zombies = info->zombies_created >= info->zombies_reaped
-                          ? info->zombies_created - info->zombies_reaped : 0;
-    unsigned live_kstack_pages = info->stack_pages_allocated >= info->stack_pages_freed
-                               ? info->stack_pages_allocated - info->stack_pages_freed : 0;
-    unsigned live_phys_pages = info->phys_pages_allocated >= info->phys_pages_freed
-                             ? info->phys_pages_allocated - info->phys_pages_freed : 0;
-    printf("\033[1mMem:\033[0m  %u MB total   %u MB free   \033[%sm%u.%u%%\033[0m used\n\n",
-           info->mem_total_kb / 1024, info->mem_free_kb / 1024,
-           pct_x10 > 800 ? "1;31" : pct_x10 > 600 ? "1;33" : "1;32",
-           pct, pct_frac);
-    printf("\033[1m%-6s\033[0m %-10s %8s %8s %8s   %-12s %u  %-12s %u  %-12s %u\n",
-           "Life:", "metric", "live", "+new", "-done",
-           "forkfail", info->failed_forks,
-           "sched-refuse", info->scheduler_refused,
-           "ready-refuse", info->ready_queue_refused);
-    printf("%-6s %-10s %8u %8u %8u   %-12s %u\n",
-           "", "tasks",
-           live_tasks, info->tasks_created, info->tasks_destroyed,
-           "asid-roll", info->asid_rollovers);
-    printf("%-6s %-10s %8u %8u %8u\n",
-           "", "zombies",
-           live_zombies, info->zombies_created, info->zombies_reaped);
-
-    printf("\033[1m%-6s\033[0m %-10s %8s %8s %8s\n",
-           "Alloc:", "metric", "live", "+alloc", "-free");
-    printf("%-6s %-10s %7up %7up %7up\n",
-           "", "kstack",
-           live_kstack_pages,
-           info->stack_pages_allocated, info->stack_pages_freed);
-    printf("%-6s %-10s %7up %7up %7up\n",
-           "", "phys",
-           live_phys_pages,
-           info->phys_pages_allocated, info->phys_pages_freed);
-
-    printf("\033[1m%-6s\033[0m %-12s %7u   %-12s %7u   %-12s %7u   %-12s %7u\n\n",
-           "Diag:",
-           "state-set", info->state_sync_repairs,
-           "signal-wake", info->blocked_signal_wakeups,
-           "tty-stale", info->tty_stale_waiters,
-           "unintr-timeout", info->uninterruptible_timeouts);
-
-    /* Header */
-    printf("\033[1m%4s %4s %4s %4s %3s %-6s %3s %5s %5s %5s %5s %5s %2s %5s %4s %4s %4s %-6s %s\033[0m\n",
-           "PID", "TID", "PPID", "SID", "TTY", "KIND", "PRI", "%CPU", "KSTK", "HEAP",
-           "VM", "RSS", "L2", "CTX", "PF", "COW", "STK", "STATE", "NAME");
-    printf("----------------------------------------------------------------------------------------------------------------\n");
-
-    for (int i = 0; i < n; i++) {
-        struct proc_info *p = &info->procs[i];
-
-        unsigned ci = p->cpu_pct_x10 / 10;
-        unsigned cf = p->cpu_pct_x10 % 10;
-        const char *cpucolor = ci >= 50 ? "\033[1;31m" :
-                               ci >= 20 ? "\033[1;33m" : "\033[0m";
-        const char *pfcolor = p->page_faults ? "\033[1;35m" : "\033[0m";
-
-        printf("%4u %4d %4d %4d %3d %s%-6s\033[0m %3u %s%3u.%u\033[0m %4uK %4uK %4uK %4uK %2u %5u %s%4u\033[0m %4u %4u %s%-6s\033[0m %s\n",
-               p->pid, p->tid, p->ppid, p->sid, p->tty,
-               kind_color(p->type), kind_name(p->type),
-               p->priority,
-               cpucolor, ci, cf,
-               p->stack_kb, p->heap_kb, p->vm_kb, p->rss_kb,
-               p->l2_tables,
-               p->switches,
-               pfcolor, p->page_faults,
-               p->cow_faults, p->stack_faults,
-               state_color(p->state), state_name(p->state),
-               p->name);
+    fd = open("/proc", O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) {
+        printf("ps: cannot open /proc\n");
+        free(dirbuf);
+        return 1;
     }
 
-    free(info);
-    return 0;
+    printf("%5s %-8s %8s %s\n", "PID", "TTY", "TIME", "CMD");
+
+    while ((n = getdents(fd, dirbuf, PROC_BUF_SIZE)) > 0) {
+        char *ptr = dirbuf;
+
+        while (ptr < dirbuf + n) {
+            struct linux_dirent *e = (struct linux_dirent *)ptr;
+            char path[64];
+            char name[64];
+            int pid;
+            int tty;
+
+            if (e->d_reclen == 0)
+                break;
+
+            if (e->d_ino != 0 && is_digit(e->d_name[0])) {
+                sprintf(path, "/proc/%s/stat", e->d_name);
+                if (read_file(path, statbuf, sizeof(statbuf)) >= 0 &&
+                    parse_proc_stat(statbuf, &pid, &tty, name, sizeof(name)) == 0) {
+                    printf("%5d ", pid);
+                    print_tty(tty);
+                    printf("%*s %8s %s\n", tty >= 0 ? 4 : 7, "", "0:00.00", name);
+                }
+            }
+
+            ptr += e->d_reclen;
+        }
+    }
+
+    close(fd);
+    free(dirbuf);
+    return n < 0 ? 1 : 0;
 }

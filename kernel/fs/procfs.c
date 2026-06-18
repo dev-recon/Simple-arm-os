@@ -600,6 +600,11 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
                           kernel_lifecycle_stats.tasks_destroyed;
     uint32_t live_zombies = kernel_lifecycle_stats.zombies_created -
                             kernel_lifecycle_stats.zombies_reaped;
+    uint32_t live_kstack = kernel_lifecycle_stats.stack_pages_allocated -
+                           kernel_lifecycle_stats.stack_pages_freed;
+    uint32_t phys_alloc = get_allocated_page_count();
+    uint32_t phys_free = get_freed_page_count();
+    uint32_t live_phys = phys_alloc - phys_free;
 
     proc_append(buf, cap, len, "uptime_ticks %u\n", get_system_ticks());
     proc_append(buf, cap, len, "tasks %u %u %u\n",
@@ -610,6 +615,14 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
                 live_zombies,
                 kernel_lifecycle_stats.zombies_created,
                 kernel_lifecycle_stats.zombies_reaped);
+    proc_append(buf, cap, len, "kstack %u %u %u\n",
+                live_kstack,
+                kernel_lifecycle_stats.stack_pages_allocated,
+                kernel_lifecycle_stats.stack_pages_freed);
+    proc_append(buf, cap, len, "phys %u %u %u\n",
+                live_phys,
+                phys_alloc,
+                phys_free);
     proc_append(buf, cap, len, "forkfail %u\n", kernel_lifecycle_stats.failed_forks);
     proc_append(buf, cap, len, "sched_refuse %u\n", kernel_lifecycle_stats.scheduler_refused);
     proc_append(buf, cap, len, "ready_refuse %u\n", kernel_lifecycle_stats.ready_queue_refused);
@@ -641,7 +654,7 @@ static void proc_fill_tasks(char* buf, size_t cap, size_t* len)
     uint32_t count = 0;
     unsigned long flags;
 
-    proc_append(buf, cap, len, "pid tid ppid state kind name\n");
+    proc_append(buf, cap, len, "pid tid ppid state kind pri ctx pf cow stk name\n");
 
     spin_lock_irqsave(&task_lock, &flags);
     task = task_list_head;
@@ -652,13 +665,18 @@ static void proc_fill_tasks(char* buf, size_t cap, size_t* len)
 
     do {
         process_t* proc = proc_task_process(task);
-        proc_append(buf, cap, len, "%d %u %d %c %c %s\n",
+        proc_append(buf, cap, len, "%d %u %d %c %c %u %u %u %u %u %s\n",
                     proc ? proc->pid : 0,
                     task->task_id,
                     proc ? proc->ppid : 0,
                     proc_task_state_char(task->state),
                     task->type == TASK_TYPE_PROCESS ? 'P' :
                     task->type == TASK_TYPE_THREAD ? 'T' : 'K',
+                    task->priority,
+                    task->switch_count,
+                    task->page_faults,
+                    task->cow_faults,
+                    task->stack_faults,
                     task->name);
         task = task->next;
         count++;
@@ -697,6 +715,10 @@ static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "Tty:\t%d\n", proc ? proc->controlling_tty : -1);
     proc_append(buf, cap, len, "Uid:\t%u\n", proc ? proc->uid : 0);
     proc_append(buf, cap, len, "Gid:\t%u\n", proc ? proc->gid : 0);
+    proc_append(buf, cap, len, "Priority:\t%u\n", task->priority);
+    proc_append(buf, cap, len, "KStack:\t%u kB\n", KERNEL_TASK_STACK_SIZE / 1024);
+    proc_append(buf, cap, len, "Heap:\t%u kB\n",
+                (vm && vm->brk >= vm->heap_start) ? ((vm->brk - vm->heap_start) / 1024u) : 0);
     proc_append(buf, cap, len, "VmSize:\t%u kB\n", proc_vm_virtual_kb(vm));
     proc_append(buf, cap, len, "VmRSS:\t%u kB\n", proc_vm_rss_kb(vm));
     proc_append(buf, cap, len, "L2Tables:\t%u\n", proc_vm_l2_tables(vm));

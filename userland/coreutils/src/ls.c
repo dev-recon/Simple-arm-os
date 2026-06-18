@@ -8,6 +8,9 @@
 #include <sys/stat.h>
 
 #define BUF_SIZE 4096
+#define LS_MAX_SIMPLE_ENTRIES 128
+#define LS_SIMPLE_NAME_LEN 80
+#define LS_SIMPLE_COL_WIDTH 18
 
 struct dirent_raw {
     uint32_t d_ino;
@@ -15,6 +18,11 @@ struct dirent_raw {
     uint16_t d_reclen;
     uint8_t  d_type;
     char     d_name[];
+};
+
+struct simple_entry {
+    char name[LS_SIMPLE_NAME_LEN];
+    int is_dir;
 };
 
 static void perm_string(mode_t mode, char *out)
@@ -107,14 +115,58 @@ static void print_long_path(const char *display_name, const char *path)
     print_long(display_name, &st, link_target);
 }
 
+static void print_simple_entries(struct simple_entry *entries, int count)
+{
+    int col = 0;
+
+    for (int i = 0; i < count; i++) {
+        int len = strlen(entries[i].name);
+        int pad = LS_SIMPLE_COL_WIDTH - len;
+
+        if (entries[i].is_dir)
+            printf("\033[1;34m%s\033[0m", entries[i].name);
+        else
+            printf("%s", entries[i].name);
+
+        if (i == count - 1) {
+            printf("\n");
+            break;
+        }
+
+        if (++col >= 4) {
+            printf("\n");
+            col = 0;
+        } else {
+            if (pad < 2)
+                pad = 2;
+            while (pad-- > 0)
+                printf(" ");
+        }
+    }
+
+    if (count == 0)
+        printf("\n");
+}
+
 static int ls_dir(const char *path, int long_fmt, int show_all)
 {
     char *buf = malloc(BUF_SIZE);
+    struct simple_entry *entries = NULL;
+    int entry_count = 0;
     if (!buf) return 1;
+
+    if (!long_fmt) {
+        entries = malloc(sizeof(struct simple_entry) * LS_MAX_SIMPLE_ENTRIES);
+        if (!entries) {
+            free(buf);
+            return 1;
+        }
+    }
 
     int fd = open(path, O_RDONLY | O_DIRECTORY, 0);
     if (fd < 0) {
         printf("ls: cannot open directory '%s'\n", path);
+        free(entries);
         free(buf);
         return 1;
     }
@@ -140,16 +192,22 @@ static int ls_dir(const char *path, int long_fmt, int show_all)
 
                 print_long_path(e->d_name, fullpath);
             } else {
-                if (e->d_type == 4)
-                    printf("\033[1;34m%s\033[0m\n", e->d_name);
-                else
-                    printf("%s\n", e->d_name);
+                if (entry_count < LS_MAX_SIMPLE_ENTRIES) {
+                    strncpy(entries[entry_count].name, e->d_name, LS_SIMPLE_NAME_LEN - 1);
+                    entries[entry_count].name[LS_SIMPLE_NAME_LEN - 1] = '\0';
+                    entries[entry_count].is_dir = (e->d_type == 4);
+                    entry_count++;
+                }
             }
             ptr += e->d_reclen;
         }
     }
 
+    if (!long_fmt)
+        print_simple_entries(entries, entry_count);
+
     close(fd);
+    free(entries);
     free(buf);
     return n < 0 ? 1 : 0;
 }
