@@ -138,8 +138,6 @@ int tty_set_termios(const struct termios *tio, int flush_input)
     next.c_lflag &= (ECHO | ICANON | ISIG | IEXTEN |
                      ECHOE | ECHOK | ECHOCTL | ECHOKE);
     next.c_cflag &= (CS8 | CREAD | HUPCL);
-    if (next.c_cc[VMIN] == 0 && next.c_cc[VTIME] == 0)
-        next.c_cc[VMIN] = 1;
 
     spin_lock_irqsave(&tty0.lock, &flags);
     tty0.termios = next;

@@ -34,13 +34,148 @@ static void expect_true(int cond, const char *name, int detail)
         fail(name, detail);
 }
 
-int main(void)
+static void test_tcflush_selectors(void)
 {
-    struct termios tio;
-    struct termios raw;
+    if (tcflush(STDIN_FILENO, TCIFLUSH) == 0)
+        ok("tcflush input queue");
+    else
+        fail("tcflush input queue", errno);
+
+    if (tcflush(STDOUT_FILENO, TCOFLUSH) == 0)
+        ok("tcflush output queue");
+    else
+        fail("tcflush output queue", errno);
+
+    if (tcflush(STDIN_FILENO, TCIOFLUSH) == 0)
+        ok("tcflush input/output queues");
+    else
+        fail("tcflush input/output queues", errno);
+
+    errno = 0;
+    if (tcflush(STDIN_FILENO, 99) < 0 && errno == EINVAL)
+        ok("tcflush rejects invalid selector");
+    else
+        fail("tcflush rejects invalid selector", errno);
+}
+
+static int set_and_check_termios(const struct termios *tio,
+                                 const char *set_name,
+                                 struct termios *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, tio) < 0) {
+        fail(set_name, errno);
+        return -1;
+    }
+    ok(set_name);
+
+    if (tcgetattr(STDIN_FILENO, out) < 0) {
+        fail("tcgetattr observes mode", errno);
+        return -1;
+    }
+    ok("tcgetattr observes mode");
+    return 0;
+}
+
+static void test_raw_timeout_mode(void)
+{
+    struct termios raw = saved_termios;
     struct termios check;
     unsigned char c = 0;
     ssize_t n;
+
+    raw.c_lflag &= ~(ICANON | ECHO);
+    raw.c_iflag &= ~ICRNL;
+    raw.c_oflag &= ~OPOST;
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 1;
+
+    if (set_and_check_termios(&raw, "tcsetattr raw timeout mode", &check) < 0)
+        return;
+
+    expect_true((check.c_lflag & ICANON) == 0,
+                "raw mode clears ICANON", (int)check.c_lflag);
+    expect_true((check.c_lflag & ECHO) == 0,
+                "raw mode clears ECHO", (int)check.c_lflag);
+    expect_true((check.c_iflag & ICRNL) == 0,
+                "raw mode clears ICRNL", (int)check.c_iflag);
+    expect_true((check.c_oflag & OPOST) == 0,
+                "raw mode clears OPOST", (int)check.c_oflag);
+    expect_true(check.c_cc[VMIN] == 0,
+                "raw mode keeps VMIN=0", check.c_cc[VMIN]);
+    expect_true(check.c_cc[VTIME] == 1,
+                "raw mode keeps VTIME=1", check.c_cc[VTIME]);
+
+    errno = 0;
+    n = read(STDIN_FILENO, &c, 1);
+    if (n == 0)
+        ok("read timeout returns 0 with VMIN=0/VTIME=1");
+    else if (n == 1)
+        printf("\033[1;33m[WARN]\033[0m read consumed pending byte 0x%02x\n", c);
+    else
+        fail("read timeout returns 0 with VMIN=0/VTIME=1", errno);
+}
+
+static void test_raw_poll_mode(void)
+{
+    struct termios raw = saved_termios;
+    struct termios check;
+    unsigned char c = 0;
+    ssize_t n;
+
+    raw.c_lflag &= ~(ICANON | ECHO);
+    raw.c_iflag &= ~ICRNL;
+    raw.c_oflag &= ~OPOST;
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+
+    if (set_and_check_termios(&raw, "tcsetattr raw poll mode", &check) < 0)
+        return;
+
+    expect_true(check.c_cc[VMIN] == 0,
+                "raw poll keeps VMIN=0", check.c_cc[VMIN]);
+    expect_true(check.c_cc[VTIME] == 0,
+                "raw poll keeps VTIME=0", check.c_cc[VTIME]);
+
+    errno = 0;
+    n = read(STDIN_FILENO, &c, 1);
+    if (n == 0)
+        ok("read poll returns 0 with VMIN=0/VTIME=0");
+    else if (n == 1)
+        printf("\033[1;33m[WARN]\033[0m poll consumed pending byte 0x%02x\n", c);
+    else
+        fail("read poll returns 0 with VMIN=0/VTIME=0", errno);
+}
+
+static void test_control_chars_preserved(void)
+{
+    struct termios tio = saved_termios;
+    struct termios check;
+
+    tio.c_cc[VERASE] = 0x08;
+    tio.c_cc[VKILL] = 0x15;
+    tio.c_cc[VEOF] = 0x04;
+    tio.c_cc[VINTR] = 0x03;
+    tio.c_cc[VSUSP] = 0x1A;
+
+    if (set_and_check_termios(&tio, "tcsetattr control chars", &check) < 0)
+        return;
+
+    expect_true(check.c_cc[VERASE] == 0x08,
+                "termios preserves VERASE", check.c_cc[VERASE]);
+    expect_true(check.c_cc[VKILL] == 0x15,
+                "termios preserves VKILL", check.c_cc[VKILL]);
+    expect_true(check.c_cc[VEOF] == 0x04,
+                "termios preserves VEOF", check.c_cc[VEOF]);
+    expect_true(check.c_cc[VINTR] == 0x03,
+                "termios preserves VINTR", check.c_cc[VINTR]);
+    expect_true(check.c_cc[VSUSP] == 0x1A,
+                "termios preserves VSUSP", check.c_cc[VSUSP]);
+}
+
+int main(void)
+{
+    struct termios tio;
 
     printf("ttytest: termios smoke test\n");
 
@@ -61,51 +196,10 @@ int main(void)
     expect_true(tio.c_cc[VMIN] == 1, "default VMIN is 1", tio.c_cc[VMIN]);
     expect_true(tio.c_cc[VINTR] == 3, "default VINTR is Ctrl-C", tio.c_cc[VINTR]);
 
-    if (tcflush(STDIN_FILENO, TCIFLUSH) == 0)
-        ok("tcflush input queue");
-    else
-        fail("tcflush input queue", errno);
-
-    raw = saved_termios;
-    raw.c_lflag &= ~(ICANON | ECHO);
-    raw.c_iflag &= ~ICRNL;
-    raw.c_oflag &= ~OPOST;
-    raw.c_cc[VMIN] = 0;
-    raw.c_cc[VTIME] = 1;
-
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
-        fail("tcsetattr raw timeout mode", errno);
-        return 1;
-    }
-    ok("tcsetattr raw timeout mode");
-
-    memset(&check, 0, sizeof(check));
-    if (tcgetattr(STDIN_FILENO, &check) == 0) {
-        ok("tcgetattr observes raw mode");
-        expect_true((check.c_lflag & ICANON) == 0,
-                    "raw mode clears ICANON", (int)check.c_lflag);
-        expect_true((check.c_lflag & ECHO) == 0,
-                    "raw mode clears ECHO", (int)check.c_lflag);
-        expect_true((check.c_iflag & ICRNL) == 0,
-                    "raw mode clears ICRNL", (int)check.c_iflag);
-        expect_true((check.c_oflag & OPOST) == 0,
-                    "raw mode clears OPOST", (int)check.c_oflag);
-        expect_true(check.c_cc[VMIN] == 0,
-                    "raw mode keeps VMIN=0", check.c_cc[VMIN]);
-        expect_true(check.c_cc[VTIME] == 1,
-                    "raw mode keeps VTIME=1", check.c_cc[VTIME]);
-    } else {
-        fail("tcgetattr observes raw mode", errno);
-    }
-
-    errno = 0;
-    n = read(STDIN_FILENO, &c, 1);
-    if (n == 0)
-        ok("read timeout returns 0 with VMIN=0/VTIME=1");
-    else if (n == 1)
-        printf("\033[1;33m[WARN]\033[0m read consumed pending byte 0x%02x\n", c);
-    else
-        fail("read timeout returns 0 with VMIN=0/VTIME=1", errno);
+    test_tcflush_selectors();
+    test_control_chars_preserved();
+    test_raw_timeout_mode();
+    test_raw_poll_mode();
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_termios) == 0)
         ok("tcsetattr restores terminal");
