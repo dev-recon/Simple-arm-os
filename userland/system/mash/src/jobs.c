@@ -263,7 +263,7 @@ void jobs_note_status(int pid, int status)
 
     job->statuses[slot] = status;
 
-    if (WIFSTOPPED(status)) {
+    if (WIFSTOPPED(status) && WSTOPSIG(status) != 0) {
         job->pid_states[slot] = JOB_PID_STOPPED;
         job->status = status;
     } else {
@@ -303,7 +303,7 @@ static int jobs_reap(int notify)
 
         if (job) {
             jobs_note_status(pid, status);
-            if (notify && WIFSTOPPED(status)) {
+            if (notify && WIFSTOPPED(status) && WSTOPSIG(status) != 0) {
                 printf("[%d] stopped pgid=%d signal=%d  %s\n",
                        job->id, job->pgid, WSTOPSIG(status), job->command);
                 notified++;

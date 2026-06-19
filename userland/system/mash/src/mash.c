@@ -925,7 +925,7 @@ static int pipeline_pid_index(const int pids[], int count, int pid)
 static int pipeline_has_stopped_member(const int seen[], const int statuses[], int count)
 {
     for (int i = 0; i < count; i++) {
-        if (seen[i] && WIFSTOPPED(statuses[i]))
+        if (seen[i] && WIFSTOPPED(statuses[i]) && WSTOPSIG(statuses[i]) != 0)
             return 1;
     }
     return 0;
@@ -1653,7 +1653,8 @@ int shell_execute(int argc, char* argv[]) {
         int waited_pid = shell_wait_foreground_child(child_pid, &status);
         SHELL_TRACE("wait done child=%d waited=%d status=%d", child_pid, waited_pid, status);
         if (waited_pid == child_pid &&
-            WIFSTOPPED(status)) {
+            WIFSTOPPED(status) &&
+            WSTOPSIG(status) != 0) {
             stopped_status = status;
             was_stopped = 1;
         }
