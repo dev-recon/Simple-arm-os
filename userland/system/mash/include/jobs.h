@@ -9,7 +9,7 @@ void jobs_build_command(int argc, char* argv[], char* out, int out_size);
 void jobs_set_shell_pgid(int pgid);
 void jobs_add(int pid, int pgid, const char* command);
 void jobs_note_status(int pid, int status);
-void jobs_reap_background(void);
+int jobs_reap_background(void);
 int jobs_builtin(int argc, char* argv[]);
 int jobs_fg_builtin(int argc, char* argv[]);
 int jobs_bg_builtin(int argc, char* argv[]);

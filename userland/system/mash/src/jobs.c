@@ -292,31 +292,38 @@ static void jobs_continue(job_t* job)
     }
 }
 
-static void jobs_reap(int notify)
+static int jobs_reap(int notify)
 {
     int status = 0;
     int pid;
+    int notified = 0;
 
     while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
         job_t* job = jobs_find_by_pid(pid);
 
         if (job) {
             jobs_note_status(pid, status);
-            if (notify && WIFSTOPPED(status))
+            if (notify && WIFSTOPPED(status)) {
                 printf("[%d] stopped pgid=%d signal=%d  %s\n",
                        job->id, job->pgid, WSTOPSIG(status), job->command);
-            else if (notify && job->state == JOB_DONE)
+                notified++;
+            } else if (notify && job->state == JOB_DONE) {
                 printf("[%d] done pgid=%d status=%d  %s\n",
                        job->id, job->pgid, status, job->command);
+                notified++;
+            }
         } else if (notify) {
             printf("[bg] pid %d done status=%d\n", pid, status);
+            notified++;
         }
     }
+
+    return notified;
 }
 
-void jobs_reap_background(void)
+int jobs_reap_background(void)
 {
-    jobs_reap(1);
+    return jobs_reap(1);
 }
 
 int jobs_builtin(int argc, char* argv[])

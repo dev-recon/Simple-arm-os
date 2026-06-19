@@ -691,6 +691,11 @@ char* shell_read_line(void) {
     while (1) {
         c = getc_tty();
         if (c < 0) {
+            if (len > 0)
+                printf("\r\n");
+            else
+                printf("\r\033[K");
+
             jobs_reap_background();
             shell_redraw_line(input_buffer, len, cursor);
             pflush();
