@@ -360,91 +360,116 @@ bool tty_has_pending_output(void)
     return pending;
 }
 
-/* Appelé par l'IRQ UART (ou polling) */
-void tty_input_char(char c) {
-    task_t* reader = NULL;
-    pid_t signal_pgid = 0;
-    int signal_num = 0;
-    struct termios tio;
-    bool canonical_echo;
-    bool should_wake = true;
-    unsigned long flags;
-    spin_lock_irqsave(&tty0.lock, &flags);
-    tio = tty0.termios;
-    canonical_echo = (tio.c_lflag & ICANON) && (tio.c_lflag & ECHO);
+static void tty_wake_reader(task_t *reader)
+{
+    if (!reader)
+        return;
 
-    if (c == '\r') {
-        if (tio.c_iflag & IGNCR) {
-            spin_unlock_irqrestore(&tty0.lock, flags);
-            return;
-        }
-        if (tio.c_iflag & ICRNL)
-            c = '\n';
-    } else if (c == '\n' && (tio.c_iflag & INLCR)) {
-        c = '\r';
+    reader->wakeup_time = 0;
+    if (reader->process)
+        reader->process->state = (proc_state_t)PROC_READY;
+    add_to_ready_queue(reader);
+}
+
+static bool tty_normalize_input_char(const struct termios *tio, char *c)
+{
+    if (*c == '\r') {
+        if (tio->c_iflag & IGNCR)
+            return false;
+        if (tio->c_iflag & ICRNL)
+            *c = '\n';
+    } else if (*c == '\n' && (tio->c_iflag & INLCR)) {
+        *c = '\r';
     }
 
-    if ((tio.c_lflag & ISIG) && c == tio.c_cc[VINTR]) {
-        int delivered;
-        signal_pgid = tty0.foreground_pgid;
-        signal_num = SIGINT;
+    return true;
+}
+
+static bool tty_handle_signal_char_locked(const struct termios *tio, char c,
+                                          unsigned long *flags)
+{
+    int sig;
+    int delivered;
+    pid_t pgid;
+    const char *echo;
+
+    if (!(tio->c_lflag & ISIG))
+        return false;
+
+    if (c == tio->c_cc[VINTR]) {
+        sig = SIGINT;
+        echo = "^C\n";
         tty0.ctrl_c_seen++;
-        tty0.last_signal_pgid = signal_pgid;
-        tty0.last_signal = signal_num;
-        spin_unlock_irqrestore(&tty0.lock, flags);
-        uart_puts("^C\n");
-        delivered = tty_signal_process_group(signal_pgid, signal_num);
-        spin_lock_irqsave(&tty0.lock, &flags);
-        tty0.last_signal_delivered = delivered;
+    } else if (c == tio->c_cc[VSUSP]) {
+        sig = SIGTSTP;
+        echo = "^Z\n";
+        tty0.ctrl_z_seen++;
+    } else {
+        return false;
+    }
+
+    pgid = tty0.foreground_pgid;
+    tty0.last_signal_pgid = pgid;
+    tty0.last_signal = sig;
+
+    spin_unlock_irqrestore(&tty0.lock, *flags);
+    uart_puts(echo);
+    delivered = tty_signal_process_group(pgid, sig);
+    spin_lock_irqsave(&tty0.lock, flags);
+
+    tty0.last_signal_delivered = delivered;
+    if (sig == SIGINT) {
         if (delivered > 0)
             tty0.sigint_delivered += delivered;
         else
             tty0.sigint_missed++;
-        spin_unlock_irqrestore(&tty0.lock, flags);
-        return;
-    }
-
-    if ((tio.c_lflag & ISIG) && c == tio.c_cc[VSUSP]) {
-        int delivered;
-        signal_pgid = tty0.foreground_pgid;
-        signal_num = SIGTSTP;
-        tty0.ctrl_z_seen++;
-        tty0.last_signal_pgid = signal_pgid;
-        tty0.last_signal = signal_num;
-        spin_unlock_irqrestore(&tty0.lock, flags);
-        uart_puts("^Z\n");
-        delivered = tty_signal_process_group(signal_pgid, signal_num);
-        spin_lock_irqsave(&tty0.lock, &flags);
-        tty0.last_signal_delivered = delivered;
+    } else {
         if (delivered > 0)
             tty0.sigtstp_delivered += delivered;
         else
             tty0.sigtstp_missed++;
-        spin_unlock_irqrestore(&tty0.lock, flags);
-        return;
     }
-    
-    if (canonical_echo && c == tio.c_cc[VEOF]) {
-        tty0.eof_pending = true;
-        if (tty0.read_wait && tty0.read_wait->state == TASK_INTERRUPTIBLE) {
-            reader = tty0.read_wait;
-            tty0.read_wait = NULL;
-            tty0.eof_wakeups++;
-        }
-        spin_unlock_irqrestore(&tty0.lock, flags);
 
-        if (reader) {
-            reader->wakeup_time = 0;
-            if (reader->process)
-                reader->process->state = (proc_state_t)PROC_READY;
-            add_to_ready_queue(reader);
-        }
-        return;
+    return true;
+}
+
+static task_t *tty_take_interruptible_reader_locked(void)
+{
+    task_t *reader = NULL;
+
+    if (tty0.read_wait && tty0.read_wait->state == TASK_INTERRUPTIBLE) {
+        reader = tty0.read_wait;
+        tty0.read_wait = NULL;
     }
+
+    return reader;
+}
+
+static bool tty_handle_eof_locked(const struct termios *tio, char c,
+                                  task_t **reader)
+{
+    if (!((tio->c_lflag & ICANON) && (tio->c_lflag & ECHO)) ||
+        c != tio->c_cc[VEOF])
+        return false;
+
+    tty0.eof_pending = true;
+    *reader = tty_take_interruptible_reader_locked();
+    if (*reader)
+        tty0.eof_wakeups++;
+
+    return true;
+}
+
+static bool tty_handle_canonical_edit_locked(const struct termios *tio, char c)
+{
+    bool canonical_echo = (tio->c_lflag & ICANON) && (tio->c_lflag & ECHO);
+
+    if (!canonical_echo)
+        return false;
 
     /* In canonical echo mode, the kernel owns basic line editing. mash keeps
      * ECHO disabled and still receives raw editing keys for its own editor. */
-    if (canonical_echo && (c == '\b' || c == tio.c_cc[VERASE])) {
+    if (c == '\b' || c == tio->c_cc[VERASE]) {
         if (tty0.input_head != tty0.input_tail) {
             uint32_t prev = tty_input_prev(tty0.input_head);
             if (tty0.input_buf[prev] != '\n' && tty0.input_buf[prev] != '\r') {
@@ -452,11 +477,10 @@ void tty_input_char(char c) {
                 uart_puts("\b \b");
             }
         }
-        spin_unlock_irqrestore(&tty0.lock, flags);
-        return;
+        return true;
     }
 
-    if (canonical_echo && c == tio.c_cc[VKILL]) {
+    if (c == tio->c_cc[VKILL]) {
         while (tty0.input_head != tty0.input_tail) {
             uint32_t prev = tty_input_prev(tty0.input_head);
             if (tty0.input_buf[prev] == '\n' || tty0.input_buf[prev] == '\r')
@@ -464,11 +488,10 @@ void tty_input_char(char c) {
             tty0.input_head = prev;
             uart_puts("\b \b");
         }
-        spin_unlock_irqrestore(&tty0.lock, flags);
-        return;
+        return true;
     }
 
-    if (canonical_echo && c == tio.c_cc[VWERASE]) {
+    if (c == tio->c_cc[VWERASE]) {
         while (tty0.input_head != tty0.input_tail) {
             uint32_t prev = tty_input_prev(tty0.input_head);
             char pc = tty0.input_buf[prev];
@@ -485,54 +508,89 @@ void tty_input_char(char c) {
             tty0.input_head = prev;
             uart_puts("\b \b");
         }
+        return true;
+    }
+
+    return false;
+}
+
+static task_t *tty_enqueue_input_char_locked(const struct termios *tio, char c)
+{
+    uint32_t next_head;
+    bool canonical_echo = (tio->c_lflag & ICANON) && (tio->c_lflag & ECHO);
+    bool should_wake = true;
+    task_t *reader = NULL;
+
+    if (tio->c_lflag & ECHO)
+        uart_putc(c);
+
+    next_head = (tty0.input_head + 1) % TTY_INPUT_BUF_SIZE;
+    if (next_head == tty0.input_tail)
+        return NULL;
+
+    tty0.input_buf[tty0.input_head] = c;
+    tty0.input_head = next_head;
+    tty0.input_chars++;
+    if (canonical_echo)
+        should_wake = (c == '\n' || c == '\r');
+
+    /* read(0, &c, 1) doit être réveillé dès qu'un caractère arrive.
+     * Ne pas conserver un waiter mort ou qui n'attend plus le TTY: après
+     * un signal, il doit revenir en userland via -EINTR plutôt que voler
+     * le prochain caractère du shell. */
+    if (should_wake && tty0.read_wait) {
+        if (tty0.read_wait->state == TASK_INTERRUPTIBLE) {
+            reader = tty0.read_wait;
+            tty0.read_wait = NULL;
+            if (canonical_echo)
+                tty0.line_wakeups++;
+            else
+                tty0.char_wakeups++;
+        } else if (tty0.read_wait->state == TASK_ZOMBIE ||
+                   tty0.read_wait->state == TASK_TERMINATED ||
+                   tty0.read_wait->state == TASK_READY ||
+                   tty0.read_wait->state == TASK_RUNNING) {
+            kernel_lifecycle_stats.tty_stale_waiters++;
+            tty0.read_wait = NULL;
+        }
+    }
+
+    return reader;
+}
+
+/* Appelé par l'IRQ UART (ou polling) */
+void tty_input_char(char c) {
+    task_t* reader = NULL;
+    struct termios tio;
+    unsigned long flags;
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    tio = tty0.termios;
+
+    if (!tty_normalize_input_char(&tio, &c)) {
         spin_unlock_irqrestore(&tty0.lock, flags);
         return;
     }
 
-    /* Echo si activé */
-    if (tio.c_lflag & ECHO) {
-        uart_putc(c);
+    if (tty_handle_signal_char_locked(&tio, c, &flags)) {
+        spin_unlock_irqrestore(&tty0.lock, flags);
+        return;
     }
-    
-    /* Ajouter au buffer */
-    uint32_t next_head = (tty0.input_head + 1) % TTY_INPUT_BUF_SIZE;
-    if (next_head != tty0.input_tail) {
-        tty0.input_buf[tty0.input_head] = c;
-        tty0.input_head = next_head;
-        tty0.input_chars++;
-        if (canonical_echo)
-            should_wake = (c == '\n' || c == '\r');
-        
-        /* read(0, &c, 1) doit être réveillé dès qu'un caractère arrive.
-         * Ne pas conserver un waiter mort ou qui n'attend plus le TTY: après
-         * un signal, il doit revenir en userland via -EINTR plutôt que voler
-         * le prochain caractère du shell. */
-        if (should_wake && tty0.read_wait) {
-            if (tty0.read_wait->state == TASK_INTERRUPTIBLE) {
-                reader = tty0.read_wait;
-                tty0.read_wait = NULL;
-                if (canonical_echo)
-                    tty0.line_wakeups++;
-                else
-                    tty0.char_wakeups++;
-            } else if (tty0.read_wait->state == TASK_ZOMBIE ||
-                       tty0.read_wait->state == TASK_TERMINATED ||
-                       tty0.read_wait->state == TASK_READY ||
-                       tty0.read_wait->state == TASK_RUNNING) {
-                kernel_lifecycle_stats.tty_stale_waiters++;
-                tty0.read_wait = NULL;
-            }
-        }
-    }
-    
-    spin_unlock_irqrestore(&tty0.lock, flags);
 
-    if (reader) {
-        reader->wakeup_time = 0;
-        if (reader->process)
-            reader->process->state = (proc_state_t)PROC_READY;
-        add_to_ready_queue(reader);
+    if (tty_handle_eof_locked(&tio, c, &reader)) {
+        spin_unlock_irqrestore(&tty0.lock, flags);
+        tty_wake_reader(reader);
+        return;
     }
+
+    if (tty_handle_canonical_edit_locked(&tio, c)) {
+        spin_unlock_irqrestore(&tty0.lock, flags);
+        return;
+    }
+
+    reader = tty_enqueue_input_char_locked(&tio, c);
+    spin_unlock_irqrestore(&tty0.lock, flags);
+    tty_wake_reader(reader);
 }
 
 ssize_t tty_read(char *buf, size_t count) {
