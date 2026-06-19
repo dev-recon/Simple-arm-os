@@ -211,16 +211,27 @@ int tty_set_winsize(uint16_t rows, uint16_t cols,
                     uint16_t xpixel, uint16_t ypixel)
 {
     unsigned long flags;
+    pid_t pgid = 0;
+    bool changed;
 
     if (rows == 0 || cols == 0)
         return -EINVAL;
 
     spin_lock_irqsave(&tty0.lock, &flags);
+    changed = tty0.winsize_rows != rows ||
+              tty0.winsize_cols != cols ||
+              tty0.winsize_xpixel != xpixel ||
+              tty0.winsize_ypixel != ypixel;
     tty0.winsize_rows = rows;
     tty0.winsize_cols = cols;
     tty0.winsize_xpixel = xpixel;
     tty0.winsize_ypixel = ypixel;
+    if (changed)
+        pgid = tty0.foreground_pgid;
     spin_unlock_irqrestore(&tty0.lock, flags);
+
+    if (changed && pgid > 0)
+        tty_signal_process_group(pgid, SIGWINCH);
 
     return 0;
 }

@@ -26,6 +26,7 @@
 #define SIGCONT    18
 #define SIGSTOP    19
 #define SIGTSTP    20
+#define SIGWINCH   28
 
 /* Signal flags */
 #define SA_RESTART    0x01

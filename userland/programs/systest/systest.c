@@ -21,6 +21,7 @@
 static int failures = 0;
 static volatile int cow_shared_value = 11;
 static volatile int sleep_signal_seen = 0;
+static volatile int winch_signal_seen = 0;
 static struct sysinfo_response sysinfo_scratch;
 static char systest_tmp_root[64];
 
@@ -59,6 +60,12 @@ static int expect(int cond, const char *name, int value)
     }
     fail(name, value);
     return -1;
+}
+
+static void systest_winch_signal_handler(int sig)
+{
+    (void)sig;
+    winch_signal_seen++;
 }
 
 static int read_file(const char *path, char *buf, int size)
@@ -409,7 +416,7 @@ static void test_posix_compat_syscalls(void)
     }
 
     expect(ioctl(STDIN_FILENO, TCGETS, &tio) == 0, "ioctl TCGETS accepts tty", 0);
-    if (expect(ioctl(STDOUT_FILENO, TIOCGWINSZ, &wsz) == 0,
+    if (expect(ioctl(STDIN_FILENO, TIOCGWINSZ, &wsz) == 0,
                "ioctl TIOCGWINSZ accepts tty", 0) == 0) {
         expect(wsz.ws_col == 80, "ioctl TIOCGWINSZ reports 80 columns", wsz.ws_col);
         expect(wsz.ws_row == 24, "ioctl TIOCGWINSZ reports 24 rows", wsz.ws_row);
@@ -418,19 +425,26 @@ static void test_posix_compat_syscalls(void)
     wsz.ws_col = 100;
     wsz.ws_xpixel = 0;
     wsz.ws_ypixel = 0;
-    expect(ioctl(STDOUT_FILENO, TIOCSWINSZ, &wsz) == 0,
+    winch_signal_seen = 0;
+    signal(SIGWINCH, systest_winch_signal_handler);
+    expect(ioctl(STDIN_FILENO, TIOCSWINSZ, &wsz) == 0,
            "ioctl TIOCSWINSZ accepts tty", 0);
+    expect(winch_signal_seen == 1, "ioctl TIOCSWINSZ delivers SIGWINCH", winch_signal_seen);
     memset(&wsz, 0, sizeof(wsz));
-    if (expect(ioctl(STDOUT_FILENO, TIOCGWINSZ, &wsz) == 0,
+    if (expect(ioctl(STDIN_FILENO, TIOCGWINSZ, &wsz) == 0,
                "ioctl TIOCGWINSZ reads updated size", 0) == 0) {
         expect(wsz.ws_col == 100, "ioctl TIOCSWINSZ updates columns", wsz.ws_col);
         expect(wsz.ws_row == 25, "ioctl TIOCSWINSZ updates rows", wsz.ws_row);
     }
+    expect(ioctl(STDIN_FILENO, TIOCSWINSZ, &wsz) == 0,
+           "ioctl TIOCSWINSZ accepts unchanged size", 0);
+    expect(winch_signal_seen == 1, "ioctl unchanged winsize skips SIGWINCH", winch_signal_seen);
+    signal(SIGWINCH, SIG_DFL);
     wsz.ws_row = 24;
     wsz.ws_col = 80;
     wsz.ws_xpixel = 0;
     wsz.ws_ypixel = 0;
-    expect(ioctl(STDOUT_FILENO, TIOCSWINSZ, &wsz) == 0,
+    expect(ioctl(STDIN_FILENO, TIOCSWINSZ, &wsz) == 0,
            "ioctl TIOCSWINSZ restores default size", 0);
     expect(tcgetattr(STDIN_FILENO, &tio) == 0, "tcgetattr accepts tty", 0);
     expect((tio.c_lflag & ICANON) != 0, "tcgetattr reports canonical mode", tio.c_lflag);

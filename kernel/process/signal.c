@@ -50,6 +50,7 @@ static sig_default_action_t default_signal_actions[MAX_SIGNALS] = {
     [SIGCONT] = SIG_ACT_CONT,
     [SIGSTOP] = SIG_ACT_STOP,
     [SIGTSTP] = SIG_ACT_STOP,
+    [SIGWINCH] = SIG_ACT_IGN,
 };
 
 static bool signal_would_kill_or_stop_init(int sig)
