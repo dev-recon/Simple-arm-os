@@ -100,6 +100,9 @@ refusals, TTY counters, and known long-idle issues.
 
 See:
 
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/GET_STARTED_KERNEL_DEV.md`](docs/GET_STARTED_KERNEL_DEV.md)
+- [`docs/GET_STARTED_USERLAND_DEV.md`](docs/GET_STARTED_USERLAND_DEV.md)
 - [`STABILITY.md`](STABILITY.md)
 - [`ROADMAP.md`](ROADMAP.md)
 
