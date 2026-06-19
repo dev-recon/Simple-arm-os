@@ -52,6 +52,19 @@ static sig_default_action_t default_signal_actions[MAX_SIGNALS] = {
     [SIGTSTP] = SIG_ACT_STOP,
 };
 
+static bool signal_would_kill_or_stop_init(int sig)
+{
+    sig_default_action_t action;
+
+    if (sig <= 0 || sig >= MAX_SIGNALS)
+        return false;
+
+    action = default_signal_actions[sig];
+    return action == SIG_ACT_TERM ||
+           action == SIG_ACT_CORE ||
+           action == SIG_ACT_STOP;
+}
+
 extern void signal_return_trampoline(void);
 
 typedef struct {
@@ -278,6 +291,10 @@ int send_signal(task_t* target, int sig)
 {
     if (sig <= 0 || sig >= MAX_SIGNALS) return -1;
     if (!target || target->type != TASK_TYPE_PROCESS || target->state == TASK_TERMINATED) return -1;
+    if (target->process && target->process->pid == 1 &&
+        signal_would_kill_or_stop_init(sig)) {
+        return -EPERM;
+    }
     
     //KDEBUG("[SIGNAL] Sending signal %d to process PID=%u\n", sig, target->process->pid);
     

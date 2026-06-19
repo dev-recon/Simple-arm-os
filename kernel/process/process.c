@@ -115,21 +115,33 @@ void init_process_system(void)
 void init_process_main(void* arg)
 {
     (void)arg;
+    const char* init_path = "/sbin/init";
+    char* init_name = "init";
+    char* const init_argv[] = { init_name, NULL };
+    char* const init_envp[] = {
+        "PATH=/bin",
+        "HOME=/home/user",
+        "USER=user",
+        "PS1=mash$> ",
+        NULL
+    };
+    int result;
     
-    KINFO("=== INIT PROCESS (PID 1) STARTED ===\n");
+    /* First milestone toward a Unix-like userspace init: PID 1 execs /sbin/init. */
+    init_process->process->uid = 0;
+    init_process->process->gid = 0;
+    strcpy(init_process->process->cwd, "/home/user");
+
+    KBOOT_OKF("Init: starting %s", init_path);
+    result = sys_execve(init_path, init_argv, init_envp);
+
+    KWARN("Userland init exec failed with %d, falling back to kernel launcher\n",
+          result);
     
-    /* Initialiser les sous-systemes utilisateur */
-    KINFO("[INIT] Initializing subsystems...\n");
-    
-    /* TODO: Initialiser VFS, drivers, etc. */
-    
-    KINFO("[INIT] Creating initial processes...\n");
-    
-    /* Creer le shell de demonstration */
+    /* Fallback legacy path: create a kernel-launched shell process. */
     task_t* shell_proc  = task_create_process("shell", simple_shell_task, NULL, 10, TASK_TYPE_PROCESS);
-    //init_process = create_process("init");
     if (!shell_proc) {
-        panic("Failed to create init process");
+        panic("Failed to create fallback shell process");
     }
 
     shell_proc->context.is_first_run = 1;                    
@@ -138,15 +150,9 @@ void init_process_main(void* arg)
     shell_proc->process->gid = 1000;
     strcpy(shell_proc->process->cwd, "/home/user");
 
-    //KDEBUG("[SHELL PROC] SCV STACK TOP = 0x%08X\n", shell_proc->context.svc_sp_top);
-    //KDEBUG("[SHELL PROC] SCV STACK SP = 0x%08X\n", shell_proc->context.svc_sp);
-
     add_to_ready_queue(shell_proc);
     
-    KINFO("[INIT] System initialization complete\n");
-    KINFO("[INIT] Init entering main reaper loop...\n");
-    
-    /* Boucle principale d'init : recolter les processus zombies */
+    /* Legacy kernel reaper loop used only if /sbin/init could not exec. */
     int reaped_count = 0;
 
     while (1) {

@@ -53,7 +53,9 @@ extern long sys_fcntl(int fd, int cmd, long arg);
 extern long sys_kill(int pid, int sig);
 extern long sys_getpid(void);
 extern long sys_getppid(void);
+extern long sys_setuid(int uid);
 extern long sys_getuid(void);
+extern long sys_setgid(int gid);
 extern long sys_getgid(void);
 extern long sys_getpgrp(void);
 extern long sys_setpgid(int pid, int pgid);
@@ -542,9 +544,19 @@ uid_t getuid(void)
     return (uid_t)sys_getuid();
 }
 
+int setuid(uid_t uid)
+{
+    return ret_errno(sys_setuid((int)uid));
+}
+
 gid_t getgid(void)
 {
     return (gid_t)sys_getgid();
+}
+
+int setgid(gid_t gid)
+{
+    return ret_errno(sys_setgid((int)gid));
 }
 
 pid_t getpgrp(void)

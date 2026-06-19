@@ -39,7 +39,9 @@ static syscall_func_t syscall_table[256] = {
     [__NR_time] = (syscall_func_t)sys_time,
     [__NR_getpid] = (syscall_func_t)sys_getpid,
     [__NR_getppid] = (syscall_func_t)sys_getppid,
+    [__NR_setuid] = (syscall_func_t)sys_setuid,
     [__NR_getuid] = (syscall_func_t)sys_getuid,
+    [__NR_setgid] = (syscall_func_t)sys_setgid,
     [__NR_getgid] = (syscall_func_t)sys_getgid,
     [__NR_setpgid] = (syscall_func_t)sys_setpgid,
     [__NR_getpgrp] = (syscall_func_t)sys_getpgrp,
@@ -1121,6 +1123,20 @@ int sys_getuid(void)
     return 0;
 }
 
+int sys_setuid(uid_t uid)
+{
+    task_t *proc = current_task;
+
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
+        return -EINVAL;
+
+    if (proc->process->uid != 0 && proc->process->uid != uid)
+        return -EPERM;
+
+    proc->process->uid = uid;
+    return 0;
+}
+
 int sys_getgid(void)
 {
     task_t *proc = current_task;
@@ -1128,6 +1144,20 @@ int sys_getgid(void)
     if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
         return proc->process->gid;
     }
+    return 0;
+}
+
+int sys_setgid(gid_t gid)
+{
+    task_t *proc = current_task;
+
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
+        return -EINVAL;
+
+    if (proc->process->uid != 0 && proc->process->gid != gid)
+        return -EPERM;
+
+    proc->process->gid = gid;
     return 0;
 }
 

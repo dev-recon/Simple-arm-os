@@ -21,8 +21,10 @@ userfs/etc/os.conf
 build/
 newlib-port/build/
 userfs/bin/
+userfs/sbin/
 userfs/legacy/bin-libc/
 userfs/opt/newlib/bin/nl-*
+userfs/opt/newlib/sbin/nl-*
 userfs/usr/bin/cat
 userfs/usr/bin/chmod
 userfs/usr/bin/chown

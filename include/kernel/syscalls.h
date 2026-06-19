@@ -204,7 +204,9 @@ int sys_gtty(int cmd);
 /* Process info syscalls */
 int sys_getpid(void);
 int sys_getppid(void);
+int sys_setuid(uid_t uid);
 int sys_getuid(void);
+int sys_setgid(gid_t gid);
 int sys_getgid(void);
 int sys_time(time_t* tloc);
 int sys_gettimeofday(struct timeval* tv, struct timezone* tz);

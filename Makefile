@@ -188,7 +188,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	       case "$$relpath" in dev/tty0|dev/console) continue ;; esac; \
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
 	       case "$$relpath" in \
-	           bin/*|opt/newlib/bin/*|legacy/bin-libc/*|init.sh) mode=0100755 ;; \
+	           bin/*|sbin/*|opt/newlib/bin/*|opt/newlib/sbin/*|legacy/bin-libc/*|init.sh) mode=0100755 ;; \
 	           home/user/copy_renamed) mode=0100755 ;; \
 	           *) mode=0100644 ;; \
 	       esac; \

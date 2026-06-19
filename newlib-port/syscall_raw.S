@@ -33,6 +33,7 @@ RAW_SYSCALL sys_chdir, 12
 RAW_SYSCALL sys_time, 13
 RAW_SYSCALL sys_mount, 21
 RAW_SYSCALL sys_umount, 22
+RAW_SYSCALL sys_setuid, 23
 RAW_SYSCALL sys_chmod, 15
 RAW_SYSCALL sys_chown, 16
 RAW_SYSCALL sys_lseek, 19
@@ -52,6 +53,7 @@ RAW_SYSCALL sys_gtty, 32
 RAW_SYSCALL sys_ioctl, 54
 RAW_SYSCALL sys_fcntl, 55
 RAW_SYSCALL sys_setpgid, 57
+RAW_SYSCALL sys_setgid, 46
 RAW_SYSCALL sys_getgid, 47
 RAW_SYSCALL sys_umask, 60
 RAW_SYSCALL sys_dup2, 63
