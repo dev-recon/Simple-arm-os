@@ -3,6 +3,7 @@ PROGRAMS := nl-hello nl-systest nl-mash $(COREUTILS:%=nl-%)
 UNPREFIXED_LINKS := nl-systest nl-mash $(COREUTILS:%=nl-%)
 ARCH ?= arm-none-eabi-
 CC := $(ARCH)gcc
+STRIP := $(ARCH)strip
 
 BUILD_DIR := ../../build/newlib-tests
 NEWLIB_PORT := ../../newlib-port
@@ -15,7 +16,8 @@ NEWLIB_SYSROOT ?= $(shell $(CC) -print-sysroot 2>/dev/null)
 NEWLIB_LIBC ?= $(NEWLIB_SYSROOT)/lib/libc.a
 LIBGCC := $(shell $(CC) $(ARCH_FLAGS) -print-libgcc-file-name 2>/dev/null)
 
-CFLAGS := $(ARCH_FLAGS) -std=gnu99 -Os -g -ffreestanding -fno-builtin \
+CFLAGS := $(ARCH_FLAGS) -std=gnu99 -Os -ffreestanding -fno-builtin \
+          -ffunction-sections -fdata-sections \
           -fno-stack-protector -DARM_OS_NEWLIB -Iinclude -I$(NEWLIB_SYSROOT)/include
 LDFLAGS := $(ARCH_FLAGS) -nostdlib -nostartfiles -static \
            -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections \
@@ -80,6 +82,7 @@ install: $(PROGRAMS)
 		name=$${prog#nl-}; \
 		cp $$prog $(USERFS_NEWLIB_BIN)/$$prog; \
 		cp $$prog $(USERFS_BIN)/$$name; \
+		$(STRIP) --strip-all $(USERFS_NEWLIB_BIN)/$$prog $(USERFS_BIN)/$$name; \
 	done
 
 clean:

@@ -10,7 +10,8 @@ NEWLIB_INCLUDE ?= $(NEWLIB_SYSROOT)/include
 NEWLIB_LIBC ?= $(shell $(CC) $(ARCH_FLAGS) --sysroot=$(NEWLIB_SYSROOT) -print-file-name=libc.a 2>/dev/null)
 
 CFLAGS := $(ARCH_FLAGS) -std=gnu99 -ffreestanding -nostdlib -fno-builtin \
-          -fno-stack-protector -Os -g -I$(NEWLIB_INCLUDE)
+          -fno-stack-protector -ffunction-sections -fdata-sections \
+          -Os -I$(NEWLIB_INCLUDE)
 ASFLAGS := -mcpu=cortex-a15
 
 OBJECTS := $(BUILD_DIR)/crt0_newlib.o \
