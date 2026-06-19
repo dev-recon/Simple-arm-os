@@ -402,6 +402,7 @@ int sys_pipe(int pipefd[2])
     read_file->inode = inode;
     read_file->offset = 0;
     read_file->flags = O_RDONLY;        /* ← Utilise le champ flags */
+    read_file->type = FILE_TYPE_PIPE;
     read_file->ref_count = 1;
     read_file->f_op = &pipe_read_fops;
     read_file->private_data = read_pipe;
@@ -413,6 +414,7 @@ int sys_pipe(int pipefd[2])
     inode->ref_count++;
     write_file->offset = 0;
     write_file->flags = O_WRONLY;       /* ← Utilise le champ flags */
+    write_file->type = FILE_TYPE_PIPE;
     write_file->ref_count = 1;
     write_file->f_op = &pipe_write_fops;
     write_file->private_data = write_pipe;
@@ -675,7 +677,6 @@ int sys_fcntl(int fd, int cmd, uint32_t arg)
 int sys_ioctl(int fd, uint32_t request, uint32_t arg)
 {
     file_t* file;
-    bool is_tty;
     struct termios tio;
     struct winsize wsz;
 
@@ -688,15 +689,9 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
     if (!file)
         return -EBADF;
 
-    is_tty = (file->inode == NULL) &&
-             (strcmp(file->name, "stdin") == 0 ||
-              strcmp(file->name, "stdout") == 0 ||
-              strcmp(file->name, "stderr") == 0 ||
-              strcmp(file->name, "tty0") == 0);
-
     switch (request) {
     case TIOCGWINSZ:
-        if (!is_tty)
+        if (!file_is_tty(file))
             return -ENOTTY;
         if (!arg)
             return -EFAULT;
@@ -705,7 +700,7 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
         return copy_to_user((void*)arg, &wsz, sizeof(wsz)) < 0 ? -EFAULT : 0;
 
     case TIOCSWINSZ:
-        if (!is_tty)
+        if (!file_is_tty(file))
             return -ENOTTY;
         if (!arg)
             return -EFAULT;
@@ -715,7 +710,7 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
                                wsz.ws_xpixel, wsz.ws_ypixel);
 
     case TCGETS:
-        if (!is_tty)
+        if (!file_is_tty(file))
             return -ENOTTY;
         if (!arg)
             return -EFAULT;
@@ -727,7 +722,7 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
         /* Drain is a no-op for the UART-backed console for now. */
         /* fall through */
     case TCSETS:
-        if (!is_tty)
+        if (!file_is_tty(file))
             return -ENOTTY;
         if (!arg)
             return -EFAULT;
@@ -736,7 +731,7 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
         return tty_set_termios(&tio, 0);
 
     case TCSETSF:
-        if (!is_tty)
+        if (!file_is_tty(file))
             return -ENOTTY;
         if (!arg)
             return -EFAULT;
@@ -745,7 +740,7 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
         return tty_set_termios(&tio, 1);
 
     case TCFLSH:
-        if (!is_tty)
+        if (!file_is_tty(file))
             return -ENOTTY;
         return tty_flush((int)arg);
     default:

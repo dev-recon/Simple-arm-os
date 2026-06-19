@@ -145,6 +145,11 @@ __load_new_context:
     ldr     r3, [r12, #CTX_ASID]
     mcr     p15, 0, r2, c2,  c0, 0         // TTBR0
     mcr     p15, 0, r3, c13, c0, 1         // ASID
+    /*
+     * Conservative for now: keep a global TLB flush on context switch.
+     * The ASID path mostly works, but parallel fork/exec/ext2 stress still
+     * exposes stale-translation symptoms without this barrier.
+     */
     mov     r2, #0
     mcr     p15, 0, r2, c8,  c7, 0         // Invalidate TLB
     dsb

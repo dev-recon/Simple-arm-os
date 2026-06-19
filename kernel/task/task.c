@@ -1723,7 +1723,7 @@ static task_t* schedule_next_task(void)
             break;
         }
 
-        if (task_is_schedulable(current)) {
+        if (task_is_schedulable(current) && current != idle_task) {
             
             /* Preferer une tache differente de current_task */
             if (current != (task_t *)current_task) {
@@ -1749,6 +1749,12 @@ static task_t* schedule_next_task(void)
         
     } while (current != start_search);
     
+    /*
+     * Idle is a fallback, not a regular round-robin peer. If a user/kernel task
+     * is READY anywhere in the circular list, it must win over idle even if idle
+     * appears earlier in the scan order.
+     */
+
     /* Si on n'a trouve que current_task, l'utiliser */
     if (fallback) {
         //KDEBUG("  -> Using fallback (current): %s\n", fallback->name);
@@ -1859,28 +1865,17 @@ void idle_task_func(void* arg)
     (void)arg;
     
     KINFO("Idle task started\n");
-    int idle_count = 0;
     
     while (1) {
-        idle_count++;
-        
-        /* Debug periodique */
-        if (idle_count % 1000 == 0) {
-            //KDEBUG("Idle loop %d, yielding\n", idle_count);
-        }
-        
-        /*  TOUJOURS yield() d'abord */
-        yield();
-        
-        /*  Petite pause au lieu de WFI */
-        for (volatile int i = 0; i < 1000; i++) {
-            __asm__ volatile("nop");
-        }
-        
-        /* Debug periodique */
-        if (idle_count % 1000 == 0) {
-            //KDEBUG("Idle completed loop %d\n", idle_count);
-        }
+        /*
+         * Before timer preemption existed, idle had to yield in a tight loop.
+         * With the periodic IRQ scheduler, that becomes artificial scheduler
+         * pressure during long idle runs. Sleep until an interrupt, then let
+         * the scheduler pick any task that became runnable.
+         */
+        __asm__ volatile("cpsie i" ::: "memory");
+        __asm__ volatile("wfi" ::: "memory");
+        schedule();
     }
 }
 

@@ -475,10 +475,7 @@ static int proc_fd_target(process_t* proc, int fd, char* target, size_t size)
         return 0;
     }
 
-    if (strcmp(file->name, "stdin") == 0 ||
-        strcmp(file->name, "stdout") == 0 ||
-        strcmp(file->name, "stderr") == 0 ||
-        strcmp(file->name, "tty0") == 0) {
+    if (file_is_tty(file)) {
         snprintf(target, size, "/dev/tty0");
         return 0;
     }

@@ -464,6 +464,7 @@ file_t* create_uart_console_file(const char* name, int flags) {
     
     file->f_op = &uart_console_fops;    // Pointer vers UART operations
     file->flags = flags;
+    file->type = FILE_TYPE_TTY;
     file->pos = 0;
     file->inode = NULL;                 // Fichier virtuel
     file->ref_count = 1;

@@ -750,9 +750,15 @@ file_t* create_file(void)
     file_t* file = kmalloc(sizeof(file_t));
     if (file) {
         memset(file, 0, sizeof(file_t));
+        file->type = FILE_TYPE_REGULAR;
         file->ref_count = 1;
     }
     return file;
+}
+
+bool file_is_tty(file_t* file)
+{
+    return file && file->type == FILE_TYPE_TTY;
 }
 
 file_t* get_file(file_t* file)

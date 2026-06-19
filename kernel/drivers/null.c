@@ -103,6 +103,7 @@ file_t* create_null_device_file(const char* name, int flags)
 
     file->f_op = &null_file_ops;
     file->flags = flags;
+    file->type = FILE_TYPE_NULL;
     file->pos = 0;
     file->offset = 0;
     file->inode = inode;

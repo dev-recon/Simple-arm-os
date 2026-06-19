@@ -10,6 +10,8 @@
 
 struct tty_struct tty0;
 
+#define TTY_TX_DRAIN_BUDGET 64
+
 static uint32_t tty_output_next(uint32_t pos)
 {
     return (pos + 1) % TTY_OUTPUT_BUF_SIZE;
@@ -138,6 +140,7 @@ int tty_set_termios(const struct termios *tio, int flush_input)
 {
     unsigned long flags;
     struct termios next;
+    task_t *reader = NULL;
 
     if (!tio)
         return -EINVAL;
@@ -155,8 +158,19 @@ int tty_set_termios(const struct termios *tio, int flush_input)
         tty0.input_head = 0;
         tty0.input_tail = 0;
         tty0.eof_pending = false;
+        if (tty0.read_wait && tty0.read_wait->state == TASK_INTERRUPTIBLE) {
+            reader = tty0.read_wait;
+            tty0.read_wait = NULL;
+        }
     }
     spin_unlock_irqrestore(&tty0.lock, flags);
+
+    if (reader) {
+        reader->wakeup_time = 0;
+        if (reader->process)
+            reader->process->state = (proc_state_t)PROC_READY;
+        add_to_ready_queue(reader);
+    }
 
     return 0;
 }
@@ -164,6 +178,7 @@ int tty_set_termios(const struct termios *tio, int flush_input)
 int tty_flush(int queue_selector)
 {
     unsigned long flags;
+    task_t *reader = NULL;
 
     if (queue_selector != TCIFLUSH &&
         queue_selector != TCOFLUSH &&
@@ -175,8 +190,17 @@ int tty_flush(int queue_selector)
         tty0.input_head = 0;
         tty0.input_tail = 0;
         tty0.eof_pending = false;
+        if (tty0.read_wait && tty0.read_wait->state == TASK_INTERRUPTIBLE)
+            reader = tty0.read_wait;
         tty0.read_wait = NULL;
         spin_unlock_irqrestore(&tty0.lock, flags);
+
+        if (reader) {
+            reader->wakeup_time = 0;
+            if (reader->process)
+                reader->process->state = (proc_state_t)PROC_READY;
+            add_to_ready_queue(reader);
+        }
     }
 
     if (queue_selector == TCOFLUSH || queue_selector == TCIOFLUSH) {
@@ -668,15 +692,16 @@ ssize_t tty_write(const char *buf, size_t count) {
     return (ssize_t)written;
 }
 
-void tty_drain_output(void)
+static void tty_drain_output_limited(uint32_t budget)
 {
     unsigned long flags;
+    uint32_t drained = 0;
 
     spin_lock_irqsave(&tty0.lock, &flags);
     tty0.output_drain_calls++;
     spin_unlock_irqrestore(&tty0.lock, flags);
 
-    while (1) {
+    while (drained < budget) {
         char c;
         bool sent;
 
@@ -692,6 +717,7 @@ void tty_drain_output(void)
         if (sent) {
             tty0.output_tail = tty_output_next(tty0.output_tail);
             tty0.output_drained++;
+            drained++;
         }
         spin_unlock_irqrestore(&tty0.lock, flags);
 
@@ -700,6 +726,20 @@ void tty_drain_output(void)
             return;
         }
     }
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    if (tty_output_empty_locked()) {
+        spin_unlock_irqrestore(&tty0.lock, flags);
+        uart_set_tx_irq_enabled(false);
+    } else {
+        spin_unlock_irqrestore(&tty0.lock, flags);
+        uart_set_tx_irq_enabled(true);
+    }
+}
+
+void tty_drain_output(void)
+{
+    tty_drain_output_limited(TTY_TX_DRAIN_BUDGET);
 }
 
 static ssize_t tty_file_read(file_t* file, void* buf, size_t count) {
@@ -727,6 +767,7 @@ file_t* create_tty_console_file(const char* name, int flags) {
 
     file->f_op = &tty_file_ops;
     file->flags = flags;
+    file->type = FILE_TYPE_TTY;
     file->pos = 0;
     file->inode = NULL;
 

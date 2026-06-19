@@ -43,6 +43,13 @@ extern volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
 typedef struct inode inode_t;
 typedef struct file file_t;
 typedef struct file_operations file_operations_t;
+
+typedef enum file_type {
+    FILE_TYPE_REGULAR = 0,
+    FILE_TYPE_TTY,
+    FILE_TYPE_NULL,
+    FILE_TYPE_PIPE,
+} file_type_t;
 typedef struct inode_operations inode_operations_t;
 
 /* Inode structure */
@@ -77,6 +84,7 @@ struct file {
     inode_t* inode;
     uint32_t offset;
     uint32_t flags;
+    file_type_t type;
     uint32_t ref_count;
     file_operations_t* f_op;
     void* private_data;
