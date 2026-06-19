@@ -63,6 +63,19 @@ static void shell_sigchld_handler(int sig)
     (void)sig;
 }
 
+static int shell_trace_enabled(void)
+{
+    const char* value = shell_getenv("MASH_TRACE");
+    return value && *value && strcmp(value, "0") != 0;
+}
+
+#define SHELL_TRACE(fmt, ...) do { \
+    if (shell_trace_enabled()) { \
+        fprintf(stderr, "[MASH] " fmt "\n", ##__VA_ARGS__); \
+        fflush(stderr); \
+    } \
+} while (0)
+
 static void shell_set_foreground_pgid(int pgid) {
     if (pgid >= 0)
         tcsetpgrp(STDIN_FILENO, pgid);
@@ -1478,8 +1491,12 @@ int shell_execute(int argc, char* argv[]) {
             return SHELL_OK;
     }
 
-    if (argv_has_pipeline(argc, argv))
+    SHELL_TRACE("execute argc=%d cmd=%s bg=%d", argc, argv[0], background);
+
+    if (argv_has_pipeline(argc, argv)) {
+        SHELL_TRACE("pipeline start cmd=%s", argv[0]);
         return run_pipeline(argc, argv, background);
+    }
 
     if (parse_redirections(&argc, argv, &redirs) < 0)
         return SHELL_ERROR;
@@ -1508,9 +1525,13 @@ int shell_execute(int argc, char* argv[]) {
             printf("mash: background builtins are not supported\n");
             return SHELL_ERROR;
         }
-        return run_builtin_with_redirs(entry, argc, argv, &redirs);
+        SHELL_TRACE("builtin start cmd=%s", argv[0]);
+        int result = run_builtin_with_redirs(entry, argc, argv, &redirs);
+        SHELL_TRACE("builtin done cmd=%s status=%d", argv[0], result);
+        return result;
     }
-    
+
+    SHELL_TRACE("fork start cmd=%s", argv[0]);
     int child_pid = fork();
     if (child_pid < 0) {
         printf("mash: fork failed: errno=%d\n", errno);
@@ -1518,6 +1539,7 @@ int shell_execute(int argc, char* argv[]) {
     }
 
     if (child_pid == 0) {
+        SHELL_TRACE("child exec cmd=%s", argv[0]);
         setpgid(0, 0);
         signal(SIGINT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
@@ -1527,6 +1549,7 @@ int shell_execute(int argc, char* argv[]) {
         exec_external_or_die(argc, argv);
         
     } else {
+        SHELL_TRACE("fork done cmd=%s child=%d", argv[0], child_pid);
         shell_prepare_child_pgid(child_pid);
 
         if (background) {
@@ -1546,7 +1569,9 @@ int shell_execute(int argc, char* argv[]) {
         jobs_build_command(argc, argv, command, sizeof(command));
         shell_set_foreground_pgid(child_pid);
 
+        SHELL_TRACE("wait start child=%d cmd=%s", child_pid, argv[0]);
         int waited_pid = shell_wait_foreground_child(child_pid, &status);
+        SHELL_TRACE("wait done child=%d waited=%d status=%d", child_pid, waited_pid, status);
         if (waited_pid == child_pid &&
             WIFSTOPPED(status)) {
             stopped_status = status;
@@ -2228,7 +2253,9 @@ int shell_execute_line(char* line) {
     if (argc <= 0)
         return SHELL_OK;
 
+    SHELL_TRACE("parsed argc=%d cmd=%s", argc, local_argv[0]);
     result = shell_execute_argv_line(argc, local_argv);
+    SHELL_TRACE("line done status=%d", result);
     if (result != SHELL_EXIT)
         shell_status = result;
     return result;
@@ -2244,13 +2271,17 @@ void shell_run(void) {
         jobs_reap_background();
         shell_restore_tty_mode();
         shell_print_prompt();
-        
+
+        SHELL_TRACE("read start");
         char* line = shell_read_line();
+        SHELL_TRACE("read done line='%s'", line ? line : "(null)");
         if (!line || strlen(line) == 0) {
             continue;
         }
 
+        SHELL_TRACE("exec line start");
         int result = shell_execute_line(line);
+        SHELL_TRACE("exec line done status=%d", result);
         if (result == SHELL_EXIT) {
             break;
         }
