@@ -672,10 +672,16 @@ int tcsetattr(int fd, int optional_actions, const void *termios_p)
 {
     int request = TCSETS;
 
-    if (optional_actions == TCSADRAIN)
+    if (optional_actions == TCSANOW)
+        request = TCSETS;
+    else if (optional_actions == TCSADRAIN)
         request = TCSETSW;
     else if (optional_actions == TCSAFLUSH)
         request = TCSETSF;
+    else {
+        errno = EINVAL;
+        return -1;
+    }
 
     return ioctl(fd, request, termios_p);
 }

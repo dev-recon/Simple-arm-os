@@ -145,6 +145,20 @@ static void test_tcflush_selectors(void)
         fail("tcflush rejects invalid selector", errno);
 }
 
+static void test_tcsetattr_actions(void)
+{
+    errno = 0;
+    if (tcsetattr(STDIN_FILENO, 99, &saved_termios) < 0 && errno == EINVAL)
+        ok("tcsetattr rejects invalid action");
+    else
+        fail("tcsetattr rejects invalid action", errno);
+
+    if (tcsetattr(STDIN_FILENO, TCSADRAIN, &saved_termios) == 0)
+        ok("tcsetattr TCSADRAIN accepted");
+    else
+        fail("tcsetattr TCSADRAIN accepted", errno);
+}
+
 static int set_and_check_termios(const struct termios *tio,
                                  const char *set_name,
                                  struct termios *out)
@@ -294,6 +308,7 @@ int main(int argc, char **argv)
     expect_true(tio.c_cc[VINTR] == 3, "default VINTR is Ctrl-C", tio.c_cc[VINTR]);
 
     test_tcflush_selectors();
+    test_tcsetattr_actions();
     test_control_chars_preserved();
     test_raw_timeout_mode();
     test_raw_poll_mode();

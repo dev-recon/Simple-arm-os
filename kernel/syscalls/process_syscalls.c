@@ -719,8 +719,21 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
         return copy_to_user((void*)arg, &tio, sizeof(tio)) < 0 ? -EFAULT : 0;
 
     case TCSETSW:
-        /* Drain is a no-op for the UART-backed console for now. */
-        /* fall through */
+        if (!file_is_tty(file))
+            return -ENOTTY;
+        if (!arg)
+            return -EFAULT;
+        if (copy_from_user(&tio, (void*)arg, sizeof(tio)) < 0)
+            return -EFAULT;
+        while (tty_has_pending_output()) {
+            if (current_task && has_pending_signals(current_task))
+                return -EINTR;
+            tty_drain_output();
+            if (current_task)
+                yield();
+        }
+        return tty_set_termios(&tio, 0);
+
     case TCSETS:
         if (!file_is_tty(file))
             return -ENOTTY;
