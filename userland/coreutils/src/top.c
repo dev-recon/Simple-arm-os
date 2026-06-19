@@ -1,9 +1,12 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
+#include <termios.h>
 #include <unistd.h>
 
 #define TOP_PROC_BUF 4096
@@ -24,6 +27,7 @@ typedef struct top_task {
     int pid;
     int tty;
     unsigned runtime_ticks;
+    unsigned cpu_pct_x10;
     unsigned ctx;
     unsigned pf;
     unsigned rss_kb;
@@ -36,13 +40,183 @@ typedef struct top_mem {
     unsigned free_kb;
 } top_mem_t;
 
+typedef struct top_sample {
+    int pid;
+    unsigned runtime_ticks;
+} top_sample_t;
+
+typedef struct top_buf {
+    char *data;
+    int len;
+    int cap;
+} top_buf_t;
+
 static volatile sig_atomic_t top_running = 1;
 static top_task_t top_tasks[TOP_MAX_TASKS];
+static top_sample_t top_prev_samples[TOP_MAX_TASKS];
+static int top_prev_count = 0;
+static int top_have_prev = 0;
+static struct termios top_saved_termios;
+static int top_termios_saved = 0;
+
+static unsigned long long now_us(void)
+{
+    struct timeval tv;
+
+    if (gettimeofday(&tv, NULL) != 0)
+        return 0;
+
+    return ((unsigned long long)tv.tv_sec * 1000000ULL) +
+           (unsigned long long)tv.tv_usec;
+}
+
+static void top_buf_free(top_buf_t *buf)
+{
+    free(buf->data);
+    buf->data = NULL;
+    buf->len = 0;
+    buf->cap = 0;
+}
+
+static int top_buf_append(top_buf_t *buf, const char *s, int len)
+{
+    char *next;
+    int next_cap;
+
+    if (!s || len <= 0)
+        return 0;
+
+    if (buf->len + len <= buf->cap) {
+        memcpy(buf->data + buf->len, s, (size_t)len);
+        buf->len += len;
+        return 0;
+    }
+
+    next_cap = buf->cap ? buf->cap : 4096;
+    while (next_cap < buf->len + len)
+        next_cap *= 2;
+
+    next = realloc(buf->data, (size_t)next_cap);
+    if (!next)
+        return -1;
+
+    buf->data = next;
+    buf->cap = next_cap;
+    memcpy(buf->data + buf->len, s, (size_t)len);
+    buf->len += len;
+    return 0;
+}
+
+static int top_buf_printf(top_buf_t *buf, const char *fmt, ...)
+{
+    char tmp[256];
+    va_list ap;
+    int len;
+
+    va_start(ap, fmt);
+    len = vsnprintf(tmp, sizeof(tmp), fmt, ap);
+    va_end(ap);
+
+    if (len < 0)
+        return -1;
+
+    if (len < (int)sizeof(tmp))
+        return top_buf_append(buf, tmp, len);
+
+    {
+        char *dyn = malloc((size_t)len + 1);
+        int rc;
+
+        if (!dyn)
+            return -1;
+
+        va_start(ap, fmt);
+        vsnprintf(dyn, (size_t)len + 1, fmt, ap);
+        va_end(ap);
+        rc = top_buf_append(buf, dyn, len);
+        free(dyn);
+        return rc;
+    }
+}
+
+static void top_enter_screen(void)
+{
+    static const char seq[] = "\033[?1049h\033[?25l\033[H\033[2J";
+    write(STDOUT_FILENO, seq, sizeof(seq) - 1);
+}
+
+static void top_leave_screen(void)
+{
+    static const char seq[] = C_RESET "\033[?25h\033[?1049l";
+    write(STDOUT_FILENO, seq, sizeof(seq) - 1);
+}
+
+static void top_enable_interactive(void)
+{
+    struct termios raw;
+
+    if (!isatty(STDIN_FILENO))
+        return;
+    if (tcgetattr(STDIN_FILENO, &top_saved_termios) < 0)
+        return;
+
+    raw = top_saved_termios;
+    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == 0)
+        top_termios_saved = 1;
+}
+
+static void top_restore_terminal(void)
+{
+    if (top_termios_saved) {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &top_saved_termios);
+        top_termios_saved = 0;
+    }
+}
 
 static void on_signal(int sig)
 {
     (void)sig;
     top_running = 0;
+}
+
+static void handle_key(char c, unsigned *delay_sec)
+{
+    switch (c) {
+    case 'q':
+    case 'Q':
+    case 3:     /* Ctrl-C when ISIG is not active for any reason. */
+    case 4:     /* Ctrl-D */
+        top_running = 0;
+        break;
+    case '+':
+    case '=':
+        if (*delay_sec > 1)
+            (*delay_sec)--;
+        break;
+    case '-':
+    case '_':
+        if (*delay_sec < 60)
+            (*delay_sec)++;
+        break;
+    case 'r':
+    case 'R':
+        top_have_prev = 0;
+        top_prev_count = 0;
+        break;
+    default:
+        break;
+    }
+}
+
+static void poll_input(unsigned *delay_sec)
+{
+    char c;
+
+    while (read(STDIN_FILENO, &c, 1) == 1)
+        handle_key(c, delay_sec);
 }
 
 static int is_digit(char c)
@@ -276,11 +450,51 @@ static int load_tasks(top_task_t *tasks, int max_tasks)
     return count;
 }
 
+static int find_prev_runtime(int pid, unsigned *runtime_ticks)
+{
+    for (int i = 0; i < top_prev_count; i++) {
+        if (top_prev_samples[i].pid == pid) {
+            *runtime_ticks = top_prev_samples[i].runtime_ticks;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static void update_cpu_percent(top_task_t *tasks, int count, unsigned delay_sec)
+{
+    unsigned elapsed_ticks = delay_sec * TOP_HZ;
+
+    if (elapsed_ticks == 0)
+        elapsed_ticks = TOP_HZ;
+
+    for (int i = 0; i < count; i++) {
+        unsigned prev_ticks = 0;
+
+        tasks[i].cpu_pct_x10 = 0;
+        if (top_have_prev && find_prev_runtime(tasks[i].pid, &prev_ticks)) {
+            unsigned delta = tasks[i].runtime_ticks >= prev_ticks ?
+                             tasks[i].runtime_ticks - prev_ticks : 0;
+            tasks[i].cpu_pct_x10 = (delta * 1000u) / elapsed_ticks;
+        }
+    }
+
+    top_prev_count = count > TOP_MAX_TASKS ? TOP_MAX_TASKS : count;
+    for (int i = 0; i < top_prev_count; i++) {
+        top_prev_samples[i].pid = tasks[i].pid;
+        top_prev_samples[i].runtime_ticks = tasks[i].runtime_ticks;
+    }
+    top_have_prev = 1;
+}
+
 static int compare_tasks(const void *a, const void *b)
 {
     const top_task_t *ta = (const top_task_t *)a;
     const top_task_t *tb = (const top_task_t *)b;
 
+    if (tb->cpu_pct_x10 != ta->cpu_pct_x10)
+        return tb->cpu_pct_x10 > ta->cpu_pct_x10 ? 1 : -1;
     if (tb->runtime_ticks != ta->runtime_ticks)
         return tb->runtime_ticks > ta->runtime_ticks ? 1 : -1;
     if (tb->ctx != ta->ctx)
@@ -296,6 +510,27 @@ static void format_runtime(unsigned ticks, char *buf, int size)
     unsigned hundredths = centis % 100u;
 
     snprintf(buf, (size_t)size, "%u:%02u.%02u", minutes, seconds, hundredths);
+}
+
+static void format_count(unsigned value, char *buf, int size)
+{
+    if (value >= 1000000u) {
+        unsigned whole = value / 1000000u;
+        unsigned dec = (value % 1000000u) / 100000u;
+        if (dec)
+            snprintf(buf, (size_t)size, "%u.%uM", whole, dec);
+        else
+            snprintf(buf, (size_t)size, "%uM", whole);
+    } else if (value >= 1000u) {
+        unsigned whole = value / 1000u;
+        unsigned dec = (value % 1000u) / 100u;
+        if (dec)
+            snprintf(buf, (size_t)size, "%u.%uK", whole, dec);
+        else
+            snprintf(buf, (size_t)size, "%uK", whole);
+    } else {
+        snprintf(buf, (size_t)size, "%u", value);
+    }
 }
 
 static const char *state_name(char state)
@@ -322,73 +557,110 @@ static const char *state_color(char state)
     }
 }
 
-static void print_tty(int tty)
+static void append_tty(top_buf_t *buf, int tty)
 {
     if (tty >= 0)
-        printf("tty%d", tty);
+        top_buf_printf(buf, "tty%d", tty);
     else
-        printf("?");
+        top_buf_append(buf, "?", 1);
 }
 
 static void render_top(unsigned delay_sec, int iteration)
 {
+    top_buf_t frame = {0};
     top_mem_t mem;
     unsigned used_kb;
     unsigned pct_x10;
+    unsigned cpu_total_x10 = 0;
     int count;
 
     read_mem(&mem);
     count = load_tasks(top_tasks, TOP_MAX_TASKS);
+    update_cpu_percent(top_tasks, count, delay_sec);
+    for (int i = 0; i < count; i++)
+        cpu_total_x10 += top_tasks[i].cpu_pct_x10;
+    if (cpu_total_x10 > 1000u)
+        cpu_total_x10 = 1000u;
     qsort(top_tasks, (size_t)count, sizeof(top_tasks[0]), compare_tasks);
 
     used_kb = mem.total_kb >= mem.free_kb ? mem.total_kb - mem.free_kb : 0;
     pct_x10 = mem.total_kb ? (used_kb * 1000u / mem.total_kb) : 0;
 
-    printf("\033[H\033[2J\033[3J");
-    printf(C_BOLD C_CYAN "ArmOS top" C_RESET " - refresh %us", delay_sec);
+    top_buf_append(&frame, "\033[?25l\033[H", 9);
+    top_buf_printf(&frame, C_BOLD C_CYAN "ArmOS top" C_RESET " - refresh %us", delay_sec);
     if (iteration >= 0)
-        printf(" - iteration %d", iteration + 1);
-    printf(" - " C_DIM "Ctrl-C to quit" C_RESET "\n");
-    printf(C_BOLD "Mem:" C_RESET " %uM total, " C_GREEN "%uM free" C_RESET
-           ", " C_YELLOW "%u.%u%% used" C_RESET ", tasks: %d\n\n",
-           mem.total_kb / 1024u,
-           mem.free_kb / 1024u,
-           pct_x10 / 10u,
-           pct_x10 % 10u,
-           count);
+        top_buf_printf(&frame, " - iteration %d", iteration + 1);
+    top_buf_printf(&frame,
+                   " - CPU " C_GREEN "%u.%u%%" C_RESET " - " C_DIM "q quit, +/- delay" C_RESET "\033[0K\r\n",
+                   cpu_total_x10 / 10u,
+                   cpu_total_x10 % 10u);
+    top_buf_printf(&frame,
+                   C_BOLD "Mem:" C_RESET " %uM total, " C_GREEN "%uM free" C_RESET
+                   ", " C_YELLOW "%u.%u%% used" C_RESET ", tasks: %d\033[0K\r\n\033[0K\r\n",
+                   mem.total_kb / 1024u,
+                   mem.free_kb / 1024u,
+                   pct_x10 / 10u,
+                   pct_x10 % 10u,
+                   count);
 
-    printf(C_BOLD "%5s %-8s %-8s %8s %8s %6s %6s %s" C_RESET "\n",
-           "PID", "TTY", "STATE", "TIME", "CTX", "PF", "RSS", "CMD");
-    printf(C_DIM "----------------------------------------------------------------" C_RESET "\n");
+    top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
+                   "PID", "TTY", "STATE", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
+    top_buf_append(&frame, C_DIM "----------------------------------------------------------------------" C_RESET "\033[0K\r\n",
+                   (int)strlen(C_DIM "----------------------------------------------------------------------" C_RESET "\033[0K\r\n"));
 
     for (int i = 0; i < count; i++) {
         char timebuf[16];
+        char ctxbuf[16];
         const char *color = state_color(top_tasks[i].state);
 
         format_runtime(top_tasks[i].runtime_ticks, timebuf, sizeof(timebuf));
-        printf(C_CYAN "%5d" C_RESET " ", top_tasks[i].pid);
-        print_tty(top_tasks[i].tty);
-        printf("%*s %s%-8s" C_RESET " %8s %8u %6u %5uK %s\n",
-               top_tasks[i].tty >= 0 ? 4 : 7,
-               "",
-               color,
-               state_name(top_tasks[i].state),
-               timebuf,
-               top_tasks[i].ctx,
-               top_tasks[i].pf,
-               top_tasks[i].rss_kb,
-               top_tasks[i].name);
+        format_count(top_tasks[i].ctx, ctxbuf, sizeof(ctxbuf));
+        top_buf_printf(&frame, C_CYAN "%5d" C_RESET " ", top_tasks[i].pid);
+        append_tty(&frame, top_tasks[i].tty);
+        top_buf_printf(&frame, "%*s %s%-8s" C_RESET " %3u.%u %8s %8s %6u %5uK %s\033[0K\r\n",
+                       top_tasks[i].tty >= 0 ? 4 : 7,
+                       "",
+                       color,
+                       state_name(top_tasks[i].state),
+                       top_tasks[i].cpu_pct_x10 / 10u,
+                       top_tasks[i].cpu_pct_x10 % 10u,
+                       timebuf,
+                       ctxbuf,
+                       top_tasks[i].pf,
+                       top_tasks[i].rss_kb,
+                       top_tasks[i].name);
     }
 
-    fflush(stdout);
+    top_buf_append(&frame, "\033[J", 3);
+    if (frame.data && frame.len > 0)
+        write(STDOUT_FILENO, frame.data, (size_t)frame.len);
+    top_buf_free(&frame);
 }
 
-static void top_delay(unsigned delay_sec)
+static void top_delay(unsigned *delay_sec)
 {
-    unsigned slices = delay_sec * 10U;
+    unsigned long long deadline;
 
-    for (unsigned i = 0; top_running && i < slices; i++)
-        usleep(100000);
+    if (*delay_sec == 0)
+        return;
+
+    deadline = now_us() + ((unsigned long long)*delay_sec * 1000000ULL);
+    while (top_running) {
+        unsigned long long now = now_us();
+        unsigned long long remaining;
+
+        poll_input(delay_sec);
+        if (!top_running)
+            break;
+
+        if (now == 0 || now >= deadline)
+            break;
+
+        remaining = deadline - now;
+        if (remaining > 100000ULL)
+            remaining = 100000ULL;
+        usleep((useconds_t)remaining);
+    }
 }
 
 static int parse_args(int argc, char **argv, unsigned *delay_sec, int *count)
@@ -433,15 +705,19 @@ int main(int argc, char **argv)
 
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
+    top_enter_screen();
+    top_enable_interactive();
 
     while (top_running && (max_count < 0 || iteration < max_count)) {
+        poll_input(&delay_sec);
         render_top(delay_sec, max_count >= 0 ? iteration : -1);
         iteration++;
         if (!top_running || (max_count >= 0 && iteration >= max_count))
             break;
-        top_delay(delay_sec);
+        top_delay(&delay_sec);
     }
 
-    printf(C_RESET "\n");
+    top_restore_terminal();
+    top_leave_screen();
     return 0;
 }

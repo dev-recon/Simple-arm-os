@@ -490,6 +490,27 @@ static const char *kind_color(char type)
     }
 }
 
+static void format_count(unsigned value, char *buf, int size)
+{
+    if (value >= 1000000u) {
+        unsigned whole = value / 1000000u;
+        unsigned dec = (value % 1000000u) / 100000u;
+        if (dec)
+            snprintf(buf, (size_t)size, "%u.%uM", whole, dec);
+        else
+            snprintf(buf, (size_t)size, "%uM", whole);
+    } else if (value >= 1000u) {
+        unsigned whole = value / 1000u;
+        unsigned dec = (value % 1000u) / 100u;
+        if (dec)
+            snprintf(buf, (size_t)size, "%u.%uK", whole, dec);
+        else
+            snprintf(buf, (size_t)size, "%uK", whole);
+    } else {
+        snprintf(buf, (size_t)size, "%u", value);
+    }
+}
+
 static void print_lifecycle_table(const proc_counters_t *c)
 {
     printf("\033[1m%-7s %-10s %10s %10s %10s\033[0m\n",
@@ -589,19 +610,28 @@ int main(void)
     print_event_table(&c);
     print_tty_table(&c);
 
-    printf("\033[1m%4s %4s %4s %4s %3s %-8s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %5s %4s %4s %4s %-6s %s\033[0m\n",
+    printf("\033[1m%4s %4s %4s %4s %3s %-8s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %7s %7s %7s %7s %-6s %s\033[0m\n",
            "PID", "TID", "PPID", "SID", "TTY", "USER", "GID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",
            "VM", "RSS", "L2", "CTX", "PF", "COW", "STK", "STATE", "NAME");
-    printf("--------------------------------------------------------------------------------------------------------------------------\n");
+    printf("------------------------------------------------------------------------------------------------------------------------------\n");
 
     for (int i = 0; i < count; i++) {
         task_row_t *p = &rows[i];
         const char *pfcolor = p->page_faults ? "\033[1;35m" : "\033[0m";
+        char ctxbuf[16];
+        char pfbuf[16];
+        char cowbuf[16];
+        char stkbuf[16];
         char user_fallback[USER_NAME_LEN];
         const char *user = user_name_for_uid(users, user_count, p->uid,
                                              user_fallback, sizeof(user_fallback));
 
-        printf("%4d %4d %4d %4d %3d %-8s %4u %s%-6s\033[0m %3u %3u.%u %4uK %4uK %4uK %4uK %2u %5u %s%4u\033[0m %4u %4u %s%-6s\033[0m %s\n",
+        format_count(p->switches, ctxbuf, sizeof(ctxbuf));
+        format_count(p->page_faults, pfbuf, sizeof(pfbuf));
+        format_count(p->cow_faults, cowbuf, sizeof(cowbuf));
+        format_count(p->stack_faults, stkbuf, sizeof(stkbuf));
+
+        printf("%4d %4d %4d %4d %3d %-8s %4u %s%-6s\033[0m %3u %3u.%u %4uK %4uK %4uK %4uK %2u %7s %s%7s\033[0m %7s %7s %s%-6s\033[0m %s\n",
                p->pid, p->tid, p->ppid, p->sid, p->tty,
                user, p->gid,
                kind_color(p->kind), kind_name(p->kind),
@@ -609,9 +639,9 @@ int main(void)
                0u, 0u,
                p->kstack_kb, p->heap_kb, p->vm_kb, p->rss_kb,
                p->l2_tables,
-               p->switches,
-               pfcolor, p->page_faults,
-               p->cow_faults, p->stack_faults,
+               ctxbuf,
+               pfcolor, pfbuf,
+               cowbuf, stkbuf,
                state_color(p->state), state_name(p->state),
                p->name);
     }
