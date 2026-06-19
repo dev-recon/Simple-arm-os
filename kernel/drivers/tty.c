@@ -537,7 +537,12 @@ void tty_input_char(char c) {
 
 ssize_t tty_read(char *buf, size_t count) {
     size_t read = 0;
+    bool interbyte_timer_active = false;
+    uint32_t interbyte_deadline = 0;
     unsigned long flags;
+
+    if (count == 0)
+        return 0;
     
     while (read < count) {
         while (uart_has_data()) {
@@ -551,7 +556,8 @@ ssize_t tty_read(char *buf, size_t count) {
         /* Buffer vide ? */
         if (tty0.input_head == tty0.input_tail) {
             struct termios tio = tty0.termios;
-            bool noncanon_no_min = !(tio.c_lflag & ICANON) && tio.c_cc[VMIN] == 0;
+            bool canon = (tio.c_lflag & ICANON) != 0;
+            uint32_t vmin = tio.c_cc[VMIN];
             uint32_t timeout_ticks = (uint32_t)tio.c_cc[VTIME] * (TIMER_FREQ / 10);
             uint32_t deadline = 0;
 
@@ -561,12 +567,20 @@ ssize_t tty_read(char *buf, size_t count) {
                 break;
             }
 
-            if (read > 0 || !current_task) {
+            if (read > 0) {
+                if (canon || vmin == 0 || read >= vmin ||
+                    (interbyte_timer_active && get_system_ticks() >= interbyte_deadline)) {
+                    spin_unlock_irqrestore(&tty0.lock, flags);
+                    break;
+                }
+            }
+
+            if (!current_task) {
                 spin_unlock_irqrestore(&tty0.lock, flags);
                 break;
             }
 
-            if (noncanon_no_min && timeout_ticks == 0) {
+            if (!canon && vmin == 0 && timeout_ticks == 0) {
                 spin_unlock_irqrestore(&tty0.lock, flags);
                 break;
             }
@@ -584,8 +598,17 @@ ssize_t tty_read(char *buf, size_t count) {
 
             tty0.read_wait = current_task;
             task_set_interruptible(current_task);
-            if (noncanon_no_min) {
-                deadline = get_system_ticks() + timeout_ticks;
+
+            if (!canon && timeout_ticks > 0) {
+                if (vmin == 0 && read == 0) {
+                    deadline = get_system_ticks() + timeout_ticks;
+                } else if (read > 0) {
+                    if (!interbyte_timer_active) {
+                        interbyte_timer_active = true;
+                        interbyte_deadline = get_system_ticks() + timeout_ticks;
+                    }
+                    deadline = interbyte_deadline;
+                }
                 current_task->wakeup_time = deadline;
             }
             spin_unlock_irqrestore(&tty0.lock, flags);
@@ -598,7 +621,7 @@ ssize_t tty_read(char *buf, size_t count) {
 
             if (has_pending_signals(current_task))
                 return read > 0 ? (ssize_t)read : (ssize_t)-EINTR;
-            if (noncanon_no_min && get_system_ticks() >= deadline) {
+            if (!canon && timeout_ticks > 0 && deadline && get_system_ticks() >= deadline) {
                 current_task->wakeup_time = 0;
                 break;
             }
@@ -616,7 +639,18 @@ ssize_t tty_read(char *buf, size_t count) {
         buf[read++] = c;
 
         if (!(tio.c_lflag & ICANON)) {
-            break;
+            uint32_t vmin = tio.c_cc[VMIN];
+            uint32_t timeout_ticks = (uint32_t)tio.c_cc[VTIME] * (TIMER_FREQ / 10);
+
+            if (vmin > 0 && read >= vmin)
+                break;
+
+            if (timeout_ticks > 0) {
+                interbyte_timer_active = true;
+                interbyte_deadline = get_system_ticks() + timeout_ticks;
+            }
+
+            continue;
         }
         
         /* En mode ligne, s'arrêter au '\n' */
