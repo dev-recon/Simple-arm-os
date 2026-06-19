@@ -188,7 +188,8 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	       case "$$relpath" in dev/tty0|dev/console) continue ;; esac; \
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
 	       case "$$relpath" in \
-	           bin/*|sbin/*|opt/newlib/bin/*|opt/newlib/sbin/*|legacy/bin-libc/*|init.sh) mode=0100755 ;; \
+	           sbin/init) mode=0100700 ;; \
+	           bin/*|sbin/*|usr/bin/*|opt/*/bin/*|legacy/bin-libc/*|init.sh) mode=0100755 ;; \
 	           home/user/copy_renamed) mode=0100755 ;; \
 	           *) mode=0100644 ;; \
 	       esac; \
@@ -243,10 +244,10 @@ $(USERFS_DIR):
 	chmod +x $(USERFS_DIR)/init.sh
 	
 	# Creer des sous-repertoires
-	mkdir -p $(USERFS_DIR)/bin
+	mkdir -p $(USERFS_DIR)/bin $(USERFS_DIR)/usr/bin
 	echo "echo 'Test program running'" > $(USERFS_DIR)/bin/test.sh
 	chmod +x $(USERFS_DIR)/bin/test.sh
-	echo "Binary placeholder" > $(USERFS_DIR)/bin/hello
+	echo "Binary placeholder" > $(USERFS_DIR)/usr/bin/hello
 	
 	mkdir -p $(USERFS_DIR)/etc
 	echo "# ARM32 OS Configuration" > $(USERFS_DIR)/etc/os.conf

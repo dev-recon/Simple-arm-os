@@ -331,7 +331,7 @@ static char** shell_build_envp(void) {
 static void shell_init_env(void) {
     script_frames[0].name = "mash";
     script_frames[0].argc = 0;
-    shell_setenv("PATH", "/bin");
+    shell_setenv("PATH", "/bin:/usr/bin:/opt/kilo/bin");
     shell_setenv("HOME", "/home/user");
     shell_setenv("USER", "user");
     shell_setenv("PWD", "/");
@@ -688,7 +688,7 @@ static void exec_external_or_die(int argc, char* argv[]) {
     } else {
         path = shell_getenv("PATH");
         if (!path || !*path)
-            path = "/bin";
+            path = "/bin:/usr/bin:/opt/kilo/bin";
 
         entry = path;
         while (*entry) {
@@ -724,7 +724,7 @@ static int external_command_exists(const char* name) {
 
     path = shell_getenv("PATH");
     if (!path || !*path)
-        path = "/bin";
+        path = "/bin:/usr/bin:/opt/kilo/bin";
 
     entry = path;
     while (*entry) {
@@ -1200,7 +1200,7 @@ int test_execve(void) {
         printf("                 ************ Child process running!\n");
         printf("                 ************ Will be exiting with value %d!\n", version);
 
-        const char* path = "/bin/hello2";
+        const char* path = "/usr/bin/hello";
         char* name = "hello2";
 
         printf("                 ************ Process PID: %d about to exec\n", getpid());
@@ -1242,7 +1242,7 @@ void shell_print_banner(void) {
     printf(" |_|  |_/_/   \\_\\____/|_| |_|\n");
     printf("\033[0m");
     printf(" arm-os shell on newlib\n");
-    printf(" type 'help' for builtins, PATH=/bin\n");
+    printf(" type 'help' for builtins, PATH=/bin:/usr/bin:/opt/kilo/bin\n");
     printf("\n");
 }
 

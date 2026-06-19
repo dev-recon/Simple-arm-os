@@ -1,4 +1,4 @@
-#!/bin/mash
+#!/sbin/mash
 # Copy regular files from a directory into DIR/copied with a copy_ prefix.
 
 DIR=$1

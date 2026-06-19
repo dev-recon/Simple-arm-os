@@ -34,12 +34,12 @@ ArmOS currently provides:
 - `/proc` virtual filesystem
 - UART-backed console/TTY
 - Shell: `mash`
-- Homegrown libc compatibility path
-- Newlib-based userland path
+- Newlib-based userland
 - Core utilities such as `cat`, `echo`, `pwd`, `ls`, `cp`, `mv`, `rm`,
   `mkdir`, `rmdir`, `touch`, `sleep`, `kill`, `ps`, `stat`, `head`,
-  `shutdown`, and stress tools
-- Runtime smoke and stress tests through `systest`
+  `grep`, `sed`, `sort`, `uniq`, `wc`, and `which`
+- System tools such as `mount`, `umount`, `shutdown`, and `fsck-lite`
+- Runtime smoke and stress tests through `systest`, `ttytest`, and `memstress`
 
 ## Platform
 
@@ -68,7 +68,8 @@ Typical layout:
 - `/dev` for device nodes
 - `/home/user` as the default user home directory
 - `/tmp` for temporary files
-- `/bin` for official userland commands, with prefixed `nl-*` copies kept in `/opt/newlib/bin`
+- `/bin` for core utilities, `/sbin` for system programs, `/usr/bin` for
+  ArmOS user programs, and `/opt/<program>/bin` for imported external tools
 
 Ext2 supports normal files, directories, links, permissions, and writable
 operations used by the current userland. FAT32 remains useful as a compatibility
@@ -76,10 +77,11 @@ filesystem, but it is no longer expected to mirror the full root filesystem.
 
 ## Userland
 
-The project is moving toward a newlib-based userland.
+Newlib is the supported userland C library.
 
-The older in-tree libc and older binaries remain useful as compatibility and
-bring-up tools, but new userland work should prefer the newlib path.
+The older in-tree libc and older programs are archived under
+`userland/legacy/` for reference and bring-up archaeology, but new userland
+work should use the newlib path.
 
 The shell, `mash`, supports interactive commands, external programs, pipes,
 redirections, background jobs, scripts, and basic job control.

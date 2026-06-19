@@ -1,12 +1,12 @@
 # User profile configuration for test kernel
-export PATH=/bin
+export PATH=/bin:/usr/bin:/opt/kilo/bin
 export HOME=/home/user
 export PS1='user@kernel:$ '
 export TERM=vt100
 
 # Welcome message
 echo "Welcome to the kernel development environment!"
-echo "Available commands in /bin"
+echo "Available commands in /bin, /usr/bin and /opt/*/bin"
 echo "Your files are in $HOME"
 
 # Aliases for development

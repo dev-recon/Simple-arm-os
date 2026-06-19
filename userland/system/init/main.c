@@ -6,7 +6,7 @@
 #include <unistd.h>
 
 static char *const init_envp[] = {
-    "PATH=/bin",
+    "PATH=/bin:/usr/bin:/opt/kilo/bin",
     "HOME=/home/user",
     "USER=user",
     "PS1=mash$> ",
@@ -30,8 +30,8 @@ static int spawn_shell(void)
             perror("init: setgid");
         if (setuid(1000) < 0)
             perror("init: setuid");
-        execve("/bin/mash", argv, init_envp);
-        perror("init: exec /bin/mash");
+        execve("/sbin/mash", argv, init_envp);
+        perror("init: exec /sbin/mash");
         _exit(127);
     }
 

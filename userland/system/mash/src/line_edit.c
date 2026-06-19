@@ -373,7 +373,7 @@ static void command_cache_rebuild_if_needed(void) {
     int i;
 
     if (!path || !*path)
-        path = "/bin";
+        path = "/bin:/usr/bin:/opt/kilo/bin";
 
     if (command_cache_valid && strcmp(command_cache_path, path) == 0)
         return;

@@ -7,7 +7,7 @@ userfs_enabled=true
 [filesystem]
 type=userfs
 base_dir=./userfs
-executable_dirs=/bin
+executable_dirs=/bin,/usr/bin,/opt/*/bin
 library_dirs=/lib
 
 [development]

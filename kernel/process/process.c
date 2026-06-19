@@ -119,7 +119,7 @@ void init_process_main(void* arg)
     char* init_name = "init";
     char* const init_argv[] = { init_name, NULL };
     char* const init_envp[] = {
-        "PATH=/bin",
+        "PATH=/sbin:/bin:/usr/bin:/opt/kilo/bin",
         "HOME=/home/user",
         "USER=user",
         "PS1=mash$> ",

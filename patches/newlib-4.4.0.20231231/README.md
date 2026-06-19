@@ -9,7 +9,7 @@ newlib itself vanilla and provides the OS ABI in tracked repo code:
 
 - `newlib-port/` provides crt0, raw syscall wrappers, errno/status translation,
   signal translation, and newlib syscall hooks.
-- `userland/newlib-tests/include/` provides the small compatibility headers
+- `userland/include/` provides the small compatibility headers
   that arm-os exposes but vanilla newlib does not ship for this target.
 
 If we later need to modify upstream newlib sources, add a patch file here and

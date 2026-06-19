@@ -4,6 +4,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifdef ARM_OS_NEWLIB
+#include "arm_os_abi.h"
+#endif
+
 #define PAGE_SIZE       4096U
 #define CHUNK_KB        16U
 #define MAX_CHUNKS      256U

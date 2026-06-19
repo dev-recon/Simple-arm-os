@@ -181,7 +181,7 @@ static void test_access_umask(void)
     int old_mask;
     int fd;
 
-    expect(access("/bin/systest", F_OK) == 0, "access existing file", 0);
+    expect(access("/usr/bin/systest", F_OK) == 0, "access existing file", 0);
     expect(access("/bin/nope", F_OK) < 0, "access missing file fails", 0);
 
     old_mask = umask(077);
@@ -268,13 +268,13 @@ static void test_stat_syscalls(void)
     struct stat fst;
     int fd;
 
-    expect(stat("/bin/systest", &st) == 0, "stat existing executable", 0);
+    expect(stat("/usr/bin/systest", &st) == 0, "stat existing executable", 0);
     expect(S_ISREG(st.st_mode), "stat reports regular file", st.st_mode);
     expect(st.st_size > 0, "stat reports file size", (int)st.st_size);
     expect(st.st_blksize > 0, "stat reports IO block size", (int)st.st_blksize);
     expect(st.st_blocks > 0, "stat reports allocated blocks", (int)st.st_blocks);
 
-    fd = open("/bin/systest", O_RDONLY, 0);
+    fd = open("/usr/bin/systest", O_RDONLY, 0);
     if (expect(fd >= 0, "open executable for fstat", fd) >= 0) {
         expect(fstat(fd, &fst) == 0, "fstat open executable", 0);
         expect(fst.st_size == st.st_size, "fstat size matches stat", (int)fst.st_size);

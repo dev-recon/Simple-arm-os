@@ -195,10 +195,15 @@ User programs live under `userland/` and are installed into the generated
 
 For newlib-linked tools, the current convention is:
 
-- source under `userland/newlib-tests/` or the relevant userland command tree
-- real binaries under `userfs/opt/newlib/bin`
-- `/usr/bin` symlinks pointing to the newlib binaries
-- older compatibility binaries remain under `/bin`
+- shell/init sources under `userland/system/`
+- system tool sources under `userland/system/tools/`
+- core utility sources under `userland/coreutils/src/`
+- ArmOS program sources under `userland/programs/<name>/`
+- imported external tool sources under `userland/opt/<name>/src/`
+- system programs under `userfs/sbin`
+- core utilities under `userfs/bin`
+- ArmOS user programs under `userfs/usr/bin`
+- imported external tools under `userfs/opt/<name>/bin`
 
 The root filesystem is ext2, so long filenames are supported there. FAT32 is
 still available under `/mnt`, but it is intentionally a smaller compatibility

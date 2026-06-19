@@ -1,40 +1,7 @@
-# Minimal userland command set
+# Core command sources live here, but the supported build is the newlib
+# userland build rooted at userland/Makefile.
 
-PROGRAMS = cat echo pwd true false rm touch write mkdir rmdir sleep kill ls cp mv ps lps stat shutdown memstress chmod chown ln head
-ARCH = arm-none-eabi-
-CC = $(ARCH)gcc
-LD = $(ARCH)ld
+.PHONY: all clean install list
 
-BUILD_DIR = ../../build
-SRCDIR = src
-
-LIBC_INCLUDE = $(BUILD_DIR)/include
-LIBC_LIB = $(BUILD_DIR)/lib
-
-CFLAGS = -mcpu=cortex-a15 -marm -std=gnu99 -mfpu=neon -nostdlib -nostdinc
-CFLAGS += -I$(LIBC_INCLUDE) -fno-builtin -fno-stack-protector
-CFLAGS += -O0 -Wall
-
-LDFLAGS = -nostdlib -L$(LIBC_LIB)
-
-OBJECTS = $(PROGRAMS:%=%.o)
-
-all: $(PROGRAMS)
-
-$(PROGRAMS): %: %.o
-	@echo "Linking: $@"
-	$(LD) $(LDFLAGS) -o $@ $< -lc
-
-%.o: $(SRCDIR)/%.c
-	@echo "Compiling: $<"
-	$(CC) $(CFLAGS) -c $< -o $@
-
-install: all
-	@for prog in $(PROGRAMS); do \
-		cp $$prog ../../userfs/bin/$$prog; \
-	done
-
-clean:
-	rm -f $(OBJECTS) $(PROGRAMS)
-
-.PHONY: all install clean
+all clean install list:
+	$(MAKE) -C .. $@
