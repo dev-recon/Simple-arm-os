@@ -121,6 +121,77 @@ static int run_interactive_canon_test(void)
     return failures ? 1 : 0;
 }
 
+static int run_interactive_raw_test(void)
+{
+    struct termios raw;
+    unsigned char buf[16];
+    ssize_t n;
+
+    printf("ttytest: interactive raw test\n");
+    printf("This test temporarily enables non-canonical no-echo mode.\n");
+
+    if (tcgetattr(STDIN_FILENO, &saved_termios) < 0) {
+        fail("tcgetattr stdin", errno);
+        return 1;
+    }
+    have_saved_termios = 1;
+    atexit(restore_terminal);
+
+    raw = saved_termios;
+    raw.c_lflag &= ~(ICANON | ECHO);
+    raw.c_iflag &= ~ICRNL;
+    raw.c_oflag &= ~OPOST;
+    raw.c_cc[VMIN] = 3;
+    raw.c_cc[VTIME] = 0;
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
+        fail("tcsetattr raw VMIN=3", errno);
+        return 1;
+    }
+    ok("tcsetattr raw VMIN=3");
+
+    printf("1) Type exactly abc. Expected one read of 3 bytes: abc\n");
+    fflush(stdout);
+    memset(buf, 0, sizeof(buf));
+    errno = 0;
+    n = read(STDIN_FILENO, buf, 3);
+    if (n == 3 && memcmp(buf, "abc", 3) == 0)
+        ok("raw read waits for VMIN bytes");
+    else if (n < 0)
+        fail("raw read waits for VMIN bytes", errno);
+    else
+        fail("raw read waits for VMIN bytes", (int)n);
+
+    raw.c_cc[VMIN] = 3;
+    raw.c_cc[VTIME] = 1;
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
+        fail("tcsetattr raw VMIN=3 VTIME=1", errno);
+        return 1;
+    }
+    ok("tcsetattr raw VMIN=3 VTIME=1");
+
+    printf("2) Press Right Arrow once. Expected ESC [ C in one read.\n");
+    fflush(stdout);
+    memset(buf, 0, sizeof(buf));
+    errno = 0;
+    n = read(STDIN_FILENO, buf, sizeof(buf));
+    if (n >= 3 && buf[0] == 0x1b && buf[1] == '[' && buf[2] == 'C')
+        ok("raw timeout read captures arrow sequence");
+    else if (n < 0)
+        fail("raw timeout read captures arrow sequence", errno);
+    else
+        fail("raw timeout read captures arrow sequence", (int)n);
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_termios) == 0)
+        ok("tcsetattr restores terminal");
+    else
+        fail("tcsetattr restores terminal", errno);
+
+    have_saved_termios = 0;
+    printf("ttytest raw interactive: %s\n", failures ? "failed" : "all tests passed");
+    return failures ? 1 : 0;
+}
+
 static void test_tcflush_selectors(void)
 {
     if (tcflush(STDIN_FILENO, TCIFLUSH) == 0)
@@ -284,7 +355,9 @@ int main(int argc, char **argv)
     if (argc > 1) {
         if (strcmp(argv[1], "--interactive-canon") == 0)
             return run_interactive_canon_test();
-        printf("usage: ttytest [--interactive-canon]\n");
+        if (strcmp(argv[1], "--interactive-raw") == 0)
+            return run_interactive_raw_test();
+        printf("usage: ttytest [--interactive-canon|--interactive-raw]\n");
         return 1;
     }
 
