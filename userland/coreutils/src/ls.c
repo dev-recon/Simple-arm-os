@@ -11,6 +11,8 @@
 #define LS_MAX_SIMPLE_ENTRIES 128
 #define LS_SIMPLE_NAME_LEN 80
 #define LS_SIMPLE_COL_WIDTH 18
+#define LS_MAX_USERS 16
+#define LS_USER_NAME_LEN 32
 
 struct dirent_raw {
     uint32_t d_ino;
@@ -24,6 +26,73 @@ struct simple_entry {
     char name[LS_SIMPLE_NAME_LEN];
     int is_dir;
 };
+
+struct user_entry {
+    unsigned uid;
+    unsigned gid;
+    char name[LS_USER_NAME_LEN];
+};
+
+static struct user_entry users[LS_MAX_USERS];
+static int user_count = 0;
+static int users_loaded = 0;
+
+static void load_users(void)
+{
+    FILE *f;
+    char line[256];
+
+    if (users_loaded)
+        return;
+    users_loaded = 1;
+
+    f = fopen("/etc/passwd", "r");
+    if (!f)
+        return;
+
+    while (user_count < LS_MAX_USERS && fgets(line, sizeof(line), f)) {
+        char *name = strtok(line, ":");
+        char *passwd = strtok(NULL, ":");
+        char *uid_s = strtok(NULL, ":");
+        char *gid_s = strtok(NULL, ":");
+
+        (void)passwd;
+        if (!name || !uid_s || !gid_s)
+            continue;
+
+        users[user_count].uid = (unsigned)strtoul(uid_s, NULL, 10);
+        users[user_count].gid = (unsigned)strtoul(gid_s, NULL, 10);
+        strncpy(users[user_count].name, name, sizeof(users[user_count].name) - 1);
+        users[user_count].name[sizeof(users[user_count].name) - 1] = '\0';
+        user_count++;
+    }
+
+    fclose(f);
+}
+
+static const char *name_for_uid(unsigned uid, char *fallback, size_t fallback_size)
+{
+    load_users();
+    for (int i = 0; i < user_count; i++) {
+        if (users[i].uid == uid)
+            return users[i].name;
+    }
+
+    snprintf(fallback, fallback_size, "%u", uid);
+    return fallback;
+}
+
+static const char *name_for_gid(unsigned gid, char *fallback, size_t fallback_size)
+{
+    load_users();
+    for (int i = 0; i < user_count; i++) {
+        if (users[i].gid == gid)
+            return users[i].name;
+    }
+
+    snprintf(fallback, fallback_size, "%u", gid);
+    return fallback;
+}
 
 static void perm_string(mode_t mode, char *out)
 {
@@ -78,18 +147,25 @@ static void print_long(const char *name, struct stat *st, const char *link_targe
 {
     char perms[11];
     char tstr[16];
+    char user_fallback[12];
+    char group_fallback[12];
+    const char *user;
+    const char *group;
+
     perm_string(st->st_mode, perms);
     format_time((uint32_t)st->st_mtime, tstr);
+    user = name_for_uid((unsigned)st->st_uid, user_fallback, sizeof(user_fallback));
+    group = name_for_gid((unsigned)st->st_gid, group_fallback, sizeof(group_fallback));
     int nl = S_ISDIR(st->st_mode) ? 2 : 1;
     if (S_ISLNK(st->st_mode) && link_target)
-        printf("%s %d root root %8u %s %s -> %s\n",
-               perms, nl, (uint32_t)st->st_size, tstr, name, link_target);
+        printf("%s %d %-8s %-8s %8u %s %s -> %s\n",
+               perms, nl, user, group, (uint32_t)st->st_size, tstr, name, link_target);
     else if (S_ISDIR(st->st_mode))
-        printf("%s %d root root %8u %s \033[1;34m%s\033[0m\n",
-               perms, nl, (uint32_t)st->st_size, tstr, name);
+        printf("%s %d %-8s %-8s %8u %s \033[1;34m%s\033[0m\n",
+               perms, nl, user, group, (uint32_t)st->st_size, tstr, name);
     else
-        printf("%s %d root root %8u %s %s\n",
-               perms, nl, (uint32_t)st->st_size, tstr, name);
+        printf("%s %d %-8s %-8s %8u %s %s\n",
+               perms, nl, user, group, (uint32_t)st->st_size, tstr, name);
 }
 
 static void print_long_path(const char *display_name, const char *path)
@@ -100,7 +176,7 @@ static void print_long_path(const char *display_name, const char *path)
     int n;
 
     if (lstat(path, &st) < 0) {
-        printf("??????????  ? root root        ?            %s\n", display_name);
+        printf("?????????? ? ?        ?               ?            %s\n", display_name);
         return;
     }
 

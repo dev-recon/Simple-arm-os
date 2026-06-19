@@ -1,0 +1,5 @@
+# root shell environment
+export PATH=/sbin:/bin:/usr/bin:/opt/kilo/bin
+export HOME=/root
+export USER=root
+export PS1="root# "

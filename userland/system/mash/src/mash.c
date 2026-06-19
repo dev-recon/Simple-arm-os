@@ -46,9 +46,27 @@ static int shell_is_login_shell(void)
     return getppid() == 1;
 }
 
+static int shell_is_signal_protected(void)
+{
+    const char *value = shell_getenv("MASH_PROTECT");
+
+    return shell_is_login_shell() ||
+           (value && *value && strcmp(value, "0") != 0);
+}
+
+static int shell_should_print_banner(void)
+{
+    const char *value = shell_getenv("MASH_BANNER");
+
+    if (value && *value)
+        return strcmp(value, "0") != 0;
+
+    return shell_is_login_shell();
+}
+
 static void shell_install_signal_handlers(void)
 {
-    if (shell_is_login_shell()) {
+    if (shell_is_signal_protected()) {
         signal(SIGINT, SIG_IGN);
         signal(SIGTSTP, SIG_IGN);
     } else {
@@ -348,14 +366,44 @@ static char** shell_build_envp(void) {
     return shell_envp;
 }
 
-static void shell_init_env(void) {
+static void shell_import_environ(char **envp)
+{
+    if (!envp)
+        return;
+
+    for (char **p = envp; *p && shell_env_count < SHELL_MAX_ENV; p++) {
+        char *eq = strchr(*p, '=');
+        char name[SHELL_ENV_NAME_LEN];
+        size_t name_len;
+
+        if (!eq || eq == *p)
+            continue;
+
+        name_len = (size_t)(eq - *p);
+        if (name_len >= sizeof(name))
+            name_len = sizeof(name) - 1;
+
+        memcpy(name, *p, name_len);
+        name[name_len] = '\0';
+        shell_setenv(name, eq + 1);
+    }
+}
+
+static void shell_set_default_env(const char *name, const char *value)
+{
+    if (!shell_getenv(name))
+        shell_setenv(name, value);
+}
+
+static void shell_init_env(char **envp) {
     script_frames[0].name = "mash";
     script_frames[0].argc = 0;
-    shell_setenv("PATH", "/bin:/usr/bin:/opt/kilo/bin");
-    shell_setenv("HOME", "/home/user");
-    shell_setenv("USER", "user");
-    shell_setenv("PWD", "/");
-    shell_setenv("PS1", "mash$> ");
+    shell_import_environ(envp);
+    shell_set_default_env("PATH", "/bin:/usr/bin:/opt/kilo/bin");
+    shell_set_default_env("HOME", "/home/user");
+    shell_set_default_env("USER", "user");
+    shell_set_default_env("PWD", "/");
+    shell_set_default_env("PS1", "mash$> ");
 }
 
 static char* trim_spaces(char* s) {
@@ -472,7 +520,17 @@ static void shell_load_rc_file(const char* path) {
 }
 
 static void shell_load_startup_files(void) {
-    shell_load_rc_file("/home/user/.nl-mashrc");
+    const char *home = shell_getenv("HOME");
+    char path[192];
+
+    if (!home || !*home)
+        home = "/home/user";
+
+    snprintf(path, sizeof(path), "%s/.mashrc", home);
+    shell_load_rc_file(path);
+
+    snprintf(path, sizeof(path), "%s/.nl-mashrc", home);
+    shell_load_rc_file(path);
 }
 
 static int build_exec_path_from_dir(const char* dir, int dir_len,
@@ -1527,7 +1585,9 @@ int shell_execute(int argc, char* argv[]) {
         return SHELL_OK;
 
     // Command exit built-in
-    if (strcmp(argv[0], "exit") == 0 || strcmp(argv[0], "quit") == 0) {
+    if (strcmp(argv[0], "exit") == 0 ||
+        strcmp(argv[0], "quit") == 0 ||
+        strcmp(argv[0], "logout") == 0) {
         if (shell_is_login_shell()) {
             printf("%s: refusing to terminate the login shell; use shutdown instead\n", argv[0]);
             return SHELL_ERROR;
@@ -2284,7 +2344,8 @@ int shell_execute_line(char* line) {
 
 // Shell main loop
 void shell_run(void) {
-    shell_print_banner();
+    if (shell_should_print_banner())
+        shell_print_banner();
     shell_running = 1;
     
     while (shell_running) {
@@ -2312,10 +2373,13 @@ void shell_run(void) {
 }
 
 
-int main() {
+int main(int argc, char **argv, char **envp) {
     int version = 11 ;
 
-    shell_init_env();
+    (void)argc;
+    (void)argv;
+
+    shell_init_env(envp);
     shell_load_startup_files();
     shell_line_edit_init();
     setpgid(0, 0);

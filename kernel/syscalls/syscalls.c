@@ -391,6 +391,9 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     elf32_ehdr_t elf_header;
     vm_space_t* old_vm;
     vm_space_t* new_vm;
+    uid_t exec_uid;
+    gid_t exec_gid;
+    mode_t exec_mode;
     uint32_t argc = 0;
     uint32_t envpc = 0;
     int result;
@@ -450,6 +453,10 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
         return -EACCES;
     }
+
+    exec_uid = exe_inode->uid;
+    exec_gid = exe_inode->gid;
+    exec_mode = exe_inode->mode;
 
     
     /* Valider l'en-tete ELF */
@@ -541,6 +548,10 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     instruction_sync_barrier();
 
     rename_task_from_exec_path(proc, kernel_filename);
+    if (exec_mode & S_ISUID)
+        proc->process->uid = exec_uid;
+    if (exec_mode & S_ISGID)
+        proc->process->gid = exec_gid;
     snapshot_exec_metadata(proc, kernel_filename, kernel_argv, kernel_envp);
 
     /* Nettoyer les ressources temporaires */

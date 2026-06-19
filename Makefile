@@ -175,6 +175,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	           case "$$relpath" in \
 	               tmp) mode=040777; uid=0; gid=0 ;; \
 	               dev) mode=040755; uid=0; gid=0 ;; \
+	               root|root/*) mode=040700; uid=0; gid=0 ;; \
 	               home/user|home/user/*) mode=040755; uid=1000; gid=1000 ;; \
 	               *) mode=040755; uid=0; gid=0 ;; \
 	           esac; \
@@ -189,6 +190,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
 	       case "$$relpath" in \
 	           sbin/init) mode=0100700 ;; \
+	           bin/su) mode=0104755 ;; \
 	           bin/*|sbin/*|usr/bin/*|opt/*/bin/*|legacy/bin-libc/*|init.sh) mode=0100755 ;; \
 	           home/user/copy_renamed) mode=0100755 ;; \
 	           *) mode=0100644 ;; \
