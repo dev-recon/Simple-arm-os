@@ -700,11 +700,19 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
             return -ENOTTY;
         if (!arg)
             return -EFAULT;
-        wsz.ws_row = 24;
-        wsz.ws_col = 80;
-        wsz.ws_xpixel = 0;
-        wsz.ws_ypixel = 0;
+        tty_get_winsize(&wsz.ws_row, &wsz.ws_col,
+                        &wsz.ws_xpixel, &wsz.ws_ypixel);
         return copy_to_user((void*)arg, &wsz, sizeof(wsz)) < 0 ? -EFAULT : 0;
+
+    case TIOCSWINSZ:
+        if (!is_tty)
+            return -ENOTTY;
+        if (!arg)
+            return -EFAULT;
+        if (copy_from_user(&wsz, (void*)arg, sizeof(wsz)) < 0)
+            return -EFAULT;
+        return tty_set_winsize(wsz.ws_row, wsz.ws_col,
+                               wsz.ws_xpixel, wsz.ws_ypixel);
 
     case TCGETS:
         if (!is_tty)

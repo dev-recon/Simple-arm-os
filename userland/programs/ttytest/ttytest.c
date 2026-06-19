@@ -81,6 +81,7 @@ static int run_interactive_canon_test(void)
     canon.c_cc[VERASE] = 0x7F;
     canon.c_cc[VKILL] = 0x15;
     canon.c_cc[VEOF] = 0x04;
+    canon.c_cc[VWERASE] = 0x17;
     canon.c_cc[VMIN] = 1;
     canon.c_cc[VTIME] = 0;
 
@@ -100,7 +101,12 @@ static int run_interactive_canon_test(void)
     if (n >= 0)
         expect_true(line_equals(line, "ok\n"), "canonical kill-line edits line", n);
 
-    printf("3) Press Ctrl-D on an empty line. Expected EOF read length 0.\n");
+    printf("3) Type: one two, Ctrl-W, three, Enter. Expected line: one three\n");
+    n = read_interactive_line("> ", line, sizeof(line));
+    if (n >= 0)
+        expect_true(line_equals(line, "one three\n"), "canonical word erase edits line", n);
+
+    printf("4) Press Ctrl-D on an empty line. Expected EOF read length 0.\n");
     n = read_interactive_line("> ", line, sizeof(line));
     if (n >= 0)
         expect_true(n == 0, "canonical Ctrl-D returns EOF", n);
@@ -238,6 +244,7 @@ static void test_control_chars_preserved(void)
     tio.c_cc[VEOF] = 0x04;
     tio.c_cc[VINTR] = 0x03;
     tio.c_cc[VSUSP] = 0x1A;
+    tio.c_cc[VWERASE] = 0x17;
 
     if (set_and_check_termios(&tio, "tcsetattr control chars", &check) < 0)
         return;
@@ -252,6 +259,8 @@ static void test_control_chars_preserved(void)
                 "termios preserves VINTR", check.c_cc[VINTR]);
     expect_true(check.c_cc[VSUSP] == 0x1A,
                 "termios preserves VSUSP", check.c_cc[VSUSP]);
+    expect_true(check.c_cc[VWERASE] == 0x17,
+                "termios preserves VWERASE", check.c_cc[VWERASE]);
 }
 
 int main(int argc, char **argv)

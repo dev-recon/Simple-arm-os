@@ -490,6 +490,73 @@ static const char *kind_color(char type)
     }
 }
 
+static void print_lifecycle_table(const proc_counters_t *c)
+{
+    printf("\033[1m%-7s %-10s %10s %10s %10s\033[0m\n",
+           "GROUP", "METRIC", "LIVE", "+NEW", "-DONE");
+    printf("%-7s %-10s %10u %10u %10u\n",
+           "life", "tasks", c->tasks_live, c->tasks_new, c->tasks_done);
+    printf("%-7s %-10s %10u %10u %10u\n",
+           "life", "zombies", c->zombies_live, c->zombies_new, c->zombies_done);
+    printf("%-7s %-10s %9up %9up %9up\n",
+           "alloc", "kstack", c->kstack_live, c->kstack_alloc, c->kstack_free);
+    printf("%-7s %-10s %9up %9up %9up\n",
+           "alloc", "phys", c->phys_live, c->phys_alloc, c->phys_free);
+}
+
+static void print_event_table(const proc_counters_t *c)
+{
+    printf("\n\033[1m%-16s %8s   %-16s %8s   %-16s %8s\033[0m\n",
+           "EVENT", "VALUE", "EVENT", "VALUE", "EVENT", "VALUE");
+    printf("%-16s %8u   %-16s %8u   %-16s %8u\n",
+           "forkfail", c->forkfail,
+           "sched-refuse", c->sched_refuse,
+           "ready-refuse", c->ready_refuse);
+    printf("%-16s %8u   %-16s %8u   %-16s %8u\n",
+           "asid-roll", c->asid_rollovers,
+           "state-set", c->state_set,
+           "signal-wake", c->signal_wake);
+    printf("%-16s %8u   %-16s %8u\n",
+           "tty-stale", c->tty_stale,
+           "unintr-timeout", c->unintr_timeout);
+}
+
+static void print_tty_table(const proc_counters_t *c)
+{
+    printf("\n\033[1mTTY tty0\033[0m\n");
+    printf("  \033[1m%-8s %12s %12s %12s %12s\033[0m\n",
+           "output", "enqueued", "drained", "full-wait", "drain-call");
+    printf("  %-8s %12u %12u %12u %12u\n",
+           "",
+           c->tty_tx_enqueued,
+           c->tty_tx_drained,
+           c->tty_tx_full_waits,
+           c->tty_tx_drain_calls);
+    printf("  \033[1m%-8s %12s %12s %12s %12s %12s\033[0m\n",
+           "input", "depth", "capacity", "eof", "vmin", "vtime");
+    printf("  %-8s %12u %12u %12u %12u %12u\n",
+           "",
+           c->tty_input_depth,
+           c->tty_input_capacity,
+           c->tty_eof_pending,
+           c->tty_vmin,
+           c->tty_vtime);
+    printf("  \033[1m%-8s %12s %12s %12s\033[0m\n",
+           "flags", "iflag", "oflag", "lflag");
+    printf("  %-8s %12u %12u %12u\n",
+           "",
+           c->tty_iflag,
+           c->tty_oflag,
+           c->tty_lflag);
+    printf("  \033[1m%-8s %12s %12s %12s\033[0m\n",
+           "wakeups", "char", "line", "eof");
+    printf("  %-8s %12u %12u %12u\n\n",
+           "",
+           c->tty_char_wakeups,
+           c->tty_line_wakeups,
+           c->tty_eof_wakeups);
+}
+
 int main(void)
 {
     proc_counters_t c;
@@ -517,53 +584,10 @@ int main(void)
            c.mem_total_kb / 1024u, c.mem_free_kb / 1024u,
            pct_x10 > 800 ? "1;31" : pct_x10 > 600 ? "1;33" : "1;32",
            pct_x10 / 10u, pct_x10 % 10u);
-    printf("\033[1m%-6s\033[0m %-10s %8s %8s %8s   %-12s %u  %-12s %u  %-12s %u\n",
-           "Life:", "metric", "live", "+new", "-done",
-           "forkfail", c.forkfail,
-           "sched-refuse", c.sched_refuse,
-           "ready-refuse", c.ready_refuse);
-    printf("%-6s %-10s %8u %8u %8u   %-12s %u\n",
-           "", "tasks", c.tasks_live, c.tasks_new, c.tasks_done,
-           "asid-roll", c.asid_rollovers);
-    printf("%-6s %-10s %8u %8u %8u\n",
-           "", "zombies", c.zombies_live, c.zombies_new, c.zombies_done);
 
-    printf("\033[1m%-6s\033[0m %-10s %8s %8s %8s\n",
-           "Alloc:", "metric", "live", "+alloc", "-free");
-    printf("%-6s %-10s %7up %7up %7up\n",
-           "", "kstack", c.kstack_live, c.kstack_alloc, c.kstack_free);
-    printf("%-6s %-10s %7up %7up %7up\n",
-           "", "phys", c.phys_live, c.phys_alloc, c.phys_free);
-
-    printf("\033[1m%-6s\033[0m %-12s %7u   %-12s %7u   %-12s %7u   %-12s %7u\n\n",
-           "Diag:",
-           "state-set", c.state_set,
-           "signal-wake", c.signal_wake,
-           "tty-stale", c.tty_stale,
-           "unintr-timeout", c.unintr_timeout);
-    printf("\033[1m%-6s\033[0m %-12s %7u   %-12s %7u   %-12s %7u   %-12s %7u\n\n",
-           "TTY:",
-           "tx-enq", c.tty_tx_enqueued,
-           "tx-drain", c.tty_tx_drained,
-           "tx-full", c.tty_tx_full_waits,
-           "drain-calls", c.tty_tx_drain_calls);
-    printf("%-6s %-12s %7u   %-12s %7u   %-12s %7u   %-12s %7u   %-12s %7u\n",
-           "",
-           "in-depth", c.tty_input_depth,
-           "in-cap", c.tty_input_capacity,
-           "eof", c.tty_eof_pending,
-           "vmin", c.tty_vmin,
-           "vtime", c.tty_vtime);
-    printf("%-6s %-12s %7u   %-12s %7u   %-12s %7u\n\n",
-           "",
-           "iflag", c.tty_iflag,
-           "oflag", c.tty_oflag,
-           "lflag", c.tty_lflag);
-    printf("%-6s %-12s %7u   %-12s %7u   %-12s %7u\n\n",
-           "",
-           "char-wake", c.tty_char_wakeups,
-           "line-wake", c.tty_line_wakeups,
-           "eof-wake", c.tty_eof_wakeups);
+    print_lifecycle_table(&c);
+    print_event_table(&c);
+    print_tty_table(&c);
 
     printf("\033[1m%4s %4s %4s %4s %3s %-8s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %5s %4s %4s %4s %-6s %s\033[0m\n",
            "PID", "TID", "PPID", "SID", "TTY", "USER", "GID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",

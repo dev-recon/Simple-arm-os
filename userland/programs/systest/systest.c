@@ -414,6 +414,24 @@ static void test_posix_compat_syscalls(void)
         expect(wsz.ws_col == 80, "ioctl TIOCGWINSZ reports 80 columns", wsz.ws_col);
         expect(wsz.ws_row == 24, "ioctl TIOCGWINSZ reports 24 rows", wsz.ws_row);
     }
+    wsz.ws_row = 25;
+    wsz.ws_col = 100;
+    wsz.ws_xpixel = 0;
+    wsz.ws_ypixel = 0;
+    expect(ioctl(STDOUT_FILENO, TIOCSWINSZ, &wsz) == 0,
+           "ioctl TIOCSWINSZ accepts tty", 0);
+    memset(&wsz, 0, sizeof(wsz));
+    if (expect(ioctl(STDOUT_FILENO, TIOCGWINSZ, &wsz) == 0,
+               "ioctl TIOCGWINSZ reads updated size", 0) == 0) {
+        expect(wsz.ws_col == 100, "ioctl TIOCSWINSZ updates columns", wsz.ws_col);
+        expect(wsz.ws_row == 25, "ioctl TIOCSWINSZ updates rows", wsz.ws_row);
+    }
+    wsz.ws_row = 24;
+    wsz.ws_col = 80;
+    wsz.ws_xpixel = 0;
+    wsz.ws_ypixel = 0;
+    expect(ioctl(STDOUT_FILENO, TIOCSWINSZ, &wsz) == 0,
+           "ioctl TIOCSWINSZ restores default size", 0);
     expect(tcgetattr(STDIN_FILENO, &tio) == 0, "tcgetattr accepts tty", 0);
     expect((tio.c_lflag & ICANON) != 0, "tcgetattr reports canonical mode", tio.c_lflag);
     expect((tio.c_lflag & ISIG) != 0, "tcgetattr reports signal mode", tio.c_lflag);

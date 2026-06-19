@@ -48,6 +48,7 @@ static void tty_init_termios(struct termios *tio)
     tio->c_cc[VSTART] = 0x11;  /* Ctrl-Q */
     tio->c_cc[VSTOP] = 0x13;   /* Ctrl-S */
     tio->c_cc[VSUSP] = 0x1A;   /* Ctrl-Z */
+    tio->c_cc[VWERASE] = 0x17; /* Ctrl-W */
     tio->c_cc[VEOL] = 0;
     tio->c_cc[VEOL2] = 0;
     tio->c_ispeed = 115200;
@@ -59,6 +60,10 @@ void tty_init(void) {
     
     tty_init_termios(&tty0.termios);
     tty0.foreground_pgid = 0;
+    tty0.winsize_rows = 24;
+    tty0.winsize_cols = 80;
+    tty0.winsize_xpixel = 0;
+    tty0.winsize_ypixel = 0;
     
     init_spinlock(&tty0.lock);
 }
@@ -181,6 +186,41 @@ int tty_flush(int queue_selector)
         spin_unlock_irqrestore(&tty0.lock, flags);
         uart_set_tx_irq_enabled(false);
     }
+
+    return 0;
+}
+
+void tty_get_winsize(uint16_t *rows, uint16_t *cols,
+                     uint16_t *xpixel, uint16_t *ypixel)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    if (rows)
+        *rows = tty0.winsize_rows;
+    if (cols)
+        *cols = tty0.winsize_cols;
+    if (xpixel)
+        *xpixel = tty0.winsize_xpixel;
+    if (ypixel)
+        *ypixel = tty0.winsize_ypixel;
+    spin_unlock_irqrestore(&tty0.lock, flags);
+}
+
+int tty_set_winsize(uint16_t rows, uint16_t cols,
+                    uint16_t xpixel, uint16_t ypixel)
+{
+    unsigned long flags;
+
+    if (rows == 0 || cols == 0)
+        return -EINVAL;
+
+    spin_lock_irqsave(&tty0.lock, &flags);
+    tty0.winsize_rows = rows;
+    tty0.winsize_cols = cols;
+    tty0.winsize_xpixel = xpixel;
+    tty0.winsize_ypixel = ypixel;
+    spin_unlock_irqrestore(&tty0.lock, flags);
 
     return 0;
 }
@@ -385,6 +425,27 @@ void tty_input_char(char c) {
         while (tty0.input_head != tty0.input_tail) {
             uint32_t prev = tty_input_prev(tty0.input_head);
             if (tty0.input_buf[prev] == '\n' || tty0.input_buf[prev] == '\r')
+                break;
+            tty0.input_head = prev;
+            uart_puts("\b \b");
+        }
+        spin_unlock_irqrestore(&tty0.lock, flags);
+        return;
+    }
+
+    if (canonical_echo && c == tio.c_cc[VWERASE]) {
+        while (tty0.input_head != tty0.input_tail) {
+            uint32_t prev = tty_input_prev(tty0.input_head);
+            char pc = tty0.input_buf[prev];
+            if (pc == '\n' || pc == '\r' || pc != ' ')
+                break;
+            tty0.input_head = prev;
+            uart_puts("\b \b");
+        }
+        while (tty0.input_head != tty0.input_tail) {
+            uint32_t prev = tty_input_prev(tty0.input_head);
+            char pc = tty0.input_buf[prev];
+            if (pc == '\n' || pc == '\r' || pc == ' ')
                 break;
             tty0.input_head = prev;
             uart_puts("\b \b");

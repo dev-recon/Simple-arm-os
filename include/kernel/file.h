@@ -78,6 +78,7 @@
 #define TCSETSF     0x5404
 #define TCFLSH      0x540B
 #define TIOCGWINSZ  0x5413
+#define TIOCSWINSZ  0x5414
 
 struct winsize {
     uint16_t ws_row;

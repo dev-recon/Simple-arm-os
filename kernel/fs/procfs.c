@@ -665,6 +665,11 @@ static void proc_fill_tty(char* buf, size_t cap, size_t* len)
     uint32_t tty_char_wakeups = 0;
     uint32_t tty_line_wakeups = 0;
     uint32_t tty_eof_wakeups = 0;
+    struct termios tio;
+    uint16_t rows = 0;
+    uint16_t cols = 0;
+    uint16_t xpixel = 0;
+    uint16_t ypixel = 0;
 
     tty_get_tx_stats(&tty_tx_enqueued, &tty_tx_drained,
                      &tty_tx_full_waits, &tty_tx_drain_calls);
@@ -673,8 +678,12 @@ static void proc_fill_tty(char* buf, size_t cap, size_t* len)
                         &tty_lflag, &tty_vmin, &tty_vtime,
                         &tty_char_wakeups, &tty_line_wakeups,
                         &tty_eof_wakeups);
+    tty_get_termios(&tio);
+    tty_get_winsize(&rows, &cols, &xpixel, &ypixel);
 
     proc_append(buf, cap, len, "tty0\n");
+    proc_append(buf, cap, len, "winsize rows %u cols %u xpixel %u ypixel %u\n",
+                rows, cols, xpixel, ypixel);
     proc_append(buf, cap, len, "input depth %u capacity %u chars %u eof %u\n",
                 tty_input_depth, tty_input_capacity, tty0.input_chars, tty_eof_pending);
     proc_append(buf, cap, len, "wake char %u line %u eof %u\n",
@@ -683,6 +692,14 @@ static void proc_fill_tty(char* buf, size_t cap, size_t* len)
                 tty_tx_enqueued, tty_tx_drained, tty_tx_full_waits, tty_tx_drain_calls);
     proc_append(buf, cap, len, "flags iflag %u oflag %u lflag %u vmin %u vtime %u\n",
                 tty_iflag, tty_oflag, tty_lflag, tty_vmin, tty_vtime);
+    proc_append(buf, cap, len, "cc intr %u quit %u erase %u kill %u eof %u susp %u werase %u\n",
+                tio.c_cc[VINTR],
+                tio.c_cc[VQUIT],
+                tio.c_cc[VERASE],
+                tio.c_cc[VKILL],
+                tio.c_cc[VEOF],
+                tio.c_cc[VSUSP],
+                tio.c_cc[VWERASE]);
     proc_append(buf, cap, len, "jobctl fg_pgid %d read_wait_pid %d read_wait_state %d\n",
                 tty_get_foreground_pgid(),
                 tty_get_read_wait_pid(),

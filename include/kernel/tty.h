@@ -63,6 +63,10 @@ struct tty_struct {
     /* POSIX-ish terminal state. */
     struct termios termios;
     pid_t foreground_pgid;
+    uint16_t winsize_rows;
+    uint16_t winsize_cols;
+    uint16_t winsize_xpixel;
+    uint16_t winsize_ypixel;
     
     /* Wait queue pour read bloquant */
     task_t *read_wait;
@@ -131,6 +135,10 @@ ssize_t tty_write(const char *buf, size_t count);
 int tty_get_termios(struct termios *tio);
 int tty_set_termios(const struct termios *tio, int flush_input);
 int tty_flush(int queue_selector);
+void tty_get_winsize(uint16_t *rows, uint16_t *cols,
+                     uint16_t *xpixel, uint16_t *ypixel);
+int tty_set_winsize(uint16_t rows, uint16_t cols,
+                    uint16_t xpixel, uint16_t ypixel);
 int tty_set_foreground_pgid(pid_t pgid);
 pid_t tty_get_foreground_pgid(void);
 pid_t tty_get_read_wait_pid(void);
