@@ -20,6 +20,7 @@ static char command_cache[SHELL_COMMAND_CACHE_MAX][SHELL_COMMAND_CACHE_NAME_MAX]
 static int command_cache_count = 0;
 static int command_cache_valid = 0;
 static char command_cache_path[SHELL_BUFFER_SIZE];
+static int shell_line_eof = 0;
 
 static int le_starts_with(const char* s, const char* prefix) {
     while (*prefix) {
@@ -685,6 +686,7 @@ char* shell_read_line(void) {
 
     input_buffer[0] = '\0';
     history_draft[0] = '\0';
+    shell_line_eof = 0;
 
     while (1) {
         c = getc_tty();
@@ -702,6 +704,14 @@ char* shell_read_line(void) {
             break;
         } else if (c == '\t') {
             shell_complete_line(input_buffer, &len, &cursor);
+        } else if (c == 0x04) {
+            if (len == 0) {
+                printf("\n");
+                shell_line_eof = 1;
+                return NULL;
+            }
+            if (cursor < len)
+                shell_delete_char(input_buffer, &len, cursor);
         } else if (c == 0x01) {
             shell_cursor_left(cursor);
             cursor = 0;
@@ -745,6 +755,10 @@ char* shell_read_line(void) {
         shell_history_add(input_buffer);
     }
     return input_buffer;
+}
+
+int shell_line_was_eof(void) {
+    return shell_line_eof;
 }
 
 void shell_line_edit_init(void) {

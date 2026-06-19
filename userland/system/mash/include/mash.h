@@ -46,6 +46,7 @@ int shell_push_script_args(const char* name, int argc, char* argv[]);
 void shell_pop_script_args(void);
 void shell_print_prompt(void);
 char* shell_read_line(void);
+int shell_line_was_eof(void);
 void shell_line_edit_init(void);
 void shell_line_edit_shutdown(void);
 

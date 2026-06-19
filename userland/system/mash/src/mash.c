@@ -2356,7 +2356,18 @@ void shell_run(void) {
         SHELL_TRACE("read start");
         char* line = shell_read_line();
         SHELL_TRACE("read done line='%s'", line ? line : "(null)");
-        if (!line || strlen(line) == 0) {
+        if (!line) {
+            if (shell_line_was_eof()) {
+                if (shell_is_login_shell()) {
+                    printf("mash: refusing EOF on login shell; use shutdown instead\n");
+                    continue;
+                }
+                printf("logout\n");
+                break;
+            }
+            continue;
+        }
+        if (strlen(line) == 0) {
             continue;
         }
 
