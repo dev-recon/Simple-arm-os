@@ -19,6 +19,7 @@
 #define COLOR_RESET "\033[0m"
 
 static int failures = 0;
+static int verbose = 1;
 static volatile int cow_shared_value = 11;
 static volatile int sleep_signal_seen = 0;
 static volatile int winch_signal_seen = 0;
@@ -37,6 +38,8 @@ static const char *tmp_path(const char *name)
 
 static void pass(const char *name)
 {
+    if (!verbose)
+        return;
     printf("pid %d " COLOR_GREEN "[OK]" COLOR_RESET " %s\n", getpid(), name);
 }
 
@@ -49,7 +52,19 @@ static void fail(const char *name, int value)
 
 static void skip(const char *name)
 {
+    if (!verbose)
+        return;
     printf("pid %d [SKIP] %s\n", getpid(), name);
+}
+
+static int stdin_is_foreground_tty(void)
+{
+    int fg_pgrp = tcgetpgrp(STDIN_FILENO);
+
+    if (fg_pgrp < 0)
+        return 0;
+
+    return fg_pgrp == getpgrp();
 }
 
 static int expect(int cond, const char *name, int value)
@@ -87,13 +102,21 @@ static int read_file(const char *path, char *buf, int size)
     return n;
 }
 
-static int run_command(char *const argv[])
+static int run_command_common(char *const argv[], int quiet)
 {
     char *const envp[] = { NULL };
     int status = -1;
     int pid = fork();
 
     if (pid == 0) {
+        if (quiet) {
+            int fd = open("/dev/null", O_WRONLY, 0);
+            if (fd >= 0) {
+                dup2(fd, STDOUT_FILENO);
+                dup2(fd, STDERR_FILENO);
+                close(fd);
+            }
+        }
         execve(argv[0], argv, envp);
         exit(127);
     }
@@ -107,10 +130,20 @@ static int run_command(char *const argv[])
     return status;
 }
 
+static int run_command(char *const argv[])
+{
+    return run_command_common(argv, 0);
+}
+
+static int run_command_quiet(char *const argv[])
+{
+    return run_command_common(argv, 1);
+}
+
 static int run_rm1(const char *arg)
 {
     char *argv[] = { "/bin/rm", (char *)arg, NULL };
-    return run_command(argv);
+    return run_command_quiet(argv);
 }
 
 static int run_rm2(const char *opt, const char *arg)
@@ -129,6 +162,54 @@ static int run_ln3(const char *opt, const char *target, const char *link_name)
 {
     char *argv[] = { "/bin/ln", (char *)opt, (char *)target, (char *)link_name, NULL };
     return run_command(argv);
+}
+
+static int remove_tree_local(const char *path)
+{
+    struct stat st;
+
+    if (lstat(path, &st) < 0)
+        return errno == ENOENT ? 0 : -1;
+
+    if (S_ISDIR(st.st_mode)) {
+        char dents[512];
+        int fd;
+        int n;
+
+        fd = open(path, O_RDONLY | O_DIRECTORY, 0);
+        if (fd < 0)
+            return -1;
+
+        while ((n = getdents(fd, dents, sizeof(dents))) > 0) {
+            int pos = 0;
+
+            while (pos < n) {
+                struct linux_dirent *de = (struct linux_dirent *)(dents + pos);
+                char child[192];
+
+                if (de->d_reclen == 0)
+                    break;
+
+                if (strcmp(de->d_name, ".") != 0 &&
+                    strcmp(de->d_name, "..") != 0) {
+                    snprintf(child, sizeof(child), "%s/%s", path, de->d_name);
+                    if (remove_tree_local(child) < 0) {
+                        close(fd);
+                        return -1;
+                    }
+                }
+
+                pos += de->d_reclen;
+            }
+        }
+
+        close(fd);
+        if (n < 0)
+            return -1;
+        return rmdir(path);
+    }
+
+    return unlink(path);
 }
 
 static void test_file_io(void)
@@ -413,6 +494,12 @@ static void test_posix_compat_syscalls(void)
         expect(tcflush(fd, TCIFLUSH) < 0 && errno == ENOTTY,
                "tcflush rejects regular file", errno);
         close(fd);
+    }
+
+    if (!stdin_is_foreground_tty()) {
+        skip("tty ioctl/termios mutation (not foreground job)");
+        unlink(path);
+        return;
     }
 
     expect(ioctl(STDIN_FILENO, TCGETS, &tio) == 0, "ioctl TCGETS accepts tty", 0);
@@ -1384,6 +1471,11 @@ static void test_asid_live_saturation(void)
     int pid;
     int status;
 
+    if (!stdin_is_foreground_tty()) {
+        skip("ASID live saturation (not foreground job)");
+        return;
+    }
+
     for (int i = 0; i < LIVE_LIMIT; i++)
         pids[i] = -1;
 
@@ -1506,6 +1598,11 @@ static void test_terminal_process_group(void)
     int self_pgrp = getpgrp();
     int current;
 
+    if (old_pgrp < 0 && errno == ENOTTY) {
+        skip("tcsetpgrp foreground mutation (stdin is not tty)");
+        return;
+    }
+
     if (expect(old_pgrp >= 0, "tcgetpgrp returns foreground group", old_pgrp) < 0)
         return;
 
@@ -1557,11 +1654,35 @@ static void test_process_session_info(void)
     expect(found, "sysinfo contains current process", self);
 }
 
-int main(void)
+static void usage(void)
 {
-    printf("=== syscall smoke tests ===\n");
+    printf("usage: systest [-q|-v]\n");
+}
+
+int main(int argc, char **argv)
+{
+    int foreground = stdin_is_foreground_tty();
+
+    verbose = foreground ? 1 : 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
+            verbose = 0;
+        } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+            verbose = 1;
+        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            usage();
+            exit(0);
+        } else {
+            usage();
+            exit(1);
+        }
+    }
+
+    if (verbose)
+        printf("=== syscall smoke tests ===\n");
+
     snprintf(systest_tmp_root, sizeof(systest_tmp_root), "/tmp/systest-%d", getpid());
-    run_rm2("-rf", systest_tmp_root);
+    remove_tree_local(systest_tmp_root);
     mkdir(systest_tmp_root, 0755);
 
     test_identity();
@@ -1596,12 +1717,12 @@ int main(void)
     test_lifecycle_orphan_reaper();
 
     if (failures == 0) {
-        run_rm2("-rf", systest_tmp_root);
-        printf("systest: all tests passed\n");
+        remove_tree_local(systest_tmp_root);
+        printf("pid %d systest: all tests passed\n", getpid());
         exit(0);
     }
 
-    run_rm2("-rf", systest_tmp_root);
-    printf("systest: %d failure(s)\n", failures);
+    remove_tree_local(systest_tmp_root);
+    printf("pid %d systest: %d failure(s)\n", getpid(), failures);
     exit(1);
 }

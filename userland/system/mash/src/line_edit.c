@@ -690,6 +690,11 @@ char* shell_read_line(void) {
 
     while (1) {
         c = getc_tty();
+        if (c == -2) {
+            jobs_reap_background();
+            pflush();
+            continue;
+        }
         if (c < 0) {
             if (len > 0)
                 printf("\r\n");

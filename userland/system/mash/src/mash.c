@@ -1544,6 +1544,14 @@ static int shell_parse_line_into(char* line, char* argv[],
         }
     }
     
+    while (*readp == ' ' || *readp == '\t')
+        readp++;
+    if (*readp) {
+        argv[0] = NULL;
+        printf("mash: too many arguments\n");
+        return -SHELL_MAX_ARGS;
+    }
+
     argv[argc] = NULL;
     return argc;
 }
@@ -2225,7 +2233,9 @@ static int shell_execute_for_line(char* line) {
 
     list_argc = shell_parse_line_into(list_copy, list_argv,
                                       list_tokens, sizeof(list_tokens));
-    if (list_argc <= 0)
+    if (list_argc < 0)
+        return SHELL_ERROR;
+    if (list_argc == 0)
         return SHELL_OK;
 
     if (shell_collect_for_items(list_argv, 0, list_argc,
@@ -2331,7 +2341,11 @@ int shell_execute_line(char* line) {
 
     argc = shell_parse_line_into(trimmed, local_argv,
                                  local_tokens, sizeof(local_tokens));
-    if (argc <= 0)
+    if (argc < 0) {
+        shell_status = SHELL_ERROR;
+        return SHELL_ERROR;
+    }
+    if (argc == 0)
         return SHELL_OK;
 
     SHELL_TRACE("parsed argc=%d cmd=%s", argc, local_argv[0]);

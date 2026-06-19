@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include <errno.h>
 
 static inline int putc_tty(char c) {
     return write(1, &c, 1);
@@ -10,7 +11,15 @@ static inline int putc_tty(char c) {
 
 static inline int getc_tty(void) {
     char c;
-    return read(0, &c, 1) == 1 ? (unsigned char)c : -1;
+    int n;
+
+    errno = 0;
+    n = read(0, &c, 1);
+    if (n == 1)
+        return (unsigned char)c;
+    if (n < 0 && errno == EINTR)
+        return -2;
+    return -1;
 }
 
 static inline void pflush(void) {
@@ -51,7 +60,7 @@ void shell_line_edit_init(void);
 void shell_line_edit_shutdown(void);
 
 #define SHELL_BUFFER_SIZE 256
-#define SHELL_MAX_ARGS      16
+#define SHELL_MAX_ARGS      64
 
 // Codes de retour des commandes
 #define SHELL_OK            0
