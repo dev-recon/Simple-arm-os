@@ -34,6 +34,8 @@ typedef struct shell_script_frame {
 static shell_script_frame_t script_frames[SHELL_SCRIPT_STACK_MAX];
 static int script_frame_depth = 1;
 
+static void shell_sigchld_handler(int sig);
+
 static int shell_is_login_shell(void)
 {
     /*
@@ -42,6 +44,24 @@ static int shell_is_login_shell(void)
      * are allowed to terminate via the exit builtin.
      */
     return getppid() == 1;
+}
+
+static void shell_install_signal_handlers(void)
+{
+    if (shell_is_login_shell()) {
+        signal(SIGINT, SIG_IGN);
+        signal(SIGTSTP, SIG_IGN);
+    } else {
+        /*
+         * A nested interactive shell is just a foreground command. It must not
+         * inherit the login shell protection, otherwise Ctrl-C cannot kill a
+         * user-started /sbin/mash.
+         */
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL);
+    }
+
+    signal(SIGCHLD, shell_sigchld_handler);
 }
 
 #define SHELL_MAX_ENV       16
@@ -1507,9 +1527,9 @@ int shell_execute(int argc, char* argv[]) {
         return SHELL_OK;
 
     // Command exit built-in
-    if (strcmp(argv[0], "exit") == 0) {
+    if (strcmp(argv[0], "exit") == 0 || strcmp(argv[0], "quit") == 0) {
         if (shell_is_login_shell()) {
-            printf("exit: refusing to terminate the login shell; use shutdown instead\n");
+            printf("%s: refusing to terminate the login shell; use shutdown instead\n", argv[0]);
             return SHELL_ERROR;
         }
         printf("Au revoir!\n");
@@ -2301,9 +2321,7 @@ int main() {
     setpgid(0, 0);
     shell_pgid = getpgrp();
     jobs_set_shell_pgid(shell_pgid);
-    signal(SIGINT, SIG_IGN);
-    signal(SIGTSTP, SIG_IGN);
-    signal(SIGCHLD, shell_sigchld_handler);
+    shell_install_signal_handlers();
     shell_restore_foreground();
     shell_restore_tty_mode();
     command_init();
