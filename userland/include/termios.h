@@ -76,5 +76,6 @@ struct termios {
 int tcgetattr(int fd, struct termios *termios_p);
 int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
 int tcflush(int fd, int queue_selector);
+int tcdrain(int fd);
 
 #endif

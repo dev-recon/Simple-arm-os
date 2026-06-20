@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
 #include <sys/wait.h>
 #include "../include/jobs.h"
 
@@ -153,6 +154,52 @@ static job_t* jobs_find_arg(int argc, char* argv[])
     return jobs_find_by_id(id);
 }
 
+static int jobs_parse_positive_int(const char* s, int* out)
+{
+    int value = 0;
+
+    if (!s || !*s || !out)
+        return -1;
+
+    while (*s) {
+        if (*s < '0' || *s > '9')
+            return -1;
+        value = value * 10 + (*s - '0');
+        s++;
+    }
+
+    if (value <= 0)
+        return -1;
+
+    *out = value;
+    return 0;
+}
+
+static job_t* jobs_find_wait_job_spec(const char* spec)
+{
+    int id;
+
+    if (!spec)
+        return NULL;
+
+    if (strcmp(spec, "%%") == 0 || strcmp(spec, "%+") == 0)
+        return jobs_current();
+    if (strcmp(spec, "%-") == 0)
+        return jobs_previous();
+
+    if (spec[0] != '%')
+        return NULL;
+
+    spec++;
+    if (!*spec)
+        return jobs_current();
+
+    if (jobs_parse_positive_int(spec, &id) < 0)
+        return NULL;
+
+    return jobs_find_by_id(id);
+}
+
 static const char* jobs_state_name(job_state_t state)
 {
     switch (state) {
@@ -268,6 +315,63 @@ static int jobs_shell_status_from_wait_status(int status)
     if (status < 0)
         return SHELL_ERROR;
     return status & 0xff;
+}
+
+static int jobs_wait_for_job(job_t* job)
+{
+    int status = 0;
+    int pid;
+
+    if (!job || job->state == JOB_EMPTY)
+        return 127;
+
+    if (job->state == JOB_DONE) {
+        status = job->status;
+        job->state = JOB_EMPTY;
+        return jobs_shell_status_from_wait_status(status);
+    }
+
+    if (job->state == JOB_STOPPED)
+        return jobs_shell_status_from_wait_status(job->status);
+
+    while (job->state == JOB_RUNNING) {
+        errno = 0;
+        pid = waitpid(-job->pgid, &status, WUNTRACED);
+        if (pid < 0) {
+            if (errno == EINTR)
+                continue;
+            return 127;
+        }
+        if (pid == 0)
+            continue;
+        jobs_note_status(pid, status);
+    }
+
+    status = job->status;
+    if (job->state == JOB_DONE)
+        job->state = JOB_EMPTY;
+
+    return jobs_shell_status_from_wait_status(status);
+}
+
+static int jobs_wait_for_pid(int pid)
+{
+    int status = 0;
+    int waited;
+    job_t* job = jobs_find_by_pid(pid);
+
+    if (job)
+        return jobs_wait_for_job(job);
+
+    do {
+        errno = 0;
+        waited = waitpid(pid, &status, WUNTRACED);
+    } while (waited < 0 && errno == EINTR);
+
+    if (waited != pid)
+        return 127;
+
+    return jobs_shell_status_from_wait_status(status);
 }
 
 static int jobs_find_pid_slot(job_t* job, int pid)
@@ -584,4 +688,53 @@ int jobs_bg_builtin(int argc, char* argv[])
     jobs_continue(job);
     printf("[%d]+ %s &\n", job->id, job->command);
     return SHELL_OK;
+}
+
+int jobs_wait_builtin(int argc, char* argv[])
+{
+    int status = SHELL_OK;
+    int shown_error = 0;
+
+    jobs_reap(0);
+
+    if (argc == 1) {
+        for (int i = 0; i < JOBS_MAX; i++) {
+            if (jobs[i].state == JOB_EMPTY)
+                continue;
+            status = jobs_wait_for_job(&jobs[i]);
+        }
+        return status;
+    }
+
+    for (int i = 1; i < argc; i++) {
+        job_t* job = jobs_find_wait_job_spec(argv[i]);
+        int pid;
+
+        if (job) {
+            status = jobs_wait_for_job(job);
+            continue;
+        }
+
+        if (argv[i][0] == '%') {
+            printf("wait: no such job: %s\n", argv[i]);
+            status = 127;
+            shown_error = 1;
+            continue;
+        }
+
+        if (jobs_parse_positive_int(argv[i], &pid) < 0) {
+            printf("wait: invalid pid: %s\n", argv[i]);
+            status = 127;
+            shown_error = 1;
+            continue;
+        }
+
+        status = jobs_wait_for_pid(pid);
+        if (status == 127 && !shown_error) {
+            printf("wait: pid %d is not a child\n", pid);
+            shown_error = 1;
+        }
+    }
+
+    return status;
 }

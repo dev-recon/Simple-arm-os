@@ -14,5 +14,6 @@ int jobs_reap_background(void);
 int jobs_builtin(int argc, char* argv[]);
 int jobs_fg_builtin(int argc, char* argv[]);
 int jobs_bg_builtin(int argc, char* argv[]);
+int jobs_wait_builtin(int argc, char* argv[]);
 
 #endif

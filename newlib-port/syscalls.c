@@ -121,6 +121,17 @@ char **environ = __env;
 #define TCIOFLUSH 2
 #endif
 
+struct armos_termios {
+    uint32_t c_iflag;
+    uint32_t c_oflag;
+    uint32_t c_cflag;
+    uint32_t c_lflag;
+    uint8_t c_line;
+    uint8_t c_cc[32];
+    uint32_t c_ispeed;
+    uint32_t c_ospeed;
+};
+
 struct os_stat {
     uint32_t st_dev;
     uint32_t st_ino;
@@ -701,6 +712,16 @@ int tcsetattr(int fd, int optional_actions, const void *termios_p)
 int tcflush(int fd, int queue_selector)
 {
     return ret_errno(sys_ioctl(fd, TCFLSH, (void *)queue_selector));
+}
+
+int tcdrain(int fd)
+{
+    struct armos_termios tio;
+
+    if (tcgetattr(fd, &tio) < 0)
+        return -1;
+
+    return tcsetattr(fd, TCSADRAIN, &tio);
 }
 
 int tcsetpgrp(int fd, pid_t pgrp)

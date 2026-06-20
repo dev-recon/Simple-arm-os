@@ -230,6 +230,14 @@ static void test_tcsetattr_actions(void)
         fail("tcsetattr TCSADRAIN accepted", errno);
 }
 
+static void test_tcdrain(void)
+{
+    if (tcdrain(STDOUT_FILENO) == 0)
+        ok("tcdrain stdout");
+    else
+        fail("tcdrain stdout", errno);
+}
+
 static int set_and_check_termios(const struct termios *tio,
                                  const char *set_name,
                                  struct termios *out)
@@ -382,6 +390,7 @@ int main(int argc, char **argv)
 
     test_tcflush_selectors();
     test_tcsetattr_actions();
+    test_tcdrain();
     test_control_chars_preserved();
     test_raw_timeout_mode();
     test_raw_poll_mode();

@@ -67,6 +67,7 @@ int command_init(void) {
     register_command("jobs", "List background jobs", jobs_builtin);
     register_command("fg", "Bring a background job to the foreground", jobs_fg_builtin);
     register_command("bg", "Resume a background job", jobs_bg_builtin);
+    register_command("wait", "Wait for background jobs", jobs_wait_builtin);
 
     return SHELL_OK;
 }
