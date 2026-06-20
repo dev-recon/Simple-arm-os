@@ -235,10 +235,15 @@ void kernel_main(void)
     init_keyboard();
   
     init_display();
-    if (virtio_gpu_init())
+    if (virtio_gpu_init()) {
         KBOOT_OKF("GPU: virtio-gpu %ux%ux%u", FB_WIDTH, FB_HEIGHT, FB_BPP);
-    else
+        if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0)
+            KBOOT_OKF("TTY: console tty1 on virtio-gpu");
+        else
+            KBOOT_WARN("TTY: tty1 framebuffer backend unavailable");
+    } else {
         KBOOT_WARN("GPU: virtio-gpu unavailable");
+    }
     KBOOT_OKF("TTY: console tty0 on uart0");
       
     //kprintf("Initialize IDE ... ");

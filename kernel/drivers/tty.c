@@ -49,35 +49,55 @@ static const tty_backend_ops_t *tty_backend_for(const struct tty_struct *tty)
     return tty ? tty->backend : NULL;
 }
 
-static void tty_backend_putc(char c)
+static void tty_backend_putc_to(struct tty_struct *tty, char c)
 {
-    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
+    const tty_backend_ops_t *backend = tty_backend_for(tty);
 
     if (backend)
         backend->putc(c);
 }
 
-static bool tty_backend_try_putc(char c)
+static void tty_backend_putc(char c)
 {
-    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
+    tty_backend_putc_to(&tty0, c);
+}
+
+static bool tty_backend_try_putc_to(struct tty_struct *tty, char c)
+{
+    const tty_backend_ops_t *backend = tty_backend_for(tty);
 
     return backend ? backend->try_putc(c) : false;
 }
 
-static void tty_backend_puts(const char *s)
+static bool tty_backend_try_putc(char c)
 {
-    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
+    return tty_backend_try_putc_to(&tty0, c);
+}
+
+static void tty_backend_puts_to(struct tty_struct *tty, const char *s)
+{
+    const tty_backend_ops_t *backend = tty_backend_for(tty);
 
     if (backend)
         backend->puts(s);
 }
 
-static void tty_backend_set_tx_irq_enabled(bool enabled)
+static void tty_backend_puts(const char *s)
 {
-    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
+    tty_backend_puts_to(&tty0, s);
+}
+
+static void tty_backend_set_tx_irq_enabled_to(struct tty_struct *tty, bool enabled)
+{
+    const tty_backend_ops_t *backend = tty_backend_for(tty);
 
     if (backend)
         backend->set_tx_irq_enabled(enabled);
+}
+
+static void tty_backend_set_tx_irq_enabled(bool enabled)
+{
+    tty_backend_set_tx_irq_enabled_to(&tty0, enabled);
 }
 
 static bool tty_backend_has_data(void)
@@ -104,14 +124,14 @@ static uint32_t tty_input_prev(uint32_t pos)
     return pos == 0 ? TTY_INPUT_BUF_SIZE - 1 : pos - 1;
 }
 
-static bool tty_output_empty_locked(void)
+static bool tty_output_empty_locked(struct tty_struct *tty)
 {
-    return tty0.output_head == tty0.output_tail;
+    return tty->output_head == tty->output_tail;
 }
 
-static bool tty_output_full_locked(void)
+static bool tty_output_full_locked(struct tty_struct *tty)
 {
-    return tty_output_next(tty0.output_head) == tty0.output_tail;
+    return tty_output_next(tty->output_head) == tty->output_tail;
 }
 
 static void tty_init_termios(struct termios *tio)
@@ -464,7 +484,7 @@ bool tty_has_pending_output(void)
     bool pending;
 
     spin_lock_irqsave(&tty0.lock, &flags);
-    pending = !tty_output_empty_locked();
+    pending = !tty_output_empty_locked(&tty0);
     spin_unlock_irqrestore(&tty0.lock, flags);
 
     return pending;
@@ -836,62 +856,67 @@ ssize_t tty_read(char *buf, size_t count) {
     return read;
 }
 
-ssize_t tty_write(const char *buf, size_t count) {
+static void tty_drain_output_limited_to(struct tty_struct *tty, uint32_t budget);
+
+static ssize_t tty_write_to(struct tty_struct *tty, const char *buf, size_t count) {
     uint32_t oflag;
     unsigned long flags;
     size_t written = 0;
 
-    spin_lock_irqsave(&tty0.lock, &flags);
-    oflag = tty0.termios.c_oflag;
-    spin_unlock_irqrestore(&tty0.lock, flags);
+    if (!tty)
+        return -ENODEV;
+
+    spin_lock_irqsave(&tty->lock, &flags);
+    oflag = tty->termios.c_oflag;
+    spin_unlock_irqrestore(&tty->lock, flags);
 
     for (size_t i = 0; i < count; i++) {
         if ((oflag & OPOST) && (oflag & ONLCR) && buf[i] == '\n') {
             while (1) {
-                spin_lock_irqsave(&tty0.lock, &flags);
-                if (!tty_output_full_locked()) {
-                    tty0.output_buf[tty0.output_head] = '\r';
-                    tty0.output_head = tty_output_next(tty0.output_head);
-                    tty0.output_enqueued++;
-                    spin_unlock_irqrestore(&tty0.lock, flags);
-                    tty_backend_set_tx_irq_enabled(true);
-                    tty_drain_output();
+                spin_lock_irqsave(&tty->lock, &flags);
+                if (!tty_output_full_locked(tty)) {
+                    tty->output_buf[tty->output_head] = '\r';
+                    tty->output_head = tty_output_next(tty->output_head);
+                    tty->output_enqueued++;
+                    spin_unlock_irqrestore(&tty->lock, flags);
+                    tty_backend_set_tx_irq_enabled_to(tty, true);
+                    tty_drain_output_limited_to(tty, TTY_TX_DRAIN_BUDGET);
                     break;
                 }
-                tty0.output_full_waits++;
-                spin_unlock_irqrestore(&tty0.lock, flags);
-                tty_drain_output();
+                tty->output_full_waits++;
+                spin_unlock_irqrestore(&tty->lock, flags);
+                tty_drain_output_limited_to(tty, TTY_TX_DRAIN_BUDGET);
                 if (current_task && has_pending_signals(current_task))
                     return written > 0 ? (ssize_t)written : (ssize_t)-EINTR;
                 if (current_task)
                     yield();
                 else {
-                    tty_backend_putc('\r');
+                    tty_backend_putc_to(tty, '\r');
                     break;
                 }
             }
         }
 
         while (1) {
-            spin_lock_irqsave(&tty0.lock, &flags);
-            if (!tty_output_full_locked()) {
-                tty0.output_buf[tty0.output_head] = buf[i];
-                tty0.output_head = tty_output_next(tty0.output_head);
-                tty0.output_enqueued++;
-                spin_unlock_irqrestore(&tty0.lock, flags);
-                tty_backend_set_tx_irq_enabled(true);
-                tty_drain_output();
+            spin_lock_irqsave(&tty->lock, &flags);
+            if (!tty_output_full_locked(tty)) {
+                tty->output_buf[tty->output_head] = buf[i];
+                tty->output_head = tty_output_next(tty->output_head);
+                tty->output_enqueued++;
+                spin_unlock_irqrestore(&tty->lock, flags);
+                tty_backend_set_tx_irq_enabled_to(tty, true);
+                tty_drain_output_limited_to(tty, TTY_TX_DRAIN_BUDGET);
                 break;
             }
-            tty0.output_full_waits++;
-            spin_unlock_irqrestore(&tty0.lock, flags);
-            tty_drain_output();
+            tty->output_full_waits++;
+            spin_unlock_irqrestore(&tty->lock, flags);
+            tty_drain_output_limited_to(tty, TTY_TX_DRAIN_BUDGET);
             if (current_task && has_pending_signals(current_task))
                 return written > 0 ? (ssize_t)written : (ssize_t)-EINTR;
             if (current_task)
                 yield();
             else {
-                tty_backend_putc(buf[i]);
+                tty_backend_putc_to(tty, buf[i]);
                 break;
             }
         }
@@ -900,49 +925,61 @@ ssize_t tty_write(const char *buf, size_t count) {
     return (ssize_t)written;
 }
 
-static void tty_drain_output_limited(uint32_t budget)
+ssize_t tty_write(const char *buf, size_t count) {
+    return tty_write_to(&tty0, buf, count);
+}
+
+static void tty_drain_output_limited_to(struct tty_struct *tty, uint32_t budget)
 {
     unsigned long flags;
     uint32_t drained = 0;
 
-    spin_lock_irqsave(&tty0.lock, &flags);
-    tty0.output_drain_calls++;
-    spin_unlock_irqrestore(&tty0.lock, flags);
+    if (!tty)
+        return;
+
+    spin_lock_irqsave(&tty->lock, &flags);
+    tty->output_drain_calls++;
+    spin_unlock_irqrestore(&tty->lock, flags);
 
     while (drained < budget) {
         char c;
         bool sent;
 
-        spin_lock_irqsave(&tty0.lock, &flags);
-        if (tty_output_empty_locked()) {
-            spin_unlock_irqrestore(&tty0.lock, flags);
-            tty_backend_set_tx_irq_enabled(false);
+        spin_lock_irqsave(&tty->lock, &flags);
+        if (tty_output_empty_locked(tty)) {
+            spin_unlock_irqrestore(&tty->lock, flags);
+            tty_backend_set_tx_irq_enabled_to(tty, false);
             return;
         }
 
-        c = tty0.output_buf[tty0.output_tail];
-        sent = tty_backend_try_putc(c);
+        c = tty->output_buf[tty->output_tail];
+        sent = tty_backend_try_putc_to(tty, c);
         if (sent) {
-            tty0.output_tail = tty_output_next(tty0.output_tail);
-            tty0.output_drained++;
+            tty->output_tail = tty_output_next(tty->output_tail);
+            tty->output_drained++;
             drained++;
         }
-        spin_unlock_irqrestore(&tty0.lock, flags);
+        spin_unlock_irqrestore(&tty->lock, flags);
 
         if (!sent) {
-            tty_backend_set_tx_irq_enabled(true);
+            tty_backend_set_tx_irq_enabled_to(tty, true);
             return;
         }
     }
 
-    spin_lock_irqsave(&tty0.lock, &flags);
-    if (tty_output_empty_locked()) {
-        spin_unlock_irqrestore(&tty0.lock, flags);
-        tty_backend_set_tx_irq_enabled(false);
+    spin_lock_irqsave(&tty->lock, &flags);
+    if (tty_output_empty_locked(tty)) {
+        spin_unlock_irqrestore(&tty->lock, flags);
+        tty_backend_set_tx_irq_enabled_to(tty, false);
     } else {
-        spin_unlock_irqrestore(&tty0.lock, flags);
-        tty_backend_set_tx_irq_enabled(true);
+        spin_unlock_irqrestore(&tty->lock, flags);
+        tty_backend_set_tx_irq_enabled_to(tty, true);
     }
+}
+
+static void tty_drain_output_limited(uint32_t budget)
+{
+    tty_drain_output_limited_to(&tty0, budget);
 }
 
 void tty_drain_output(void)
@@ -951,13 +988,19 @@ void tty_drain_output(void)
 }
 
 static ssize_t tty_file_read(file_t* file, void* buf, size_t count) {
-    (void)file;
+    int tty_id = file ? (int)(uintptr_t)file->private_data : TTY_CONSOLE_ID;
+
+    if (tty_id != TTY_CONSOLE_ID)
+        return -EIO;
+
     return tty_read((char*)buf, count);
 }
 
 static ssize_t tty_file_write(file_t* file, const void* buf, size_t count) {
-    (void)file;
-    return tty_write((const char*)buf, count);
+    int tty_id = file ? (int)(uintptr_t)file->private_data : TTY_CONSOLE_ID;
+    struct tty_struct *tty = tty_by_id(tty_id);
+
+    return tty_write_to(tty, (const char*)buf, count);
 }
 
 static file_operations_t tty_file_ops = {

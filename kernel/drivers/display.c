@@ -3,6 +3,8 @@
 #include <kernel/kernel.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
+#include <kernel/tty.h>
+#include <kernel/virtio_gpu.h>
 
 static display_state_t display = {0};
 
@@ -247,4 +249,65 @@ ssize_t framebuffer_read(file_t* file, void* buffer, size_t count)
     file->offset += to_copy;
     
     return to_copy;
+}
+
+static void framebuffer_tty_putc(char c)
+{
+    if (!framebuffer_base)
+        return;
+
+    console_putchar(c);
+    virtio_gpu_flush();
+}
+
+static bool framebuffer_tty_try_putc(char c)
+{
+    if (!framebuffer_base)
+        return false;
+
+    console_putchar(c);
+    virtio_gpu_flush();
+    return true;
+}
+
+static void framebuffer_tty_puts(const char *s)
+{
+    if (!framebuffer_base || !s)
+        return;
+
+    while (*s)
+        console_putchar(*s++);
+    virtio_gpu_flush();
+}
+
+static void framebuffer_tty_set_tx_irq_enabled(bool enabled)
+{
+    (void)enabled;
+}
+
+static bool framebuffer_tty_has_data(void)
+{
+    return false;
+}
+
+static int framebuffer_tty_getc(void)
+{
+    return -1;
+}
+
+static const tty_backend_ops_t framebuffer_tty_backend = {
+    .putc = framebuffer_tty_putc,
+    .try_putc = framebuffer_tty_try_putc,
+    .puts = framebuffer_tty_puts,
+    .set_tx_irq_enabled = framebuffer_tty_set_tx_irq_enabled,
+    .has_data = framebuffer_tty_has_data,
+    .getc = framebuffer_tty_getc,
+};
+
+int framebuffer_attach_tty_backend(int tty_id)
+{
+    if (!framebuffer_base)
+        return -ENODEV;
+
+    return tty_attach_backend_to(tty_id, &framebuffer_tty_backend);
 }

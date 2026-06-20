@@ -49,6 +49,7 @@ void draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg);
 void console_putchar(char c);
 void console_puts(const char* str);
 void scroll_screen(void);
+int framebuffer_attach_tty_backend(int tty_id);
 
 /* Framebuffer file operations */
 ssize_t framebuffer_read(file_t* file, void* buffer, size_t count);
