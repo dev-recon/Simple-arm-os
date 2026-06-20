@@ -250,6 +250,15 @@ static char jobs_marker(job_t* job)
     return ' ';
 }
 
+static int jobs_shell_status_from_wait_status(int status)
+{
+    if (WIFSTOPPED(status) && WSTOPSIG(status) != 0)
+        return 128 + WSTOPSIG(status);
+    if (status < 0)
+        return SHELL_ERROR;
+    return status & 0xff;
+}
+
 static int jobs_find_pid_slot(job_t* job, int pid)
 {
     if (!job)
@@ -522,7 +531,7 @@ int jobs_fg_builtin(int argc, char* argv[])
         printf("[%d] Done pid=%d status=%d  %s\n",
                job->id, job->pids[0], job->status, job->command);
         job->state = JOB_EMPTY;
-        return job->status;
+        return jobs_shell_status_from_wait_status(job->status);
     }
 
     printf("%s\n", job->command);
@@ -542,7 +551,7 @@ int jobs_fg_builtin(int argc, char* argv[])
     if (job->state == JOB_DONE)
         job->state = JOB_EMPTY;
 
-    return status;
+    return jobs_shell_status_from_wait_status(status);
 }
 
 int jobs_bg_builtin(int argc, char* argv[])
@@ -558,7 +567,7 @@ int jobs_bg_builtin(int argc, char* argv[])
     if (job->state == JOB_DONE) {
         printf("[%d] Done pid=%d status=%d  %s\n",
                job->id, job->pids[0], job->status, job->command);
-        return job->status;
+        return jobs_shell_status_from_wait_status(job->status);
     }
 
     jobs_continue(job);

@@ -197,6 +197,23 @@ static int shell_wait_foreground_child(int child_pid, int* status)
     return waited;
 }
 
+static int shell_status_from_wait_status(int status)
+{
+    /*
+     * ArmOS waitpid currently returns plain exit codes for normal exits, while
+     * stopped jobs use the traditional 0x7f | (signal << 8) encoding. Keep the
+     * raw exit code ABI intact and only normalize job-control stops for shell
+     * conditionals/$?.
+     */
+    if (WIFSTOPPED(status) && WSTOPSIG(status) != 0)
+        return 128 + WSTOPSIG(status);
+
+    if (status < 0)
+        return SHELL_ERROR;
+
+    return status & 0xff;
+}
+
 static void shell_restore_foreground(void) {
     shell_set_foreground_pgid(shell_pgid);
     shell_restore_tty_mode();
@@ -906,7 +923,7 @@ static int validate_pipeline_commands(shell_command_t commands[], int command_co
             continue;
 
         printf("mash: command not found: %s\n", name);
-        return -1;
+        return 127;
     }
 
     return 0;
@@ -978,8 +995,11 @@ static int run_pipeline(int argc, char* argv[], int background) {
     if (split_pipeline(argc, argv, commands, &command_count) < 0)
         return SHELL_ERROR;
 
-    if (validate_pipeline_commands(commands, command_count) < 0)
-        return SHELL_ERROR;
+    {
+        int validate_status = validate_pipeline_commands(commands, command_count);
+        if (validate_status != 0)
+            return validate_status;
+    }
 
     pipe_count = command_count - 1;
     for (i = 0; i < pipe_count; i++) {
@@ -1080,7 +1100,7 @@ static int run_pipeline(int argc, char* argv[], int background) {
             wait_seen[idx] = 1;
             reported++;
         }
-        last_status = status;
+        last_status = shell_status_from_wait_status(status);
     }
     shell_restore_foreground();
 
@@ -1686,7 +1706,7 @@ int shell_execute(int argc, char* argv[]) {
             remember_stopped_job(child_pid, child_pid, command, stopped_status);
         //printf("SHELL waked up waited_pid %d, son status = %d\n", waited_pid, status);
 
-        return(status);
+        return shell_status_from_wait_status(status);
     } 
 
 
@@ -2351,8 +2371,12 @@ int shell_execute_line(char* line) {
         return 2;
     }
 
-    if (starts_with(trimmed, "for "))
-        return shell_execute_for_line(trimmed);
+    if (starts_with(trimmed, "for ")) {
+        result = shell_execute_for_line(trimmed);
+        if (result != SHELL_EXIT)
+            shell_status = result;
+        return result;
+    }
 
     argc = shell_parse_line_into(trimmed, local_argv,
                                  local_tokens, sizeof(local_tokens));
