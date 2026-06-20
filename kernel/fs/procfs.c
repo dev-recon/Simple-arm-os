@@ -645,8 +645,61 @@ static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "LAST:%10u\n", gic_get_last_irq_id());
 }
 
+typedef struct proc_flag_name {
+    uint32_t flag;
+    const char* name;
+} proc_flag_name_t;
+
+static void proc_append_flag_names(char* buf, size_t cap, size_t* len,
+                                   const char* label, uint32_t value,
+                                   const proc_flag_name_t* names,
+                                   size_t name_count)
+{
+    bool any = false;
+
+    proc_append(buf, cap, len, "%s", label);
+    for (size_t i = 0; i < name_count; i++) {
+        if (value & names[i].flag) {
+            proc_append(buf, cap, len, "%s%s", any ? "," : "", names[i].name);
+            any = true;
+        }
+    }
+    if (!any)
+        proc_append(buf, cap, len, "none");
+    proc_append(buf, cap, len, "\n");
+}
+
 static void proc_fill_tty(char* buf, size_t cap, size_t* len)
 {
+    static const proc_flag_name_t iflag_names[] = {
+        { INLCR, "INLCR" },
+        { IGNCR, "IGNCR" },
+        { ICRNL, "ICRNL" },
+        { IXON,  "IXON" },
+        { IXOFF, "IXOFF" },
+    };
+    static const proc_flag_name_t oflag_names[] = {
+        { OPOST, "OPOST" },
+        { ONLCR, "ONLCR" },
+        { OCRNL, "OCRNL" },
+        { ONOCR, "ONOCR" },
+        { ONLRET, "ONLRET" },
+    };
+    static const proc_flag_name_t lflag_names[] = {
+        { ECHO, "ECHO" },
+        { ICANON, "ICANON" },
+        { ISIG, "ISIG" },
+        { IEXTEN, "IEXTEN" },
+        { ECHOE, "ECHOE" },
+        { ECHOK, "ECHOK" },
+        { ECHOCTL, "ECHOCTL" },
+        { ECHOKE, "ECHOKE" },
+    };
+    static const proc_flag_name_t cflag_names[] = {
+        { CS8, "CS8" },
+        { CREAD, "CREAD" },
+        { HUPCL, "HUPCL" },
+    };
     uint32_t tty_tx_enqueued = 0;
     uint32_t tty_tx_drained = 0;
     uint32_t tty_tx_full_waits = 0;
@@ -689,6 +742,22 @@ static void proc_fill_tty(char* buf, size_t cap, size_t* len)
                 tty_tx_enqueued, tty_tx_drained, tty_tx_full_waits, tty_tx_drain_calls);
     proc_append(buf, cap, len, "flags iflag %u oflag %u lflag %u vmin %u vtime %u\n",
                 tty_iflag, tty_oflag, tty_lflag, tty_vmin, tty_vtime);
+    proc_append(buf, cap, len, "mode %s %s %s\n",
+                (tty_lflag & ICANON) ? "canonical" : "raw",
+                (tty_lflag & ISIG) ? "signal" : "nosignal",
+                (tty_lflag & ECHO) ? "echo" : "noecho");
+    proc_append_flag_names(buf, cap, len, "iflag_names ",
+                           tty_iflag, iflag_names,
+                           sizeof(iflag_names) / sizeof(iflag_names[0]));
+    proc_append_flag_names(buf, cap, len, "oflag_names ",
+                           tty_oflag, oflag_names,
+                           sizeof(oflag_names) / sizeof(oflag_names[0]));
+    proc_append_flag_names(buf, cap, len, "lflag_names ",
+                           tty_lflag, lflag_names,
+                           sizeof(lflag_names) / sizeof(lflag_names[0]));
+    proc_append_flag_names(buf, cap, len, "cflag_names ",
+                           tio.c_cflag, cflag_names,
+                           sizeof(cflag_names) / sizeof(cflag_names[0]));
     proc_append(buf, cap, len, "cc intr %u quit %u erase %u kill %u eof %u susp %u werase %u\n",
                 tio.c_cc[VINTR],
                 tio.c_cc[VQUIT],
