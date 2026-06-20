@@ -20,6 +20,7 @@
 
 // Fonctions publiques
 void uart_init(void);
+void uart_attach_tty_backend(void);
 void uart_use_kernel_mmio_alias(void);
 void uart_putc(char c);
 bool uart_try_putc(char c);

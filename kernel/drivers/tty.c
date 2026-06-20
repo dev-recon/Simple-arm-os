@@ -1,6 +1,5 @@
 /* kernel/drivers/tty.c */
 #include <kernel/tty.h>
-#include <kernel/uart.h>
 #include <kernel/task.h>
 #include <kernel/string.h>
 #include <kernel/process.h>
@@ -12,16 +11,7 @@ struct tty_struct tty0;
 
 #define TTY_TX_DRAIN_BUDGET 64
 
-static const tty_backend_ops_t tty_uart_backend = {
-    .putc = uart_putc,
-    .try_putc = uart_try_putc,
-    .puts = uart_puts,
-    .set_tx_irq_enabled = uart_set_tx_irq_enabled,
-    .has_data = uart_has_data,
-    .getc = uart_getc,
-};
-
-static const tty_backend_ops_t *tty_backend = &tty_uart_backend;
+static const tty_backend_ops_t *tty_backend = NULL;
 
 int tty_attach_backend(const tty_backend_ops_t *ops)
 {
@@ -35,32 +25,35 @@ int tty_attach_backend(const tty_backend_ops_t *ops)
 
 static void tty_backend_putc(char c)
 {
-    tty_backend->putc(c);
+    if (tty_backend)
+        tty_backend->putc(c);
 }
 
 static bool tty_backend_try_putc(char c)
 {
-    return tty_backend->try_putc(c);
+    return tty_backend ? tty_backend->try_putc(c) : false;
 }
 
 static void tty_backend_puts(const char *s)
 {
-    tty_backend->puts(s);
+    if (tty_backend)
+        tty_backend->puts(s);
 }
 
 static void tty_backend_set_tx_irq_enabled(bool enabled)
 {
-    tty_backend->set_tx_irq_enabled(enabled);
+    if (tty_backend)
+        tty_backend->set_tx_irq_enabled(enabled);
 }
 
 static bool tty_backend_has_data(void)
 {
-    return tty_backend->has_data();
+    return tty_backend ? tty_backend->has_data() : false;
 }
 
 static int tty_backend_getc(void)
 {
-    return tty_backend->getc();
+    return tty_backend ? tty_backend->getc() : -1;
 }
 
 static uint32_t tty_output_next(uint32_t pos)

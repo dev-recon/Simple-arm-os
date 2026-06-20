@@ -390,6 +390,19 @@ bool uart_has_data(void) {
     return !rx_fifo_empty;  // Retourner true si données disponibles
 }
 
+static const tty_backend_ops_t uart_tty_backend = {
+    .putc = uart_putc,
+    .try_putc = uart_try_putc,
+    .puts = uart_puts,
+    .set_tx_irq_enabled = uart_set_tx_irq_enabled,
+    .has_data = uart_has_data,
+    .getc = uart_getc,
+};
+
+void uart_attach_tty_backend(void)
+{
+    tty_attach_backend(&uart_tty_backend);
+}
 
 static ssize_t uart_console_write(file_t* file, const void* buf, size_t count) {
     (void) file;

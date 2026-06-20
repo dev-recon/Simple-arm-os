@@ -137,6 +137,7 @@ void early_init(void)
     /* Phase 1: Hardware de base uniquement */
     uart_init();
     tty_init();
+    uart_attach_tty_backend();
     
     /* Phase 2: Detection memoire pour MMU */
     kernel_memory_size = detect_memory();
