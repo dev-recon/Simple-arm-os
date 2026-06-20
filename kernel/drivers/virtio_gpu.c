@@ -1,0 +1,575 @@
+#include <kernel/kernel.h>
+#include <kernel/types.h>
+#include <kernel/virtio_gpu.h>
+#include <kernel/virtio_block.h>
+#include <kernel/display.h>
+#include <kernel/memory.h>
+#include <kernel/string.h>
+#include <kernel/kprintf.h>
+#include <kernel/timer.h>
+#include <asm/arm.h>
+
+#define VIRTIO_ID_GPU 16
+
+#define VIRTIO_GPU_F_VIRGL    0
+#define VIRTIO_GPU_F_EDID     1
+
+#define VIRTIO_GPU_CMD_GET_DISPLAY_INFO        0x0100
+#define VIRTIO_GPU_CMD_RESOURCE_CREATE_2D      0x0101
+#define VIRTIO_GPU_CMD_RESOURCE_UNREF          0x0102
+#define VIRTIO_GPU_CMD_SET_SCANOUT             0x0103
+#define VIRTIO_GPU_CMD_RESOURCE_FLUSH          0x0104
+#define VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D     0x0105
+#define VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING 0x0106
+
+#define VIRTIO_GPU_RESP_OK_NODATA              0x1100
+#define VIRTIO_GPU_RESP_OK_DISPLAY_INFO        0x1101
+
+#define VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM       1
+
+#define VIRTIO_GPU_RESOURCE_ID                 1
+#define VIRTIO_GPU_SCANOUT_ID                  0
+#define VIRTIO_GPU_VQ_SIZE                     8
+#define VIRTIO_GPU_TIMEOUT_MS                  1000
+
+typedef struct {
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
+} __attribute__((packed)) virtio_gpu_rect_t;
+
+typedef struct {
+    uint32_t type;
+    uint32_t flags;
+    uint64_t fence_id;
+    uint32_t ctx_id;
+    uint32_t padding;
+} __attribute__((packed)) virtio_gpu_ctrl_hdr_t;
+
+typedef struct {
+    virtio_gpu_rect_t r;
+    uint32_t enabled;
+    uint32_t flags;
+} __attribute__((packed)) virtio_gpu_display_one_t;
+
+typedef struct {
+    virtio_gpu_ctrl_hdr_t hdr;
+    virtio_gpu_display_one_t pmodes[16];
+} __attribute__((packed)) virtio_gpu_resp_display_info_t;
+
+typedef struct {
+    virtio_gpu_ctrl_hdr_t hdr;
+    uint32_t resource_id;
+    uint32_t format;
+    uint32_t width;
+    uint32_t height;
+} __attribute__((packed)) virtio_gpu_resource_create_2d_t;
+
+typedef struct {
+    virtio_gpu_ctrl_hdr_t hdr;
+    virtio_gpu_rect_t r;
+    uint32_t scanout_id;
+    uint32_t resource_id;
+} __attribute__((packed)) virtio_gpu_set_scanout_t;
+
+typedef struct {
+    uint64_t addr;
+    uint32_t length;
+    uint32_t padding;
+} __attribute__((packed)) virtio_gpu_mem_entry_t;
+
+typedef struct {
+    virtio_gpu_ctrl_hdr_t hdr;
+    uint32_t resource_id;
+    uint32_t nr_entries;
+} __attribute__((packed)) virtio_gpu_resource_attach_backing_t;
+
+typedef struct {
+    virtio_gpu_ctrl_hdr_t hdr;
+    virtio_gpu_rect_t r;
+    uint64_t offset;
+    uint32_t resource_id;
+    uint32_t padding;
+} __attribute__((packed)) virtio_gpu_transfer_to_host_2d_t;
+
+typedef struct {
+    virtio_gpu_ctrl_hdr_t hdr;
+    virtio_gpu_rect_t r;
+    uint32_t resource_id;
+    uint32_t padding;
+} __attribute__((packed)) virtio_gpu_resource_flush_t;
+
+typedef struct {
+    uint32_t phys;
+    uint32_t irq;
+    volatile uint32_t *mmio;
+    vq_legacy_t vq;
+    uint16_t next_desc;
+    uint32_t framebuffer_size;
+    bool initialized;
+} virtio_gpu_state_t;
+
+static virtio_gpu_state_t gpu = {0};
+
+static inline uint32_t fdt32_to_cpu_gpu(uint32_t x)
+{
+    return __builtin_bswap32(x);
+}
+
+static struct vring_desc *gpu_desc_ptr(vq_legacy_t *vq, unsigned i)
+{
+    return (struct vring_desc *)((uint8_t *)(uintptr_t)vq->va_desc +
+                                 i * sizeof(struct vring_desc));
+}
+
+static struct vring_avail *gpu_avail_ptr(vq_legacy_t *vq)
+{
+    return (struct vring_avail *)((uint8_t *)(uintptr_t)vq->va_avail);
+}
+
+static struct vring_used *gpu_used_ptr(vq_legacy_t *vq)
+{
+    return (struct vring_used *)((uint8_t *)(uintptr_t)vq->va_used);
+}
+
+static void *gpu_alloc_dma_pages(size_t npages, uint32_t *out_pa)
+{
+    uint32_t pa = (uint32_t)allocate_pages(npages);
+    if (!pa)
+        return NULL;
+    if (out_pa)
+        *out_pa = pa;
+    return (void *)pa;
+}
+
+static bool gpu_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
+{
+    uint32_t desc_sz = 16u * qsize;
+    uint32_t avail_sz = ALIGN_UP(6u + 2u * qsize, 2u);
+    uint32_t used_sz = ALIGN_UP(6u + 8u * qsize, VQ_ALIGN);
+    uint32_t total = ALIGN_UP(desc_sz, 16) +
+                     ALIGN_UP(avail_sz, 2) +
+                     ALIGN_UP(used_sz, VQ_ALIGN);
+    size_t npages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint32_t pa_base = 0;
+    uint8_t *va_base = gpu_alloc_dma_pages(npages, &pa_base);
+    uint32_t off = 0;
+
+    if (!va_base)
+        return false;
+
+    memset(va_base, 0, npages * PAGE_SIZE);
+
+    vq->pa_base = pa_base;
+    vq->va_base = (uintptr_t)va_base;
+
+    vq->pa_desc = pa_base + off;
+    vq->va_desc = (uintptr_t)(va_base + off);
+    vq->desc_size = desc_sz;
+    off = ALIGN_UP(off + desc_sz, 16);
+
+    vq->pa_avail = pa_base + off;
+    vq->va_avail = (uintptr_t)(va_base + off);
+    vq->avail_size = avail_sz;
+    off = ALIGN_UP(off + avail_sz, 2);
+
+    off = ALIGN_UP(off, VQ_ALIGN);
+    vq->pa_used = pa_base + off;
+    vq->va_used = (uintptr_t)(va_base + off);
+    vq->used_size = used_sz;
+    vq->qsize = qsize;
+    vq->last_used_idx = 0;
+
+    clean_dcache_by_mva(va_base, npages * PAGE_SIZE);
+    return true;
+}
+
+static bool gpu_decode_reg(const uint32_t *reg, uint32_t len, uint32_t *out_phys)
+{
+    if (!reg || !out_phys)
+        return false;
+    if (len >= 16) {
+        if (fdt32_to_cpu_gpu(reg[0]) != 0)
+            return false;
+        *out_phys = fdt32_to_cpu_gpu(reg[1]);
+        return true;
+    }
+    if (len >= 8) {
+        *out_phys = fdt32_to_cpu_gpu(reg[0]);
+        return true;
+    }
+    return false;
+}
+
+static bool gpu_probe_from_dtb(uint32_t *out_phys, uint32_t *out_irq)
+{
+    void *dtb_ptr = (void *)dtb_address;
+    if (!dtb_ptr || !out_phys || !out_irq)
+        return false;
+
+    struct fdt_header *fdt = (struct fdt_header *)dtb_ptr;
+    if (fdt32_to_cpu_gpu(fdt->magic) != FDT_MAGIC)
+        return false;
+
+    uint8_t *struct_block = (uint8_t *)dtb_ptr + fdt32_to_cpu_gpu(fdt->off_dt_struct);
+    uint32_t *token = (uint32_t *)struct_block;
+
+    while (1) {
+        uint32_t tag = fdt32_to_cpu_gpu(*token++);
+        switch (tag) {
+        case FDT_BEGIN_NODE: {
+            void *node_ptr = (void *)(token - 1);
+            const char *name = (const char *)token;
+            size_t len = strlen(name);
+            token += (len + 4) / 4;
+
+            if (!fdt_node_matches(name, "virtio_mmio"))
+                break;
+
+            uint32_t reg_len = 0;
+            uint32_t *reg = (uint32_t *)fdt_get_property(dtb_ptr, node_ptr, "reg", &reg_len);
+            uint32_t phys = 0;
+            if (!gpu_decode_reg(reg, reg_len, &phys))
+                break;
+
+            volatile uint32_t *base = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+            if (mmio_read32(base, VIRTIO_MMIO_MAGIC) != 0x74726976)
+                break;
+            if (mmio_read32(base, VIRTIO_MMIO_DEVICE_ID) != VIRTIO_ID_GPU)
+                break;
+
+            uint32_t index = (phys - VIRT_VIRTIO_BASE) / VIRT_VIRTIO_SIZE;
+            *out_phys = phys;
+            *out_irq = VIRT_VIRTIO_IRQ(index);
+            return true;
+        }
+        case FDT_PROP: {
+            uint32_t prop_len = fdt32_to_cpu_gpu(*token++);
+            token++;
+            token += (prop_len + 3) / 4;
+            break;
+        }
+        case FDT_END_NODE:
+        case FDT_NOP:
+            break;
+        case FDT_END:
+            return false;
+        default:
+            return false;
+        }
+    }
+}
+
+static int gpu_wait_used(uint16_t prev_used)
+{
+    uint32_t freq = get_cntfrq();
+    if (freq == 0)
+        freq = QEMU_TIMER_FREQ;
+
+    uint64_t timeout_ticks = (uint64_t)VIRTIO_GPU_TIMEOUT_MS * (uint64_t)(freq / 1000);
+    uint64_t start = get_cntpct();
+
+    while ((get_cntpct() - start) < timeout_ticks) {
+        invalidate_dcache_by_mva((void *)(uintptr_t)gpu.vq.va_used,
+            sizeof(struct vring_used) + gpu.vq.qsize * sizeof(struct vring_used_elem));
+        asm volatile("dmb ish" ::: "memory");
+        if (gpu_used_ptr(&gpu.vq)->idx != prev_used)
+            return 0;
+        asm volatile("yield" ::: "memory");
+    }
+
+    return -1;
+}
+
+static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len)
+{
+    if (!gpu.initialized || !cmd || cmd_len == 0 || !resp || resp_len == 0)
+        return -1;
+    if (gpu.vq.qsize < 2)
+        return -1;
+
+    unsigned d0 = gpu.next_desc;
+    unsigned d1 = (gpu.next_desc + 1) % gpu.vq.qsize;
+    gpu.next_desc = (gpu.next_desc + 2) % gpu.vq.qsize;
+
+    struct vring_desc *desc0 = gpu_desc_ptr(&gpu.vq, d0);
+    struct vring_desc *desc1 = gpu_desc_ptr(&gpu.vq, d1);
+
+    memset(resp, 0, resp_len);
+
+    desc0->addr = (uint64_t)(uint32_t)cmd;
+    desc0->len = cmd_len;
+    desc0->flags = VRING_DESC_F_NEXT;
+    desc0->next = d1;
+
+    desc1->addr = (uint64_t)(uint32_t)resp;
+    desc1->len = resp_len;
+    desc1->flags = VRING_DESC_F_WRITE;
+    desc1->next = 0;
+
+    clean_dcache_by_mva((void *)gpu.vq.va_desc, sizeof(struct vring_desc) * gpu.vq.qsize);
+    clean_dcache_by_mva(cmd, cmd_len);
+    clean_invalidate_dcache_by_mva(resp, resp_len);
+    asm volatile("dmb ish" ::: "memory");
+
+    uint16_t prev_used = gpu.vq.last_used_idx;
+    struct vring_avail *avail = gpu_avail_ptr(&gpu.vq);
+    uint16_t old_idx = avail->idx;
+    avail->ring[old_idx % gpu.vq.qsize] = d0;
+    clean_dcache_by_mva((void *)gpu.vq.va_avail, gpu.vq.avail_size);
+    asm volatile("dmb ish" ::: "memory");
+    avail->idx = old_idx + 1;
+    clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
+    asm volatile("dsb ishst" ::: "memory");
+
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_QUEUE_NOTIFY, 0);
+
+    if (gpu_wait_used(prev_used) < 0) {
+        KERROR("virtio_gpu: command timeout type=0x%08X\n",
+               ((virtio_gpu_ctrl_hdr_t *)cmd)->type);
+        return -1;
+    }
+
+    struct vring_used *used = gpu_used_ptr(&gpu.vq);
+    if ((uint16_t)(used->idx - prev_used) != 1) {
+        KERROR("virtio_gpu: unexpected used ring advance\n");
+        return -1;
+    }
+    if (used->ring[prev_used % gpu.vq.qsize].id != d0) {
+        KERROR("virtio_gpu: unexpected used descriptor id\n");
+        return -1;
+    }
+
+    gpu.vq.last_used_idx = used->idx;
+    invalidate_dcache_by_mva(resp, resp_len);
+    uint32_t irq_status = mmio_read32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_STATUS);
+    if (irq_status)
+        mmio_write32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_ACK, irq_status);
+    return 0;
+}
+
+static int gpu_submit_simple(void *cmd, uint32_t cmd_len, const char *name)
+{
+    virtio_gpu_ctrl_hdr_t resp;
+
+    if (gpu_submit(cmd, cmd_len, &resp, sizeof(resp)) < 0)
+        return -1;
+
+    if (resp.type != VIRTIO_GPU_RESP_OK_NODATA) {
+        KERROR("virtio_gpu: %s response=0x%08X\n", name, resp.type);
+        return -1;
+    }
+
+    return 0;
+}
+
+static void gpu_fill_hdr(virtio_gpu_ctrl_hdr_t *hdr, uint32_t type)
+{
+    memset(hdr, 0, sizeof(*hdr));
+    hdr->type = type;
+}
+
+static int gpu_get_display_info(void)
+{
+    virtio_gpu_ctrl_hdr_t cmd;
+    virtio_gpu_resp_display_info_t resp;
+
+    gpu_fill_hdr(&cmd, VIRTIO_GPU_CMD_GET_DISPLAY_INFO);
+    if (gpu_submit(&cmd, sizeof(cmd), &resp, sizeof(resp)) < 0)
+        return -1;
+    if (resp.hdr.type != VIRTIO_GPU_RESP_OK_DISPLAY_INFO) {
+        KERROR("virtio_gpu: display info response=0x%08X\n", resp.hdr.type);
+        return -1;
+    }
+
+    KINFO("VirtIO GPU scanout0: enabled=%u %ux%u at %u,%u\n",
+          resp.pmodes[0].enabled, resp.pmodes[0].r.width,
+          resp.pmodes[0].r.height, resp.pmodes[0].r.x,
+          resp.pmodes[0].r.y);
+    return 0;
+}
+
+static int gpu_create_resource(void)
+{
+    virtio_gpu_resource_create_2d_t cmd;
+    gpu_fill_hdr(&cmd.hdr, VIRTIO_GPU_CMD_RESOURCE_CREATE_2D);
+    cmd.resource_id = VIRTIO_GPU_RESOURCE_ID;
+    cmd.format = VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM;
+    cmd.width = FB_WIDTH;
+    cmd.height = FB_HEIGHT;
+    return gpu_submit_simple(&cmd, sizeof(cmd), "resource_create_2d");
+}
+
+static int gpu_attach_backing(void)
+{
+    struct {
+        virtio_gpu_resource_attach_backing_t cmd;
+        virtio_gpu_mem_entry_t entry;
+    } __attribute__((packed)) req;
+
+    memset(&req, 0, sizeof(req));
+    gpu_fill_hdr(&req.cmd.hdr, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING);
+    req.cmd.resource_id = VIRTIO_GPU_RESOURCE_ID;
+    req.cmd.nr_entries = 1;
+    req.entry.addr = (uint64_t)(uint32_t)framebuffer_base;
+    req.entry.length = gpu.framebuffer_size;
+    req.entry.padding = 0;
+
+    return gpu_submit_simple(&req, sizeof(req), "resource_attach_backing");
+}
+
+static int gpu_set_scanout(void)
+{
+    virtio_gpu_set_scanout_t cmd;
+    gpu_fill_hdr(&cmd.hdr, VIRTIO_GPU_CMD_SET_SCANOUT);
+    cmd.r.x = 0;
+    cmd.r.y = 0;
+    cmd.r.width = FB_WIDTH;
+    cmd.r.height = FB_HEIGHT;
+    cmd.scanout_id = VIRTIO_GPU_SCANOUT_ID;
+    cmd.resource_id = VIRTIO_GPU_RESOURCE_ID;
+    return gpu_submit_simple(&cmd, sizeof(cmd), "set_scanout");
+}
+
+int virtio_gpu_flush(void)
+{
+    if (!gpu.initialized)
+        return -1;
+
+    clean_dcache_by_mva(framebuffer_base, gpu.framebuffer_size);
+
+    virtio_gpu_transfer_to_host_2d_t tx;
+    gpu_fill_hdr(&tx.hdr, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D);
+    tx.r.x = 0;
+    tx.r.y = 0;
+    tx.r.width = FB_WIDTH;
+    tx.r.height = FB_HEIGHT;
+    tx.offset = 0;
+    tx.resource_id = VIRTIO_GPU_RESOURCE_ID;
+    tx.padding = 0;
+    if (gpu_submit_simple(&tx, sizeof(tx), "transfer_to_host_2d") < 0)
+        return -1;
+
+    virtio_gpu_resource_flush_t fl;
+    gpu_fill_hdr(&fl.hdr, VIRTIO_GPU_CMD_RESOURCE_FLUSH);
+    fl.r.x = 0;
+    fl.r.y = 0;
+    fl.r.width = FB_WIDTH;
+    fl.r.height = FB_HEIGHT;
+    fl.resource_id = VIRTIO_GPU_RESOURCE_ID;
+    fl.padding = 0;
+    return gpu_submit_simple(&fl, sizeof(fl), "resource_flush");
+}
+
+void virtio_gpu_draw_test_pattern(void)
+{
+    if (!framebuffer_base)
+        return;
+
+    uint32_t *fb = (uint32_t *)framebuffer_base;
+    for (uint32_t y = 0; y < FB_HEIGHT; y++) {
+        for (uint32_t x = 0; x < FB_WIDTH; x++) {
+            uint8_t r = (uint8_t)((x * 255) / FB_WIDTH);
+            uint8_t g = (uint8_t)((y * 255) / FB_HEIGHT);
+            uint8_t b = (uint8_t)(((x ^ y) * 255) / (FB_WIDTH > FB_HEIGHT ? FB_WIDTH : FB_HEIGHT));
+            fb[y * FB_WIDTH + x] = 0xFF000000u |
+                                    ((uint32_t)r << 16) |
+                                    ((uint32_t)g << 8) |
+                                    b;
+        }
+    }
+
+    console_puts("ArmOS virtio-gpu\n");
+    console_puts("Framebuffer flush test\n");
+}
+
+bool virtio_gpu_is_initialized(void)
+{
+    return gpu.initialized;
+}
+
+bool virtio_gpu_init(void)
+{
+    uint32_t phys = 0;
+    uint32_t irq = 0;
+
+    memset(&gpu, 0, sizeof(gpu));
+
+    if (!framebuffer_base) {
+        return false;
+    }
+
+    if (!gpu_probe_from_dtb(&phys, &irq)) {
+        return false;
+    }
+
+    gpu.phys = phys;
+    gpu.irq = irq;
+    gpu.mmio = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+    gpu.framebuffer_size = FB_WIDTH * FB_HEIGHT * (FB_BPP / 8);
+
+    KINFO("VirtIO GPU found: phys=0x%08X mmio=%p irq=%u\n",
+          gpu.phys, gpu.mmio, gpu.irq);
+
+    uint32_t magic = mmio_read32(gpu.mmio, VIRTIO_MMIO_MAGIC);
+    uint32_t version = mmio_read32(gpu.mmio, VIRTIO_MMIO_VERSION);
+    uint32_t devid = mmio_read32(gpu.mmio, VIRTIO_MMIO_DEVICE_ID);
+    if (magic != 0x74726976 || version != 1 || devid != VIRTIO_ID_GPU) {
+        KERROR("virtio_gpu: bad device magic=0x%08X version=%u id=%u\n",
+               magic, version, devid);
+        return false;
+    }
+
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_STATUS, 0);
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACK);
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_STATUS,
+                 mmio_read32(gpu.mmio, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_DRIVER);
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_DRIVER_FEATURES, 0);
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_STATUS,
+                 mmio_read32(gpu.mmio, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_FEATURES_OK);
+    if (!(mmio_read32(gpu.mmio, VIRTIO_MMIO_STATUS) & VIRTIO_STATUS_FEATURES_OK)) {
+        KERROR("virtio_gpu: features rejected\n");
+        return false;
+    }
+
+    mmio_write32(gpu.mmio, VIRTIO_REG_GUEST_PAGE_SIZE, PAGE_SIZE);
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_QUEUE_SEL, 0);
+    uint32_t qmax = mmio_read32(gpu.mmio, VIRTIO_MMIO_QUEUE_NUM_MAX);
+    if (qmax < 2) {
+        KERROR("virtio_gpu: control queue unavailable\n");
+        return false;
+    }
+    uint16_t qsize = VIRTIO_GPU_VQ_SIZE <= qmax ? VIRTIO_GPU_VQ_SIZE : (uint16_t)qmax;
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_QUEUE_NUM, qsize);
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_QUEUE_ALIGN_OFF, VQ_ALIGN);
+
+    if (!gpu_vq_alloc(&gpu.vq, qsize)) {
+        KERROR("virtio_gpu: virtqueue allocation failed\n");
+        return false;
+    }
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_QUEUE_PFN, gpu.vq.pa_base >> 12);
+
+    gpu.initialized = true;
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_STATUS,
+                 mmio_read32(gpu.mmio, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_DRIVER_OK);
+
+    gpu_get_display_info();
+    if (gpu_create_resource() < 0 ||
+        gpu_attach_backing() < 0 ||
+        gpu_set_scanout() < 0) {
+        gpu.initialized = false;
+        mmio_write32(gpu.mmio, VIRTIO_MMIO_STATUS,
+                     mmio_read32(gpu.mmio, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_FAILED);
+        return false;
+    }
+
+    virtio_gpu_draw_test_pattern();
+    if (virtio_gpu_flush() < 0) {
+        KWARN("VirtIO GPU initialized but initial flush failed\n");
+        return false;
+    }
+
+    KINFO("VirtIO GPU initialized: %ux%ux%u\n", FB_WIDTH, FB_HEIGHT, FB_BPP);
+    return true;
+}

@@ -56,8 +56,8 @@ void init_display(void)
         display.text_rows = display.height / 16;
         display.cursor_x = 0;
         display.cursor_y = 0;
-        display.fg_color = 0xFFFFFF;
-        display.bg_color = 0x000000;
+        display.fg_color = 0xFFFFFFFF;
+        display.bg_color = 0xFF000000;
         
         clear_screen();
         KINFO("Display initialized: %d x %d (RAM-based)\n", 

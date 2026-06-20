@@ -6,6 +6,7 @@
 #include <kernel/timer.h>
 #include <kernel/keyboard.h>
 #include <kernel/display.h>
+#include <kernel/virtio_gpu.h>
 #include <kernel/vfs.h>
 #include <kernel/ata.h>
 
@@ -234,6 +235,10 @@ void kernel_main(void)
     init_keyboard();
   
     init_display();
+    if (virtio_gpu_init())
+        KBOOT_OKF("GPU: virtio-gpu %ux%ux%u", FB_WIDTH, FB_HEIGHT, FB_BPP);
+    else
+        KBOOT_WARN("GPU: virtio-gpu unavailable");
     KBOOT_OKF("TTY: console tty0 on uart0");
       
     //kprintf("Initialize IDE ... ");
