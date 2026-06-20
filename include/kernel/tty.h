@@ -161,6 +161,8 @@ extern struct tty_struct tty1;
 void tty_init(void);
 int tty_attach_backend(const tty_backend_ops_t *ops);
 int tty_attach_backend_to(int tty_id, const tty_backend_ops_t *ops);
+int tty_set_active(int tty_id);
+int tty_get_active(void);
 void tty_input_char(char c);
 bool tty_has_pending_output(void);
 void tty_drain_output(void);
@@ -169,12 +171,21 @@ ssize_t tty_write(const char *buf, size_t count);
 int tty_get_termios(struct termios *tio);
 int tty_set_termios(const struct termios *tio, int flush_input);
 int tty_flush(int queue_selector);
+int tty_get_termios_for_id(int tty_id, struct termios *tio);
+int tty_set_termios_for_id(int tty_id, const struct termios *tio, int flush_input);
+int tty_flush_for_id(int tty_id, int queue_selector);
 void tty_get_winsize(uint16_t *rows, uint16_t *cols,
                      uint16_t *xpixel, uint16_t *ypixel);
 int tty_set_winsize(uint16_t rows, uint16_t cols,
                     uint16_t xpixel, uint16_t ypixel);
+void tty_get_winsize_for_id(int tty_id, uint16_t *rows, uint16_t *cols,
+                            uint16_t *xpixel, uint16_t *ypixel);
+int tty_set_winsize_for_id(int tty_id, uint16_t rows, uint16_t cols,
+                           uint16_t xpixel, uint16_t ypixel);
 int tty_set_foreground_pgid(pid_t pgid);
 pid_t tty_get_foreground_pgid(void);
+int tty_set_foreground_pgid_for_id(int tty_id, pid_t pgid);
+pid_t tty_get_foreground_pgid_for_id(int tty_id);
 pid_t tty_get_read_wait_pid(void);
 int tty_get_read_wait_state(void);
 void tty_get_tx_stats(uint32_t *enqueued, uint32_t *drained,
@@ -189,6 +200,7 @@ void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
 bool is_tty_device_path(const char* path);
 void fill_tty_device_stat(const char* path, struct stat* st);
 int tty_id_from_device_path(const char* path);
+int tty_id_from_file(file_t* file);
 file_t* create_tty_console_file(const char* name, int flags);
 
 #endif
