@@ -16,7 +16,13 @@ extern uint8_t* framebuffer_base;  /* Pointeur global vers le framebuffer */
 
 #define FB_BASE         ((uint32_t)framebuffer_base)
 
-
+typedef struct {
+    uint32_t width;
+    uint32_t height;
+    uint32_t first;
+    uint32_t last;
+    const uint8_t *glyphs; /* width * height alpha bytes per glyph */
+} font_t;
 
 typedef struct {
     uint32_t width;
@@ -30,7 +36,10 @@ typedef struct {
     uint32_t cursor_y;
     uint32_t fg_color;
     uint32_t bg_color;
+    const font_t *font;
 } display_state_t;
+
+extern const font_t font_meslo_12x24;
 
 /* Display functions */
 void init_display(void);

@@ -5,7 +5,6 @@
 #include <kernel/kprintf.h>
 
 static display_state_t display = {0};
-extern uint8_t font_8x16[];
 
 /* Variable globale pour le framebuffer */
 uint8_t* framebuffer_base = NULL;
@@ -39,6 +38,7 @@ void init_display(void)
     display.bpp = FB_BPP;
     display.pitch = FB_WIDTH * (FB_BPP / 8);
     display.framebuffer = framebuffer_base;
+    display.font = &font_meslo_12x24;
     
     /* Test d'acces au framebuffer */
     KINFO("Testing framebuffer access...\n");
@@ -52,8 +52,8 @@ void init_display(void)
         KINFO("Framebuffer write/read test PASSED\n");
         
         /* Console mode */
-        display.text_cols = display.width / 8;
-        display.text_rows = display.height / 16;
+        display.text_cols = display.width / display.font->width;
+        display.text_rows = display.height / display.font->height;
         display.cursor_x = 0;
         display.cursor_y = 0;
         display.fg_color = 0xFFFFFFFF;
@@ -96,18 +96,44 @@ void put_pixel(uint32_t x, uint32_t y, uint32_t color)
     fb32[y * display.width + x] = color;
 }
 
+static uint32_t blend_argb(uint32_t fg, uint32_t bg, uint8_t alpha)
+{
+    if (alpha == 0)
+        return bg;
+    if (alpha == 255)
+        return fg;
+
+    uint32_t inv = 255u - alpha;
+    uint32_t fr = (fg >> 16) & 0xFF;
+    uint32_t fg_g = (fg >> 8) & 0xFF;
+    uint32_t fb = fg & 0xFF;
+    uint32_t br = (bg >> 16) & 0xFF;
+    uint32_t bg_g = (bg >> 8) & 0xFF;
+    uint32_t bb = bg & 0xFF;
+    uint32_t r = (fr * alpha + br * inv + 127) / 255;
+    uint32_t g = (fg_g * alpha + bg_g * inv + 127) / 255;
+    uint32_t b = (fb * alpha + bb * inv + 127) / 255;
+
+    return 0xFF000000u | (r << 16) | (g << 8) | b;
+}
+
 void draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg)
 {
-    if (c < 32 || c > 126) c = '?';
-    
-    uint8_t* glyph = &font_8x16[(c - 32) * 16];
-    int row, col;
-    
-    for (row = 0; row < 16; row++) {
-        uint8_t pixel_row = glyph[row];
-        
-        for (col = 0; col < 8; col++) {
-            uint32_t color = (pixel_row & (0x80 >> col)) ? fg : bg;
+    const font_t *font = display.font;
+    if (!font || !font->glyphs)
+        return;
+
+    uint32_t code = (uint8_t)c;
+    if (code < font->first || code > font->last)
+        code = '?';
+
+    const uint8_t *glyph = font->glyphs +
+        (code - font->first) * font->width * font->height;
+
+    for (uint32_t row = 0; row < font->height; row++) {
+        for (uint32_t col = 0; col < font->width; col++) {
+            uint8_t alpha = glyph[row * font->width + col];
+            uint32_t color = blend_argb(fg, bg, alpha);
             put_pixel(x + col, y + row, color);
         }
     }
@@ -128,7 +154,8 @@ void console_putchar(char c)
         case '\b':
             if (display.cursor_x > 0) {
                 display.cursor_x--;
-                draw_char(display.cursor_x * 8, display.cursor_y * 16, ' ',
+                draw_char(display.cursor_x * display.font->width,
+                         display.cursor_y * display.font->height, ' ',
                          display.fg_color, display.bg_color);
             }
             break;
@@ -139,7 +166,8 @@ void console_putchar(char c)
             
         default:
             if (c >= 32 && c <= 126) {
-                draw_char(display.cursor_x * 8, display.cursor_y * 16, c,
+                draw_char(display.cursor_x * display.font->width,
+                         display.cursor_y * display.font->height, c,
                          display.fg_color, display.bg_color);
                 display.cursor_x++;
             }
@@ -165,21 +193,22 @@ void console_puts(const char* str)
 
 void scroll_screen(void)
 {
-    uint32_t line_bytes = display.width * 16 * 4;
+    uint32_t font_h = display.font ? display.font->height : 16;
+    uint32_t line_bytes = display.width * font_h * 4;
     uint32_t y;
     
     /* Copy lines up */
-    for (y = 0; y < display.height - 16; y += 16) {
+    for (y = 0; y < display.height - font_h; y += font_h) {
         memcpy(display.framebuffer + (y * display.pitch),
-               display.framebuffer + ((y + 16) * display.pitch),
+               display.framebuffer + ((y + font_h) * display.pitch),
                line_bytes);
     }
     
     /* Clear last line */
     uint32_t* last_line = (uint32_t*)(display.framebuffer + 
-                                     ((display.height - 16) * display.pitch));
+                                     ((display.height - font_h) * display.pitch));
     uint32_t i;
-    for (i = 0; i < display.width * 16; i++) {
+    for (i = 0; i < display.width * font_h; i++) {
         last_line[i] = display.bg_color;
     }
     

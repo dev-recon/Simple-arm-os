@@ -462,6 +462,43 @@ int virtio_gpu_flush(void)
     return gpu_submit_simple(&fl, sizeof(fl), "resource_flush");
 }
 
+static void gpu_draw_text_px(uint32_t x, uint32_t y, const char *s,
+                             uint32_t fg, uint32_t bg)
+{
+    while (*s) {
+        draw_char(x, y, *s++, fg, bg);
+        x += 8;
+    }
+}
+
+static void gpu_draw_ascii_grid(uint32_t x0, uint32_t y0)
+{
+    const uint32_t cell_w = 60;
+    const uint32_t cell_h = 44;
+    const uint32_t dim = 0xFF9AA7B2;
+    const uint32_t bg = 0xFF101820;
+    static const uint32_t palette[] = {
+        0xFFFFFFFF, 0xFFFF5252, 0xFFFFC107, 0xFF4CAF50,
+        0xFF00BCD4, 0xFF42A5F5, 0xFF7E57C2, 0xFFFF80AB
+    };
+    char label[4];
+
+    for (uint32_t ch = 32; ch <= 126; ch++) {
+        uint32_t i = ch - 32;
+        uint32_t x = x0 + (i % 16) * cell_w;
+        uint32_t y = y0 + (i / 16) * cell_h;
+        uint32_t fg = palette[i % (sizeof(palette) / sizeof(palette[0]))];
+
+        label[0] = (char)('0' + ((ch / 100) % 10));
+        label[1] = (char)('0' + ((ch / 10) % 10));
+        label[2] = (char)('0' + (ch % 10));
+        label[3] = '\0';
+
+        gpu_draw_text_px(x, y, label, dim, bg);
+        draw_char(x + 24, y + 14, (char)ch, fg, bg);
+    }
+}
+
 void virtio_gpu_draw_test_pattern(void)
 {
     if (!framebuffer_base)
@@ -480,8 +517,29 @@ void virtio_gpu_draw_test_pattern(void)
         }
     }
 
-    console_puts("ArmOS virtio-gpu\n");
-    console_puts("Framebuffer flush test\n");
+    const uint32_t title_fg = 0xFFFFFFFF;
+    const uint32_t title_bg = 0xFF263238;
+    const uint32_t text_fg = 0xFFE0E0E0;
+    const uint32_t text_bg = 0xFF101820;
+    const uint32_t green = 0xFF4CAF50;
+    const uint32_t amber = 0xFFFFC107;
+
+    gpu_draw_text_px(32, 32, "ArmOS virtio-gpu framebuffer", title_fg, title_bg);
+    gpu_draw_text_px(32, 56, "Bitmap font 8x16 boot test", green, text_bg);
+    gpu_draw_text_px(32, 88, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", text_fg, text_bg);
+    gpu_draw_text_px(32, 112, "abcdefghijklmnopqrstuvwxyz", text_fg, text_bg);
+    gpu_draw_text_px(32, 136, "0123456789  !?.,;:-_+=*/\\|()[]{}<>@#$%^&~", amber, text_bg);
+    gpu_draw_text_px(32, 176, "white  red    amber  green  cyan   blue   violet pink", title_fg, text_bg);
+    gpu_draw_text_px(32, 200, "The quick brown fox jumps over the lazy dog.", 0xFFFFFFFF, 0xFF263238);
+    gpu_draw_text_px(32, 224, "The quick brown fox jumps over the lazy dog.", 0xFFFF5252, text_bg);
+    gpu_draw_text_px(32, 248, "The quick brown fox jumps over the lazy dog.", 0xFFFFC107, text_bg);
+    gpu_draw_text_px(32, 272, "The quick brown fox jumps over the lazy dog.", 0xFF4CAF50, text_bg);
+    gpu_draw_text_px(32, 296, "The quick brown fox jumps over the lazy dog.", 0xFF00BCD4, text_bg);
+    gpu_draw_text_px(32, 320, "The quick brown fox jumps over the lazy dog.", 0xFF42A5F5, text_bg);
+    gpu_draw_text_px(32, 344, "The quick brown fox jumps over the lazy dog.", 0xFF7E57C2, text_bg);
+    gpu_draw_text_px(32, 368, "The quick brown fox jumps over the lazy dog.", 0xFFFF80AB, text_bg);
+    gpu_draw_text_px(32, 408, "ASCII 32..126, colored per glyph:", title_fg, text_bg);
+    gpu_draw_ascii_grid(32, 440);
 }
 
 bool virtio_gpu_is_initialized(void)
