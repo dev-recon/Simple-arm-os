@@ -410,6 +410,42 @@ static void test_dev_null(void)
     }
 }
 
+static void test_dev_tty(void)
+{
+    struct stat st;
+    struct stat fst;
+    int fd;
+
+    if (expect(stat("/dev/tty0", &st) == 0, "stat /dev/tty0", 0) == 0) {
+        expect(S_ISCHR(st.st_mode), "/dev/tty0 is char device", st.st_mode);
+        expect((st.st_mode & 0777) == 0666, "/dev/tty0 mode is 666", st.st_mode & 0777);
+    }
+
+    if (expect(stat("/dev/console", &st) == 0, "stat /dev/console", 0) == 0) {
+        expect(S_ISCHR(st.st_mode), "/dev/console is char device", st.st_mode);
+        expect((st.st_mode & 0777) == 0666, "/dev/console mode is 666", st.st_mode & 0777);
+    }
+
+    expect(access("/dev/tty0", F_OK) == 0, "access /dev/tty0 exists", 0);
+    expect(access("/dev/tty0", R_OK | W_OK) == 0, "access /dev/tty0 read-write", 0);
+    expect(access("/dev/tty0", X_OK) < 0, "access /dev/tty0 execute fails", 0);
+    expect(access("/dev/console", F_OK) == 0, "access /dev/console exists", 0);
+
+    fd = open("/dev/tty0", O_WRONLY, 0);
+    if (expect(fd >= 0, "open /dev/tty0 write-only", fd) >= 0) {
+        if (expect(fstat(fd, &fst) == 0, "fstat /dev/tty0", 0) == 0)
+            expect(S_ISCHR(fst.st_mode), "fstat /dev/tty0 is char device", fst.st_mode);
+        close(fd);
+    }
+
+    fd = open("/dev/console", O_WRONLY, 0);
+    if (expect(fd >= 0, "open /dev/console write-only", fd) >= 0) {
+        if (expect(fstat(fd, &fst) == 0, "fstat /dev/console", 0) == 0)
+            expect(S_ISCHR(fst.st_mode), "fstat /dev/console is char device", fst.st_mode);
+        close(fd);
+    }
+}
+
 static void test_chmod_chown_syscalls(void)
 {
     const char *path = tmp_path("chmod-chown.txt");
@@ -1694,6 +1730,7 @@ int main(int argc, char **argv)
     test_fd_access_modes();
     test_stat_syscalls();
     test_dev_null();
+    test_dev_tty();
     test_chmod_chown_syscalls();
     test_posix_compat_syscalls();
     test_ext2_links_and_dirents();

@@ -8,6 +8,8 @@
 
 #define TTY_INPUT_BUF_SIZE  512
 #define TTY_OUTPUT_BUF_SIZE 512
+#define DEV_TTY_RDEV        ((4u << 8) | 0u)
+#define DEV_CONSOLE_RDEV    ((5u << 8) | 1u)
 
 #define TTY_STTY_SET_FOREGROUND_PGID 1
 #define TTY_GTTY_GET_FOREGROUND_PGID 1
@@ -175,6 +177,8 @@ void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
                          uint32_t *char_wakeups,
                          uint32_t *line_wakeups,
                          uint32_t *eof_wakeups);
+bool is_tty_device_path(const char* path);
+void fill_tty_device_stat(const char* path, struct stat* st);
 file_t* create_tty_console_file(const char* name, int flags);
 
 #endif

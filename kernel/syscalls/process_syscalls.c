@@ -12,6 +12,7 @@
 #include <kernel/ext2.h>
 #include <kernel/fat32.h>
 #include <kernel/tty.h>
+#include <kernel/null.h>
 #include <kernel/mount.h>
 #include <kernel/virtio_block.h>
 
@@ -1059,6 +1060,11 @@ int sys_access(const char* pathname, int mode)
     kfree(kernel_path);
 
     if (!full_path) return -ENOENT;
+
+    if (is_null_device_path(full_path) || is_tty_device_path(full_path)) {
+        kfree(full_path);
+        return (mode & MAY_EXEC) ? -EACCES : 0;
+    }
 
     inode = path_lookup(full_path);
     kfree(full_path);

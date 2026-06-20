@@ -524,14 +524,16 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     
     if (!full_path) return -ENOENT;
 
-    if (strcmp(full_path, "/dev/tty0") == 0 || strcmp(full_path, "/dev/console") == 0) {
+    if (is_tty_device_path(full_path)) {
         fd = allocate_fd(current_task);
         if (fd < 0) {
             kfree(full_path);
             return fd;
         }
 
-        tty_file = create_tty_console_file("tty0", flags & ~O_CLOEXEC);
+        tty_file = create_tty_console_file(
+            strcmp(full_path, "/dev/console") == 0 ? "console" : "tty0",
+            flags & ~O_CLOEXEC);
         if (!tty_file) {
             free_fd(current_task, fd);
             kfree(full_path);
@@ -662,6 +664,15 @@ int sys_stat(const char* pathname, struct stat* statbuf)
         }
         return 0;
     }
+
+    if (is_tty_device_path(full_path)) {
+        fill_tty_device_stat(full_path, &kstat);
+        kfree(full_path);
+        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
     
     inode = path_lookup(full_path);
     kfree(full_path);
@@ -696,6 +707,15 @@ int sys_lstat(const char* pathname, struct stat* statbuf)
 
     if (is_null_device_path(full_path)) {
         fill_null_device_stat(&kstat);
+        kfree(full_path);
+        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
+
+    if (is_tty_device_path(full_path)) {
+        fill_tty_device_stat(full_path, &kstat);
         kfree(full_path);
         if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
             return -EFAULT;

@@ -6,6 +6,7 @@
 #include <kernel/vfs.h>
 #include <kernel/signal.h>
 #include <kernel/timer.h>
+#include <kernel/memory.h>
 
 struct tty_struct tty0;
 
@@ -897,15 +898,72 @@ static file_operations_t tty_file_ops = {
     .readdir = NULL
 };
 
+bool is_tty_device_path(const char* path)
+{
+    return path && (strcmp(path, "/dev/tty0") == 0 ||
+                    strcmp(path, "/dev/console") == 0);
+}
+
+void fill_tty_device_stat(const char* path, struct stat* st)
+{
+    uint32_t now;
+    uint32_t rdev;
+
+    if (!st) return;
+
+    rdev = (path && strcmp(path, "/dev/console") == 0) ?
+        DEV_CONSOLE_RDEV : DEV_TTY_RDEV;
+    now = get_current_time();
+
+    memset(st, 0, sizeof(*st));
+    st->st_dev = 0;
+    st->st_ino = rdev;
+    st->st_mode = S_IFCHR | 0666;
+    st->st_nlink = 1;
+    st->st_uid = 0;
+    st->st_gid = 0;
+    st->st_rdev = rdev;
+    st->st_size = 0;
+    st->st_blksize = 1024;
+    st->st_blocks = 0;
+    st->st_atime = now;
+    st->st_mtime = now;
+    st->st_ctime = now;
+}
+
 file_t* create_tty_console_file(const char* name, int flags) {
     file_t* file = create_file();
+    inode_t* inode;
+    struct stat st;
     if (!file) return NULL;
+
+    inode = create_inode();
+    if (!inode) {
+        kfree(file);
+        return NULL;
+    }
+
+    fill_tty_device_stat(name && strcmp(name, "console") == 0 ?
+                         "/dev/console" : "/dev/tty0", &st);
+    inode->mode = st.st_mode;
+    inode->uid = st.st_uid;
+    inode->gid = st.st_gid;
+    inode->size = st.st_size;
+    inode->blocks = st.st_blocks;
+    inode->nlink = st.st_nlink;
+    inode->first_cluster = 0;
+    inode->parent_cluster = st.st_rdev;
+    inode->atime = st.st_atime;
+    inode->mtime = st.st_mtime;
+    inode->ctime = st.st_ctime;
+    inode->i_op = NULL;
+    inode->f_op = &tty_file_ops;
 
     file->f_op = &tty_file_ops;
     file->flags = flags;
     file->type = FILE_TYPE_TTY;
     file->pos = 0;
-    file->inode = NULL;
+    file->inode = inode;
 
     if (name) {
         strncpy(file->name, name, sizeof(file->name) - 1);
