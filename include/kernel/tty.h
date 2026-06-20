@@ -46,6 +46,28 @@ struct termios {
     speed_t c_ospeed;
 };
 
+/*
+ * Low-level console backend used by the TTY line discipline.
+ *
+ * The backend owns the physical transport (currently PL011 UART). The TTY
+ * layer owns termios, canonical/raw input, foreground process groups, signal
+ * generation, read waiters and output buffering.
+ *
+ * Rules:
+ * - putc/puts may block or poll; they are used only for direct echo/fallback.
+ * - try_putc must be non-blocking and return false when TX cannot accept data.
+ * - set_tx_irq_enabled controls TX empty interrupts for buffered output.
+ * - has_data/getc are polled by tty_read() in addition to UART IRQ delivery.
+ */
+typedef struct tty_backend_ops {
+    void (*putc)(char c);
+    bool (*try_putc)(char c);
+    void (*puts)(const char *s);
+    void (*set_tx_irq_enabled)(bool enabled);
+    bool (*has_data)(void);
+    int (*getc)(void);
+} tty_backend_ops_t;
+
 struct tty_struct {
     /* Buffers circulaires */
     char input_buf[TTY_INPUT_BUF_SIZE];
@@ -127,6 +149,7 @@ struct tty_struct {
 extern struct tty_struct tty0;
 
 void tty_init(void);
+int tty_attach_backend(const tty_backend_ops_t *ops);
 void tty_input_char(char c);
 bool tty_has_pending_output(void);
 void tty_drain_output(void);

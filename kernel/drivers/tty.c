@@ -12,15 +12,6 @@ struct tty_struct tty0;
 
 #define TTY_TX_DRAIN_BUDGET 64
 
-typedef struct tty_backend_ops {
-    void (*putc)(char c);
-    bool (*try_putc)(char c);
-    void (*puts)(const char *s);
-    void (*set_tx_irq_enabled)(bool enabled);
-    bool (*has_data)(void);
-    int (*getc)(void);
-} tty_backend_ops_t;
-
 static const tty_backend_ops_t tty_uart_backend = {
     .putc = uart_putc,
     .try_putc = uart_try_putc,
@@ -31,6 +22,16 @@ static const tty_backend_ops_t tty_uart_backend = {
 };
 
 static const tty_backend_ops_t *tty_backend = &tty_uart_backend;
+
+int tty_attach_backend(const tty_backend_ops_t *ops)
+{
+    if (!ops || !ops->putc || !ops->try_putc || !ops->puts ||
+        !ops->set_tx_irq_enabled || !ops->has_data || !ops->getc)
+        return -EINVAL;
+
+    tty_backend = ops;
+    return 0;
+}
 
 static void tty_backend_putc(char c)
 {
