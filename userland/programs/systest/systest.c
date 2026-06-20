@@ -18,6 +18,10 @@
 #define COLOR_RED   "\033[31m"
 #define COLOR_RESET "\033[0m"
 
+#ifndef SIGTTIN
+#define SIGTTIN 21
+#endif
+
 static int failures = 0;
 static int verbose = 1;
 static volatile int cow_shared_value = 11;
@@ -1668,6 +1672,68 @@ static void test_terminal_process_group(void)
         tcsetpgrp(STDIN_FILENO, old_pgrp);
 }
 
+static void test_background_tty_read_stops(void)
+{
+    int old_pgrp = tcgetpgrp(STDIN_FILENO);
+    int self_pgrp = getpgrp();
+    int sync_pipe[2];
+    int status = 0;
+    char sync = 0;
+    pid_t pid;
+    pid_t waited;
+
+    if (old_pgrp < 0 && errno == ENOTTY) {
+        skip("background tty read stop (stdin is not tty)");
+        return;
+    }
+
+    if (old_pgrp != self_pgrp) {
+        skip("background tty read stop (not foreground job)");
+        return;
+    }
+
+    if (expect(pipe(sync_pipe) == 0, "background tty read sync pipe", errno) < 0)
+        return;
+
+    pid = fork();
+    if (expect(pid >= 0, "background tty read fork child", pid) < 0) {
+        close(sync_pipe[0]);
+        close(sync_pipe[1]);
+        return;
+    }
+
+    if (pid == 0) {
+        char c;
+
+        close(sync_pipe[0]);
+        setpgid(0, 0);
+        (void)write(sync_pipe[1], "r", 1);
+        close(sync_pipe[1]);
+        (void)read(STDIN_FILENO, &c, 1);
+        exit(77);
+    }
+
+    close(sync_pipe[1]);
+    setpgid(pid, pid);
+    expect(read(sync_pipe[0], &sync, 1) == 1 && sync == 'r',
+           "background tty read child reached read point", sync);
+    close(sync_pipe[0]);
+
+    waited = 0;
+    for (int i = 0; i < 100; i++) {
+        waited = waitpid(pid, &status, WUNTRACED | WNOHANG);
+        if (waited == pid)
+            break;
+        usleep(10000);
+    }
+    expect(waited == pid, "background tty read reports stopped child", waited);
+    expect(WIFSTOPPED(status) && WSTOPSIG(status) == SIGTTIN,
+           "background tty read stops with SIGTTIN", status);
+
+    kill(-pid, SIGKILL);
+    waitpid(pid, &status, 0);
+}
+
 static void test_process_session_info(void)
 {
     int self = getpid();
@@ -1723,6 +1789,7 @@ int main(int argc, char **argv)
 
     test_identity();
     test_terminal_process_group();
+    test_background_tty_read_stops();
     test_process_session_info();
     test_file_io();
     test_access_umask();

@@ -165,6 +165,27 @@ pid_t tty_get_foreground_pgid(void)
     return pgid;
 }
 
+static bool tty_current_task_is_background_reader(pid_t *pgid_out)
+{
+    task_t *task = current_task;
+    unsigned long flags;
+    pid_t fg_pgid;
+    pid_t pgid;
+
+    if (!task || task->type != TASK_TYPE_PROCESS || !task->process)
+        return false;
+
+    pgid = task->process->pgid;
+    spin_lock_irqsave(&tty0.lock, &flags);
+    fg_pgid = tty0.foreground_pgid;
+    spin_unlock_irqrestore(&tty0.lock, flags);
+
+    if (pgid_out)
+        *pgid_out = pgid;
+
+    return fg_pgid > 0 && pgid > 0 && pgid != fg_pgid;
+}
+
 int tty_get_termios(struct termios *tio)
 {
     unsigned long flags;
@@ -643,9 +664,15 @@ ssize_t tty_read(char *buf, size_t count) {
     bool interbyte_timer_active = false;
     uint32_t interbyte_deadline = 0;
     unsigned long flags;
+    pid_t pgid = 0;
 
     if (count == 0)
         return 0;
+
+    if (tty_current_task_is_background_reader(&pgid)) {
+        tty_signal_process_group(pgid, SIGTTIN);
+        return -EINTR;
+    }
     
     while (read < count) {
         while (tty_backend_has_data()) {
