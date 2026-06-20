@@ -218,6 +218,11 @@ static int wait_status_os_to_newlib(int status)
         return 0x7f | ((sig & 0xff) << 8);
     }
 
+    if ((status & 0x7f) != 0) {
+        int sig = signal_os_to_newlib(status & 0x7f);
+        return sig & 0x7f;
+    }
+
     return status;
 }
 
@@ -586,7 +591,14 @@ int _execve(const char *pathname, char *const argv[], char *const envp[])
 
 int _wait(int *status)
 {
-    return ret_errno(sys_waitpid(-1, status, 0));
+    long ret = sys_waitpid(-1, status, 0);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    if (status)
+        *status = wait_status_os_to_newlib(*status);
+    return (int)ret;
 }
 
 pid_t waitpid(pid_t pid, int *status, int options)

@@ -381,6 +381,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             child->process->children = NULL;
             child->process->sibling_next = NULL;
             child->process->exit_code = 0;
+            child->process->term_signal = 0;
             child->process->stop_signal = 0;
             child->process->stop_reported = 0;
             child->process->uid = parent->process->uid;
@@ -889,6 +890,7 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         task->process->children = NULL;
         task->process->sibling_next = NULL;
         task->process->exit_code = 0;
+        task->process->term_signal = 0;
         task->process->stop_signal = 0;
         task->process->stop_reported = 0;
         task->process->uid = 0;

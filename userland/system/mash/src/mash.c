@@ -199,12 +199,10 @@ static int shell_wait_foreground_child(int child_pid, int* status)
 
 static int shell_status_from_wait_status(int status)
 {
-    /*
-     * ArmOS waitpid currently returns plain exit codes for normal exits, while
-     * stopped jobs use the traditional 0x7f | (signal << 8) encoding. Keep the
-     * raw exit code ABI intact and only normalize job-control stops for shell
-     * conditionals/$?.
-     */
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
     if (WIFSTOPPED(status) && WSTOPSIG(status) != 0)
         return 128 + WSTOPSIG(status);
 

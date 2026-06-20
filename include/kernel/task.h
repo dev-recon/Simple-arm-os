@@ -244,6 +244,7 @@ typedef struct {
     file_t* files[MAX_FILES];  /* Descripteurs */
     uint32_t fd_flags[MAX_FILES]; /* Flags propres au descripteur (FD_CLOEXEC, etc.) */
     int exit_code;
+    int term_signal;
     int stop_signal;
     int stop_reported;
     uid_t uid, gid;

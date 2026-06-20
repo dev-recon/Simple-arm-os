@@ -822,7 +822,8 @@ static void terminate_process(task_t* proc, int sig)
     
     //KINFO("[SIGNAL] Terminating process PID=%u with signal %d\n", proc->process->pid, sig);
     
-    proc->process->exit_code = sig;
+    proc->process->exit_code = 0;
+    proc->process->term_signal = sig;
     sys_exit(sig);  /* Utiliser la version corrigee */
 }
 

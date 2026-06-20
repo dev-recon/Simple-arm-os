@@ -81,6 +81,16 @@ static int expect(int cond, const char *name, int value)
     return -1;
 }
 
+static int status_exited(int status, int code)
+{
+    return WIFEXITED(status) && WEXITSTATUS(status) == code;
+}
+
+static int status_signaled(int status, int sig)
+{
+    return WIFSIGNALED(status) && WTERMSIG(status) == sig;
+}
+
 static void systest_winch_signal_handler(int sig)
 {
     (void)sig;
@@ -830,7 +840,8 @@ static void test_fork_wait_kill(void)
         return;
 
     waited = waitpid(pid, &status, 0);
-    expect(waited == pid && status == 42, "waitpid collects exit status", waited);
+    expect(waited == pid && status_exited(status, 42),
+           "waitpid collects exit status", status);
 
     pid = fork();
     if (pid == 0) {
@@ -843,7 +854,8 @@ static void test_fork_wait_kill(void)
 
     expect(kill(pid, SIGKILL) == 0, "kill SIGKILL", 0);
     waited = waitpid(pid, &status, 0);
-    expect(waited == pid, "waitpid collects killed child", waited);
+    expect(waited == pid && status_signaled(status, SIGKILL),
+           "waitpid collects killed child", status);
 }
 
 static void test_process_groups(void)
@@ -915,7 +927,8 @@ static void test_waitpid_process_group(void)
         return;
 
     waited = waitpid(-pgid, &status, 0);
-    expect(waited == pids[0] && status == 61, "waitpid -pgid reaps group child", waited);
+    expect(waited == pids[0] && status_exited(status, 61),
+           "waitpid -pgid reaps group child", status);
 
     expect(kill(-pgid, SIGKILL) == 0, "waitpid -pgid kill remaining group", pgid);
     for (int i = 0; i < 2; i++) {
@@ -1103,7 +1116,8 @@ static void test_nanosleep_signal_interrupt(void)
     do {
         waited = waitpid(pid, &status, 0);
     } while (waited < 0 && errno == EINTR);
-    expect(waited == pid && status == 0, "nanosleep signal child reaped", status);
+    expect(waited == pid && status_exited(status, 0),
+           "nanosleep signal child reaped", status);
     signal(SIGUSR1, SIG_DFL);
 }
 
@@ -1126,7 +1140,8 @@ static void test_cow_memory(void)
         return;
 
     waited = waitpid(pid, &status, 0);
-    expect(waited == pid && status == 0, "COW child writes private page", waited);
+    expect(waited == pid && status_exited(status, 0),
+           "COW child writes private page", status);
     expect(cow_shared_value == 11, "COW parent value unchanged", cow_shared_value);
 
     cow_shared_value = 11;
@@ -1141,7 +1156,8 @@ static void test_cow_memory(void)
 
     cow_shared_value = 44;
     waited = waitpid(pid, &status, 0);
-    expect(waited == pid && status == 0, "COW parent writes private page", waited);
+    expect(waited == pid && status_exited(status, 0),
+           "COW parent writes private page", status);
     expect(cow_shared_value == 44, "COW parent keeps own write", cow_shared_value);
 
     heap = malloc(8192);
@@ -1162,7 +1178,8 @@ static void test_cow_memory(void)
 
     if (expect(pid > 0, "COW heap child writer", pid) >= 0) {
         waited = waitpid(pid, &status, 0);
-        expect(waited == pid && status == 0, "COW heap child writes private pages", waited);
+        expect(waited == pid && status_exited(status, 0),
+               "COW heap child writes private pages", status);
         expect(heap[0] == 0x11 && heap[4095] == 0x22 &&
                heap[4096] == 0x33 && heap[8191] == 0x44,
                "COW heap parent unchanged", heap[0]);
@@ -1181,7 +1198,8 @@ static void test_cow_memory(void)
         heap[0] = 0xCC;
         heap[4096] = 0xDD;
         waited = waitpid(pid, &status, 0);
-        expect(waited == pid && status == 0, "COW heap child unchanged", waited);
+        expect(waited == pid && status_exited(status, 0),
+               "COW heap child unchanged", status);
         expect(heap[0] == 0xCC && heap[4096] == 0xDD,
                "COW heap parent keeps own writes", heap[0]);
     }
@@ -1202,7 +1220,8 @@ static void test_cow_memory(void)
 
     if (expect(pid > 0, "COW stack child writer", pid) >= 0) {
         waited = waitpid(pid, &status, 0);
-        expect(waited == pid && status == 0, "COW stack child writes private pages", waited);
+        expect(waited == pid && status_exited(status, 0),
+               "COW stack child writes private pages", status);
         expect(stack_area[0] == 0x12 && stack_area[4095] == 0x23 &&
                stack_area[4096] == 0x34 && stack_area[8191] == 0x45,
                "COW stack parent unchanged", stack_area[0]);
@@ -1221,7 +1240,8 @@ static void test_cow_memory(void)
         stack_area[0] = 0xCD;
         stack_area[4096] = 0xDE;
         waited = waitpid(pid, &status, 0);
-        expect(waited == pid && status == 0, "COW stack child unchanged", waited);
+        expect(waited == pid && status_exited(status, 0),
+               "COW stack child unchanged", status);
         expect(stack_area[0] == 0xCD && stack_area[4096] == 0xDE,
                "COW stack parent keeps own writes", stack_area[0]);
     }
@@ -1267,7 +1287,8 @@ static void test_shared_memory(void)
     }
 
     waited = waitpid(pid, &status, 0);
-    expect(waited == pid && status == 0, "shm child sees parent data", waited);
+    expect(waited == pid && status_exited(status, 0),
+           "shm child sees parent data", status);
     expect(shared[0] == 5678 && shared[1] == 42, "shm parent sees child writes", shared[0]);
     expect(shm_unmap((void *)shared, 4096) == 0, "shm unmap parent", 0);
     expect(shm_unlink(name) == 0, "shm unlink", 0);
@@ -1458,7 +1479,7 @@ static void test_cow_fork_stress(void)
         stack_area[4096] = (unsigned char)(0xC0 + (i & 0x1F));
 
         waited = waitpid(pid, &status, 0);
-        if (waited != pid || status != 0) {
+        if (waited != pid || !status_exited(status, 0)) {
             loop_ok = 0;
             break;
         }
@@ -1493,7 +1514,7 @@ static void test_asid_churn(void)
         }
 
         waited = waitpid(pid, &status, 0);
-        if (waited != pid || status != (i & 0x7f)) {
+        if (waited != pid || !status_exited(status, i & 0x7f)) {
             loop_ok = 0;
             break;
         }
@@ -1566,7 +1587,8 @@ static void test_lifecycle_exec_fail_loop(void)
             break;
         }
 
-        if (waitpid(pid, &status, 0) != pid || status != 90 + (i & 7)) {
+        if (waitpid(pid, &status, 0) != pid ||
+            !status_exited(status, 90 + (i & 7))) {
             ok = 0;
             break;
         }
@@ -1590,7 +1612,8 @@ static void test_lifecycle_wnohang_kill(void)
 
     expect(waitpid(pid, &status, WNOHANG) == 0, "waitpid WNOHANG leaves live child", status);
     expect(kill(pid, SIGKILL) == 0, "lifecycle kill live child", pid);
-    expect(waitpid(pid, &status, 0) == pid, "lifecycle reap killed child", status);
+    expect(waitpid(pid, &status, 0) == pid && status_signaled(status, SIGKILL),
+           "lifecycle reap killed child", status);
 }
 
 static void test_lifecycle_orphan_reaper(void)
@@ -1616,7 +1639,7 @@ static void test_lifecycle_orphan_reaper(void)
             break;
         }
 
-        if (waitpid(pid, &status, 0) != pid || status != 30 + i) {
+        if (waitpid(pid, &status, 0) != pid || !status_exited(status, 30 + i)) {
             ok = 0;
             break;
         }

@@ -199,7 +199,14 @@ static void jobs_format_status(job_t* job, char* out, int out_size)
     }
 
     if (job->state == JOB_DONE) {
-        snprintf(out, out_size, "%d", job->status);
+        if (WIFEXITED(job->status))
+            snprintf(out, out_size, "exit(%d)", WEXITSTATUS(job->status));
+        else if (WIFSIGNALED(job->status))
+            snprintf(out, out_size, "%s(%d)",
+                     jobs_signal_name(WTERMSIG(job->status)),
+                     WTERMSIG(job->status));
+        else
+            snprintf(out, out_size, "%d", job->status);
         return;
     }
 
@@ -252,6 +259,10 @@ static char jobs_marker(job_t* job)
 
 static int jobs_shell_status_from_wait_status(int status)
 {
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
     if (WIFSTOPPED(status) && WSTOPSIG(status) != 0)
         return 128 + WSTOPSIG(status);
     if (status < 0)

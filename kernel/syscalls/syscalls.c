@@ -700,7 +700,12 @@ void sys_exit(int status)
     unsigned long task_flags;
     spin_lock_irqsave(&task_lock, &task_flags);
     /* CORRECTION: États cohérents avec sys_waitpid */
-    proc->process->exit_code = status;
+    if (proc->process->term_signal > 0) {
+        proc->process->exit_code = 0;
+    } else {
+        proc->process->exit_code = status & 0xff;
+        proc->process->term_signal = 0;
+    }
     //task_set_state(proc, TASK_ZOMBIE);
     if (proc->state != TASK_ZOMBIE) {
         proc->state = TASK_ZOMBIE;           /* Pas TASK_TERMINATED ! */
@@ -808,11 +813,17 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
         if (zombie) {
             /* Zombie trouve - ACCeS CORRECT */
             pid_t child_pid = zombie->process->pid;
-            int exit_code = zombie->process->exit_code;
+            int wait_status;
+
+            if (zombie->process->term_signal > 0) {
+                wait_status = zombie->process->term_signal & 0x7f;
+            } else {
+                wait_status = (zombie->process->exit_code & 0xff) << 8;
+            }
             
             /* Copier le statut de sortie */
             if (status) {
-                *status = exit_code;
+                *status = wait_status;
             }
             
             /* Retirer de la liste des enfants - ACCeS CORRECT */
