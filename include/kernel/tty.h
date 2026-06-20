@@ -8,7 +8,11 @@
 
 #define TTY_INPUT_BUF_SIZE  512
 #define TTY_OUTPUT_BUF_SIZE 512
+#define TTY_MAX             2
+#define TTY_CONSOLE_ID      0
+#define TTY_GRAPHICS_ID     1
 #define DEV_TTY_RDEV        ((4u << 8) | 0u)
+#define DEV_TTY1_RDEV       ((4u << 8) | 1u)
 #define DEV_CONSOLE_RDEV    ((5u << 8) | 1u)
 
 #define TTY_STTY_SET_FOREGROUND_PGID 1
@@ -71,6 +75,9 @@ typedef struct tty_backend_ops {
 } tty_backend_ops_t;
 
 struct tty_struct {
+    int id;
+    const tty_backend_ops_t *backend;
+
     /* Buffers circulaires */
     char input_buf[TTY_INPUT_BUF_SIZE];
     uint32_t input_head;
@@ -149,9 +156,11 @@ struct tty_struct {
 #define TCIOFLUSH 2
 
 extern struct tty_struct tty0;
+extern struct tty_struct tty1;
 
 void tty_init(void);
 int tty_attach_backend(const tty_backend_ops_t *ops);
+int tty_attach_backend_to(int tty_id, const tty_backend_ops_t *ops);
 void tty_input_char(char c);
 bool tty_has_pending_output(void);
 void tty_drain_output(void);

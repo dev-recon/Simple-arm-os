@@ -9,52 +9,89 @@
 #include <kernel/memory.h>
 
 struct tty_struct tty0;
+struct tty_struct tty1;
 
 #define TTY_TX_DRAIN_BUDGET 64
 
-static const tty_backend_ops_t *tty_backend = NULL;
-
-int tty_attach_backend(const tty_backend_ops_t *ops)
+static struct tty_struct *tty_by_id(int tty_id)
 {
+    switch (tty_id) {
+    case TTY_CONSOLE_ID:
+        return &tty0;
+    case TTY_GRAPHICS_ID:
+        return &tty1;
+    default:
+        return NULL;
+    }
+}
+
+int tty_attach_backend_to(int tty_id, const tty_backend_ops_t *ops)
+{
+    struct tty_struct *tty = tty_by_id(tty_id);
+
+    if (!tty)
+        return -ENODEV;
     if (!ops || !ops->putc || !ops->try_putc || !ops->puts ||
         !ops->set_tx_irq_enabled || !ops->has_data || !ops->getc)
         return -EINVAL;
 
-    tty_backend = ops;
+    tty->backend = ops;
     return 0;
+}
+
+int tty_attach_backend(const tty_backend_ops_t *ops)
+{
+    return tty_attach_backend_to(TTY_CONSOLE_ID, ops);
+}
+
+static const tty_backend_ops_t *tty_backend_for(const struct tty_struct *tty)
+{
+    return tty ? tty->backend : NULL;
 }
 
 static void tty_backend_putc(char c)
 {
-    if (tty_backend)
-        tty_backend->putc(c);
+    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
+
+    if (backend)
+        backend->putc(c);
 }
 
 static bool tty_backend_try_putc(char c)
 {
-    return tty_backend ? tty_backend->try_putc(c) : false;
+    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
+
+    return backend ? backend->try_putc(c) : false;
 }
 
 static void tty_backend_puts(const char *s)
 {
-    if (tty_backend)
-        tty_backend->puts(s);
+    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
+
+    if (backend)
+        backend->puts(s);
 }
 
 static void tty_backend_set_tx_irq_enabled(bool enabled)
 {
-    if (tty_backend)
-        tty_backend->set_tx_irq_enabled(enabled);
+    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
+
+    if (backend)
+        backend->set_tx_irq_enabled(enabled);
 }
 
 static bool tty_backend_has_data(void)
 {
-    return tty_backend ? tty_backend->has_data() : false;
+    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
+
+    return backend ? backend->has_data() : false;
 }
 
 static int tty_backend_getc(void)
 {
-    return tty_backend ? tty_backend->getc() : -1;
+    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
+
+    return backend ? backend->getc() : -1;
 }
 
 static uint32_t tty_output_next(uint32_t pos)
@@ -102,17 +139,24 @@ static void tty_init_termios(struct termios *tio)
     tio->c_ospeed = 115200;
 }
 
+static void tty_init_one(struct tty_struct *tty, int id)
+{
+    memset(tty, 0, sizeof(*tty));
+    
+    tty->id = id;
+    tty_init_termios(&tty->termios);
+    tty->foreground_pgid = 0;
+    tty->winsize_rows = 24;
+    tty->winsize_cols = 80;
+    tty->winsize_xpixel = 0;
+    tty->winsize_ypixel = 0;
+    
+    init_spinlock(&tty->lock);
+}
+
 void tty_init(void) {
-    memset(&tty0, 0, sizeof(tty0));
-    
-    tty_init_termios(&tty0.termios);
-    tty0.foreground_pgid = 0;
-    tty0.winsize_rows = 24;
-    tty0.winsize_cols = 80;
-    tty0.winsize_xpixel = 0;
-    tty0.winsize_ypixel = 0;
-    
-    init_spinlock(&tty0.lock);
+    tty_init_one(&tty0, TTY_CONSOLE_ID);
+    tty_init_one(&tty1, TTY_GRAPHICS_ID);
 }
 
 static int tty_signal_process_group(pid_t pgid, int sig)
