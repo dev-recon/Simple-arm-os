@@ -12,6 +12,56 @@ struct tty_struct tty0;
 
 #define TTY_TX_DRAIN_BUDGET 64
 
+typedef struct tty_backend_ops {
+    void (*putc)(char c);
+    bool (*try_putc)(char c);
+    void (*puts)(const char *s);
+    void (*set_tx_irq_enabled)(bool enabled);
+    bool (*has_data)(void);
+    int (*getc)(void);
+} tty_backend_ops_t;
+
+static const tty_backend_ops_t tty_uart_backend = {
+    .putc = uart_putc,
+    .try_putc = uart_try_putc,
+    .puts = uart_puts,
+    .set_tx_irq_enabled = uart_set_tx_irq_enabled,
+    .has_data = uart_has_data,
+    .getc = uart_getc,
+};
+
+static const tty_backend_ops_t *tty_backend = &tty_uart_backend;
+
+static void tty_backend_putc(char c)
+{
+    tty_backend->putc(c);
+}
+
+static bool tty_backend_try_putc(char c)
+{
+    return tty_backend->try_putc(c);
+}
+
+static void tty_backend_puts(const char *s)
+{
+    tty_backend->puts(s);
+}
+
+static void tty_backend_set_tx_irq_enabled(bool enabled)
+{
+    tty_backend->set_tx_irq_enabled(enabled);
+}
+
+static bool tty_backend_has_data(void)
+{
+    return tty_backend->has_data();
+}
+
+static int tty_backend_getc(void)
+{
+    return tty_backend->getc();
+}
+
 static uint32_t tty_output_next(uint32_t pos)
 {
     return (pos + 1) % TTY_OUTPUT_BUF_SIZE;
@@ -208,7 +258,7 @@ int tty_flush(int queue_selector)
         tty0.output_head = 0;
         tty0.output_tail = 0;
         spin_unlock_irqrestore(&tty0.lock, flags);
-        uart_set_tx_irq_enabled(false);
+        tty_backend_set_tx_irq_enabled(false);
     }
 
     return 0;
@@ -413,7 +463,7 @@ static bool tty_handle_signal_char_locked(const struct termios *tio, char c,
     tty0.last_signal = sig;
 
     spin_unlock_irqrestore(&tty0.lock, *flags);
-    uart_puts(echo);
+    tty_backend_puts(echo);
     delivered = tty_signal_process_group(pgid, sig);
     spin_lock_irqsave(&tty0.lock, flags);
 
@@ -474,7 +524,7 @@ static bool tty_handle_canonical_edit_locked(const struct termios *tio, char c)
             uint32_t prev = tty_input_prev(tty0.input_head);
             if (tty0.input_buf[prev] != '\n' && tty0.input_buf[prev] != '\r') {
                 tty0.input_head = prev;
-                uart_puts("\b \b");
+                tty_backend_puts("\b \b");
             }
         }
         return true;
@@ -486,7 +536,7 @@ static bool tty_handle_canonical_edit_locked(const struct termios *tio, char c)
             if (tty0.input_buf[prev] == '\n' || tty0.input_buf[prev] == '\r')
                 break;
             tty0.input_head = prev;
-            uart_puts("\b \b");
+            tty_backend_puts("\b \b");
         }
         return true;
     }
@@ -498,7 +548,7 @@ static bool tty_handle_canonical_edit_locked(const struct termios *tio, char c)
             if (pc == '\n' || pc == '\r' || pc != ' ')
                 break;
             tty0.input_head = prev;
-            uart_puts("\b \b");
+            tty_backend_puts("\b \b");
         }
         while (tty0.input_head != tty0.input_tail) {
             uint32_t prev = tty_input_prev(tty0.input_head);
@@ -506,7 +556,7 @@ static bool tty_handle_canonical_edit_locked(const struct termios *tio, char c)
             if (pc == '\n' || pc == '\r' || pc == ' ')
                 break;
             tty0.input_head = prev;
-            uart_puts("\b \b");
+            tty_backend_puts("\b \b");
         }
         return true;
     }
@@ -522,7 +572,7 @@ static task_t *tty_enqueue_input_char_locked(const struct termios *tio, char c)
     task_t *reader = NULL;
 
     if (tio->c_lflag & ECHO)
-        uart_putc(c);
+        tty_backend_putc(c);
 
     next_head = (tty0.input_head + 1) % TTY_INPUT_BUF_SIZE;
     if (next_head == tty0.input_tail)
@@ -603,8 +653,8 @@ ssize_t tty_read(char *buf, size_t count) {
         return 0;
     
     while (read < count) {
-        while (uart_has_data()) {
-            int c = uart_getc();
+        while (tty_backend_has_data()) {
+            int c = tty_backend_getc();
             if (c < 0) break;
             tty_input_char((char)c);
         }
@@ -738,7 +788,7 @@ ssize_t tty_write(const char *buf, size_t count) {
                     tty0.output_head = tty_output_next(tty0.output_head);
                     tty0.output_enqueued++;
                     spin_unlock_irqrestore(&tty0.lock, flags);
-                    uart_set_tx_irq_enabled(true);
+                    tty_backend_set_tx_irq_enabled(true);
                     tty_drain_output();
                     break;
                 }
@@ -750,7 +800,7 @@ ssize_t tty_write(const char *buf, size_t count) {
                 if (current_task)
                     yield();
                 else {
-                    uart_putc('\r');
+                    tty_backend_putc('\r');
                     break;
                 }
             }
@@ -763,7 +813,7 @@ ssize_t tty_write(const char *buf, size_t count) {
                 tty0.output_head = tty_output_next(tty0.output_head);
                 tty0.output_enqueued++;
                 spin_unlock_irqrestore(&tty0.lock, flags);
-                uart_set_tx_irq_enabled(true);
+                tty_backend_set_tx_irq_enabled(true);
                 tty_drain_output();
                 break;
             }
@@ -775,7 +825,7 @@ ssize_t tty_write(const char *buf, size_t count) {
             if (current_task)
                 yield();
             else {
-                uart_putc(buf[i]);
+                tty_backend_putc(buf[i]);
                 break;
             }
         }
@@ -800,12 +850,12 @@ static void tty_drain_output_limited(uint32_t budget)
         spin_lock_irqsave(&tty0.lock, &flags);
         if (tty_output_empty_locked()) {
             spin_unlock_irqrestore(&tty0.lock, flags);
-            uart_set_tx_irq_enabled(false);
+            tty_backend_set_tx_irq_enabled(false);
             return;
         }
 
         c = tty0.output_buf[tty0.output_tail];
-        sent = uart_try_putc(c);
+        sent = tty_backend_try_putc(c);
         if (sent) {
             tty0.output_tail = tty_output_next(tty0.output_tail);
             tty0.output_drained++;
@@ -814,7 +864,7 @@ static void tty_drain_output_limited(uint32_t budget)
         spin_unlock_irqrestore(&tty0.lock, flags);
 
         if (!sent) {
-            uart_set_tx_irq_enabled(true);
+            tty_backend_set_tx_irq_enabled(true);
             return;
         }
     }
@@ -822,10 +872,10 @@ static void tty_drain_output_limited(uint32_t budget)
     spin_lock_irqsave(&tty0.lock, &flags);
     if (tty_output_empty_locked()) {
         spin_unlock_irqrestore(&tty0.lock, flags);
-        uart_set_tx_irq_enabled(false);
+        tty_backend_set_tx_irq_enabled(false);
     } else {
         spin_unlock_irqrestore(&tty0.lock, flags);
-        uart_set_tx_irq_enabled(true);
+        tty_backend_set_tx_irq_enabled(true);
     }
 }
 
