@@ -113,6 +113,19 @@ static job_t* jobs_current(void)
     return current;
 }
 
+static job_t* jobs_previous(void)
+{
+    job_t* current = jobs_current();
+    job_t* previous = NULL;
+
+    for (int i = 0; i < JOBS_MAX; i++) {
+        if (jobs[i].state != JOB_EMPTY && &jobs[i] != current)
+            previous = &jobs[i];
+    }
+
+    return previous;
+}
+
 static job_t* jobs_find_arg(int argc, char* argv[])
 {
     const char* spec;
@@ -122,8 +135,16 @@ static job_t* jobs_find_arg(int argc, char* argv[])
         return jobs_current();
 
     spec = argv[1];
-    if (spec[0] == '%')
+    if (strcmp(spec, "%%") == 0 || strcmp(spec, "%+") == 0)
+        return jobs_current();
+    if (strcmp(spec, "%-") == 0)
+        return jobs_previous();
+
+    if (spec[0] == '%') {
         spec++;
+        if (!*spec)
+            return jobs_current();
+    }
 
     id = atoi(spec);
     if (id <= 0)
@@ -135,11 +156,98 @@ static job_t* jobs_find_arg(int argc, char* argv[])
 static const char* jobs_state_name(job_state_t state)
 {
     switch (state) {
-        case JOB_RUNNING: return "running";
-        case JOB_STOPPED: return "stopped";
-        case JOB_DONE: return "done";
-        default: return "empty";
+        case JOB_RUNNING: return "Running";
+        case JOB_STOPPED: return "Stopped";
+        case JOB_DONE: return "Done";
+        default: return "Empty";
     }
+}
+
+static const char* jobs_signal_name(int sig)
+{
+    switch (sig) {
+        case SIGINT: return "SIGINT";
+        case SIGKILL: return "SIGKILL";
+        case SIGTERM: return "SIGTERM";
+        case SIGCONT: return "SIGCONT";
+        case SIGSTOP: return "SIGSTOP";
+        case SIGTSTP: return "SIGTSTP";
+#ifdef SIGTTIN
+        case SIGTTIN: return "SIGTTIN";
+#endif
+#ifdef SIGTTOU
+        case SIGTTOU: return "SIGTTOU";
+#endif
+        default: return "signal";
+    }
+}
+
+static void jobs_format_status(job_t* job, char* out, int out_size)
+{
+    if (!out || out_size <= 0)
+        return;
+
+    if (!job || job->state == JOB_EMPTY) {
+        snprintf(out, out_size, "-");
+        return;
+    }
+
+    if (job->state == JOB_STOPPED && WIFSTOPPED(job->status)) {
+        int sig = WSTOPSIG(job->status);
+        snprintf(out, out_size, "%s(%d)", jobs_signal_name(sig), sig);
+        return;
+    }
+
+    if (job->state == JOB_DONE) {
+        snprintf(out, out_size, "%d", job->status);
+        return;
+    }
+
+    snprintf(out, out_size, "-");
+}
+
+static const char* jobs_stop_reason(int sig)
+{
+#ifdef SIGTTIN
+    if (sig == SIGTTIN)
+        return " (tty input)";
+#endif
+#ifdef SIGTTOU
+    if (sig == SIGTTOU)
+        return " (tty output)";
+#endif
+    return "";
+}
+
+static void jobs_format_state(job_t* job, char* out, int out_size, int long_format)
+{
+    if (!out || out_size <= 0)
+        return;
+
+    if (!job || job->state == JOB_EMPTY) {
+        snprintf(out, out_size, "Empty");
+        return;
+    }
+
+    if (job->state == JOB_STOPPED && WIFSTOPPED(job->status)) {
+        int sig = WSTOPSIG(job->status);
+        if (long_format)
+            snprintf(out, out_size, "Stopped (%s)", jobs_signal_name(sig));
+        else
+            snprintf(out, out_size, "Stopped%s", jobs_stop_reason(sig));
+        return;
+    }
+
+    snprintf(out, out_size, "%s", jobs_state_name(job->state));
+}
+
+static char jobs_marker(job_t* job)
+{
+    if (job == jobs_current())
+        return '+';
+    if (job == jobs_previous())
+        return '-';
+    return ' ';
 }
 
 static int jobs_find_pid_slot(job_t* job, int pid)
@@ -277,6 +385,21 @@ void jobs_note_status(int pid, int status)
         job->status = status;
 }
 
+void jobs_print_stopped(int pgid)
+{
+    job_t* job = jobs_find_by_pgid(pgid);
+    char state_buf[40];
+
+    if (!job) {
+        printf("\n[?] Stopped\n");
+        return;
+    }
+
+    jobs_format_state(job, state_buf, sizeof(state_buf), 0);
+    printf("\n[%d]%c %-22s %s\n",
+           job->id, jobs_marker(job), state_buf, job->command);
+}
+
 static void jobs_continue(job_t* job)
 {
     if (!job || job->state == JOB_EMPTY)
@@ -304,12 +427,13 @@ static int jobs_reap(int notify)
         if (job) {
             jobs_note_status(pid, status);
             if (notify && WIFSTOPPED(status) && WSTOPSIG(status) != 0) {
-                printf("[%d] stopped pgid=%d signal=%d  %s\n",
-                       job->id, job->pgid, WSTOPSIG(status), job->command);
+                int sig = WSTOPSIG(status);
+                printf("[%d]+ Stopped%s        %s\n",
+                       job->id, jobs_stop_reason(sig), job->command);
                 notified++;
             } else if (notify && job->state == JOB_DONE) {
-                printf("[%d] done pgid=%d status=%d  %s\n",
-                       job->id, job->pgid, status, job->command);
+                printf("[%d]+ Done                   %s\n",
+                       job->id, job->command);
                 notified++;
             }
         } else if (notify) {
@@ -329,22 +453,46 @@ int jobs_reap_background(void)
 int jobs_builtin(int argc, char* argv[])
 {
     int shown = 0;
+    int long_format = 0;
+    int pids_only = 0;
 
-    (void)argc;
-    (void)argv;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-l") == 0) {
+            long_format = 1;
+        } else if (strcmp(argv[i], "-p") == 0) {
+            pids_only = 1;
+        } else {
+            printf("jobs: usage: jobs [-l|-p]\n");
+            return SHELL_ERROR;
+        }
+    }
 
     jobs_reap(0);
 
     for (int i = 0; i < JOBS_MAX; i++) {
         job_t* job = &jobs[i];
+        char state_buf[40];
 
         if (job->state == JOB_EMPTY)
             continue;
 
-        printf("[%d] %-7s pid=%d pgid=%d status=%d  %s\n",
-               job->id,
-               jobs_state_name(job->state),
-               job->pids[0], job->pgid, job->status, job->command);
+        if (pids_only) {
+            printf("%d\n", job->pgid);
+            shown++;
+            continue;
+        }
+
+        jobs_format_state(job, state_buf, sizeof(state_buf), long_format);
+        if (long_format) {
+            char status_buf[32];
+            jobs_format_status(job, status_buf, sizeof(status_buf));
+            printf("[%d]%c %-5d pgid=%-5d %-18s status=%-12s %s\n",
+                   job->id, jobs_marker(job), job->pids[0], job->pgid,
+                   state_buf, status_buf, job->command);
+        } else {
+            printf("[%d]%c %-22s %s\n",
+                   job->id, jobs_marker(job), state_buf, job->command);
+        }
         shown++;
     }
 
@@ -371,7 +519,7 @@ int jobs_fg_builtin(int argc, char* argv[])
     }
 
     if (job->state == JOB_DONE) {
-        printf("[%d] done pid=%d status=%d  %s\n",
+        printf("[%d] Done pid=%d status=%d  %s\n",
                job->id, job->pids[0], job->status, job->command);
         job->state = JOB_EMPTY;
         return job->status;
@@ -408,13 +556,12 @@ int jobs_bg_builtin(int argc, char* argv[])
     }
 
     if (job->state == JOB_DONE) {
-        printf("[%d] done pid=%d status=%d  %s\n",
+        printf("[%d] Done pid=%d status=%d  %s\n",
                job->id, job->pids[0], job->status, job->command);
         return job->status;
     }
 
     jobs_continue(job);
-    printf("[%d] running pid=%d pgid=%d  %s\n",
-           job->id, job->pids[0], job->pgid, job->command);
+    printf("[%d]+ %s &\n", job->id, job->command);
     return SHELL_OK;
 }

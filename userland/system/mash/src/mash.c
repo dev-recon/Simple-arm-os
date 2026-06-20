@@ -927,8 +927,7 @@ static void remember_stopped_job(int pid, int pgid, const char* command, int sta
 {
     jobs_add(pid, pgid, command);
     jobs_note_status(pid, status);
-    printf("\n[stopped] pid %d signal=%d  %s\n",
-           pid, WSTOPSIG(status), command ? command : "");
+    jobs_print_stopped(pgid);
 }
 
 static int pipeline_pid_index(const int pids[], int count, int pid)
@@ -1092,7 +1091,7 @@ static int run_pipeline(int argc, char* argv[], int background) {
             if (wait_seen[i])
                 jobs_note_status(pids[i], wait_statuses[i]);
         }
-        printf("\n[stopped] pgid %d  %s\n", pgid, command);
+        jobs_print_stopped(pgid);
     }
 
     return last_status;
