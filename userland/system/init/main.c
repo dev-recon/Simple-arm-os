@@ -5,6 +5,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifndef SIGTTIN
+#define SIGTTIN 21
+#endif
+#ifndef SIGTTOU
+#define SIGTTOU 22
+#endif
+
 static char *const init_envp[] = {
     "PATH=/bin:/usr/bin:/opt/kilo/bin",
     "HOME=/home/user",
@@ -46,6 +53,8 @@ int main(void)
 
     signal(SIGINT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGTTOU, SIG_IGN);
     chdir("/");
 
     while (1) {

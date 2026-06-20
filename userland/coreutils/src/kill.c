@@ -4,6 +4,13 @@
 #include <signal.h>
 #include <unistd.h>
 
+#ifndef SIGTTIN
+#define SIGTTIN 21
+#endif
+#ifndef SIGTTOU
+#define SIGTTOU 22
+#endif
+
 static int parse_signal(const char *arg)
 {
     if (strcmp(arg, "-9")       == 0 || strcmp(arg, "-KILL")    == 0 || strcmp(arg, "-SIGKILL") == 0) return SIGKILL;
@@ -13,6 +20,8 @@ static int parse_signal(const char *arg)
     if (strcmp(arg, "-18")      == 0 || strcmp(arg, "-CONT")    == 0 || strcmp(arg, "-SIGCONT") == 0) return SIGCONT;
     if (strcmp(arg, "-19")      == 0 || strcmp(arg, "-STOP")    == 0 || strcmp(arg, "-SIGSTOP") == 0) return SIGSTOP;
     if (strcmp(arg, "-20")      == 0 || strcmp(arg, "-TSTP")    == 0 || strcmp(arg, "-SIGTSTP") == 0) return SIGTSTP;
+    if (strcmp(arg, "-21")      == 0 || strcmp(arg, "-TTIN")    == 0 || strcmp(arg, "-SIGTTIN") == 0) return SIGTTIN;
+    if (strcmp(arg, "-22")      == 0 || strcmp(arg, "-TTOU")    == 0 || strcmp(arg, "-SIGTTOU") == 0) return SIGTTOU;
     return -1;
 }
 
@@ -26,6 +35,8 @@ static const char *signal_name(int sig)
         case SIGCONT: return "SIGCONT";
         case SIGSTOP: return "SIGSTOP";
         case SIGTSTP: return "SIGTSTP";
+        case SIGTTIN: return "SIGTTIN";
+        case SIGTTOU: return "SIGTTOU";
         default:      return "signal";
     }
 }

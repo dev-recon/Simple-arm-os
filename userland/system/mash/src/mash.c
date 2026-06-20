@@ -14,6 +14,12 @@
 #ifndef SA_RESTART
 #define SA_RESTART 0x01
 #endif
+#ifndef SIGTTIN
+#define SIGTTIN 21
+#endif
+#ifndef SIGTTOU
+#define SIGTTOU 22
+#endif
 
 char input_buffer[SHELL_BUFFER_SIZE];
 char* argv_buffer[SHELL_MAX_ARGS];
@@ -69,6 +75,8 @@ static void shell_install_signal_handlers(void)
     if (shell_is_signal_protected()) {
         signal(SIGINT, SIG_IGN);
         signal(SIGTSTP, SIG_IGN);
+        signal(SIGTTIN, SIG_IGN);
+        signal(SIGTTOU, SIG_IGN);
     } else {
         /*
          * A nested interactive shell is just a foreground command. It must not
@@ -77,9 +85,19 @@ static void shell_install_signal_handlers(void)
          */
         signal(SIGINT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
+        signal(SIGTTIN, SIG_DFL);
+        signal(SIGTTOU, SIG_DFL);
     }
 
     signal(SIGCHLD, shell_sigchld_handler);
+}
+
+static void shell_restore_child_signal_handlers(void)
+{
+    signal(SIGINT, SIG_DFL);
+    signal(SIGTSTP, SIG_DFL);
+    signal(SIGTTIN, SIG_DFL);
+    signal(SIGTTOU, SIG_DFL);
 }
 
 #define SHELL_MAX_ENV       16
@@ -992,8 +1010,7 @@ static int run_pipeline(int argc, char* argv[], int background) {
             else if (pgid > 0)
                 setpgid(0, pgid);
 
-            signal(SIGINT, SIG_DFL);
-            signal(SIGTSTP, SIG_DFL);
+            shell_restore_child_signal_handlers();
 
             if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
                 printf("mash: cannot connect pipeline input\n");
@@ -1629,8 +1646,7 @@ int shell_execute(int argc, char* argv[]) {
     if (child_pid == 0) {
         SHELL_TRACE("child exec cmd=%s", argv[0]);
         setpgid(0, 0);
-        signal(SIGINT, SIG_DFL);
-        signal(SIGTSTP, SIG_DFL);
+        shell_restore_child_signal_handlers();
         if (apply_redirections(&redirs) < 0)
             exit(-1);
 

@@ -22,6 +22,10 @@ static int parse_signal(const char *s)
         return SIGSTOP;
     if (strcmp(s, "CONT") == 0 || strcmp(s, "SIGCONT") == 0)
         return SIGCONT;
+    if (strcmp(s, "21") == 0 || strcmp(s, "TTIN") == 0 || strcmp(s, "SIGTTIN") == 0)
+        return SIGTTIN;
+    if (strcmp(s, "22") == 0 || strcmp(s, "TTOU") == 0 || strcmp(s, "SIGTTOU") == 0)
+        return SIGTTOU;
     return -1;
 }
 

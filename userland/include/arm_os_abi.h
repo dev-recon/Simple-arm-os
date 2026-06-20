@@ -13,6 +13,13 @@
 #define SHM_RDONLY  0x01
 #define SHM_RDWR    0x02
 
+#ifndef SIGTTIN
+#define SIGTTIN 21
+#endif
+#ifndef SIGTTOU
+#define SIGTTOU 22
+#endif
+
 #ifndef WSTOPSIG
 #define WSTOPSIG(status)   (((status) >> 8) & 0xff)
 #endif
