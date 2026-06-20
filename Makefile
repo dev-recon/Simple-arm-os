@@ -187,7 +187,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	   done; \
 	   find $(USERFS_DIR) -type f | sort | while read f; do \
 	       relpath=$$(echo "$$f" | sed 's|$(USERFS_DIR)/||'); \
-	       case "$$relpath" in dev/tty0|dev/console) continue ;; esac; \
+	       case "$$relpath" in dev/tty0|dev/tty1|dev/console) continue ;; esac; \
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
 	       case "$$relpath" in \
 	           sbin/init) mode=0100700 ;; \
@@ -218,6 +218,10 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	   printf 'set_inode_field tty0 mode 020666\n'; \
 	   printf 'set_inode_field tty0 uid 0\n'; \
 	   printf 'set_inode_field tty0 gid 0\n'; \
+	   printf 'mknod tty1 c 4 1\n'; \
+	   printf 'set_inode_field tty1 mode 020666\n'; \
+	   printf 'set_inode_field tty1 uid 0\n'; \
+	   printf 'set_inode_field tty1 gid 0\n'; \
 	   printf 'mknod null c 1 3\n'; \
 	   printf 'set_inode_field null mode 020666\n'; \
 	   printf 'set_inode_field null uid 0\n'; \
@@ -261,7 +265,7 @@ $(USERFS_DIR):
 	echo "Temporary files directory" > $(USERFS_DIR)/tmp/README
 	
 	mkdir -p $(USERFS_DIR)/dev
-	touch $(USERFS_DIR)/dev/tty0 $(USERFS_DIR)/dev/console
+	touch $(USERFS_DIR)/dev/tty0 $(USERFS_DIR)/dev/tty1 $(USERFS_DIR)/dev/console
 	
 	@echo "$(USERFS_DIR) directory created with test files"
 
