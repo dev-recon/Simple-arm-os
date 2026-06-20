@@ -188,6 +188,7 @@ void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
                          uint32_t *eof_wakeups);
 bool is_tty_device_path(const char* path);
 void fill_tty_device_stat(const char* path, struct stat* st);
+int tty_id_from_device_path(const char* path);
 file_t* create_tty_console_file(const char* name, int flags);
 
 #endif

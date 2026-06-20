@@ -532,7 +532,8 @@ int sys_open(const char* pathname, int flags, mode_t mode)
         }
 
         tty_file = create_tty_console_file(
-            strcmp(full_path, "/dev/console") == 0 ? "console" : "tty0",
+            strcmp(full_path, "/dev/console") == 0 ? "console" :
+            strcmp(full_path, "/dev/tty1") == 0 ? "tty1" : "tty0",
             flags & ~O_CLOEXEC);
         if (!tty_file) {
             free_fd(current_task, fd);

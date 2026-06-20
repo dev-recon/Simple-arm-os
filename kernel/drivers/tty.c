@@ -972,7 +972,38 @@ static file_operations_t tty_file_ops = {
 bool is_tty_device_path(const char* path)
 {
     return path && (strcmp(path, "/dev/tty0") == 0 ||
+                    strcmp(path, "/dev/tty1") == 0 ||
                     strcmp(path, "/dev/console") == 0);
+}
+
+int tty_id_from_device_path(const char* path)
+{
+    if (!path)
+        return -ENODEV;
+    if (strcmp(path, "/dev/tty1") == 0)
+        return TTY_GRAPHICS_ID;
+    if (strcmp(path, "/dev/tty0") == 0 ||
+        strcmp(path, "/dev/console") == 0)
+        return TTY_CONSOLE_ID;
+    return -ENODEV;
+}
+
+static uint32_t tty_rdev_from_path(const char* path)
+{
+    if (path && strcmp(path, "/dev/console") == 0)
+        return DEV_CONSOLE_RDEV;
+    if (path && strcmp(path, "/dev/tty1") == 0)
+        return DEV_TTY1_RDEV;
+    return DEV_TTY_RDEV;
+}
+
+static int tty_id_from_name(const char* name)
+{
+    if (!name)
+        return TTY_CONSOLE_ID;
+    if (strcmp(name, "tty1") == 0)
+        return TTY_GRAPHICS_ID;
+    return TTY_CONSOLE_ID;
 }
 
 void fill_tty_device_stat(const char* path, struct stat* st)
@@ -982,8 +1013,7 @@ void fill_tty_device_stat(const char* path, struct stat* st)
 
     if (!st) return;
 
-    rdev = (path && strcmp(path, "/dev/console") == 0) ?
-        DEV_CONSOLE_RDEV : DEV_TTY_RDEV;
+    rdev = tty_rdev_from_path(path);
     now = get_current_time();
 
     memset(st, 0, sizeof(*st));
@@ -1006,6 +1036,7 @@ file_t* create_tty_console_file(const char* name, int flags) {
     file_t* file = create_file();
     inode_t* inode;
     struct stat st;
+    int tty_id;
     if (!file) return NULL;
 
     inode = create_inode();
@@ -1014,8 +1045,13 @@ file_t* create_tty_console_file(const char* name, int flags) {
         return NULL;
     }
 
-    fill_tty_device_stat(name && strcmp(name, "console") == 0 ?
-                         "/dev/console" : "/dev/tty0", &st);
+    tty_id = tty_id_from_name(name);
+    if (name && strcmp(name, "console") == 0)
+        fill_tty_device_stat("/dev/console", &st);
+    else if (tty_id == TTY_GRAPHICS_ID)
+        fill_tty_device_stat("/dev/tty1", &st);
+    else
+        fill_tty_device_stat("/dev/tty0", &st);
     inode->mode = st.st_mode;
     inode->uid = st.st_uid;
     inode->gid = st.st_gid;
@@ -1035,6 +1071,7 @@ file_t* create_tty_console_file(const char* name, int flags) {
     file->type = FILE_TYPE_TTY;
     file->pos = 0;
     file->inode = inode;
+    file->private_data = (void*)(uintptr_t)tty_id;
 
     if (name) {
         strncpy(file->name, name, sizeof(file->name) - 1);
