@@ -237,10 +237,12 @@ void kernel_main(void)
     init_display();
     if (virtio_gpu_init()) {
         KBOOT_OKF("GPU: virtio-gpu %ux%ux%u", FB_WIDTH, FB_HEIGHT, FB_BPP);
-        if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0)
+        if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0) {
+            tty_set_active(TTY_GRAPHICS_ID);
             KBOOT_OKF("TTY: console tty1 on virtio-gpu");
-        else
+        } else {
             KBOOT_WARN("TTY: tty1 framebuffer backend unavailable");
+        }
     } else {
         KBOOT_WARN("GPU: virtio-gpu unavailable");
     }

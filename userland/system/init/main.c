@@ -2,6 +2,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -19,6 +20,30 @@ static char *const init_envp[] = {
     "PS1=mash$> ",
     NULL
 };
+
+static char *const root_envp[] = {
+    "PATH=/bin:/usr/bin:/sbin:/opt/kilo/bin",
+    "HOME=/root",
+    "USER=root",
+    "PS1=root# ",
+    "MASH_BANNER=0",
+    NULL
+};
+
+static void attach_stdio_to(const char *tty_path)
+{
+    int fd = open(tty_path, O_RDWR, 0);
+    if (fd < 0) {
+        perror("init: open tty");
+        return;
+    }
+
+    dup2(fd, STDIN_FILENO);
+    dup2(fd, STDOUT_FILENO);
+    dup2(fd, STDERR_FILENO);
+    if (fd > STDERR_FILENO)
+        close(fd);
+}
 
 static int spawn_shell(void)
 {
@@ -45,9 +70,32 @@ static int spawn_shell(void)
     return pid;
 }
 
+static int spawn_root_graphics_shell(void)
+{
+    char *const argv[] = { "mash", NULL };
+    int pid;
+
+    pid = fork();
+    if (pid < 0) {
+        perror("init: fork tty1");
+        return -1;
+    }
+
+    if (pid == 0) {
+        attach_stdio_to("/dev/tty1");
+        chdir("/root");
+        execve("/sbin/mash", argv, root_envp);
+        perror("init: exec /sbin/mash tty1");
+        _exit(127);
+    }
+
+    return pid;
+}
+
 int main(void)
 {
     int shell_pid;
+    int root_shell_pid;
     int waited;
     int status;
 
@@ -56,6 +104,9 @@ int main(void)
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
     chdir("/");
+
+    root_shell_pid = spawn_root_graphics_shell();
+    (void)root_shell_pid;
 
     while (1) {
         shell_pid = spawn_shell();
