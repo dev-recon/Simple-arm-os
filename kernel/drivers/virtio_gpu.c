@@ -525,7 +525,7 @@ void virtio_gpu_draw_test_pattern(void)
     const uint32_t amber = 0xFFFFC107;
 
     gpu_draw_text_px(32, 32, "ArmOS virtio-gpu framebuffer", title_fg, title_bg);
-    gpu_draw_text_px(32, 56, "Bitmap font 8x16 boot test", green, text_bg);
+    gpu_draw_text_px(32, 56, "Meslo 12x24 boot test", green, text_bg);
     gpu_draw_text_px(32, 88, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", text_fg, text_bg);
     gpu_draw_text_px(32, 112, "abcdefghijklmnopqrstuvwxyz", text_fg, text_bg);
     gpu_draw_text_px(32, 136, "0123456789  !?.,;:-_+=*/\\|()[]{}<>@#$%^&~", amber, text_bg);
@@ -622,7 +622,7 @@ bool virtio_gpu_init(void)
         return false;
     }
 
-    virtio_gpu_draw_test_pattern();
+    clear_screen();
     if (virtio_gpu_flush() < 0) {
         KWARN("VirtIO GPU initialized but initial flush failed\n");
         return false;
