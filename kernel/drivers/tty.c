@@ -902,9 +902,15 @@ static void tty_input_char_to(struct tty_struct *tty, char c)
     tty_wake_reader(reader);
 }
 
-/* Appelé par l'IRQ UART (ou polling) */
+void tty_input_char_to_id(int tty_id, char c)
+{
+    tty_input_char_to(tty_by_id(tty_id), c);
+}
+
+/* Appelé par l'IRQ UART (ou polling). L'UART reste la console de secours tty0,
+ * indépendamment du TTY graphique actif. */
 void tty_input_char(char c) {
-    tty_input_char_to(tty_by_id(active_tty_id), c);
+    tty_input_char_to_id(TTY_CONSOLE_ID, c);
 }
 
 static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)

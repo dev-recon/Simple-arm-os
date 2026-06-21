@@ -7,6 +7,7 @@
 #include <kernel/keyboard.h>
 #include <kernel/display.h>
 #include <kernel/virtio_gpu.h>
+#include <kernel/virtio_input.h>
 #include <kernel/vfs.h>
 #include <kernel/ata.h>
 
@@ -240,6 +241,11 @@ void kernel_main(void)
         if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0) {
             tty_set_active(TTY_GRAPHICS_ID);
             KBOOT_OKF("TTY: console tty1 on virtio-gpu");
+            if (virtio_input_init(TTY_GRAPHICS_ID)) {
+                KBOOT_OKF("Input: virtio-keyboard on tty1");
+            } else {
+                KBOOT_WARN("Input: virtio-keyboard unavailable");
+            }
         } else {
             KBOOT_WARN("TTY: tty1 framebuffer backend unavailable");
         }

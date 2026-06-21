@@ -9,6 +9,7 @@
 #include <kernel/file.h>
 #include <kernel/disk_layout.h>
 #include <kernel/tty.h>
+#include <kernel/virtio_input.h>
 #include <kernel/interrupt.h>
 #include <kernel/kernel.h>
 #include <kernel/virtio_block.h>
@@ -777,7 +778,7 @@ static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
                 active ? 1 : 0,
                 pending ? 1 : 0,
                 tty_id == TTY_CONSOLE_ID ? "uart/default" :
-                active ? "active-keyboard" : "inactive-keyboard");
+                virtio_input_is_initialized() ? "virtio-keyboard" : "none");
     proc_append(buf, cap, len, "winsize rows %u cols %u xpixel %u ypixel %u\n",
                 rows, cols, xpixel, ypixel);
     proc_append(buf, cap, len, "input depth %u capacity %u chars %u eof %u\n",
@@ -827,6 +828,39 @@ static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
                 last_signal,
                 last_signal_pgid,
                 last_signal_delivered);
+    if (tty_id == TTY_GRAPHICS_ID) {
+        uint32_t vk_irq = 0;
+        uint32_t vk_used = 0;
+        uint32_t vk_keys = 0;
+        uint32_t vk_emit = 0;
+        uint32_t vk_type = 0;
+        uint32_t vk_code = 0;
+        uint32_t vk_value = 0;
+        uint32_t vk_irq_status = 0;
+        uint32_t vk_qsize = 0;
+        uint32_t vk_last_used = 0;
+        uint32_t vk_status = 0;
+
+        virtio_input_get_stats(&vk_irq, &vk_used, &vk_keys, &vk_emit,
+                               &vk_type, &vk_code, &vk_value,
+                               &vk_irq_status, &vk_qsize, &vk_last_used,
+                               &vk_status);
+        proc_append(buf, cap, len,
+                    "virtio_input init %u route_irq %u irq_count %u used %u keys %u emitted %u qsize %u last_used %u status 0x%02X last_irq 0x%X last_event type %u code %u value %u\n",
+                    virtio_input_is_initialized() ? 1 : 0,
+                    virtio_input_get_irq(),
+                    vk_irq,
+                    vk_used,
+                    vk_keys,
+                    vk_emit,
+                    vk_qsize,
+                    vk_last_used,
+                    vk_status,
+                    vk_irq_status,
+                    vk_type,
+                    vk_code,
+                    vk_value);
+    }
 }
 
 static void proc_fill_tty(char* buf, size_t cap, size_t* len)

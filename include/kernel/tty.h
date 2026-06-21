@@ -169,6 +169,7 @@ int tty_get_active(void);
 bool tty_has_backend_for_id(int tty_id);
 bool tty_output_pending_for_id(int tty_id);
 void tty_input_char(char c);
+void tty_input_char_to_id(int tty_id, char c);
 bool tty_has_pending_output(void);
 void tty_drain_output(void);
 ssize_t tty_read(char *buf, size_t count);

@@ -35,6 +35,7 @@ qemu-system-arm -M virt -cpu cortex-a15 \
     -drive file=disk.img,if=none,format=raw,id=hd0 \
     -device virtio-blk-device,drive=hd0 \
     -device virtio-gpu-device \
+    -device virtio-keyboard-device,event_idx=off,indirect_desc=off \
     -chardev stdio,id=uart0,signal=off \
     -serial chardev:uart0 \
     -monitor none \

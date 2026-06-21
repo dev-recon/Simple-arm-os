@@ -65,6 +65,7 @@ KERNEL_OBJS = \
 	kernel/drivers/display.o \
 	kernel/drivers/console.o \
 	kernel/drivers/virtio_gpu.o \
+	kernel/drivers/virtio_input.o \
 	kernel/drivers/uart.o \
 	kernel/drivers/tty.o \
 	kernel/drivers/null.o \
