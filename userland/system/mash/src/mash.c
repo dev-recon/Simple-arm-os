@@ -186,6 +186,30 @@ static int shell_prepare_child_pgid(int child_pid)
     return -1;
 }
 
+static void shell_child_wait_until_foreground(void)
+{
+    int self_pgid = getpgrp();
+
+    if (self_pgid <= 0)
+        return;
+
+    /*
+     * The parent shell gives the terminal to the child process group after
+     * fork(). With preemption, the child may run first and reach its initial
+     * read() before tcsetpgrp() has completed; the TTY would correctly see it
+     * as a background reader and deliver SIGTTIN. Poll the foreground group
+     * before exec to close that race. If stdin is not a TTY, tcgetpgrp() fails
+     * and there is nothing to wait for.
+     */
+    for (int i = 0; i < 1000; i++) {
+        int fg = tcgetpgrp(STDIN_FILENO);
+
+        if (fg < 0 || fg == self_pgid)
+            return;
+        usleep(1000);
+    }
+}
+
 static int shell_wait_foreground_child(int child_pid, int* status)
 {
     int waited;
@@ -1028,6 +1052,8 @@ static int run_pipeline(int argc, char* argv[], int background) {
                 setpgid(0, pgid);
 
             shell_restore_child_signal_handlers();
+            if (!background)
+                shell_child_wait_until_foreground();
 
             if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
                 printf("mash: cannot connect pipeline input\n");
@@ -1664,6 +1690,8 @@ int shell_execute(int argc, char* argv[]) {
         SHELL_TRACE("child exec cmd=%s", argv[0]);
         setpgid(0, 0);
         shell_restore_child_signal_handlers();
+        if (!background)
+            shell_child_wait_until_foreground();
         if (apply_redirections(&redirs) < 0)
             exit(-1);
 
