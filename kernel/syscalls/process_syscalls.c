@@ -737,7 +737,7 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
             return -EFAULT;
         if (copy_from_user(&tio, (void*)arg, sizeof(tio)) < 0)
             return -EFAULT;
-        while (tty_has_pending_output_for_id(tty_id)) {
+        while (tty_has_pending_output()) {
             if (current_task && has_pending_signals(current_task))
                 return -EINTR;
             tty_drain_output();

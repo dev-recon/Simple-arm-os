@@ -8,7 +8,6 @@
 #include <kernel/kernel.h>
 #include <kernel/process.h>
 #include <kernel/kprintf.h>
-#include <kernel/tty.h>
 
 /* Scancode to ASCII mapping for Mac FR (AZERTY) - version ASCII pure */
 static char scancode_to_ascii_mac_fr[55] = {
@@ -169,12 +168,6 @@ char convert_to_ascii_mac_fr(uint8_t scancode)
 void add_to_keyboard_buffer(char c)
 {
     uint32_t next_head = (kbd_state.head + 1) % 256;
-
-    /*
-     * Non-UART keyboard input follows the active graphical/physical tty focus.
-     * UART RX remains hard-wired to tty0 in tty_input_char().
-     */
-    tty_input_char_to_id(tty_get_active(), c);
     
     if (next_head != kbd_state.tail) {
         kbd_state.buffer[kbd_state.head] = c;

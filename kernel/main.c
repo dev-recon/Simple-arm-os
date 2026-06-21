@@ -238,11 +238,6 @@ void kernel_main(void)
     if (virtio_gpu_init()) {
         KBOOT_OKF("GPU: virtio-gpu %ux%ux%u", FB_WIDTH, FB_HEIGHT, FB_BPP);
         if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0) {
-            /*
-             * active_tty is the non-UART keyboard focus. UART RX is always
-             * routed to tty0 by tty_input_char(), so tty0 remains the rescue
-             * console even when the graphical console is active.
-             */
             tty_set_active(TTY_GRAPHICS_ID);
             KBOOT_OKF("TTY: console tty1 on virtio-gpu");
         } else {

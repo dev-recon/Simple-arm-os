@@ -645,21 +645,6 @@ bool tty_has_pending_output(void)
     return pending;
 }
 
-bool tty_has_pending_output_for_id(int tty_id)
-{
-    unsigned long flags;
-    bool pending;
-    struct tty_struct *tty = tty_by_id(tty_id);
-
-    if (!tty)
-        return false;
-
-    spin_lock_irqsave(&tty->lock, &flags);
-    pending = !tty_output_empty_locked(tty);
-    spin_unlock_irqrestore(&tty->lock, flags);
-    return pending;
-}
-
 static void tty_wake_reader(task_t *reader)
 {
     if (!reader)
@@ -900,17 +885,9 @@ static void tty_input_char_to(struct tty_struct *tty, char c)
     tty_wake_reader(reader);
 }
 
-void tty_input_char_to_id(int tty_id, char c)
-{
-    tty_input_char_to(tty_by_id(tty_id), c);
-}
-
-/*
- * UART input is the rescue console input path. Never route it through
- * active_tty_id: graphical tty focus must not steal tty0 keyboard input.
- */
+/* Appelé par l'IRQ UART (ou polling) */
 void tty_input_char(char c) {
-    tty_input_char_to_id(TTY_CONSOLE_ID, c);
+    tty_input_char_to(tty_by_id(active_tty_id), c);
 }
 
 static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
@@ -937,7 +914,7 @@ static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
         while (tty == &tty0 && tty_backend_has_data()) {
             int c = tty_backend_getc();
             if (c < 0) break;
-            tty_input_char_to(tty, (char)c);
+            tty_input_char((char)c);
         }
 
         spin_lock_irqsave(&tty->lock, &flags);
