@@ -555,7 +555,7 @@ void init_display(void)
     display.bpp = FB_BPP;
     display.pitch = FB_WIDTH * (FB_BPP / 8);
     display.framebuffer = framebuffer_base;
-    display.font = &font_spleen_8x16;
+    display.font = &font_vga_8x16;
     
     /* Test d'acces au framebuffer */
     KINFO("Testing framebuffer access...\n");

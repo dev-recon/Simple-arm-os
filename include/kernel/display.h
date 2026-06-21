@@ -44,6 +44,7 @@ extern const font_t font_meslo_10x20;
 extern const font_t font_meslo_8x16;
 extern const font_t font_spleen_8x16;
 extern const font_t font_spleen_12x24;
+extern const font_t font_vga_8x16;
 
 /* Display functions */
 void init_display(void);

@@ -36,7 +36,7 @@ TASK_OBJS = kernel/task/task.o \
             kernel/sync/spinlock.o
 
 # Objets de la bibliotheque
-LIB_OBJ = kernel/lib/kprintf.o kernel/lib/string.o kernel/lib/font_meslo_12x24.o kernel/lib/font_meslo_10x20.o kernel/lib/font_meslo_8x16.o kernel/lib/font_spleen_8x16.o kernel/lib/font_spleen_12x24.o kernel/lib/divmod.o kernel/lib/debug_print.o kernel/lib/math.o
+LIB_OBJ = kernel/lib/kprintf.o kernel/lib/string.o kernel/lib/font_meslo_12x24.o kernel/lib/font_meslo_10x20.o kernel/lib/font_meslo_8x16.o kernel/lib/font_spleen_8x16.o kernel/lib/font_spleen_12x24.o kernel/lib/font_vga_8x16.o kernel/lib/divmod.o kernel/lib/debug_print.o kernel/lib/math.o
 
 # Objets du noyau
 KERNEL_OBJS = \
