@@ -553,7 +553,7 @@ static const char *state_color(char state)
     case 'T':
     case 't': return C_YELLOW;
     case 'D': return C_MAGENTA;
-    default:  return C_BLUE;
+    default:  return C_CYAN;
     }
 }
 

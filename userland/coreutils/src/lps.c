@@ -468,7 +468,7 @@ static const char *state_color(char state)
         case 'T': return "\033[0;31m";
         case 't': return "\033[1;33m";
         case 'D': return "\033[1;33m";
-        default:  return "\033[0;37m";
+        default:  return "\033[36m";
     }
 }
 
