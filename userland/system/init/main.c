@@ -30,9 +30,8 @@ static char *const root_envp[] = {
     NULL
 };
 
-static int attach_stdio_to(const char *tty_path)
+static int attach_stdio_fd(int fd)
 {
-    int fd = open(tty_path, O_RDWR, 0);
     if (fd < 0)
         return -1;
 
@@ -42,6 +41,13 @@ static int attach_stdio_to(const char *tty_path)
     if (fd > STDERR_FILENO)
         close(fd);
     return 0;
+}
+
+static int attach_stdio_to(const char *tty_path)
+{
+    int fd = open(tty_path, O_RDWR, 0);
+
+    return attach_stdio_fd(fd);
 }
 
 static int spawn_shell(void)
@@ -72,16 +78,22 @@ static int spawn_shell(void)
 static int spawn_root_graphics_shell(void)
 {
     char *const argv[] = { "mash", NULL };
+    int tty_fd;
     int pid;
+
+    tty_fd = open("/dev/tty1", O_RDWR, 0);
+    if (tty_fd < 0)
+        return 0;
 
     pid = fork();
     if (pid < 0) {
         perror("init: fork tty1");
+        close(tty_fd);
         return -1;
     }
 
     if (pid == 0) {
-        if (attach_stdio_to("/dev/tty1") < 0)
+        if (attach_stdio_fd(tty_fd) < 0)
             _exit(0);
         chdir("/root");
         execve("/sbin/mash", argv, root_envp);
@@ -89,6 +101,7 @@ static int spawn_root_graphics_shell(void)
         _exit(127);
     }
 
+    close(tty_fd);
     return pid;
 }
 
