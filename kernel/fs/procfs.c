@@ -743,6 +743,9 @@ static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
     uint16_t cols = 0;
     uint16_t xpixel = 0;
     uint16_t ypixel = 0;
+    bool backend = tty_has_backend_for_id(tty_id);
+    bool active = tty_get_active() == tty_id;
+    bool pending = tty_output_pending_for_id(tty_id);
     unsigned long flags;
 
     tty_get_tx_stats_for_id(tty_id, &tty_tx_enqueued, &tty_tx_drained,
@@ -769,6 +772,12 @@ static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
     spin_unlock_irqrestore(&tty->lock, flags);
 
     proc_append(buf, cap, len, "%s\n", name);
+    proc_append(buf, cap, len, "device backend %s active %u output_pending %u input_route %s\n",
+                backend ? "present" : "none",
+                active ? 1 : 0,
+                pending ? 1 : 0,
+                tty_id == TTY_CONSOLE_ID ? "uart/default" :
+                active ? "active-keyboard" : "inactive-keyboard");
     proc_append(buf, cap, len, "winsize rows %u cols %u xpixel %u ypixel %u\n",
                 rows, cols, xpixel, ypixel);
     proc_append(buf, cap, len, "input depth %u capacity %u chars %u eof %u\n",

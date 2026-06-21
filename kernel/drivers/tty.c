@@ -15,6 +15,8 @@ struct tty_struct tty1;
 
 static int active_tty_id = TTY_CONSOLE_ID;
 
+static bool tty_output_empty_locked(struct tty_struct *tty);
+
 static struct tty_struct *tty_by_id(int tty_id)
 {
     switch (tty_id) {
@@ -64,6 +66,21 @@ bool tty_has_backend_for_id(int tty_id)
     struct tty_struct *tty = tty_by_id(tty_id);
 
     return tty && tty->backend != NULL;
+}
+
+bool tty_output_pending_for_id(int tty_id)
+{
+    unsigned long flags;
+    bool pending;
+    struct tty_struct *tty = tty_by_id(tty_id);
+
+    if (!tty)
+        return false;
+
+    spin_lock_irqsave(&tty->lock, &flags);
+    pending = !tty_output_empty_locked(tty);
+    spin_unlock_irqrestore(&tty->lock, flags);
+    return pending;
 }
 
 static const tty_backend_ops_t *tty_backend_for(const struct tty_struct *tty)

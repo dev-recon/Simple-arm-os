@@ -167,6 +167,7 @@ int tty_attach_backend_to(int tty_id, const tty_backend_ops_t *ops);
 int tty_set_active(int tty_id);
 int tty_get_active(void);
 bool tty_has_backend_for_id(int tty_id);
+bool tty_output_pending_for_id(int tty_id);
 void tty_input_char(char c);
 bool tty_has_pending_output(void);
 void tty_drain_output(void);
