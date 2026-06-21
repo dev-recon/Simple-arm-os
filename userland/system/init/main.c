@@ -30,19 +30,18 @@ static char *const root_envp[] = {
     NULL
 };
 
-static void attach_stdio_to(const char *tty_path)
+static int attach_stdio_to(const char *tty_path)
 {
     int fd = open(tty_path, O_RDWR, 0);
-    if (fd < 0) {
-        perror("init: open tty");
-        return;
-    }
+    if (fd < 0)
+        return -1;
 
     dup2(fd, STDIN_FILENO);
     dup2(fd, STDOUT_FILENO);
     dup2(fd, STDERR_FILENO);
     if (fd > STDERR_FILENO)
         close(fd);
+    return 0;
 }
 
 static int spawn_shell(void)
@@ -82,7 +81,8 @@ static int spawn_root_graphics_shell(void)
     }
 
     if (pid == 0) {
-        attach_stdio_to("/dev/tty1");
+        if (attach_stdio_to("/dev/tty1") < 0)
+            _exit(0);
         chdir("/root");
         execve("/sbin/mash", argv, root_envp);
         perror("init: exec /sbin/mash tty1");

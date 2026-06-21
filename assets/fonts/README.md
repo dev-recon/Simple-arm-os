@@ -1,15 +1,30 @@
 # Fonts
 
-ArmOS uses `MesloLGS NF Regular` for the experimental virtio-gpu framebuffer
-console renderer.
+ArmOS uses the Spleen bitmap font for the experimental virtio-gpu framebuffer
+console renderer. MesloLGS NF is kept as an experimental TrueType-derived
+variant, but Spleen is preferred for the kernel console because it renders
+crisply without scaling or subpixel hinting.
 
-Source: <https://github.com/romkatv/powerlevel10k-media>
+Spleen source: <https://github.com/fcambus/spleen>
 
-License: Apache License 2.0, mirrored in `MesloLGS-NF-LICENSE.txt`.
+Spleen license: BSD 2-Clause, mirrored in `spleen/LICENSE`.
 
-The generated kernel font source is `kernel/lib/font_meslo_12x24.c` and can be
-regenerated with:
+MesloLGS NF source: <https://github.com/romkatv/powerlevel10k-media>
+
+MesloLGS NF license: Apache License 2.0, mirrored in
+`MesloLGS-NF-LICENSE.txt`.
+
+The generated kernel font sources are:
+
+- `kernel/lib/font_spleen_8x16.c`
+- `kernel/lib/font_spleen_12x24.c`
+- `kernel/lib/font_meslo_12x24.c`
+- `kernel/lib/font_meslo_10x20.c`
+- `kernel/lib/font_meslo_8x16.c`
+
+They can be regenerated with:
 
 ```sh
+python3 tools/generate_spleen_font.py
 python3 tools/generate_meslo_font.py
 ```

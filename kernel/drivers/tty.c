@@ -59,6 +59,13 @@ int tty_get_active(void)
     return active_tty_id;
 }
 
+bool tty_has_backend_for_id(int tty_id)
+{
+    struct tty_struct *tty = tty_by_id(tty_id);
+
+    return tty && tty->backend != NULL;
+}
+
 static const tty_backend_ops_t *tty_backend_for(const struct tty_struct *tty)
 {
     return tty ? tty->backend : NULL;
@@ -558,11 +565,18 @@ void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
 bool tty_has_pending_output(void)
 {
     unsigned long flags;
-    bool pending;
+    bool pending = false;
 
     spin_lock_irqsave(&tty0.lock, &flags);
     pending = !tty_output_empty_locked(&tty0);
     spin_unlock_irqrestore(&tty0.lock, flags);
+
+    if (pending)
+        return true;
+
+    spin_lock_irqsave(&tty1.lock, &flags);
+    pending = !tty_output_empty_locked(&tty1);
+    spin_unlock_irqrestore(&tty1.lock, flags);
 
     return pending;
 }
@@ -828,6 +842,7 @@ static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
 
     if (tty_current_task_is_background_reader(tty, &pgid)) {
         tty_signal_process_group(pgid, SIGTTIN);
+        (void)check_pending_signals();
         return -EINTR;
     }
     
@@ -977,7 +992,6 @@ static ssize_t tty_write_to(struct tty_struct *tty, const char *buf, size_t coun
                     tty->output_enqueued++;
                     spin_unlock_irqrestore(&tty->lock, flags);
                     tty_backend_set_tx_irq_enabled_to(tty, true);
-                    tty_drain_output_limited_to(tty, TTY_TX_DRAIN_BUDGET);
                     break;
                 }
                 tty->output_full_waits++;
@@ -1002,7 +1016,6 @@ static ssize_t tty_write_to(struct tty_struct *tty, const char *buf, size_t coun
                 tty->output_enqueued++;
                 spin_unlock_irqrestore(&tty->lock, flags);
                 tty_backend_set_tx_irq_enabled_to(tty, true);
-                tty_drain_output_limited_to(tty, TTY_TX_DRAIN_BUDGET);
                 break;
             }
             tty->output_full_waits++;
@@ -1019,6 +1032,7 @@ static ssize_t tty_write_to(struct tty_struct *tty, const char *buf, size_t coun
         }
         written++;
     }
+    tty_drain_output_limited_to(tty, TTY_OUTPUT_BUF_SIZE);
     return (ssize_t)written;
 }
 
@@ -1077,6 +1091,7 @@ static void tty_drain_output_limited_to(struct tty_struct *tty, uint32_t budget)
 static void tty_drain_output_limited(uint32_t budget)
 {
     tty_drain_output_limited_to(&tty0, budget);
+    tty_drain_output_limited_to(&tty1, budget);
 }
 
 void tty_drain_output(void)
@@ -1195,6 +1210,12 @@ file_t* create_tty_console_file(const char* name, int flags) {
     }
 
     tty_id = tty_id_from_name(name);
+    if (!tty_has_backend_for_id(tty_id)) {
+        kfree(inode);
+        kfree(file);
+        return NULL;
+    }
+
     if (name && strcmp(name, "console") == 0)
         fill_tty_device_stat("/dev/console", &st);
     else if (tty_id == TTY_GRAPHICS_ID)

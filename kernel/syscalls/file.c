@@ -525,6 +525,13 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     if (!full_path) return -ENOENT;
 
     if (is_tty_device_path(full_path)) {
+        int tty_id = tty_id_from_device_path(full_path);
+
+        if (tty_id < 0 || !tty_has_backend_for_id(tty_id)) {
+            kfree(full_path);
+            return -ENODEV;
+        }
+
         fd = allocate_fd(current_task);
         if (fd < 0) {
             kfree(full_path);

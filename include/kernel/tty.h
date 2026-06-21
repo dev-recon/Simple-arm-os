@@ -7,7 +7,7 @@
 #include <kernel/task.h>
 
 #define TTY_INPUT_BUF_SIZE  512
-#define TTY_OUTPUT_BUF_SIZE 512
+#define TTY_OUTPUT_BUF_SIZE 4096
 #define TTY_MAX             2
 #define TTY_CONSOLE_ID      0
 #define TTY_GRAPHICS_ID     1
@@ -17,6 +17,8 @@
 
 #define TTY_STTY_SET_FOREGROUND_PGID 1
 #define TTY_GTTY_GET_FOREGROUND_PGID 1
+#define TTY_STTY_SET_FOREGROUND_PGID_FD 2
+#define TTY_GTTY_GET_FOREGROUND_PGID_FD 2
 
 #define NCCS 32
 
@@ -163,6 +165,7 @@ int tty_attach_backend(const tty_backend_ops_t *ops);
 int tty_attach_backend_to(int tty_id, const tty_backend_ops_t *ops);
 int tty_set_active(int tty_id);
 int tty_get_active(void);
+bool tty_has_backend_for_id(int tty_id);
 void tty_input_char(char c);
 bool tty_has_pending_output(void);
 void tty_drain_output(void);

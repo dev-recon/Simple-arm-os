@@ -598,6 +598,7 @@ int sys_dup(int oldfd)
 int sys_dup2(int oldfd, int newfd)
 {
     file_t* file;
+    file_t* new_file;
     
     if (oldfd < 0 || oldfd >= MAX_FILES) return -EBADF;
     if (newfd < 0 || newfd >= MAX_FILES) return -EBADF;
@@ -615,10 +616,15 @@ int sys_dup2(int oldfd, int newfd)
         close_file(old_newfd);
     }
     
-    current_task->process->files[newfd] = get_file(file);
-    if (!current_task->process->files[newfd])
+    new_file = get_file(file);
+    if (!new_file)
         return -EBADF;
+
+    current_task->process->files[newfd] = new_file;
     current_task->process->fd_flags[newfd] = 0;
+
+    if (newfd == STDIN_FILENO && file_is_tty(new_file))
+        current_task->process->controlling_tty = tty_id_from_file(new_file);
     
     return newfd;
 }

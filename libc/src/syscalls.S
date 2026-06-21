@@ -357,14 +357,14 @@ gtty_success:
     pop {r7, lr}
     bx lr
 
-//   TCSETPGRP -> SYS_STTY(TTY_STTY_SET_FOREGROUND_PGID, pgrp)
+//   TCSETPGRP -> SYS_STTY(TTY_STTY_SET_FOREGROUND_PGID_FD, fd, pgrp)
 .global tcsetpgrp
 .type tcsetpgrp, %function
 tcsetpgrp:
     push {r7, lr}
-    cmp r0, #2
-    bhi tcsetpgrp_enotty
-    mov r0, #1              /* TTY_STTY_SET_FOREGROUND_PGID */
+    mov r2, r1              /* pgrp */
+    mov r1, r0              /* fd */
+    mov r0, #2              /* TTY_STTY_SET_FOREGROUND_PGID_FD */
     mov r7, #31             /* SYS_STTY */
     swi #0
 
@@ -379,21 +379,13 @@ tcsetpgrp_success:
     pop {r7, lr}
     bx lr
 
-tcsetpgrp_enotty:
-    mov r0, #25             /* ENOTTY */
-    bl __set_errno
-    mov r0, #-1
-    pop {r7, lr}
-    bx lr
-
-//   TCGETPGRP -> SYS_GTTY(TTY_GTTY_GET_FOREGROUND_PGID)
+//   TCGETPGRP -> SYS_GTTY(TTY_GTTY_GET_FOREGROUND_PGID_FD, fd)
 .global tcgetpgrp
 .type tcgetpgrp, %function
 tcgetpgrp:
     push {r7, lr}
-    cmp r0, #2
-    bhi tcgetpgrp_enotty
-    mov r0, #1              /* TTY_GTTY_GET_FOREGROUND_PGID */
+    mov r1, r0              /* fd */
+    mov r0, #2              /* TTY_GTTY_GET_FOREGROUND_PGID_FD */
     mov r7, #32             /* SYS_GTTY */
     swi #0
 
@@ -405,13 +397,6 @@ tcgetpgrp:
     mov r0, #-1
 
 tcgetpgrp_success:
-    pop {r7, lr}
-    bx lr
-
-tcgetpgrp_enotty:
-    mov r0, #25             /* ENOTTY */
-    bl __set_errno
-    mov r0, #-1
     pop {r7, lr}
     bx lr
 

@@ -432,20 +432,32 @@ static int gpu_set_scanout(void)
     return gpu_submit_simple(&cmd, sizeof(cmd), "set_scanout");
 }
 
-int virtio_gpu_flush(void)
+int virtio_gpu_flush_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height)
 {
     if (!gpu.initialized)
         return -1;
 
-    clean_dcache_by_mva(framebuffer_base, gpu.framebuffer_size);
+    if (x >= FB_WIDTH || y >= FB_HEIGHT || width == 0 || height == 0)
+        return 0;
+
+    if (x + width > FB_WIDTH)
+        width = FB_WIDTH - x;
+    if (y + height > FB_HEIGHT)
+        height = FB_HEIGHT - y;
+
+    for (uint32_t row = 0; row < height; row++) {
+        uint8_t *line = framebuffer_base +
+            ((y + row) * FB_WIDTH + x) * (FB_BPP / 8);
+        clean_dcache_by_mva(line, width * (FB_BPP / 8));
+    }
 
     virtio_gpu_transfer_to_host_2d_t tx;
     gpu_fill_hdr(&tx.hdr, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D);
-    tx.r.x = 0;
-    tx.r.y = 0;
-    tx.r.width = FB_WIDTH;
-    tx.r.height = FB_HEIGHT;
-    tx.offset = 0;
+    tx.r.x = x;
+    tx.r.y = y;
+    tx.r.width = width;
+    tx.r.height = height;
+    tx.offset = ((uint64_t)y * FB_WIDTH + x) * (FB_BPP / 8);
     tx.resource_id = VIRTIO_GPU_RESOURCE_ID;
     tx.padding = 0;
     if (gpu_submit_simple(&tx, sizeof(tx), "transfer_to_host_2d") < 0)
@@ -453,13 +465,18 @@ int virtio_gpu_flush(void)
 
     virtio_gpu_resource_flush_t fl;
     gpu_fill_hdr(&fl.hdr, VIRTIO_GPU_CMD_RESOURCE_FLUSH);
-    fl.r.x = 0;
-    fl.r.y = 0;
-    fl.r.width = FB_WIDTH;
-    fl.r.height = FB_HEIGHT;
+    fl.r.x = x;
+    fl.r.y = y;
+    fl.r.width = width;
+    fl.r.height = height;
     fl.resource_id = VIRTIO_GPU_RESOURCE_ID;
     fl.padding = 0;
     return gpu_submit_simple(&fl, sizeof(fl), "resource_flush");
+}
+
+int virtio_gpu_flush(void)
+{
+    return virtio_gpu_flush_rect(0, 0, FB_WIDTH, FB_HEIGHT);
 }
 
 static void gpu_draw_text_px(uint32_t x, uint32_t y, const char *s,
