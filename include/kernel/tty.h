@@ -13,6 +13,7 @@
 #define TTY_GRAPHICS_ID     1
 #define DEV_TTY_RDEV        ((4u << 8) | 0u)
 #define DEV_TTY1_RDEV       ((4u << 8) | 1u)
+#define DEV_CTTY_RDEV       ((5u << 8) | 0u)
 #define DEV_CONSOLE_RDEV    ((5u << 8) | 1u)
 
 #define TTY_STTY_SET_FOREGROUND_PGID 1
@@ -215,6 +216,7 @@ bool is_tty_device_path(const char* path);
 void fill_tty_device_stat(const char* path, struct stat* st);
 int tty_id_from_device_path(const char* path);
 int tty_id_from_file(file_t* file);
+int tty_current_controlling_id(void);
 file_t* create_tty_console_file(const char* name, int flags);
 
 #endif

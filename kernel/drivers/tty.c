@@ -1188,15 +1188,32 @@ static file_operations_t tty_file_ops = {
 
 bool is_tty_device_path(const char* path)
 {
-    return path && (strcmp(path, "/dev/tty0") == 0 ||
+    return path && (strcmp(path, "/dev/tty") == 0 ||
+                    strcmp(path, "/dev/tty0") == 0 ||
                     strcmp(path, "/dev/tty1") == 0 ||
                     strcmp(path, "/dev/console") == 0);
+}
+
+int tty_current_controlling_id(void)
+{
+    int tty_id;
+
+    if (!current_task || !current_task->process)
+        return -ENXIO;
+
+    tty_id = current_task->process->controlling_tty;
+    if (!tty_by_id(tty_id))
+        return -ENXIO;
+
+    return tty_id;
 }
 
 int tty_id_from_device_path(const char* path)
 {
     if (!path)
         return -ENODEV;
+    if (strcmp(path, "/dev/tty") == 0)
+        return tty_current_controlling_id();
     if (strcmp(path, "/dev/tty1") == 0)
         return TTY_GRAPHICS_ID;
     if (strcmp(path, "/dev/tty0") == 0 ||
@@ -1218,6 +1235,8 @@ int tty_id_from_file(file_t* file)
 
 static uint32_t tty_rdev_from_path(const char* path)
 {
+    if (path && strcmp(path, "/dev/tty") == 0)
+        return DEV_CTTY_RDEV;
     if (path && strcmp(path, "/dev/console") == 0)
         return DEV_CONSOLE_RDEV;
     if (path && strcmp(path, "/dev/tty1") == 0)
@@ -1229,6 +1248,8 @@ static int tty_id_from_name(const char* name)
 {
     if (!name)
         return TTY_CONSOLE_ID;
+    if (strcmp(name, "tty") == 0)
+        return tty_current_controlling_id();
     if (strcmp(name, "tty1") == 0)
         return TTY_GRAPHICS_ID;
     return TTY_CONSOLE_ID;
@@ -1280,7 +1301,9 @@ file_t* create_tty_console_file(const char* name, int flags) {
         return NULL;
     }
 
-    if (name && strcmp(name, "console") == 0)
+    if (name && strcmp(name, "tty") == 0)
+        fill_tty_device_stat("/dev/tty", &st);
+    else if (name && strcmp(name, "console") == 0)
         fill_tty_device_stat("/dev/console", &st);
     else if (tty_id == TTY_GRAPHICS_ID)
         fill_tty_device_stat("/dev/tty1", &st);
