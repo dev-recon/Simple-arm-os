@@ -698,6 +698,8 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
         return -EBADF;
 
     tty_id = file_is_tty(file) ? tty_id_from_file(file) : -ENOTTY;
+    if (file_is_tty(file) && tty_id < 0)
+        return tty_id;
 
     switch (request) {
     case TIOCGWINSZ:

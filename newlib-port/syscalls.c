@@ -47,7 +47,6 @@ extern long sys_stat(const char *pathname, void *st);
 extern long sys_lstat(const char *pathname, void *st);
 extern long sys_fstat(int fd, void *st);
 extern long sys_gettimeofday(struct timeval *tv, void *tz);
-extern long sys_isatty(int fd);
 extern long sys_ioctl(int fd, unsigned long request, void *arg);
 extern long sys_fcntl(int fd, int cmd, long arg);
 extern long sys_kill(int pid, int sig);
@@ -76,8 +75,8 @@ extern long sys_dup(int oldfd);
 extern long sys_dup2(int oldfd, int newfd);
 extern long sys_getdents(int fd, void *dirp, unsigned long count);
 extern long sys_nanosleep(const struct timespec *req, struct timespec *rem);
-extern long sys_stty(int request, int value);
-extern long sys_gtty(int request);
+extern long sys_stty(int request, int value, int value2);
+extern long sys_gtty(int request, int value);
 extern long sys_sigaction(int sig, const void *act, void *oldact);
 extern long sys_sysinfo(void *resp);
 extern long sys_shm_open(const char *name, unsigned long size, int flags);
@@ -92,6 +91,8 @@ char **environ = __env;
 
 #define TTY_STTY_SET_FOREGROUND_PGID 1
 #define TTY_GTTY_GET_FOREGROUND_PGID 1
+#define TTY_STTY_SET_FOREGROUND_PGID_FD 2
+#define TTY_GTTY_GET_FOREGROUND_PGID_FD 2
 
 #define OS_SIGBUS   7
 #define OS_SIGUSR1  10
@@ -433,10 +434,13 @@ int _ftruncate(int fd, off_t length)
 
 int _isatty(int fd)
 {
-    if (fd == STDIN_FILENO || fd == STDOUT_FILENO || fd == STDERR_FILENO)
+    struct armos_termios tio;
+    long ret = sys_ioctl(fd, TCGETS, &tio);
+
+    if (ret >= 0)
         return 1;
 
-    errno = ENOTTY;
+    errno = (int)-ret;
     return 0;
 }
 
@@ -726,23 +730,14 @@ int tcdrain(int fd)
 
 int tcsetpgrp(int fd, pid_t pgrp)
 {
-    if (fd > STDERR_FILENO) {
-        errno = ENOTTY;
-        return -1;
-    }
-    return ret_errno(sys_stty(TTY_STTY_SET_FOREGROUND_PGID, pgrp));
+    return ret_errno(sys_stty(TTY_STTY_SET_FOREGROUND_PGID_FD, fd, pgrp));
 }
 
 pid_t tcgetpgrp(int fd)
 {
     long ret;
 
-    if (fd > STDERR_FILENO) {
-        errno = ENOTTY;
-        return (pid_t)-1;
-    }
-
-    ret = sys_gtty(TTY_GTTY_GET_FOREGROUND_PGID);
+    ret = sys_gtty(TTY_GTTY_GET_FOREGROUND_PGID_FD, fd);
     if (ret < 0) {
         errno = (int)-ret;
         return (pid_t)-1;

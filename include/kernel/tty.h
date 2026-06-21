@@ -191,8 +191,12 @@ int tty_set_foreground_pgid_for_id(int tty_id, pid_t pgid);
 pid_t tty_get_foreground_pgid_for_id(int tty_id);
 pid_t tty_get_read_wait_pid(void);
 int tty_get_read_wait_state(void);
+pid_t tty_get_read_wait_pid_for_id(int tty_id);
+int tty_get_read_wait_state_for_id(int tty_id);
 void tty_get_tx_stats(uint32_t *enqueued, uint32_t *drained,
                       uint32_t *full_waits, uint32_t *drain_calls);
+void tty_get_tx_stats_for_id(int tty_id, uint32_t *enqueued, uint32_t *drained,
+                             uint32_t *full_waits, uint32_t *drain_calls);
 void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
                          uint32_t *eof_pending, uint32_t *iflag,
                          uint32_t *oflag, uint32_t *lflag,
@@ -200,6 +204,13 @@ void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
                          uint32_t *char_wakeups,
                          uint32_t *line_wakeups,
                          uint32_t *eof_wakeups);
+void tty_get_input_stats_for_id(int tty_id, uint32_t *depth, uint32_t *capacity,
+                                uint32_t *eof_pending, uint32_t *iflag,
+                                uint32_t *oflag, uint32_t *lflag,
+                                uint32_t *vmin, uint32_t *vtime,
+                                uint32_t *char_wakeups,
+                                uint32_t *line_wakeups,
+                                uint32_t *eof_wakeups);
 bool is_tty_device_path(const char* path);
 void fill_tty_device_stat(const char* path, struct stat* st);
 int tty_id_from_device_path(const char* path);

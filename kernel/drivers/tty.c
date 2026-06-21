@@ -474,75 +474,125 @@ int tty_set_winsize(uint16_t rows, uint16_t cols,
     return tty_set_winsize_for_id(TTY_CONSOLE_ID, rows, cols, xpixel, ypixel);
 }
 
-pid_t tty_get_read_wait_pid(void)
+pid_t tty_get_read_wait_pid_for_id(int tty_id)
 {
     unsigned long flags;
     task_t* waiter;
     pid_t pid = 0;
+    struct tty_struct *tty = tty_by_id(tty_id);
 
-    spin_lock_irqsave(&tty0.lock, &flags);
-    waiter = tty0.read_wait;
+    if (!tty)
+        return 0;
+
+    spin_lock_irqsave(&tty->lock, &flags);
+    waiter = tty->read_wait;
     if (waiter && waiter->process)
         pid = waiter->process->pid;
-    spin_unlock_irqrestore(&tty0.lock, flags);
+    spin_unlock_irqrestore(&tty->lock, flags);
     return pid;
 }
 
-int tty_get_read_wait_state(void)
+pid_t tty_get_read_wait_pid(void)
+{
+    return tty_get_read_wait_pid_for_id(TTY_CONSOLE_ID);
+}
+
+int tty_get_read_wait_state_for_id(int tty_id)
 {
     unsigned long flags;
     task_t* waiter;
     int state = -1;
+    struct tty_struct *tty = tty_by_id(tty_id);
 
-    spin_lock_irqsave(&tty0.lock, &flags);
-    waiter = tty0.read_wait;
+    if (!tty)
+        return -1;
+
+    spin_lock_irqsave(&tty->lock, &flags);
+    waiter = tty->read_wait;
     if (waiter)
         state = (int)waiter->state;
-    spin_unlock_irqrestore(&tty0.lock, flags);
+    spin_unlock_irqrestore(&tty->lock, flags);
     return state;
+}
+
+int tty_get_read_wait_state(void)
+{
+    return tty_get_read_wait_state_for_id(TTY_CONSOLE_ID);
+}
+
+void tty_get_tx_stats_for_id(int tty_id, uint32_t *enqueued, uint32_t *drained,
+                             uint32_t *full_waits, uint32_t *drain_calls)
+{
+    unsigned long flags;
+    struct tty_struct *tty = tty_by_id(tty_id);
+
+    if (!tty) {
+        if (enqueued) *enqueued = 0;
+        if (drained) *drained = 0;
+        if (full_waits) *full_waits = 0;
+        if (drain_calls) *drain_calls = 0;
+        return;
+    }
+
+    spin_lock_irqsave(&tty->lock, &flags);
+    if (enqueued)
+        *enqueued = tty->output_enqueued;
+    if (drained)
+        *drained = tty->output_drained;
+    if (full_waits)
+        *full_waits = tty->output_full_waits;
+    if (drain_calls)
+        *drain_calls = tty->output_drain_calls;
+    spin_unlock_irqrestore(&tty->lock, flags);
 }
 
 void tty_get_tx_stats(uint32_t *enqueued, uint32_t *drained,
                       uint32_t *full_waits, uint32_t *drain_calls)
 {
-    unsigned long flags;
-
-    spin_lock_irqsave(&tty0.lock, &flags);
-    if (enqueued)
-        *enqueued = tty0.output_enqueued;
-    if (drained)
-        *drained = tty0.output_drained;
-    if (full_waits)
-        *full_waits = tty0.output_full_waits;
-    if (drain_calls)
-        *drain_calls = tty0.output_drain_calls;
-    spin_unlock_irqrestore(&tty0.lock, flags);
+    tty_get_tx_stats_for_id(TTY_CONSOLE_ID, enqueued, drained,
+                            full_waits, drain_calls);
 }
 
-void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
-                         uint32_t *eof_pending, uint32_t *iflag,
-                         uint32_t *oflag, uint32_t *lflag,
-                         uint32_t *vmin, uint32_t *vtime,
-                         uint32_t *char_wakeups,
-                         uint32_t *line_wakeups,
-                         uint32_t *eof_wakeups)
+void tty_get_input_stats_for_id(int tty_id, uint32_t *depth, uint32_t *capacity,
+                                uint32_t *eof_pending, uint32_t *iflag,
+                                uint32_t *oflag, uint32_t *lflag,
+                                uint32_t *vmin, uint32_t *vtime,
+                                uint32_t *char_wakeups,
+                                uint32_t *line_wakeups,
+                                uint32_t *eof_wakeups)
 {
     unsigned long flags;
     uint32_t head;
     uint32_t tail;
     struct termios tio;
+    struct tty_struct *tty = tty_by_id(tty_id);
 
-    spin_lock_irqsave(&tty0.lock, &flags);
-    head = tty0.input_head;
-    tail = tty0.input_tail;
-    tio = tty0.termios;
+    if (!tty) {
+        if (depth) *depth = 0;
+        if (capacity) *capacity = 0;
+        if (eof_pending) *eof_pending = 0;
+        if (iflag) *iflag = 0;
+        if (oflag) *oflag = 0;
+        if (lflag) *lflag = 0;
+        if (vmin) *vmin = 0;
+        if (vtime) *vtime = 0;
+        if (char_wakeups) *char_wakeups = 0;
+        if (line_wakeups) *line_wakeups = 0;
+        if (eof_wakeups) *eof_wakeups = 0;
+        return;
+    }
+
+    spin_lock_irqsave(&tty->lock, &flags);
+    head = tty->input_head;
+    tail = tty->input_tail;
+    tio = tty->termios;
 
     if (depth)
         *depth = head >= tail ? head - tail : TTY_INPUT_BUF_SIZE - tail + head;
     if (capacity)
         *capacity = TTY_INPUT_BUF_SIZE - 1;
     if (eof_pending)
-        *eof_pending = tty0.eof_pending ? 1 : 0;
+        *eof_pending = tty->eof_pending ? 1 : 0;
     if (iflag)
         *iflag = tio.c_iflag;
     if (oflag)
@@ -554,12 +604,26 @@ void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
     if (vtime)
         *vtime = tio.c_cc[VTIME];
     if (char_wakeups)
-        *char_wakeups = tty0.char_wakeups;
+        *char_wakeups = tty->char_wakeups;
     if (line_wakeups)
-        *line_wakeups = tty0.line_wakeups;
+        *line_wakeups = tty->line_wakeups;
     if (eof_wakeups)
-        *eof_wakeups = tty0.eof_wakeups;
-    spin_unlock_irqrestore(&tty0.lock, flags);
+        *eof_wakeups = tty->eof_wakeups;
+    spin_unlock_irqrestore(&tty->lock, flags);
+}
+
+void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
+                         uint32_t *eof_pending, uint32_t *iflag,
+                         uint32_t *oflag, uint32_t *lflag,
+                         uint32_t *vmin, uint32_t *vtime,
+                         uint32_t *char_wakeups,
+                         uint32_t *line_wakeups,
+                         uint32_t *eof_wakeups)
+{
+    tty_get_input_stats_for_id(TTY_CONSOLE_ID, depth, capacity,
+                               eof_pending, iflag, oflag, lflag,
+                               vmin, vtime, char_wakeups,
+                               line_wakeups, eof_wakeups);
 }
 
 bool tty_has_pending_output(void)
@@ -1149,7 +1213,7 @@ int tty_id_from_file(file_t* file)
         return -ENOTTY;
 
     tty_id = (int)(uintptr_t)file->private_data;
-    return tty_by_id(tty_id) ? tty_id : TTY_CONSOLE_ID;
+    return tty_by_id(tty_id) ? tty_id : -ENODEV;
 }
 
 static uint32_t tty_rdev_from_path(const char* path)

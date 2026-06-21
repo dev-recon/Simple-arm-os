@@ -1678,10 +1678,10 @@ static void test_terminal_process_group(void)
     if (old_pgrp != self_pgrp) {
         skip("tcsetpgrp foreground mutation (not foreground job)");
         errno = 0;
-        expect(tcgetpgrp(99) < 0 && errno == ENOTTY, "tcgetpgrp rejects non-tty fd", errno);
+        expect(tcgetpgrp(99) < 0 && errno == EBADF, "tcgetpgrp rejects closed fd", errno);
         errno = 0;
-        expect(tcsetpgrp(99, self_pgrp) < 0 && errno == ENOTTY,
-               "tcsetpgrp rejects non-tty fd", errno);
+        expect(tcsetpgrp(99, self_pgrp) < 0 && errno == EBADF,
+               "tcsetpgrp rejects closed fd", errno);
         return;
     }
 
@@ -1690,9 +1690,9 @@ static void test_terminal_process_group(void)
     expect(current == self_pgrp, "tcgetpgrp observes tcsetpgrp", current);
 
     errno = 0;
-    expect(tcgetpgrp(99) < 0 && errno == ENOTTY, "tcgetpgrp rejects non-tty fd", errno);
+    expect(tcgetpgrp(99) < 0 && errno == EBADF, "tcgetpgrp rejects closed fd", errno);
     errno = 0;
-    expect(tcsetpgrp(99, self_pgrp) < 0 && errno == ENOTTY, "tcsetpgrp rejects non-tty fd", errno);
+    expect(tcsetpgrp(99, self_pgrp) < 0 && errno == EBADF, "tcsetpgrp rejects closed fd", errno);
 
     if (old_pgrp >= 0)
         tcsetpgrp(STDIN_FILENO, old_pgrp);
@@ -1773,7 +1773,7 @@ static void test_process_session_info(void)
             found = 1;
             expect(sysinfo_scratch.procs[i].sid > 0, "sysinfo reports process sid",
                    sysinfo_scratch.procs[i].sid);
-            expect(sysinfo_scratch.procs[i].tty == 0, "sysinfo reports controlling tty",
+            expect(sysinfo_scratch.procs[i].tty >= 0, "sysinfo reports controlling tty",
                    sysinfo_scratch.procs[i].tty);
             break;
         }
