@@ -23,7 +23,7 @@
 
 .global swi_handler
 .global current_task
-//.global TASK_CONTEXT_OFF   //via l’en-tete pre-traite
+//.global TASK_CONTEXT_OFF
 .global save_user_bank
 .global signal_return_trampoline
 .equ __NR_rt_sigreturn, 173
@@ -37,7 +37,7 @@
 .equ CTX_USR_CPSR,    152
 .equ CTX_SVC_SP_TOP,  156
 
-    /* Registres generaux r0-r12 */
+    /* General-purpose registers r0-r12. */
     // r0.         0,
     // r1          4,
     // r2          8,
@@ -52,73 +52,86 @@
     // r11         44
     // r12         48
     
-    /* Registres speciaux */
+    /* Special registers. */
     // sp          52       // Stack Pointer 
     // lr          56       // Link Register 
     // pc;         60       // Program Counter 
     // cpsr;       64       // Current Program Status Register 
     
-    // is_first_run; 68.     // NOUVEAU: Flag pour premiere execution 
+    // is_first_run; 68      // first-run flag
     // ttbr0;      72
     // asid;       76
 
     // spsr;       80        // SPSR_svc 
     // returns_to_user;  84  // has to return to user mode 
 
-    // usr_r[0];     88      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[1];     92      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[2];     96      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[3];     100      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[4];     104      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[5];     108      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[6];     112      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[7];     116      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[8];     120      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[9];     124      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[10];    128      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[11];    132      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[12];    136      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
+    // usr_r[0];     88      // user r0..r12 captured on SVC entry
+    // usr_r[1];     92
+    // usr_r[2];     96
+    // usr_r[3];     100
+    // usr_r[4];     104
+    // usr_r[5];     108
+    // usr_r[6];     112
+    // usr_r[7];     116
+    // usr_r[8];     120
+    // usr_r[9];     124
+    // usr_r[10];    128
+    // usr_r[11];    132
+    // usr_r[12];    136
     // usr_sp;       140
-    // usr_lr;       144         // optionnel si tu l’utilises
-    // usr_pc;       148         // point de reprise user
-    // usr_cpsr;     152        // en général 0x10
-    // svc_sp_top;   156        // haut de pile noyau allouée pour ce task
-    // svc_sp;       160        // courant (si tu le tiens à jour)
-    // svc_lr_saved; 164        // si tu en as besoin
+    // usr_lr;       144
+    // usr_pc;       148        // user resume PC
+    // usr_cpsr;     152        // usually 0x10
+    // svc_sp_top;   156        // allocated kernel-stack top for this task
+    // svc_sp;       160        // current SVC stack pointer
+    // svc_lr_saved; 164
 
-/* ARM32 Software Interrupt Handler - Point d'entree principal */
+/*
+ * ARM32 SVC entry.
+ *
+ * The handler has two jobs:
+ *   1. Build a canonical user context in current_task->context before C code
+ *      can clobber scratch registers.
+ *   2. Preserve the active SVC frame so a syscall may yield/sleep/wait and
+ *      later resume inside the kernel instead of being forced to user mode.
+ *
+ * Keep this file in lock-step with task_context_t offsets and task_switch.S.
+ */
 swi_handler:
 
-    stmfd sp!, {r4-r12, lr}            /* Sauvegarder registres preserves + LR */
-    mrs r12, spsr               /* Recuperer SPSR */
-    stmfd sp!, {r12}            /* Sauvegarder SPSR */
+    stmfd sp!, {r4-r12, lr}     /* save callee-preserved registers + LR_svc */
+    mrs r12, spsr
+    stmfd sp!, {r12}            /* save user CPSR/SPSR_svc */
     
-    /* Debug sortie de syscall */
+    /* Syscall exit debug hook. */
     //push {r0-r3, lr}
     //bl debug_print_sp3
     //pop {r0-r3, lr}
 
-    /* Validation du numero de syscall */
-    cmp r7, #256                /* Verifier limite syscall */
-    movhs r0, #-38              /* Si invalide: r0 = -ENOSYS */
-    subhs sp, sp, #12           /* Construire le meme cadre que le chemin normal */
-    bhs syscall_return          /* Brancher vers retour direct */
+    /* Validate syscall number. */
+    cmp r7, #256
+    movhs r0, #-38              /* invalid syscall: -ENOSYS */
+    subhs sp, sp, #12           /* build the same small frame as the normal path */
+    bhs syscall_return
     
-    /* Arguments pour syscall_handler */
+    /* Arguments for syscall_handler. */
     /* Prototype: syscall_handler(syscall_num, arg1, arg2, arg3, arg4, arg5) */
 
-    /* 1) FigER immédiatement les registres USER dont on a besoin */
-    /* On va les recopier dans le contexte, ainsi on peut clobber r0..r3 ensuite */
+    /*
+     * 1) Freeze the user registers immediately.
+     * After this point the C calling convention and helper calls may clobber
+     * r0-r3, so ctx->usr_r[] becomes the canonical user register image.
+     */
     ldr     r12, =current_task
     ldr     r12, [r12]               /* r12 = current_task */
     add     r12, r12, #48          /* r12 = &current->context */ // FIX IT !!!
 
-    /* Copier 9 arguments user dans ctx->usr_r[0..7] + ctx->usr_r[11] */
+    /* Copy user-visible registers into ctx->usr_r[]. */
     str     r0,  [r12, #(88 + 0)]
     str     r1,  [r12, #(88 + 4)]
     str     r2,  [r12, #(88 + 8)]
     str     r3,  [r12, #(88 + 12)]
-    str     r4,  [r12, #(88 + 16)]   /* ATTENTION: r4/r5 = args4/5 du user ! */
+    str     r4,  [r12, #(88 + 16)]   /* user r4/r5 carry extra syscall args here */
     str     r5,  [r12, #(88 + 20)]
     str     r6,  [r12, #(88 + 24)]
     str     r7,  [r12, #(88 + 28)]
@@ -127,7 +140,7 @@ swi_handler:
     str     r10, [r12, #(88 + 40)]
     str     r11,  [r12, #(88 + 44)]
 
-    /* Sauver les arguments avant de reutiliser r0 pour relire r12 user. */
+    /* Save syscall arguments before reusing scratch registers. */
     mov     r8, r0
     mov     r9, r1
     mov     r10, r2
@@ -136,13 +149,17 @@ swi_handler:
     ldr     r0, [sp, #36]
     str     r0, [r12, #(88 + 48)]
 
-    /* 2) Sauvegardes “banquées” essentielles (sans BL, donc pas de clobber imprévu) */
+    /*
+     * 2) Capture banked state without calling out.
+     * User SP/LR live in the USR/SYS bank, not in SVC. We briefly switch to
+     * SYS mode to read them, then return to SVC before touching kernel state.
+     */
     mrs     r0, spsr
-    str     r0,  [r12, #152]           /* CPSR du user */
+    str     r0,  [r12, #152]           /* user CPSR */
     mov     r0,  lr
-    str     r0,  [r12, #148]          /* PC de retour user = LR_svc */
+    str     r0,  [r12, #148]          /* user resume PC = LR_svc */
 
-    cps     #0x1F                            /* passer en SYS pour lire SP_user */
+    cps     #0x1F                            /* switch to SYS mode to read user SP */
     mov     r0,  sp
     mov     r1,  lr
     cps     #0x13                            /* revenir en SVC */
@@ -150,20 +167,20 @@ swi_handler:
     str     r1,  [r12, #144]
 
     mov     r0,  #1
-    str     r0,  [r12, #84]         /* marquer retour vers USR */
+    str     r0,  [r12, #84]         /* this SVC normally returns to user */
 
     mov   r0, sp
-    str   r0, [r12, #160]         /* sauvagarde SP SVC */
-    str   r0, [r12, #52]            /* sauvagarde SP SVC top */
+    str   r0, [r12, #160]         /* SVC SP before the handler-local arg frame */
+    str   r0, [r12, #52]          /* initial kernel resume SP snapshot */
 
-    /* Préparer les arguments sur la pile pour syscall_handler */
-    sub   sp, sp, #12          /* 2 arguments + padding pour alignement AAPCS */
-    str   r6, [sp, #0]         /* arg4 C = 4eme argument user (r3) */
-    str   r4, [sp, #4]         /* arg5 C = 5eme argument user (r4) */
+    /* Prepare the stack-passed arguments for syscall_handler. */
+    sub   sp, sp, #12          /* 2 args + AAPCS alignment padding */
+    str   r6, [sp, #0]         /* C arg4 = user r3 */
+    str   r4, [sp, #4]         /* C arg5 = user r4 */
 
     mov     r0,  sp
-    str     r0,  [r12, #52]         /* sauvagarde SP SVC */
-    str     r0,  [r12, #160]         /* sauvagarde SP SVC */
+    str     r0,  [r12, #52]         /* authoritative SVC SP while in syscall */
+    str     r0,  [r12, #160]
 
     //push {r0-r3, lr}
     //mov r0, r12
@@ -171,17 +188,17 @@ swi_handler:
     //pop {r0-r3, lr}
 
 
-    /* Préparer les 4 premiers arguments dans les registres */
-    mov   r0, r7               /* r0 = num (1er param) */
-    mov   r1, r8               /* r1 = a1  (2ème param) */
-    mov   r2, r9               /* r2 = a2  (3ème param) */
-    mov   r3, r10              /* r3 = a3  (4ème param) */
+    /* First four C arguments in registers. */
+    mov   r0, r7               /* syscall number */
+    mov   r1, r8               /* arg1 */
+    mov   r2, r9               /* arg2 */
+    mov   r3, r10              /* arg3 */
 
 
-    /* Appeler le handler C */
+    /* Enter the C syscall dispatcher. It may sleep, wait, or schedule away. */
     bl syscall_handler
 
-    /* Le handler C peut avoir prepare un retour user alternatif (signal). */
+    /* Signal delivery may replace the normal user-return path. */
     str r0, [sp, #8]
     bl signal_consume_user_return_override
     cmp r0, #0
@@ -189,32 +206,34 @@ swi_handler:
     ldr r0, [sp, #8]
     
 syscall_return:
-    /* r0 contient la valeur de retour du syscall.
-       On la garde dans un temporaire pour restaurer proprement les registres. */
+    /*
+     * r0 contains the syscall return value. Keep it aside while restoring the
+     * saved SVC frame, then put it back in r0 just before exception return.
+     */
     mov   r3, r0
-    /* Nettoyer la pile (arg4, arg5) */
+    /* Drop the small syscall_handler argument frame. */
     add sp, sp, #12
 
-    /* Récupérer SPSR sauvegardé juste après {r0-r12,lr} */
-    ldr     r12, [sp], #4       /* r12 = spsr_sauvé ; sp avance de 4 */
+    /* Restore the SPSR saved just above the callee-preserved register frame. */
+    ldr     r12, [sp], #4       /* r12 = saved SPSR; sp advances by one word */
     msr     spsr_cxsf, r12
 
-    /* Restaurer tous les registres du caller, y compris l'ancien r0 */
+    /* Restore the SVC caller frame, including the old scratch registers. */
     ldmfd  sp!, {r4-r12, lr}
 
     //push {r0-r3, lr}
     //bl debug_print_sp3
     //pop {r0-r3, lr}
 
-    /* Remettre la valeur de retour dans r0 */
+    /* Publish the syscall return value to user r0. */
     mov     r0, r3
 
-    /* Debug sortie de syscall */
+    /* Syscall exit debug hook. */
     //push {r0-r3, lr}
     //bl debug_print_sp3
     //pop {r0-r3, lr}
 
-    /* Retourner en mode utilisateur */
+    /* Exception-return to user mode. */
     movs pc, lr
 
 signal_user_return:
@@ -222,7 +241,7 @@ signal_user_return:
     ldr     r12, [r12]
     add     r12, r12, #48
 
-    /* Abandonner la frame SVC courante; tout l'etat vient de ctx->usr_*. */
+    /* Abandon the current SVC frame; ctx->usr_* now describes the return. */
     ldr     sp, [r12, #CTX_SVC_SP_TOP]
     ldr     r2, [r12, #CTX_USR_CPSR]
     msr     spsr_cxsf, r2
@@ -241,149 +260,149 @@ signal_user_return:
     movs    pc, lr
 
 stack_panic:
-    /* Gestion basique de stack overflow */
+    /* Basic stack-overflow fallback. */
     mov r0, #-12                /* -ENOMEM */
     b syscall_return
 
-/* Trampoline de signal plus robuste */
+/* Signal trampoline: user signal return enters the dedicated syscall. */
 signal_return_trampoline:
     mov r7, #__NR_rt_sigreturn  /* __NR_rt_sigreturn */
-    swi #0                      /* Declencher syscall */
+    swi #0
     
-    /* Si retour echoue, terminer proprement */
+    /* If sigreturn fails, terminate the process. */
     mov r7, #1                  /* sys_exit */
-    mov r0, #-1                 /* Code d'erreur */
+    mov r0, #-1
     swi #0
 
-/* Context switching simplifie */
+/* Legacy/simple context-switch helper kept for diagnostics. */
 .global context_switch_virt
 context_switch_virt:
     /* Arguments: r0 = current_task, r1 = next_task */
     
-    /* Verifications de securite */
+    /* Basic pointer validation. */
     cmp r0, #0
     cmpne r1, #0
     bxeq lr                     /* Retour si pointeurs NULL */
     
-    /* Sauvegarder le contexte de la tache actuelle */
-    stmia r0, {r0-r14}^         /* Sauvegarder registres user mode */
+    /* Save current user context. */
+    stmia r0, {r0-r14}^
     mrs r2, spsr
-    str r2, [r0, #60]           /* Sauvegarder SPSR */
+    str r2, [r0, #60]
     
-    /* Restaurer le contexte de la prochaine tache */
-    ldr r2, [r1, #60]           /* Charger SPSR */
+    /* Restore next user context. */
+    ldr r2, [r1, #60]
     msr spsr_cxsf, r2
-    ldmia r1, {r0-r14}^         /* Restaurer registres user mode */
+    ldmia r1, {r0-r14}^
     
-    /* Change address space si different */
-    ldr r2, [r1, #64]           /* Charger TTBR0 */
-    mrc p15, 0, r3, c2, c0, 0   /* Lire TTBR0 actuel */
+    /* Change address space if needed. */
+    ldr r2, [r1, #64]
+    mrc p15, 0, r3, c2, c0, 0
     cmp r2, r3
-    beq skip_ttbr_update        /* Skip si identique */
+    beq skip_ttbr_update
     
-    mcr p15, 0, r2, c2, c0, 0   /* Ecrire nouveau TTBR0 */
+    mcr p15, 0, r2, c2, c0, 0
     
-    /* Invalider le TLB seulement si changement */
+    /* Invalidate TLB only after a TTBR change. */
     mov r2, #0
-    mcr p15, 0, r2, c8, c7, 0   /* Invalider TLB */
+    mcr p15, 0, r2, c8, c7, 0
     
 skip_ttbr_update:
-    /* Barriers pour la coherence */
+    /* Ordering barriers. */
     dsb
     isb
     
-    /* Retourner a la nouvelle tache */
+    /* Return into the new task. */
     movs pc, lr
 
-/* Fonctions helper optimisees */
+/* User-context helper functions. */
 .global save_user_context
 save_user_context:
-    /* Verifier pointeur */
+    /* Validate pointer. */
     cmp r0, #0
     bxeq lr
     
-    /* Sauvegarder le contexte utilisateur */
-    stmia r0, {r0-r15}^         /* Sauvegarder r0-r15 en mode user */
+    /* Save user context. */
+    stmia r0, {r0-r15}^
     mrs r1, spsr
-    str r1, [r0, #64]           /* Sauvegarder SPSR */
+    str r1, [r0, #64]
     
     bx lr
 
 .global restore_user_context  
 restore_user_context:
-    /* Verifier pointeur */
+    /* Validate pointer. */
     cmp r0, #0
     bxeq lr
     
-    /* Restaurer le contexte utilisateur */
-    ldr r1, [r0, #64]           /* Charger SPSR */
-    msr spsr_cxsf, r1          /* Restaurer SPSR */
-    ldmia r0, {r0-r15}^         /* Restaurer r0-r15 (mode user) */
+    /* Restore user context. */
+    ldr r1, [r0, #64]
+    msr spsr_cxsf, r1
+    ldmia r0, {r0-r15}^
     bx lr
 
-/* Setup signal frame pour machine virt */
+/* Minimal signal-frame setup helper. */
 .global setup_signal_frame
 setup_signal_frame:
     /* r0 = user_stack, r1 = signal_handler, r2 = signal_number */
     
-    /* Creer le frame de signal sur la pile utilisateur */
-    sub r0, r0, #256            /* Reserver espace pour le frame */
+    /* Build the signal frame on the user stack. */
+    sub r0, r0, #256
     
-    /* Sauvegarder le contexte actuel dans le frame */
-    stmia r0, {r0-r14}^         /* Sauvegarder registres user */
+    /* Save current user context into the frame. */
+    stmia r0, {r0-r14}^
     mrs r3, spsr
-    str r3, [r0, #60]           /* Sauvegarder SPSR */
+    str r3, [r0, #60]
     
-    /* Configurer le retour de signal */
+    /* Configure signal return. */
     ldr r3, =signal_return_trampoline
     str r3, [r0, #56]           /* LR = trampoline */
     
-    /* Configurer les arguments du signal handler */
+    /* Configure signal-handler arguments. */
     mov r3, r2                  /* r3 = signal_number */
-    mov r2, #0                  /* r2 = siginfo (NULL pour l'instant) */
-    mov r1, #0                  /* r1 = ucontext (NULL pour l'instant) */
+    mov r2, #0                  /* siginfo = NULL for now */
+    mov r1, #0                  /* ucontext = NULL for now */
     mov r0, r3                  /* r0 = signal_number */
     
     bx lr
 
-/* Cache management plus efficace */
+/* Cache-management helper. */
 .global flush_syscall_cache
 flush_syscall_cache:
-    /* Ordre optimal des operations */
+    /* Keep the usual order: data cache, barrier, instruction cache, TLB. */
     
-    /* Data cache d'abord */
+    /* Data cache first. */
     mov r0, #0
     mcr p15, 0, r0, c7, c14, 0  /* Clean & Invalidate D-cache */
     
-    /* Barrier avant instruction cache */
+    /* Barrier before instruction-cache invalidation. */
     dsb sy
     
-    /* Instruction cache */
+    /* Instruction cache. */
     mcr p15, 0, r0, c7, c5, 0   /* Invalidate I-cache */
     
-    /* TLB en dernier */
+    /* TLB last. */
     mcr p15, 0, r0, c8, c7, 0   /* Invalidate TLB */
     
-    /* Barriers finaux */
+    /* Endal barriers. */
     dsb sy
     isb
     
     bx lr
 
-/* Performance counters conditionnels */
+/* Optional performance counters. */
 .global enable_performance_counters
 enable_performance_counters:
-    /* Verifier disponibilite */
-    mrc p15, 0, r1, c0, c1, 2   /* Lire CLIDR */
+    /* Check availability. */
+    mrc p15, 0, r1, c0, c1, 2
     ands r1, r1, #0x7000000     /* Check cache levels */
-    bxeq lr                     /* Retour si pas de cache */
+    bxeq lr
     
-    /* Activer les compteurs */
-    mrc p15, 0, r0, c9, c12, 0  /* Lire PMCR */
+    /* Enable counters. */
+    mrc p15, 0, r0, c9, c12, 0
     orr r0, r0, #7              /* Enable + Reset cycles + Reset events */
-    mcr p15, 0, r0, c9, c12, 0  /* Ecrire PMCR */
+    mcr p15, 0, r0, c9, c12, 0
     
-    /* Activer le cycle counter */
+    /* Enable the cycle counter. */
     mov r0, #0x80000000
     mcr p15, 0, r0, c9, c12, 1  /* PMCNTENSET */
     
