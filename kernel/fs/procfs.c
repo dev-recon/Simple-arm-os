@@ -140,6 +140,7 @@ static const char* proc_task_state_name(task_state_t state)
 static char proc_task_state_char(task_state_t state)
 {
     switch (state) {
+        case TASK_READY:
         case TASK_RUNNING:         return 'R';
         case TASK_ZOMBIE:          return 'Z';
         case TASK_TERMINATED:      return 'X';

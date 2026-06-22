@@ -219,13 +219,13 @@ static void handle_key(char c, unsigned *delay_sec)
         break;
     case '+':
     case '=':
-        if (*delay_sec > 1)
-            (*delay_sec)--;
+        if (*delay_sec < 60)
+            (*delay_sec)++;
         break;
     case '-':
     case '_':
-        if (*delay_sec < 60)
-            (*delay_sec)++;
+        if (*delay_sec > 1)
+            (*delay_sec)--;
         break;
     case 'r':
     case 'R':
@@ -678,6 +678,7 @@ static void top_delay(unsigned *delay_sec)
         n = read(STDIN_FILENO, &c, 1);
         if (n == 1) {
             handle_key(c, delay_sec);
+            top_set_raw_poll();
             poll_input(delay_sec);
             break;
         }

@@ -1584,7 +1584,7 @@ int sys_sysinfo(struct sysinfo_response *resp)
     if (!resp) return -EINVAL;
 
     static const char state_char[8] = {
-        'S', /* TASK_READY           */
+        'R', /* TASK_READY           */
         'R', /* TASK_RUNNING         */
         'S', /* TASK_BLOCKED         */
         'Z', /* TASK_ZOMBIE          */

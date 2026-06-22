@@ -20,6 +20,22 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
 NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$DEFAULT_NEWLIB_SYSROOT}"
 
+select_qemu() {
+    if [ -n "${1:-}" ]; then
+        printf '%s\n' "$1"
+    elif [ -n "${QEMU:-}" ]; then
+        printf '%s\n' "$QEMU"
+    elif [ -x /opt/homebrew/bin/qemu-system-arm ]; then
+        printf '%s\n' /opt/homebrew/bin/qemu-system-arm
+    elif [ -x /usr/local/bin/qemu-system-arm ]; then
+        printf '%s\n' /usr/local/bin/qemu-system-arm
+    else
+        printf '%s\n' qemu-system-arm
+    fi
+}
+
+QEMU="$(select_qemu "${1:-}")"
+
 echo "=== RUN KERNEL SCRIPT ==="
 
 cd "$ROOT_DIR"
@@ -31,12 +47,17 @@ for dir in "$USERFS_DIR" "$USERLAND_DIR"; do
     fi
 done
 
-for tool in make arm-none-eabi-gcc arm-none-eabi-ld arm-none-eabi-objcopy arm-none-eabi-objdump mkfs.fat mcopy mmd mke2fs debugfs qemu-system-arm; do
+for tool in make arm-none-eabi-gcc arm-none-eabi-ld arm-none-eabi-objcopy arm-none-eabi-objdump mkfs.fat mcopy mmd mke2fs debugfs; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Error: required tool '$tool' not found in PATH"
         exit 1
     fi
 done
+
+if ! command -v "$QEMU" >/dev/null 2>&1; then
+    echo "Error: QEMU binary '$QEMU' not found"
+    exit 1
+fi
 
 if [ "$BUILD_NEWLIB" = "1" ]; then
     if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_SYSROOT/lib/libc.a" ]; then
@@ -57,4 +78,5 @@ rm -f disk.img fat32.img ext2.img
 make disk.img
 
 echo "=== Booting QEMU ==="
-make run-userfs
+echo "QEMU: $("$QEMU" --version | head -n 1)"
+make run-userfs QEMU="$QEMU"
