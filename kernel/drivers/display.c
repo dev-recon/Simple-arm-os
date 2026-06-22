@@ -5,6 +5,8 @@
 #include <kernel/kprintf.h>
 #include <kernel/tty.h>
 #include <kernel/virtio_gpu.h>
+#include <kernel/timer.h>
+#include <kernel/task.h>
 
 static display_state_t display = {0};
 static bool framebuffer_dirty = false;
@@ -41,16 +43,22 @@ static bool ansi_param_active;
 static bool ansi_reverse = false;
 static bool cursor_visible = true;
 static bool cursor_drawn = false;
+static bool cursor_blink_on = true;
 static bool wrap_enabled = true;
 static bool pending_wrap = false;
 static uint32_t cursor_drawn_x;
 static uint32_t cursor_drawn_y;
+static uint32_t cursor_blink_last_tick;
 static uint32_t saved_cursor_x;
 static uint32_t saved_cursor_y;
+static task_t *displayd_task;
 
 static void console_put_cell(uint32_t col, uint32_t row, char c,
                              uint32_t fg, uint32_t bg);
 static void console_erase_cursor(void);
+
+#define CURSOR_BLINK_TICKS      (TIMER_FREQ / 2)
+#define CURSOR_BAR_MIN_WIDTH    2
 
 static const uint32_t ansi_colors[8] = {
     0xFF000000, /* black */
@@ -118,6 +126,9 @@ static void framebuffer_mark_dirty(uint32_t x, uint32_t y,
 
 static void framebuffer_flush_dirty(void)
 {
+    if (cursor_drawn && !cursor_blink_on)
+        console_erase_cursor();
+
     if (cursor_visible && framebuffer_base && display.font) {
         if (cursor_drawn &&
             (cursor_drawn_x != display.cursor_x ||
@@ -128,19 +139,26 @@ static void framebuffer_flush_dirty(void)
     }
 
     if (cursor_visible && framebuffer_base && display.font &&
+        cursor_blink_on &&
         display.cursor_x < display.text_cols &&
         display.cursor_y < display.text_rows &&
         display.cursor_x < CONSOLE_MAX_COLS &&
         display.cursor_y < CONSOLE_MAX_ROWS &&
         !cursor_drawn) {
-        console_cell_t *cell = &console_cells[display.cursor_y][display.cursor_x];
-        draw_char(display.cursor_x * display.font->width,
-                  display.cursor_y * display.font->height,
-                  cell->ch, cell->bg, cell->fg);
-        framebuffer_mark_dirty(display.cursor_x * display.font->width,
-                               display.cursor_y * display.font->height,
-                               display.font->width,
-                               display.font->height);
+        uint32_t x = display.cursor_x * display.font->width;
+        uint32_t y = display.cursor_y * display.font->height;
+        uint32_t bar_width = display.font->width / 5;
+
+        if (bar_width < CURSOR_BAR_MIN_WIDTH)
+            bar_width = CURSOR_BAR_MIN_WIDTH;
+        if (bar_width > display.font->width)
+            bar_width = display.font->width;
+
+        for (uint32_t yy = 0; yy < display.font->height; yy++) {
+            for (uint32_t xx = 0; xx < bar_width; xx++)
+                put_pixel(x + xx, y + yy, default_fg_color);
+        }
+        framebuffer_mark_dirty(x, y, bar_width, display.font->height);
         cursor_drawn = true;
         cursor_drawn_x = display.cursor_x;
         cursor_drawn_y = display.cursor_y;
@@ -153,6 +171,53 @@ static void framebuffer_flush_dirty(void)
                           dirty_x1 - dirty_x0,
                           dirty_y1 - dirty_y0);
     framebuffer_dirty = false;
+}
+
+void display_cursor_tick(void)
+{
+    uint32_t now;
+
+    if (!framebuffer_base || !display.font || !cursor_visible)
+        return;
+
+    now = get_system_ticks();
+    if ((uint32_t)(now - cursor_blink_last_tick) < CURSOR_BLINK_TICKS)
+        return;
+
+    cursor_blink_last_tick = now;
+    cursor_blink_on = !cursor_blink_on;
+    framebuffer_flush_dirty();
+}
+
+static void displayd_main(void *arg)
+{
+    (void)arg;
+
+    while (1) {
+        task_sleep_ms(500);
+        display_cursor_tick();
+    }
+}
+
+int display_start_daemon(void)
+{
+    if (!framebuffer_base)
+        return -ENODEV;
+
+    if (displayd_task)
+        return 0;
+
+    displayd_task = task_create_process("displayd", displayd_main, NULL,
+                                        20, TASK_TYPE_KERNEL);
+    if (!displayd_task)
+        return -ENOMEM;
+
+    displayd_task->context.is_first_run = 1;
+    displayd_task->context.ttbr0 = (uint32_t)ttbr0_pgdir;
+    displayd_task->context.asid = ASID_KERNEL;
+    displayd_task->context.returns_to_user = 0;
+    add_to_ready_queue(displayd_task);
+    return 0;
 }
 
 static void console_reset_cells(void)
@@ -573,6 +638,8 @@ void init_display(void)
         display.text_rows = display.height / display.font->height;
         display.cursor_x = 0;
         display.cursor_y = 0;
+        cursor_blink_on = true;
+        cursor_blink_last_tick = get_system_ticks();
         console_reset_attrs();
         
         clear_screen();

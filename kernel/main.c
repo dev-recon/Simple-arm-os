@@ -293,10 +293,23 @@ void kernel_main(void)
 
     //trigger_timer_interrupt();
     /* Phase 5: Gestion des processus (APReS allocateurs) */
+    init_process_system();
+
+    if (framebuffer_base) {
+        if (display_start_daemon() == 0)
+            KBOOT_OK("Display: cursor daemon");
+        else
+            KBOOT_WARN("Display: cursor daemon unavailable");
+    }
+
     KBOOT_OK("Process: scheduler ready");
 
     /* Main scheduler loop */
-    init_main() ;
+    KINFO("Starting scheduler with unified system...\n");
+    print_signal_stack_stats();
+    sched_start();
+
+    panic("Returned from unified scheduler!");
 
 }
 

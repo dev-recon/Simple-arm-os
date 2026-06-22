@@ -55,6 +55,8 @@ void console_putchar(char c);
 void console_puts(const char* str);
 void scroll_screen(void);
 int framebuffer_attach_tty_backend(int tty_id);
+void display_cursor_tick(void);
+int display_start_daemon(void);
 
 /* Framebuffer file operations */
 ssize_t framebuffer_read(file_t* file, void* buffer, size_t count);
