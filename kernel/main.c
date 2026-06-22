@@ -193,6 +193,7 @@ void kernel_main(void)
     uint32_t available_mb;
     uint64_t disk_sectors;
     uint32_t disk_mb;
+    bool tty1_graphics_ready = false;
 
     /* Phase 0: etats du processeur */
     __asm__ volatile ("cpsie aif");
@@ -239,6 +240,7 @@ void kernel_main(void)
     if (virtio_gpu_init()) {
         KBOOT_OKF("GPU: virtio-gpu %ux%ux%u", FB_WIDTH, FB_HEIGHT, FB_BPP);
         if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0) {
+            tty1_graphics_ready = true;
             tty_set_active(TTY_GRAPHICS_ID);
             KBOOT_OKF("TTY: console tty1 on virtio-gpu");
             if (virtio_input_init(TTY_GRAPHICS_ID)) {
@@ -295,7 +297,7 @@ void kernel_main(void)
     /* Phase 5: Gestion des processus (APReS allocateurs) */
     init_process_system();
 
-    if (framebuffer_base) {
+    if (tty1_graphics_ready) {
         if (display_start_daemon() == 0)
             KBOOT_OK("Display: cursor daemon");
         else
