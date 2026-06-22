@@ -28,14 +28,8 @@ extern void switch_to_idle_stack(void);
  */
 void init_main(void)
 {
-    KINFO("=== UNIFIED KERNEL INITIALIZATION ===\n");
-    
     /* Initialiser le systeme unifie process/task */
     init_process_system();
-    
-    /* Demarrer le scheduler avec votre fonction existante */
-    KINFO("Starting scheduler with unified system...\n");
-    print_signal_stack_stats();
     
     /* Lancer votre scheduler existant */
     sched_start(); 
@@ -49,8 +43,6 @@ void init_main(void)
  */
 void init_process_system(void)
 {
-    KINFO("Initializing unified process/task system...\n");
-
     /* Initialiser le gestionnaire de signal stacks */
     init_signal_stack_allocator();
     
@@ -103,10 +95,6 @@ void init_process_system(void)
     add_to_ready_queue(init_process);
     add_to_ready_queue(idle_task);
 
-    
-    KINFO("Process system initialized successfully\n");
-    KINFO("  - init process: PID=%u\n", init_process->process->pid);
-    KINFO("  - Total tasks: %u\n", task_count);
 }
 
 /**
@@ -167,8 +155,6 @@ void init_process_main(void* arg)
                 reaped_count++;
                 //KDEBUG("[INIT] Reaped orphan child PID=%d (status=%d) [total=%d]\n",
                 //       child_pid, status, reaped_count);
-            } else if (child_pid == -ECHILD) {
-                KDEBUG("[INIT] No children to reap anymore\n");
             }
         } else {
             /* PAS D'ENFANTS : Ne pas faire waitpid */

@@ -99,14 +99,6 @@ void init_signal_stack_allocator(void)
     sig_allocator.total_allocated = 0;
     sig_allocator.max_processes = USER_SIGNAL_REGION_SIZE / DEFAULT_SIGNAL_STACK_SIZE;
     sig_allocator.initialized = true;
-    
-    KINFO("[SIGNAL] Allocator initialized:\n");
-    KINFO("[SIGNAL]   Region: 0x%08X - 0x%08X (%u MB)\n",
-          USER_SIGNAL_REGION_START, USER_SIGNAL_REGION_END,
-          USER_SIGNAL_REGION_SIZE / (1024*1024));
-    KINFO("[SIGNAL]   Max processes: %u\n", sig_allocator.max_processes);
-    KINFO("[SIGNAL]   Stack size per process: %u KB\n", 
-          DEFAULT_SIGNAL_STACK_SIZE / 1024);
 }
 
 /**

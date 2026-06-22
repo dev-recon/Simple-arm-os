@@ -307,8 +307,6 @@ void kernel_main(void)
     KBOOT_OK("Process: scheduler ready");
 
     /* Main scheduler loop */
-    KINFO("Starting scheduler with unified system...\n");
-    print_signal_stack_stats();
     sched_start();
 
     panic("Returned from unified scheduler!");
