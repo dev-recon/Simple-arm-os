@@ -7,7 +7,7 @@ task switching, process memory, filesystems, drivers, or userland ABI code.
 ArmOS currently targets ARMv7-A on the QEMU `virt` machine, using a Cortex-A15
 CPU model, short-descriptor page tables, split `TTBR0` / `TTBR1`, ASIDs, an
 ext2 root filesystem, a FAT32 compatibility mount, procfs, VirtIO block I/O,
-and a UART-backed TTY.
+an UART-backed rescue TTY, and an optional VirtIO-GPU graphical TTY.
 
 ## Boot And DTB Detection
 
@@ -436,6 +436,105 @@ Contributor rules:
 4. Any code that yields in kernel mode must preserve the kernel call chain.
 5. Treat `nanosleep`, TTY reads, pipe waits, and VirtIO waits as preemption
    test cases.
+
+## TTY And Console Model
+
+ArmOS exposes a small Unix-like TTY model with multiple backends.
+
+Current consoles:
+
+```text
+tty0  UART/QEMU serial console
+tty1  optional VirtIO-GPU framebuffer console with VirtIO input keyboard
+```
+
+The most important stability rule is that `tty0` must remain a complete UART
+rescue path. Graphical-console work must not make boot, login, shell access, or
+shutdown depend on `tty1`. If VirtIO-GPU or VirtIO input is missing or broken,
+the system should still boot and remain usable through `boot.sh` and `tty0`.
+
+### TTY Core
+
+The TTY layer owns:
+
+- canonical and non-canonical input behavior;
+- `termios` flags such as `ICANON`, `ECHO`, `ISIG`, `OPOST`, `ONLCR`, `ICRNL`;
+- control characters such as `VINTR`, `VSUSP`, `VEOF`, `VERASE`, `VKILL`;
+- foreground process group checks;
+- terminal-generated signals such as `SIGINT`, `SIGTSTP`, and `SIGTTIN`;
+- `/dev/tty`, `/dev/tty0`, `/dev/tty1`, and `/dev/console` behavior.
+
+Backends should feed characters into the TTY core and consume output from it.
+They should not reimplement line discipline rules independently.
+
+### UART Backend
+
+The UART backend is deliberately conservative. It is the debugging and recovery
+transport used by QEMU's terminal.
+
+Contributor rules:
+
+1. Keep `tty0` fully functional after every graphical-console change.
+2. Preserve serial-console carriage-return behavior. Interactive command
+   injection through QEMU/screen typically needs `\r`, not just `\n`.
+3. Avoid long IRQ-disabled sections in UART or TTY output paths.
+4. Do not route graphical keyboard events into `tty0` unless explicitly
+   implementing a console-switching feature.
+
+### Graphical Backend
+
+The graphical console uses VirtIO-GPU as a framebuffer-style text console. It
+keeps its own text cell snapshot, renders a bitmap font, handles ANSI color and
+cursor movement, and flushes dirty framebuffer regions to the device.
+
+Current graphical-console features:
+
+- framebuffer text output through `tty1`;
+- Spleen bitmap font by default;
+- ANSI color handling sufficient for `ls`, `top`, and `kilo`;
+- vertical-bar cursor with blinking driven by a kernel `displayd` task;
+- simple scrollback history;
+- VirtIO input keyboard routing into `tty1`;
+- Mac French keyboard fallback mapping for the development host.
+
+The `displayd` kernel task exists so cursor blinking and deferred graphical
+work do not live in the idle task. This also validates pure kernel tasks without
+an attached user process.
+
+### Graphical Scrollback
+
+The graphical backend keeps a bounded in-memory scrollback buffer. Keyboard
+shortcuts currently enqueue scroll requests:
+
+```text
+Shift+Up / Shift+Down     one line
+Option+Up / Option+Down   one page
+```
+
+VirtIO input runs in interrupt context, so it must not directly render or flush
+the framebuffer. It only records a scroll request. `displayd` consumes those
+requests in task context and performs the redraw.
+
+Any new graphical operation should follow the same rule:
+
+```text
+IRQ context: enqueue minimal state
+task context: render, flush, or perform slow work
+```
+
+### Current Limits
+
+The graphical console is usable, but it is not a full terminal emulator:
+
+- no host-style mouse selection or copy/paste;
+- no dynamic resize propagation yet;
+- no virtual-console switching such as Alt-F1 / Alt-F2;
+- no full UTF-8/accent rendering;
+- scrollback is intentionally simple;
+- `tty1` currently starts a root shell in graphical boot mode for development.
+
+Future work should move toward a clearer split between TTY core, line
+discipline, backend drivers, and session startup (`getty`/login-style policy).
 
 ## Interrupts And Exception Context
 

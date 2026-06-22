@@ -2,9 +2,9 @@
 # boot-graphics.sh - boot an existing kernel.bin + disk.img with a QEMU
 # graphics window for framebuffer/GPU experiments.
 #
-# ArmOS still uses the PL011 UART console today. This script keeps that UART on
-# stdio for normal shell interaction, and also exposes a virtio-gpu display
-# window that future framebuffer work can target.
+# This script keeps the PL011 UART console on stdio as tty0 and opens a
+# virtio-gpu window used by tty1. tty0 is the rescue console and must remain
+# usable even if graphical console work regresses.
 
 set -euo pipefail
 
