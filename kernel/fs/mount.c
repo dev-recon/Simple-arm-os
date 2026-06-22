@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/fs/mount.c
+ * Layer: Kernel / VFS and filesystems
+ *
+ * Responsibilities:
+ * - Provide filesystem-independent VFS operations.
+ * - Implement persistent ext2/FAT32/procfs behavior.
+ *
+ * Notes:
+ * - Keep file descriptor and inode ownership rules explicit.
+ */
+
 #include <kernel/mount.h>
 #include <kernel/vfs.h>
 #include <kernel/fat32.h>

@@ -1,8 +1,14 @@
-/* ========================================
- * System Calls Interface - User Space
- * Interface pour appeler le kernel depuis userspace
- * ARM 32-bit AAPCS - Adapté pour votre kernel
- * ======================================== */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: libc/src/syscalls.S
+ * Layer: Userland / legacy libc
+ * Description: Legacy freestanding C runtime support kept for compatibility.
+ */
 
 .text
 .align 4

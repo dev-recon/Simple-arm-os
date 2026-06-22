@@ -1,4 +1,21 @@
-/* kernel/task/kernel_tasks.c - Taches systeme du kernel */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/task/kernel_tasks.c
+ * Layer: Kernel / scheduler and tasking
+ *
+ * Responsibilities:
+ * - Create, schedule, block, wake, and destroy tasks.
+ * - Track scheduling and lifecycle diagnostics.
+ *
+ * Notes:
+ * - Scheduler invariants are shared with timer preemption and wait paths.
+ */
+
 #include <kernel/kernel_tasks.h>
 #include <kernel/task.h>
 #include <kernel/memory.h>

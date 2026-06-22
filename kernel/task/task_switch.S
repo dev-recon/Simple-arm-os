@@ -1,4 +1,21 @@
-/* kernel/task/task_switch.S - Commutation de contexte ARM Cortex-A15 */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/task/task_switch.S
+ * Layer: Kernel / ARMv7-A context switching
+ *
+ * Responsibilities:
+ * - Save and restore kernel and user task contexts.
+ * - Preserve banked ARM registers across SVC/user transitions.
+ *
+ * Notes:
+ * - Small changes here can affect syscall return, preemption, and signals.
+ */
+
 .text
 .align 4
 

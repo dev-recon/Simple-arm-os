@@ -1,4 +1,21 @@
-/* kernel/memory/physical.c - Corrige pour eviter conflits avec MMU */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/memory/physical.c
+ * Layer: Kernel / memory management
+ *
+ * Responsibilities:
+ * - Manage physical pages, virtual address spaces, MMU mappings, and ASIDs.
+ * - Support user mappings, page faults, and copy-on-write.
+ *
+ * Notes:
+ * - TLB, ASID, and TTBR changes are global stability concerns.
+ */
+
 #include <kernel/memory.h>
 #include <kernel/kernel.h>
 #include <kernel/kprintf.h>

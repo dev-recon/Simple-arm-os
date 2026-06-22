@@ -1,4 +1,15 @@
-/* syscalls.c - Interface entre Newlib et vos syscalls */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/legacy/newlib-prototype/newlib/syscalls.c
+ * Layer: Userland / program
+ * Description: ArmOS userspace program or support module.
+ */
+
 #include "../../sysroot/arm-none-eabi/include/sys/stat.h"
 #include <sys/types.h>
 #include <sys/times.h>

@@ -1,4 +1,21 @@
-/* include/asm/arm.h - Version corrigee sans conflits */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: include/asm/arm.h
+ * Layer: Kernel / ARMv7-A architecture interface
+ *
+ * Responsibilities:
+ * - Define ARM CPU modes, CPSR bits, and architecture helpers.
+ * - Provide low-level constants shared by boot, exceptions, and task code.
+ *
+ * Notes:
+ * - These declarations are part of privileged ARM kernel plumbing.
+ */
+
 #ifndef _ASM_ARM_H
 #define _ASM_ARM_H
 

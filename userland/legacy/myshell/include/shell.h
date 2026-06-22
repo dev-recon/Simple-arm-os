@@ -1,4 +1,15 @@
-/* include/shell.h */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/legacy/myshell/include/shell.h
+ * Layer: Userland / program
+ * Description: ArmOS userspace program or support module.
+ */
+
 #ifndef _SHELL_H
 #define _SHELL_H
 

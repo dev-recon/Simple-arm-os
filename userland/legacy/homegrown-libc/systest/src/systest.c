@@ -1,3 +1,15 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/legacy/homegrown-libc/systest/src/systest.c
+ * Layer: Userland / program
+ * Description: ArmOS userspace program or support module.
+ */
+
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>

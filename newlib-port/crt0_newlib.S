@@ -1,4 +1,14 @@
-/* crt0_newlib.S - userspace entry point for programs linked with newlib */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: newlib-port/crt0_newlib.S
+ * Layer: Userland / newlib port
+ * Description: Newlib syscall glue and ArmOS ABI adaptation layer.
+ */
 
 .section .text
 .align 4

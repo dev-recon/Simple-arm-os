@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: include/asm/mmu.h
+ * Layer: Kernel / ARMv7-A MMU interface
+ *
+ * Responsibilities:
+ * - Define short-descriptor page table bits and address helpers.
+ * - Share MMU constants between mapping, exception, and task code.
+ *
+ * Notes:
+ * - Keep these definitions aligned with the Cortex-A15 page-table format.
+ */
+
 #ifndef _ASM_MMU_H
 #define _ASM_MMU_H
 

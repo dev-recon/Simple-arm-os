@@ -1,4 +1,20 @@
-/* tar_parser_ramfs.c - Parser TAR pour integration RAMFS FAT32 */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/drivers/tar_parser_ramfs.c
+ * Layer: Kernel / device drivers
+ *
+ * Responsibilities:
+ * - Expose hardware or pseudo-device services to the kernel and VFS.
+ * - Translate device-specific state into stable kernel interfaces.
+ *
+ * Notes:
+ * - Driver failures should degrade without hiding tty0 diagnostics.
+ */
 
 #include <kernel/tar_parser_ramfs.h>
 #include <kernel/string.h>
@@ -29,32 +45,6 @@ static uint32_t g_fat_entry_count = 3;   /* Nombre d'entrees utilisees */
 
 static void update_fat_tables(void);
 
-static void sync_fat_to_ramfs(void)
-{
-    extern fat32_fs_t fat32_fs;
-    
-    uint32_t fat_sectors = 1009;
-    uint32_t fat1_start = 32;
-    uint32_t fat2_start = 32 + fat_sectors;
-    
-    KDEBUG("Syncing FAT table to ramfs...\n");
-    
-    /* Écrire FAT1 */
-    if (!ramfs_write_sectors(fat1_start, fat_sectors, fat32_fs.fat_table)) {
-        KERROR("Failed to sync FAT1 to ramfs\n");
-        return;
-    }
-    
-    /* Écrire FAT2 (backup) */
-    if (!ramfs_write_sectors(fat2_start, fat_sectors, fat32_fs.fat_table)) {
-        KERROR("Failed to sync FAT2 to ramfs\n");
-        return;
-    }
-    
-    KDEBUG("FAT synchronized successfully\n");
-}
-
-
 /* Fonctions utilitaires TAR */
 static uint32_t parse_octal_string(const char* str, size_t len)
 {
@@ -82,23 +72,6 @@ static bool validate_tar_header(const tar_header_t* header)
     return true;
 }
 
-static uint32_t calculate_tar_checksum(const tar_header_t* header)
-{
-    uint32_t sum = 0;
-    const uint8_t* bytes = (const uint8_t*)header;
-    
-    /* Calculer la somme en traitant le champ checksum comme des espaces */
-    for (int i = 0; i < 512; i++) {
-        if (i >= 148 && i < 156) {  /* Champ checksum */
-            sum += ' ';
-        } else {
-            sum += bytes[i];
-        }
-    }
-    
-    return sum;
-}
-
 static uint32_t allocate_cluster(void)
 {
     uint32_t cluster = g_next_cluster++;
@@ -110,24 +83,6 @@ static uint32_t allocate_cluster(void)
     //KDEBUG("Allocated single cluster %u\n", cluster);
     return cluster;
 }
-
-/* Gestion des clusters FAT32 */
-static uint32_t allocate_cluster2(void)
-{
-    uint32_t cluster = g_next_cluster++;
-    
-    // CORRECTION: Synchroniser les indices
-    uint32_t fat_index = cluster - 2;  // Les clusters commencent à 2, FAT à 0
-    if (fat_index < 4096) {
-        g_fat_entries[fat_index] = 0x0FFFFFFF; /* End of chain */
-    }
-    
-    //KDEBUG("[DEBUG] Allocated cluster %u (FAT index %u)\n", cluster, fat_index);
-    return cluster;
-
-}
-
-
 
 static uint32_t allocate_file_clusters(uint32_t file_size)
 {
@@ -172,32 +127,6 @@ static uint32_t allocate_file_clusters(uint32_t file_size)
 }
 
 
-
-static uint32_t allocate_file_clusters2(uint32_t file_size)
-{
-    if (file_size == 0) return 0;
-    
-    /* SOLUTION ULTRA SIMPLE */
-    uint32_t clusters_needed = 1;  // Toujours au moins 1 cluster
-    if (file_size > 512) {
-        clusters_needed = (file_size + 512 - 1) / 512;  // Seulement si > 512
-    }
-    
-    uint32_t first_cluster = allocate_cluster();
-    //KDEBUG("[DEBUG] Allocated cluster %u for file size %u (%u clusters needed)\n", 
-    //       first_cluster, file_size, clusters_needed);
-    
-    uint32_t current_cluster = first_cluster;
-    
-    /* Allouer les clusters supplémentaires */
-    for (uint32_t i = 1; i < clusters_needed; i++) {
-        uint32_t next_cluster = allocate_cluster();
-        g_fat_entries[current_cluster - 2] = next_cluster;
-        current_cluster = next_cluster;
-    }
-    
-    return first_cluster;
-}
 
 /* ecriture des donnees dans les clusters */
 static void write_file_data_to_clusters(uint32_t first_cluster, const uint8_t* data, uint32_t size)
@@ -287,29 +216,6 @@ static void update_fat_tables(void)
     kfree(complete_fat);
 }
 
-
-/* Mise a jour des tables FAT */
-static void update_fat_tables2(void)
-{
-    uint8_t fat_sector[512];
-    
-    /* Initialiser le premier secteur FAT */
-    memset(fat_sector, 0, 512);
-    *(uint32_t*)(fat_sector + 0) = 0x0FFFFFF8;  /* Media descriptor */
-    *(uint32_t*)(fat_sector + 4) = 0x0FFFFFFF;  /* End of chain */
-    *(uint32_t*)(fat_sector + 8) = 0x0FFFFFFF;  /* Root directory */
-    
-    /* Ajouter les entrees allouees */
-    uint32_t fat_offset = 12;  /* Commencer apres les 3 premieres entrees */
-    for (uint32_t i = 3; i < g_fat_entry_count && fat_offset < 512; i++) {
-        *(uint32_t*)(fat_sector + fat_offset) = g_fat_entries[i - 2];
-        fat_offset += 4;
-    }
-    
-    /* ecrire FAT1 et FAT2 */
-    ramfs_write_sectors(32, 1, fat_sector);
-    ramfs_write_sectors(32 + 1009, 1, fat_sector);
-}
 
 /* Conversion de nom en format 8.3 FAT */
 static void convert_name_to_fat83(const char* name, char* fat_name)

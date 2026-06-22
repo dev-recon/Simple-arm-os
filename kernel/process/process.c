@@ -1,4 +1,21 @@
-/* kernel/process/process.c */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/process/process.c
+ * Layer: Kernel / process lifecycle
+ *
+ * Responsibilities:
+ * - Manage process ownership, exec/fork/exit semantics, and signals.
+ * - Maintain Unix-like parent/child and zombie invariants.
+ *
+ * Notes:
+ * - Changes here can affect init reaping and job control.
+ */
+
 #include <kernel/process.h>
 #include <kernel/memory.h>
 #include <kernel/kernel.h>

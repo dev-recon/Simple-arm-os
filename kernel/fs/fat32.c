@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/fs/fat32.c
+ * Layer: Kernel / VFS and filesystems
+ *
+ * Responsibilities:
+ * - Provide filesystem-independent VFS operations.
+ * - Implement persistent ext2/FAT32/procfs behavior.
+ *
+ * Notes:
+ * - Keep file descriptor and inode ownership rules explicit.
+ */
+
 #include <kernel/fat32.h>
 #include <kernel/ata.h>
 #include <kernel/memory.h>

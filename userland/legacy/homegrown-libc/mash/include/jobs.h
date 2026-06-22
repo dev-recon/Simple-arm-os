@@ -1,3 +1,15 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/legacy/homegrown-libc/mash/include/jobs.h
+ * Layer: Userland / program
+ * Description: ArmOS userspace program or support module.
+ */
+
 #ifndef _MASH_JOBS_H
 #define _MASH_JOBS_H
 

@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: bl1.S
+ * Layer: Kernel / ARMv7-A boot assembly
+ *
+ * Responsibilities:
+ * - Establish the initial privileged CPU state.
+ * - Install early stacks and exception vector entry points.
+ *
+ * Notes:
+ * - Runs before the C runtime and before normal diagnostics exist.
+ */
+
 @ bl1.s - Bootloader minimal pour QEMU secure mode
 @ Syntaxe assembleur GNU ARM
 

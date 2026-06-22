@@ -1,4 +1,21 @@
-/* kernel/task/task_test.c - Tests du systeme de taches */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/task/task_test.c
+ * Layer: Kernel / scheduler and tasking
+ *
+ * Responsibilities:
+ * - Create, schedule, block, wake, and destroy tasks.
+ * - Track scheduling and lifecycle diagnostics.
+ *
+ * Notes:
+ * - Scheduler invariants are shared with timer preemption and wait paths.
+ */
+
 #include <kernel/task.h>
 #include <kernel/kernel.h>
 #include <kernel/kprintf.h>

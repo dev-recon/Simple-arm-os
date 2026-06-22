@@ -1,4 +1,14 @@
-/* crt0.S - Fichier de démarrage pour programmes userspace */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: libc/src/crt0.S
+ * Layer: Userland / legacy libc
+ * Description: Legacy freestanding C runtime support kept for compatibility.
+ */
 
 .section .text
 .global _start

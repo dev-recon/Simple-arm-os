@@ -1,4 +1,21 @@
-/* kernel/sync/spinlock.c - Spinlocks pour ARM Cortex-A15 */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/sync/spinlock.c
+ * Layer: Kernel / synchronization
+ *
+ * Responsibilities:
+ * - Provide low-level locking primitives.
+ * - Protect shared kernel state across preemption and interrupts.
+ *
+ * Notes:
+ * - Locking changes can expose scheduler and interrupt races.
+ */
+
 #include <kernel/spinlock.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>

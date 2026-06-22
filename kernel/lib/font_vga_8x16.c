@@ -1,4 +1,21 @@
-/* Generated from kernel/lib/font_8x16.c. Do not edit by hand. */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/lib/font_vga_8x16.c
+ * Layer: Kernel / support library
+ *
+ * Responsibilities:
+ * - Provide freestanding helpers unavailable from libc.
+ * - Keep formatting, string, math, and debug helpers deterministic.
+ *
+ * Notes:
+ * - Must remain safe before userland and full runtime services exist.
+ */
+
 /* VGA-like fixed 8x16 ASCII bitmap font used by the graphical console. */
 #include <kernel/display.h>
 

@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/drivers/virtio_block.c
+ * Layer: Kernel / VirtIO drivers
+ *
+ * Responsibilities:
+ * - Negotiate VirtIO device features and queues.
+ * - Provide block, GPU, or input transport services.
+ *
+ * Notes:
+ * - Device ordering and cache coherency matter under preemption.
+ */
+
 #include <kernel/kernel.h>
 #include <kernel/types.h>
 #include <kernel/virtio_block.h>

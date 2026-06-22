@@ -1,4 +1,21 @@
-/* userfs_loader.c - Load userfs from memory loaded by QEMU */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/fs/userfs_loader.c
+ * Layer: Kernel / VFS and filesystems
+ *
+ * Responsibilities:
+ * - Provide filesystem-independent VFS operations.
+ * - Implement persistent ext2/FAT32/procfs behavior.
+ *
+ * Notes:
+ * - Keep file descriptor and inode ownership rules explicit.
+ */
+
 #include <kernel/userfs_loader.h>
 #include <kernel/ramfs.h>
 #include <kernel/kprintf.h>

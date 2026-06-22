@@ -1,4 +1,21 @@
-/* ls_process.c - Processus ls pour votre kernel */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/internals/ls_process.c
+ * Layer: Kernel / diagnostics
+ *
+ * Responsibilities:
+ * - Expose internal debug and inspection helpers.
+ * - Support bring-up and regression analysis.
+ *
+ * Notes:
+ * - Keep diagnostic code from changing production invariants.
+ */
+
 #include <kernel/task.h>
 #include <kernel/vfs.h>
 #include <kernel/fat32.h>

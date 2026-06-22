@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/drivers/ide.c
+ * Layer: Kernel / device drivers
+ *
+ * Responsibilities:
+ * - Expose hardware or pseudo-device services to the kernel and VFS.
+ * - Translate device-specific state into stable kernel interfaces.
+ *
+ * Notes:
+ * - Driver failures should degrade without hiding tty0 diagnostics.
+ */
+
 #include <kernel/types.h>
 #include <kernel/ide.h>
 #include <kernel/kprintf.h>

@@ -1,8 +1,21 @@
 /*
- * boot.S - ARMv7-A Cortex-A15 kernel boot
- * Adapte pour machine QEMU virt
- * Alignement strict pour eviter les Heisenbugs
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/boot.S
+ * Layer: Kernel / ARMv7-A boot assembly
+ *
+ * Responsibilities:
+ * - Establish the initial privileged CPU state.
+ * - Install early stacks and exception vector entry points.
+ *
+ * Notes:
+ * - Runs before the C runtime and before normal diagnostics exist.
  */
+
 .global _start
 .global vectors
 .global dtb_address

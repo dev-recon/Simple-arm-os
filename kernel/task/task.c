@@ -1,4 +1,21 @@
-/* kernel/task/task.c - Version de base simple */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/task/task.c
+ * Layer: Kernel / scheduler and tasking
+ *
+ * Responsibilities:
+ * - Create, schedule, block, wake, and destroy tasks.
+ * - Track scheduling and lifecycle diagnostics.
+ *
+ * Notes:
+ * - Scheduler invariants are shared with timer preemption and wait paths.
+ */
+
 #include <kernel/task.h>
 #include <kernel/memory.h>
 #include <kernel/kernel.h>
@@ -47,7 +64,6 @@ static bool task_is_schedulable(task_t* task);
 void add_task_to_list(task_t* task);
 void remove_task_from_list(task_t* task);
 void setup_task_context(task_t* task);
-static task_t* schedule_next_task2(void);
 bool is_in_ready_queue(task_t* task);
 
 uint64_t task_runtime_ticks(task_t* task)
@@ -1678,26 +1694,6 @@ void sched_start(void)
     while (1) __asm__ volatile("wfe");
 }
 
-
-static task_t* find_next_same_priority_task(task_t* current)
-{
-    task_t* task = current->next;
-    uint32_t current_priority = current->priority;
-    int count = 0;
-    
-    /* Chercher la prochaine tache READY avec la meme priorite */
-    do {
-        if (task->state == TASK_READY && task->priority == current_priority
-        && task->state != TASK_ZOMBIE &&
-        task->state != TASK_TERMINATED ) {
-            return task;
-        }
-        task = task->next;
-        count++;
-    } while (task != current && count < MAX_TASKS);
-    
-    return current;  /* Pas d'autre tache de meme priorite */
-}
 
 /**
  * Round-robin ameliore qui evite de re-selectionner la meme tache

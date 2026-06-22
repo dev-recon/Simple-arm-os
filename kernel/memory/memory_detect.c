@@ -1,4 +1,21 @@
-/* kernel/memory/memory_detect.c - Adapte pour machine virt */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/memory/memory_detect.c
+ * Layer: Kernel / memory management
+ *
+ * Responsibilities:
+ * - Manage physical pages, virtual address spaces, MMU mappings, and ASIDs.
+ * - Support user mappings, page faults, and copy-on-write.
+ *
+ * Notes:
+ * - TLB, ASID, and TTBR changes are global stability concerns.
+ */
+
 #include <kernel/types.h>
 #include <kernel/kprintf.h>
 #include <kernel/memory.h>

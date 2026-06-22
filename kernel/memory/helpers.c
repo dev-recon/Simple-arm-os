@@ -1,9 +1,19 @@
 /*
- * kernel/memory/helpers.c
- * Memory Helper Functions for ARM v7 Kernel avec support split TTBR et ASID
- * 
- * Provides temporary page mapping and BSS initialization utilities
- * Compatible GNU89 standard
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/memory/helpers.c
+ * Layer: Kernel / memory management
+ *
+ * Responsibilities:
+ * - Manage physical pages, virtual address spaces, MMU mappings, and ASIDs.
+ * - Support user mappings, page faults, and copy-on-write.
+ *
+ * Notes:
+ * - TLB, ASID, and TTBR changes are global stability concerns.
  */
 
 #include <kernel/memory.h>
@@ -30,13 +40,9 @@ static struct {
 } temp_map_state = {0, false, {0}, {0}};
 
 /* Forward declarations of static functions */
-static void init_temp_mapping_state(void);
-static uint32_t* get_current_pgdir(void);
 static uint32_t* get_temp_page_table(void);
 static void setup_temp_page_table_entry(uint32_t* pt, uint32_t phys_addr);
 static void clear_temp_page_table_entry(uint32_t* pt);
-static bool is_temp_mapping_initialized(void);
-static uint32_t* get_temp_page_table_for_slot(int slot);
 static bool validate_temp_slot_configuration(int slot);
 static void init_multi_temp_mapping_state(void);
 uint32_t map_temp_page_multi(uint32_t phys_addr, int num_pages);
@@ -302,21 +308,6 @@ void dump_mmu_control_registers(void) {
     }
 }
 
-
-// Décode AP en texte (AP[2:1:0])
-static const char* ap_to_str(unsigned ap2, unsigned ap10){
-    unsigned ap = (ap2<<2) | ap10; // {AP2,AP1,AP0}
-    switch(ap){
-        case 0b000: return "No access";                         // priv NA, user NA
-        case 0b001: return "Priv RW, User NA";                  // kernel RW only
-        case 0b010: return "Priv RW, User RO";
-        case 0b011: return "Priv RW, User RW";
-        case 0b101: return "Priv RO, User NA";
-        case 0b110: return "Priv RO, User RO";
-        case 0b111: return "Priv RO, User RO (deprecated)";
-        default:     return "Invalid AP";
-    }
-}
 
 // Détermine si une VA utilise TTBR1 (short-descriptor)
 static inline int va_uses_ttbr1(uint32_t va, uint32_t ttbcr){
@@ -706,22 +697,6 @@ static int find_free_temp_slot(void)
 {
     for (int i = 0; i < MAX_TEMP_MAPPINGS; i++) {
         if (!multi_temp_state.slots[i].in_use) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-/**
- * find_temp_slot_by_vaddr - Find slot by virtual address
- * @vaddr: Virtual address to search for
- * Returns: slot index or -1 if not found
- */
-static int find_temp_slot_by_vaddr(uint32_t vaddr)
-{
-    for (int i = 0; i < MAX_TEMP_MAPPINGS; i++) {
-        if (multi_temp_state.slots[i].in_use && 
-            multi_temp_state.slots[i].virt_addr == vaddr) {
             return i;
         }
     }
@@ -1123,63 +1098,6 @@ void unmap_temp_page(void* temp_vaddr)
 }
 
 /**
- * get_temp_page_table_for_slot - Get or create L2 table for a specific slot
- * @slot: Slot index
- * Returns: Pointer to L2 table or NULL on failure
- */
-static uint32_t* get_temp_page_table_for_slot(int slot)
-{
-    /* Validation */
-    if (slot < 0 || slot >= MAX_TEMP_MAPPINGS) {
-        KERROR("get_temp_page_table_for_slot: Invalid slot %d\n", slot);
-        return NULL;
-    }
-    
-    /* Vérifier que le slot a été pré-configuré */
-    if (!preallocated_l2_tables[slot].initialized) {
-        KERROR("get_temp_page_table_for_slot: Slot %d not pre-configured\n", slot);
-        KERROR("Did you call preallocate_temp_mapping_system() during boot?\n");
-        return NULL;
-    }
-    
-    /* Retourner directement l'adresse physique pré-allouée */
-    uint32_t* l2_phys = (uint32_t*)preallocated_l2_tables[slot].phys_addr;
-    
-    KDEBUG("get_temp_page_table_for_slot: Using pre-allocated L2 for slot %d: 0x%08X\n",
-           slot, (uint32_t)l2_phys);
-    
-    return l2_phys;
-}
-
-/**
- * get_temp_page_table_virt_for_slot - Obtenir l'adresse VIRTUELLE de la table L2
- * @slot: Slot index  
- * Returns: Pointer to L2 table (VIRTUAL address) or NULL on failure
- * 
- * Cette fonction est utile quand on veut modifier la table L2 directement
- */
-static uint32_t* get_temp_page_table_virt_for_slot(int slot)
-{
-    /* Validation */
-    if (slot < 0 || slot >= MAX_TEMP_MAPPINGS) {
-        KERROR("get_temp_page_table_virt_for_slot: Invalid slot %d\n", slot);
-        return NULL;
-    }
-    
-    /* Vérifier que la zone d'accès L2 a été configurée */
-    if (!l2_table_addresses[slot]) {
-        KERROR("get_temp_page_table_virt_for_slot: L2 access zone not configured for slot %d\n", slot);
-        KERROR("Did you call create_l2_access_zone() during boot?\n");
-        return NULL;
-    }
-    
-    KDEBUG("get_temp_page_table_virt_for_slot: L2 virtual address for slot %d: 0x%08X\n",
-           slot, (uint32_t)l2_table_addresses[slot]);
-    
-    return l2_table_addresses[slot];
-}
-
-/**
  * validate_temp_slot_configuration - Valider la configuration d'un slot
  * @slot: Slot to validate
  * Returns: true if slot is properly configured, false otherwise
@@ -1513,30 +1431,6 @@ void zero_fill_bss(vm_space_t* vm, uint32_t vaddr, uint32_t size)
     uart_puts("zero_fill_bss: Completed\n");
 }
 
-/* Static function implementations */
-
-/**
- * init_temp_mapping_state - Initialize temporary mapping state
- */
-static void init_temp_mapping_state(void)
-{
-    init_spinlock(&temp_map_state.lock);
-    temp_map_state.phys_addr = 0;
-    temp_map_state.in_use = false;
-    temp_map_state.saved_asid.saved_asid = 0;
-    temp_map_state.saved_asid.context_switched = false;
-}
-
-/**
- * get_current_pgdir - Get pointer to current page directory
- * Avec split TTBR, retourne TTBR0 ou TTBR1 selon l'adresse
- */
-static uint32_t* get_current_pgdir(void)
-{
-    /* Pour les mappings temporaires dans l'espace noyau, utiliser TTBR1 */
-    return get_kernel_pgdir();
-}
-
 /**
  * get_temp_page_table - Get page table for temporary mapping dans TTBR1
  */
@@ -1616,14 +1510,6 @@ static void clear_temp_page_table_entry(uint32_t* pt)
     pt[pte_index] = 0;
     
     //KDEBUG("clear_temp_pte: Cleared L2[%u]\n", pte_index);
-}
-
-/**
- * is_temp_mapping_initialized - Check if temporary mapping state is initialized
- */
-static bool is_temp_mapping_initialized(void)
-{
-    return temp_map_state.lock.locked == 0;
 }
 
 /**

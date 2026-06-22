@@ -1,4 +1,21 @@
-/* Generated from MesloLGS NF Regular.ttf. Do not edit by hand. */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/lib/font_meslo_10x20.c
+ * Layer: Kernel / support library
+ *
+ * Responsibilities:
+ * - Provide freestanding helpers unavailable from libc.
+ * - Keep formatting, string, math, and debug helpers deterministic.
+ *
+ * Notes:
+ * - Must remain safe before userland and full runtime services exist.
+ */
+
 /* Source license: assets/fonts/MesloLGS-NF-LICENSE.txt (Apache-2.0). */
 #include <kernel/display.h>
 

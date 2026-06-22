@@ -1,4 +1,20 @@
-/* interrupt.S - Gestionnaire d'interruptions pour machine virt - VERSION CORRIGeE */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/interrupt/interrupt.S
+ * Layer: Kernel / interrupts and exceptions
+ *
+ * Responsibilities:
+ * - Handle IRQs, timer ticks, aborts, and crash diagnostics.
+ * - Keep exception reports actionable during early kernel debugging.
+ *
+ * Notes:
+ * - Handlers run in privileged exception modes with banked registers.
+ */
 
 .section .text
 .align 2

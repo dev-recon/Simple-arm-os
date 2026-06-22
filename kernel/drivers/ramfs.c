@@ -1,4 +1,21 @@
-/* kernel/drivers/ramfs.c - RAM FileSystem Driver */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/drivers/ramfs.c
+ * Layer: Kernel / device drivers
+ *
+ * Responsibilities:
+ * - Expose hardware or pseudo-device services to the kernel and VFS.
+ * - Translate device-specific state into stable kernel interfaces.
+ *
+ * Notes:
+ * - Driver failures should degrade without hiding tty0 diagnostics.
+ */
+
 #include <kernel/types.h>
 #include <kernel/memory.h>
 #include <kernel/kprintf.h>
@@ -22,10 +39,8 @@ ramfs_device_t ramfs_device = {0};
 
 /* Forward declarations */
 static bool ramfs_allocate_memory(void);
-static void ramfs_create_fat32_filesystem(void);
 static void ramfs_write_boot_sector(uint8_t* sector);
 static void ramfs_write_fat_tables(void);
-static void ramfs_write_root_directory(void);
 void debug_memory_layout_ramfs(void);
 void debug_ramfs_creation_step_by_step(void);
 void ramfs_test(void);
@@ -459,10 +474,6 @@ bool init_ramfs(void)
     
     KINFO("RAMFS memory allocated at: %p\n", ramfs_device.memory_base);
     
-    /* Create FAT32 filesystem structure */
-    //ramfs_create_fat32_filesystem();
-       /* Mark as initialized */
-
     extern ramfs_device_t ramfs_device;
     
     /* etape 1: Sauvegarder les donnees UserFS TAR */
@@ -630,35 +641,6 @@ static bool ramfs_allocate_memory(void)
     /* Clear the memory */
     //memset(ramfs_device.memory_base, 0, RAMFS_SIZE);
     debug_memory_layout_ramfs();
-    
-    return true;
-}
-
-static bool ramfs_allocate_memory2(void)
-{
-    KINFO("Allocating RAMFS memory...\n");
-    
-    /* Calculate number of pages needed */
-    uint32_t pages_needed = (RAMFS_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
-    KINFO("  Pages needed: %u (%u KB)\n", pages_needed, pages_needed * 4);
-    
-    /* Allocate contiguous pages */
-    void* memory = allocate_pages(pages_needed);
-    if (!memory) {
-        KERROR("Failed to allocate %u contiguous pages for RAMFS\n", pages_needed);
-        return false;
-    }
-    
-    ramfs_device.memory_base = (uint8_t*)memory;
-    
-    KINFO("OK RAMFS memory allocated:\n");
-    KINFO("  Base address: %p\n", ramfs_device.memory_base);
-    KINFO("  End address:  %p\n", ramfs_device.memory_base + RAMFS_SIZE);
-    KINFO("  Size:         %u MB\n", RAMFS_SIZE / (1024*1024));
-    
-    /* Clear the memory */
-    KINFO("Clearing RAMFS memory...\n");
-    memset(ramfs_device.memory_base, 0, RAMFS_SIZE);
     
     return true;
 }
@@ -1064,22 +1046,6 @@ static void ramfs_create_realistic_filesystem(void)
     KINFO("  - %u files with real content\n", 1 + 3 + 3 + 1 + 1 + 1);
 }
 
-static void ramfs_create_fat32_filesystem(void)
-{
-    KINFO("Creating FAT32 filesystem in RAMFS...\n");
-    
-    /* Write boot sector */
-    ramfs_write_boot_sector(ramfs_device.memory_base);
-    
-    /* Write FAT tables (basic structure) */
-    ramfs_write_fat_tables();
-    
-    /* Create realistic filesystem with files */
-    ramfs_create_realistic_filesystem();
-    
-    KINFO("OK Complete FAT32 filesystem created in RAMFS\n");
-}
-
 static void ramfs_write_boot_sector(uint8_t* sector)
 {
     KDEBUG("Writing FAT32 boot sector...\n");
@@ -1151,33 +1117,6 @@ static void ramfs_write_fat_tables(void)
     memcpy(fat2, fat1, fat_size_sectors * 512);
     
     KDEBUG("OK FAT tables written\n");
-}
-
-static void ramfs_write_root_directory(void)
-{
-    KDEBUG("Writing root directory...\n");
-    
-    /* Root directory starts at cluster 2 */
-    /* Data area starts after FATs: 32 + 2*1009 = 2050 sectors */
-    uint32_t data_start_sector = 32 + 2 * 1009;
-    /* Cluster 2 = first cluster of data area */
-    uint8_t* root_dir = ramfs_device.memory_base + (data_start_sector * 512);
-    
-    /* Clear root directory cluster */
-    memset(root_dir, 0, 512);
-    
-    /* Create volume label entry */
-    memcpy(root_dir, "RAMFS      ", 11);    /* Volume label */
-    root_dir[11] = 0x08;                    /* Volume label attribute */
-    
-    /* Create a test file entry */
-    uint8_t* file_entry = root_dir + 32;
-    memcpy(file_entry, "README  TXT", 11);  /* 8.3 filename */
-    file_entry[11] = 0x20;                  /* Archive attribute */
-    *(uint16_t*)(file_entry + 26) = 3;      /* First cluster (low) */
-    *(uint32_t*)(file_entry + 28) = 13;     /* File size */
-    
-    KDEBUG("OK Root directory written\n");
 }
 
 /* ============================================================================

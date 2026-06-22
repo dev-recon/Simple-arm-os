@@ -1,4 +1,21 @@
-/* kernel/include/kernel/virtio_block.h - VirtIO Block Device pour machine virt */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: include/kernel/virtio_block.h
+ * Layer: Kernel / public internal interface
+ *
+ * Responsibilities:
+ * - Declare kernel types, constants, and subsystem contracts.
+ * - Keep cross-module ABI and structure expectations explicit.
+ *
+ * Notes:
+ * - Header changes can ripple across kernel and user ABI glue.
+ */
+
 #ifndef _KERNEL_VIRTIO_BLOCK_H
 #define _KERNEL_VIRTIO_BLOCK_H
 

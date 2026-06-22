@@ -1,4 +1,21 @@
-/* kernel/timer/timer.c - Version corrigee pour machine virt */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/interrupt/timer.c
+ * Layer: Kernel / interrupts and exceptions
+ *
+ * Responsibilities:
+ * - Handle IRQs, timer ticks, aborts, and crash diagnostics.
+ * - Keep exception reports actionable during early kernel debugging.
+ *
+ * Notes:
+ * - Handlers run in privileged exception modes with banked registers.
+ */
+
 #include <kernel/timer.h>
 #include <kernel/task.h>
 #include <kernel/interrupt.h>
@@ -348,6 +365,27 @@ void wake_up_sleeping_processes(void)
 }
 
 
+
+/* Nombre de jours par mois (annee non bissextile) */
+static const int days_in_month[] = {
+    31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+};
+
+bool is_leap_year(int year)
+{
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+int get_days_in_month(int month, int year)
+{
+    if (month < 1 || month > 12)
+        return 0;
+
+    if (month == 2 && is_leap_year(year))
+        return 29;
+
+    return days_in_month[month - 1];
+}
 
 /* Convertir timestamp Unix en structure datetime */
 void unix_to_datetime(uint32_t unix_time, datetime_t* dt) {

@@ -1,3 +1,15 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: libc/include/sys/types.h
+ * Layer: Userland / legacy libc
+ * Description: Legacy freestanding C runtime support kept for compatibility.
+ */
+
 #ifndef _SYS_TYPES_H
 #define _SYS_TYPES_H
 

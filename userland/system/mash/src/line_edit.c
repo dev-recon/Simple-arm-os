@@ -1,3 +1,15 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/system/mash/src/line_edit.c
+ * Layer: Userland / system service
+ * Description: System-level userspace component for ArmOS.
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>

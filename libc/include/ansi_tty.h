@@ -1,3 +1,15 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: libc/include/ansi_tty.h
+ * Layer: Userland / legacy libc
+ * Description: Legacy freestanding C runtime support kept for compatibility.
+ */
+
 #ifndef ANSI_TTY_H
 #define ANSI_TTY_H
 

@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/drivers/display.c
+ * Layer: Kernel / terminal and character devices
+ *
+ * Responsibilities:
+ * - Drive UART/framebuffer console backends and TTY line discipline.
+ * - Preserve canonical/raw terminal semantics and job-control signals.
+ *
+ * Notes:
+ * - tty0/UART must remain a reliable fallback path.
+ */
+
 #include <kernel/display.h>
 #include <kernel/memory.h>
 #include <kernel/kernel.h>

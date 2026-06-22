@@ -1,3 +1,15 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: libc/include/fcntl.h
+ * Layer: Userland / legacy libc
+ * Description: Legacy freestanding C runtime support kept for compatibility.
+ */
+
 #ifndef _FCNTL_H
 #define _FCNTL_H
 

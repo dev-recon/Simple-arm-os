@@ -1,4 +1,15 @@
-/* src/rcfiles.c */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/legacy/myshell/src/rcfiles.c
+ * Layer: Userland / program
+ * Description: ArmOS userspace program or support module.
+ */
+
 #include "shell.h"
 
 void load_rc_files(void) {

@@ -1,4 +1,21 @@
-/* kernel/process/signal.c - COMPLET avec declarations forward */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/process/signal.c
+ * Layer: Kernel / process lifecycle
+ *
+ * Responsibilities:
+ * - Manage process ownership, exec/fork/exit semantics, and signals.
+ * - Maintain Unix-like parent/child and zombie invariants.
+ *
+ * Notes:
+ * - Changes here can affect init reaping and job control.
+ */
+
 #include <kernel/signal.h>
 #include <kernel/process.h>
 #include <kernel/memory.h>

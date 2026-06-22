@@ -1,4 +1,21 @@
-/* Generated from assets/fonts/spleen/spleen-12x24.bdf. Do not edit by hand. */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/lib/font_spleen_12x24.c
+ * Layer: Kernel / support library
+ *
+ * Responsibilities:
+ * - Provide freestanding helpers unavailable from libc.
+ * - Keep formatting, string, math, and debug helpers deterministic.
+ *
+ * Notes:
+ * - Must remain safe before userland and full runtime services exist.
+ */
+
 /* Source license: assets/fonts/spleen/LICENSE (BSD-2-Clause). */
 #include <kernel/display.h>
 

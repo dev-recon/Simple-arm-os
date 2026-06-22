@@ -1,4 +1,20 @@
-/* mmio.h - Header pour les fonctions PUT32/GET32 - VERSION CORRIGeE */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: include/kernel/mmio.h
+ * Layer: Kernel / public internal interface
+ *
+ * Responsibilities:
+ * - Declare kernel types, constants, and subsystem contracts.
+ * - Keep cross-module ABI and structure expectations explicit.
+ *
+ * Notes:
+ * - Header changes can ripple across kernel and user ABI glue.
+ */
 
 #ifndef MMIO_H
 #define MMIO_H

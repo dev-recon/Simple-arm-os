@@ -1,7 +1,13 @@
-/* syscall_raw.S - raw ARM EABI syscall wrappers for newlib glue.
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
  *
- * These wrappers intentionally return the kernel raw value. Negative errors
- * are converted to errno by newlib-port/syscalls.c.
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: newlib-port/syscall_raw.S
+ * Layer: Userland / newlib port
+ * Description: Newlib syscall glue and ArmOS ABI adaptation layer.
  */
 
 .text

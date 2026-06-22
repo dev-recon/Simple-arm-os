@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/syscalls/shm.c
+ * Layer: Kernel / syscall implementation
+ *
+ * Responsibilities:
+ * - Validate user-facing syscall requests.
+ * - Bridge user ABI arguments to kernel subsystems.
+ *
+ * Notes:
+ * - Never trust user pointers; copy through checked helpers.
+ */
+
 #include <kernel/shm.h>
 #include <kernel/memory.h>
 #include <kernel/task.h>

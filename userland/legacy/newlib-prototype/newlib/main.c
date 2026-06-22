@@ -1,3 +1,15 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/legacy/newlib-prototype/newlib/main.c
+ * Layer: Userland / program
+ * Description: ArmOS userspace program or support module.
+ */
+
 // userland/programs/hello/main.c
 #include <stdio.h>
 #include <stdlib.h>

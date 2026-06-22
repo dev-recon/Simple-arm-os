@@ -1,4 +1,21 @@
-/* kernel/syscalls/syscall.S - Version corrigee */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/syscalls/syscall.S
+ * Layer: Kernel / syscall entry assembly
+ *
+ * Responsibilities:
+ * - Capture user register state at SVC entry.
+ * - Return safely from privileged mode to user mode.
+ *
+ * Notes:
+ * - Must stay consistent with task_context_t offsets.
+ */
+
 #include <kernel/task.h>
 
 .section .text

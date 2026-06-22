@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/user/userspace.c
+ * Layer: Kernel / user execution support
+ *
+ * Responsibilities:
+ * - Prepare and validate transitions into user programs.
+ * - Coordinate user mappings with process execution.
+ *
+ * Notes:
+ * - ABI details must stay aligned with syscall and context-switch code.
+ */
+
 #include <kernel/kernel.h>
 #include <kernel/types.h>
 #include <asm/mmu.h>

@@ -1,4 +1,14 @@
-/* syscalls.c - newlib syscall glue for arm-os userspace programs */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: newlib-port/syscalls.c
+ * Layer: Userland / newlib port
+ * Description: Newlib syscall glue and ArmOS ABI adaptation layer.
+ */
 
 #include <errno.h>
 #include <fcntl.h>

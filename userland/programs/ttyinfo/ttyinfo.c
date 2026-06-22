@@ -1,3 +1,15 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/programs/ttyinfo/ttyinfo.c
+ * Layer: Userland / test or sample program
+ * Description: Userland test, diagnostic, or sample application.
+ */
+
 #include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>

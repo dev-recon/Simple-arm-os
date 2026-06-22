@@ -1,4 +1,15 @@
-/* src/executor.c */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/legacy/myshell/src/executor.c
+ * Layer: Userland / program
+ * Description: ArmOS userspace program or support module.
+ */
+
 #include "shell.h"
 
 void execute_command_line(command_line_t* cmdline) {

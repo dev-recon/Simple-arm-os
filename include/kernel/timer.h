@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: include/kernel/timer.h
+ * Layer: Kernel / public internal interface
+ *
+ * Responsibilities:
+ * - Declare kernel types, constants, and subsystem contracts.
+ * - Keep cross-module ABI and structure expectations explicit.
+ *
+ * Notes:
+ * - Header changes can ripple across kernel and user ABI glue.
+ */
+
 #ifndef _KERNEL_TIMER_H
 #define _KERNEL_TIMER_H
 
@@ -42,27 +60,6 @@ typedef struct {
     int second;  /* 0-59 */
 } datetime_t;
 
-/* Nombre de jours par mois (année non bissextile) */
-static const int days_in_month[] = {
-    31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
-};
-
-/* Vérifier si une année est bissextile */
-static bool is_leap_year(int year) {
-    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-}
-
-/* Obtenir le nombre de jours dans un mois */
-static int get_days_in_month(int month, int year) {
-    if (month < 1 || month > 12) return 0;
-    
-    if (month == 2 && is_leap_year(year)) {
-        return 29;
-    }
-    
-    return days_in_month[month - 1];
-}
-
 /* Timer functions */
 void init_timer(void);
 void init_timer_software(void);
@@ -82,6 +79,8 @@ uint32_t get_time_ms(void);
 void set_critical_section(void);
 void unset_critical_section(void);
 bool get_critical_section(void);
+bool is_leap_year(int year);
+int get_days_in_month(int month, int year);
 void unix_to_datetime(uint32_t unix_time, datetime_t* dt);
 
 uint32_t get_current_time(void);

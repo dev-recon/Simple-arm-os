@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/interrupt/exception.c
+ * Layer: Kernel / interrupts and exceptions
+ *
+ * Responsibilities:
+ * - Handle IRQs, timer ticks, aborts, and crash diagnostics.
+ * - Keep exception reports actionable during early kernel debugging.
+ *
+ * Notes:
+ * - Handlers run in privileged exception modes with banked registers.
+ */
+
 #include <kernel/kernel.h>
 #include <kernel/types.h>
 #include <kernel/kprintf.h>
@@ -144,14 +162,6 @@ static const char* l2_type_str(uint32_t d) {
 // Section: XN = bit4 ; AP[2] = bit15 ; AP[1:0] = bits[11:10]
 // Small page (desc==0b11) : XN = bit0 ; AP[2]=bit9 ; AP[1:0]=bits[5:4]
 static int section_xn(uint32_t l1d) { return (l1d >> 4) & 1; }
-static int section_ap_user_ro_or_no(uint32_t l1d) {
-    uint32_t ap2 = (l1d >> 15) & 1;
-    uint32_t ap10 = (l1d >> 10) & 3;
-    // AP decode (user perms): 0=no access, 1=RO, 2/3=RW (depends on ap2)
-    // Ici on renvoie 1 si l'utilisateur n'a PAS exécution/accès écriture (indicatif)
-    // C'est un "hint", pas une vérité absolue pour exec; XN reste la clé pour PABT.
-    return (ap2==0 && ap10==0) || (ap2==0 && ap10==1);
-}
 static int smallpage_xn(uint32_t l2d) { 
     if ((l2d & 3) == 3) return l2d & 1; // format avec XN
     return 0; // format sans XN
@@ -418,21 +428,6 @@ static inline uint32_t ats1cpr2(uint32_t va){
     return par;
 }
 
-static const char* dfsr_string2(uint32_t dfsr) {
-    uint32_t fs = ((dfsr >> 10) & 1) << 4 | (dfsr & 0xF);
-    switch (fs) {
-        case 0x01: return "Alignment fault";
-        case 0x05: return "Translation fault (Section)";
-        case 0x07: return "Translation fault (Page)";
-        case 0x09: return "Domain fault (Section)";
-        case 0x0B: return "Domain fault (Page)";
-        case 0x0D: return "Permission fault (Section)";
-        case 0x0F: return "Permission fault (Page)";
-        case 0x08: return "Precise external abort";
-        default:   return "Other/impl.-def.";
-    }
-}
-
 static inline bool spsr_thumb2(uint32_t spsr){ return (spsr & (1u<<5)) != 0; }
 
 static inline uint32_t pick_ttbr2(uint32_t va, uint32_t ttbcr) {
@@ -440,62 +435,6 @@ static inline uint32_t pick_ttbr2(uint32_t va, uint32_t ttbcr) {
     if (N == 0) return get_ttbr0();
     uint32_t top = va >> (32-N);
     return top ? get_ttbr1() : get_ttbr0();
-}
-
-static void dump_l1_l22(uint32_t va) {
-    uint32_t ttbcr = get_ttbcr();
-    uint32_t ttbr  = pick_ttbr(va, ttbcr);
-    uint32_t l1_base = ttbr & ~0x3FFFu;   /* 16KB aligned */
-    uint32_t l1_idx  = (va >> 20) & 0xFFF;
-    uint32_t *l1_ptr = (uint32_t*)(l1_base + 4*l1_idx);
-    uint32_t l1 = *l1_ptr;
-
-    uart_puts("TTBR="); uart_put_hex(ttbr);
-    uart_puts(" TTBCR="); uart_put_hex(ttbcr);
-    uart_puts(" L1@"); uart_put_hex((uint32_t)l1_ptr);
-    uart_puts(" = "); uart_put_hex(l1); uart_puts("\n");
-
-    uint32_t l1_type = l1 & 3;
-    if (l1_type == 2 /*section*/) {
-        uint32_t domain = (l1 >> 5) & 0xF;
-        uart_puts("  L1: SECTION PA=");
-        uart_put_hex(l1 & 0xFFF00000); uart_puts(" domain=");
-        uart_put_hex(domain);
-        uart_puts(" AP/TEX/C/B decoded in section bits\n");
-        return;
-    }
-    if (l1_type == 1 /*coarse L2 table*/) {
-        uint32_t l2_base = l1 & ~0x3FFu;        /* 1KB aligned */
-        uint32_t l2_idx  = (va >> 12) & 0xFF;
-        uint32_t *l2_ptr = (uint32_t*)(l2_base + 4*l2_idx);
-        uint32_t l2 = *l2_ptr;
-
-        uart_puts("  L1: COARSE L2 @"); uart_put_hex(l2_base);
-        uart_puts("  L2@"); uart_put_hex((uint32_t)l2_ptr);
-        uart_puts(" = "); uart_put_hex(l2); uart_puts("\n");
-
-        uint32_t l2_type = l2 & 3;
-        if ((l2_type & 2) == 0) { uart_puts("  L2: Fault/invalid\n"); return; }
-
-        /* Small page (0b10 or 0b11 with XN in bit0) */
-        uint32_t pa  = l2 & 0xFFFFF000;
-        uint32_t ap2 = (l2 >> 9) & 1;
-        uint32_t ap  = (l2 >> 4) & 3;  /* AP[1:0] */
-        uint32_t xn  = l2 & 1;
-        uint32_t tex = (l2 >> 6) & 7;
-        uint32_t c   = (l2 >> 3) & 1;
-        uint32_t b   = (l2 >> 2) & 1;
-
-        uart_puts("  L2: SMALL PA="); uart_put_hex(pa);
-        uart_puts(" AP2="); uart_put_hex(ap2);
-        uart_puts(" AP="); uart_put_hex(ap);
-        uart_puts(" XN="); uart_put_hex(xn);
-        uart_puts(" TEX/C/B="); uart_put_hex(tex<<2 | c<<1 | b);
-        uart_puts("\n");
-        return;
-    }
-
-    uart_puts("  L1: Fault/Reserved type\n");
 }
 
 void data_abort_c_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t *saved)

@@ -1,4 +1,15 @@
-/* src/variables.c */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/legacy/myshell/src/variables.c
+ * Layer: Userland / program
+ * Description: ArmOS userspace program or support module.
+ */
+
 #include "shell.h"
 
 void init_shell_variables(int argc, char** argv) {

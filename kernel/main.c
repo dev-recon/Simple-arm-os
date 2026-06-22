@@ -1,4 +1,21 @@
-/* kernel/main.c */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/main.c
+ * Layer: Kernel / bootstrap orchestration
+ *
+ * Responsibilities:
+ * - Bring up core kernel subsystems in boot order.
+ * - Report high-level boot status and enter the scheduler.
+ *
+ * Notes:
+ * - Keep tty0/UART usable as the recovery console.
+ */
+
 #include <kernel/kernel.h>
 #include <kernel/memory.h>
 #include <kernel/process.h>
@@ -43,15 +60,6 @@ void __attribute__((noreturn)) __stack_chk_fail(void) {
 }
 
 
-static void halt_system(void) {
-    __asm__ volatile(
-        "1: b 1b"  // Boucle infinie en assembleur
-        :
-        :
-        : "memory"
-    );
-}
-
 void init_early_uart(void)
 {
     volatile uint32_t* uart = (volatile uint32_t*)UART0_BASE;
@@ -82,15 +90,6 @@ void panic(const char* message)
     }
 }
 
-
-static void print_system_info(void);
-static void test_armv7a_features(void);
-static void test_memory_barriers(void);
-static void test_coprocessors(void);
-static uint32_t read_cpu_id(void);
-static uint32_t read_mpidr(void);
-static uint32_t read_sctlr(void);
-static void demonstrate_cache_ops(void);
 
 /* Forward declarations */
 void early_init(void); 
@@ -313,147 +312,3 @@ void kernel_main(void)
 
 }
 
-
-/*
- * Affichage des informations systeme ARMv7-A
- */
-void print_system_info(void)
-{
-    kprintf("=== Informations CPU ARMv7-A ===\n");
-    kprintf("CPU ID (MIDR): 0x%08X\n", read_cpu_id());
-    kprintf("MPIDR: 0x%08X\n", read_mpidr());
-    kprintf("SCTLR: 0x%08X\n", read_sctlr());
-    kprintf("Kernel @ %p\n", kernel_main);
-    
-    extern uint32_t __bss_start, __bss_end;
-    kprintf("BSS: %p - %p\n", &__bss_start, &__bss_end);
-}
-
-/*
- * Tests des fonctionnalites ARMv7-A
- */
-static void test_armv7a_features(void)
-{
-    kprintf("=== Tests ARMv7-A ===\n");
-    
-    /* Test des barrieres memoire */
-    kprintf("- Barrieres memoire ARMv7-A... ");
-    test_memory_barriers();
-    kprintf("OK\n");
-    
-    /* Test des coprocesseurs */
-    kprintf("- Acces coprocesseurs CP15... ");
-    test_coprocessors();
-    kprintf("OK\n");
-    
-    /* Test des operations cache */
-    kprintf("- Operations cache L1... ");
-    demonstrate_cache_ops();
-    kprintf("OK\n");
-    
-    /* Test NEON (si disponible) */
-    kprintf("- Test NEON/VFP... ");
-    uint32_t cpacr;
-    __asm__ volatile("mrc p15, 0, %0, c1, c0, 2" : "=r"(cpacr));
-    if (cpacr & (3 << 20)) {
-        kprintf("OK (VFP disponible)\n");
-    } else {
-        kprintf("WARNING  (VFP desactive)\n");
-    }
-    
-    /* Test des instructions conditionnelles ARMv7-A */
-    kprintf("- Instructions conditionnelles... ");
-    uint32_t test_val = 42;
-    uint32_t result;
-    
-    __asm__ volatile(
-        "cmp %1, #42\n"
-        "moveq %0, #1\n"      /* Si egal, result = 1 */
-        "movne %0, #0"        /* Si different, result = 0 */
-        : "=r"(result)
-        : "r"(test_val)
-        : "cc"
-    );
-    
-    if (result == 1) {
-        kprintf("OK\n");
-    } else {
-        kprintf("KO\n");
-    }
-    
-    kprintf("\n");
-    
-}
-
-/*
- * Test des barrieres memoire ARMv7-A
- */
-static void test_memory_barriers(void)
-{
-    /* ARMv7-A supporte toutes les barrieres modernes */
-    __asm__ volatile("dsb");    /* Data Synchronization Barrier */
-    __asm__ volatile("dmb");    /* Data Memory Barrier */
-    __asm__ volatile("isb");    /* Instruction Synchronization Barrier */
-    
-    /* Variants specifiques ARMv7-A */
-    __asm__ volatile("dsb sy"); /* System-wide DSB */
-    __asm__ volatile("dmb sy"); /* System-wide DMB */
-}
-
-/*
- * Test des coprocesseurs ARMv7-A
- */
-static void test_coprocessors(void)
-{
-    uint32_t cache_type, tlb_type;
-    
-    /* Lire les informations de cache (CTR) */
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 1" : "=r"(cache_type));
-    
-    /* Lire les informations TLB (TLBTR) */
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 3" : "=r"(tlb_type));
-    
-    /* Utiliser les valeurs pour eviter l'optimisation */
-    (void)cache_type;
-    (void)tlb_type;
-}
-
-/*
- * Demonstration des operations cache
- */
-static void demonstrate_cache_ops(void)
-{
-    /* Nettoyer et invalider tous les caches */
-    __asm__ volatile("mcr p15, 0, r0, c7, c14, 0" ::: "memory");
-    
-    /* Invalider les TLB */
-    __asm__ volatile("mcr p15, 0, r0, c8, c7, 0" ::: "memory");
-    
-    /* Barrieres apres operations cache */
-    __asm__ volatile("dsb");
-    __asm__ volatile("isb");
-}
-
-/*
- * Fonctions de lecture des registres systeme
- */
-static uint32_t read_cpu_id(void)
-{
-    uint32_t id;
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 0" : "=r"(id));
-    return id;
-}
-
-static uint32_t read_mpidr(void)
-{
-    uint32_t mpidr;
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(mpidr));
-    return mpidr;
-}
-
-static uint32_t read_sctlr(void)
-{
-    uint32_t sctlr;
-    __asm__ volatile("mrc p15, 0, %0, c1, c0, 0" : "=r"(sctlr));
-    return sctlr;
-}

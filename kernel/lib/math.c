@@ -1,3 +1,21 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/lib/math.c
+ * Layer: Kernel / support library
+ *
+ * Responsibilities:
+ * - Provide freestanding helpers unavailable from libc.
+ * - Keep formatting, string, math, and debug helpers deterministic.
+ *
+ * Notes:
+ * - Must remain safe before userland and full runtime services exist.
+ */
+
 #include <kernel/kernel.h>
 #include <kernel/types.h>
 #include <kernel/kprintf.h>

@@ -1,3 +1,15 @@
+/*
+ * ArmOS integration note
+ *
+ * File: userland/opt/kilo/src/kilo.c
+ * Upstream: kilo text editor by Salvatore Sanfilippo (antirez)
+ * Repository: https://github.com/antirez/kilo
+ *
+ * This file is carried as an ArmOS userland port of kilo. The original
+ * copyright and BSD-style license notice from upstream follows below and
+ * must be preserved when redistributing source or binaries.
+ */
+
 /* Kilo -- A very simple editor in less than 1-kilo lines of code (as counted
  *         by "cloc"). Does not depend on libcurses, directly emits VT100
  *         escapes on the terminal.

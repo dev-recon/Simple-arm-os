@@ -1,4 +1,21 @@
-/* kernel/drivers/tty.c */
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/drivers/tty.c
+ * Layer: Kernel / terminal and character devices
+ *
+ * Responsibilities:
+ * - Drive UART/framebuffer console backends and TTY line discipline.
+ * - Preserve canonical/raw terminal semantics and job-control signals.
+ *
+ * Notes:
+ * - tty0/UART must remain a reliable fallback path.
+ */
+
 #include <kernel/tty.h>
 #include <kernel/task.h>
 #include <kernel/string.h>

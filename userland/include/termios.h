@@ -1,3 +1,15 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/include/termios.h
+ * Layer: Userland / public header
+ * Description: Userspace ABI or library declarations for ArmOS programs.
+ */
+
 #ifndef ARM_OS_NEWLIB_TERMIOS_H
 #define ARM_OS_NEWLIB_TERMIOS_H
 
