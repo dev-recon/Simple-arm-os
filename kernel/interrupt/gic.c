@@ -5,6 +5,7 @@
 #include <kernel/keyboard.h>
 #include <kernel/ata.h>
 #include <kernel/virtio_block.h>
+#include <kernel/virtio_input.h>
 #include <kernel/uart.h>
 #include <kernel/ide.h>
 #include <kernel/kprintf.h>
@@ -175,6 +176,12 @@ void irq_c_handler(void)
         gicc[0x010/4] = irq_id;  /* GICC_EOIR */
         return;
     }
+
+    if (int_id == virtio_input_get_irq()) {
+        virtio_input_irq_handler();
+        gicc[0x010/4] = irq_id;  /* GICC_EOIR */
+        return;
+    }
     
     /* Router vers les handlers specifiques pour machine virt */
     switch (int_id) {
@@ -242,9 +249,10 @@ uint32_t gic_get_last_irq_id(void)
     return last_irq_id;
 }
 
-void enable_irq(uint32_t irq)
-{   
-    KDEBUG("[IRQ] Enabling IRQ %u (machine virt mode)...\n", irq);
+static void enable_irq_with_type(uint32_t irq, bool edge_triggered)
+{
+    KDEBUG("[IRQ] Enabling IRQ %u (machine virt mode, %s)...\n",
+           irq, edge_triggered ? "edge" : "level");
     
     volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
     volatile uint8_t* itargetsr = (volatile uint8_t*)(LOCAL_GICD_BASE + 0x800);
@@ -257,17 +265,19 @@ void enable_irq(uint32_t irq)
         KDEBUG("[IRQ]   Target: 0x%02X \n", target);
     }
     
-    /* 2. Configurer le type (edge-triggered pour IRQ >= 16) */
+    /* 2. Configurer le type */
     if (irq >= 16) {
         volatile uint32_t* icfgr = (volatile uint32_t*)(LOCAL_GICD_BASE + 0xC00);
         uint32_t cfg = icfgr[irq / 16];
         uint32_t shift = (irq % 16) * 2;
         
         cfg &= ~(0b11 << shift);
-        cfg |=  (0b10 << shift);  /* Edge-triggered */
+        if (edge_triggered)
+            cfg |=  (0b10 << shift);
         icfgr[irq / 16] = cfg;
         
-        KDEBUG("[IRQ]   Type: Edge-triggered OK\n");
+        KDEBUG("[IRQ]   Type: %s OK\n",
+               edge_triggered ? "Edge-triggered" : "Level-triggered");
     } else {
         KDEBUG("[IRQ]   Type: Level-triggered (SGI/PPI) OK\n");
     }
@@ -291,6 +301,16 @@ void enable_irq(uint32_t irq)
     } else {
         KDEBUG("[IRQ] KO IRQ %u activation failed\n", irq);
     }
+}
+
+void enable_irq(uint32_t irq)
+{
+    enable_irq_with_type(irq, true);
+}
+
+void enable_irq_level(uint32_t irq)
+{
+    enable_irq_with_type(irq, false);
 }
 
 void disable_irq(uint32_t irq)

@@ -4,6 +4,8 @@ This guide sets up ArmOS on macOS. The project is primarily developed on Apple
 Silicon, but Intel Homebrew paths are noted where they differ.
 
 ArmOS targets an ARMv7-A Cortex-A15 kernel running on QEMU `virt`.
+The supported v0.2 reference emulator is QEMU 10.0.2. QEMU 11.0.1 has been
+smoke-tested, but its macOS/Cocoa graphical window scaling differs from 10.0.2.
 
 ## Disk Layout
 
@@ -91,6 +93,14 @@ mmd -V
 mke2fs -V
 debugfs -V
 e2fsck -V
+```
+
+For ArmOS v0.2, `qemu-system-arm --version` should ideally report QEMU 10.0.2.
+The scripts also accept an explicit QEMU binary:
+
+```sh
+QEMU=/opt/qemu-11.0.1/bin/qemu-system-arm ./boot.sh
+QEMU=/opt/qemu-11.0.1/bin/qemu-system-arm ./boot-graphics.sh
 ```
 
 If `mke2fs`, `debugfs`, or `e2fsck` are not found, your shell is missing the

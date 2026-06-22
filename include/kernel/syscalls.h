@@ -198,8 +198,8 @@ void sys_exit(int status);
 int sys_waitpid(pid_t pid, int* status, int options);
 int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent);
 int kernel_open(char* kernel_path, int flags, mode_t mode);
-int sys_stty(int cmd, uint32_t arg);
-int sys_gtty(int cmd);
+int sys_stty(int cmd, uint32_t arg, uint32_t arg2);
+int sys_gtty(int cmd, uint32_t arg);
 
 /* Process info syscalls */
 int sys_getpid(void);

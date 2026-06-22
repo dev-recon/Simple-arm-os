@@ -525,6 +525,19 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     if (!full_path) return -ENOENT;
 
     if (is_tty_device_path(full_path)) {
+        int tty_id = tty_id_from_device_path(full_path);
+
+        if (tty_id < 0) {
+            int ret = tty_id;
+            kfree(full_path);
+            return ret;
+        }
+
+        if (!tty_has_backend_for_id(tty_id)) {
+            kfree(full_path);
+            return -ENODEV;
+        }
+
         fd = allocate_fd(current_task);
         if (fd < 0) {
             kfree(full_path);
@@ -532,7 +545,9 @@ int sys_open(const char* pathname, int flags, mode_t mode)
         }
 
         tty_file = create_tty_console_file(
-            strcmp(full_path, "/dev/console") == 0 ? "console" : "tty0",
+            strcmp(full_path, "/dev/tty") == 0 ? "tty" :
+            strcmp(full_path, "/dev/console") == 0 ? "console" :
+            strcmp(full_path, "/dev/tty1") == 0 ? "tty1" : "tty0",
             flags & ~O_CLOEXEC);
         if (!tty_file) {
             free_fd(current_task, fd);

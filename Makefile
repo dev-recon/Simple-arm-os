@@ -6,6 +6,7 @@ AS = $(CROSS_COMPILE)as
 LD = $(CROSS_COMPILE)ld
 OBJCOPY = $(CROSS_COMPILE)objcopy
 OBJDUMP = $(CROSS_COMPILE)objdump
+QEMU ?= qemu-system-arm
 
 ARCH_FLAGS = -mcpu=cortex-a15 -marm
 FPU_FLAGS = -mfpu=neon-vfpv4 -mfloat-abi=soft
@@ -36,7 +37,7 @@ TASK_OBJS = kernel/task/task.o \
             kernel/sync/spinlock.o
 
 # Objets de la bibliotheque
-LIB_OBJ = kernel/lib/kprintf.o kernel/lib/string.o kernel/lib/font_meslo_12x24.o kernel/lib/divmod.o kernel/lib/debug_print.o kernel/lib/math.o
+LIB_OBJ = kernel/lib/kprintf.o kernel/lib/string.o kernel/lib/font_meslo_12x24.o kernel/lib/font_meslo_10x20.o kernel/lib/font_meslo_8x16.o kernel/lib/font_spleen_8x16.o kernel/lib/font_spleen_12x24.o kernel/lib/font_vga_8x16.o kernel/lib/divmod.o kernel/lib/debug_print.o kernel/lib/math.o
 
 # Objets du noyau
 KERNEL_OBJS = \
@@ -65,6 +66,7 @@ KERNEL_OBJS = \
 	kernel/drivers/display.o \
 	kernel/drivers/console.o \
 	kernel/drivers/virtio_gpu.o \
+	kernel/drivers/virtio_input.o \
 	kernel/drivers/uart.o \
 	kernel/drivers/tty.o \
 	kernel/drivers/null.o \
@@ -187,7 +189,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	   done; \
 	   find $(USERFS_DIR) -type f | sort | while read f; do \
 	       relpath=$$(echo "$$f" | sed 's|$(USERFS_DIR)/||'); \
-	       case "$$relpath" in dev/tty0|dev/console) continue ;; esac; \
+	       case "$$relpath" in dev/tty0|dev/tty1|dev/console) continue ;; esac; \
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
 	       case "$$relpath" in \
 	           sbin/init) mode=0100700 ;; \
@@ -218,6 +220,10 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	   printf 'set_inode_field tty0 mode 020666\n'; \
 	   printf 'set_inode_field tty0 uid 0\n'; \
 	   printf 'set_inode_field tty0 gid 0\n'; \
+	   printf 'mknod tty1 c 4 1\n'; \
+	   printf 'set_inode_field tty1 mode 020666\n'; \
+	   printf 'set_inode_field tty1 uid 0\n'; \
+	   printf 'set_inode_field tty1 gid 0\n'; \
 	   printf 'mknod null c 1 3\n'; \
 	   printf 'set_inode_field null mode 020666\n'; \
 	   printf 'set_inode_field null uid 0\n'; \
@@ -261,7 +267,7 @@ $(USERFS_DIR):
 	echo "Temporary files directory" > $(USERFS_DIR)/tmp/README
 	
 	mkdir -p $(USERFS_DIR)/dev
-	touch $(USERFS_DIR)/dev/tty0 $(USERFS_DIR)/dev/console
+	touch $(USERFS_DIR)/dev/tty0 $(USERFS_DIR)/dev/tty1 $(USERFS_DIR)/dev/console
 	
 	@echo "$(USERFS_DIR) directory created with test files"
 
@@ -274,7 +280,7 @@ userfs.bin: $(wildcard userfs/**/*)
 
 # Run avec userfs loader
 run-userfs: $(KERNEL_BIN)
-	qemu-system-arm -M virt -cpu cortex-a15 \
+	$(QEMU) -M virt -cpu cortex-a15 \
 		-m 2G -smp 1 \
 		-drive file=disk.img,if=none,format=raw,id=hd0 \
 		-device virtio-blk-device,drive=hd0 \
@@ -286,7 +292,7 @@ run-userfs: $(KERNEL_BIN)
 #-device loader,file=userfs.bin,addr=0x41000000
 
 debug-run-userfs: $(KERNEL_BIN) userfs.bin
-	qemu-system-arm -M virt -cpu cortex-a15 \
+	$(QEMU) -M virt -cpu cortex-a15 \
 		-m 2G -smp 1 \
 		-drive file=disk.img,if=none,format=raw,id=hd0 \
 		-device virtio-blk-device,drive=hd0 \
@@ -374,7 +380,7 @@ clean-all: clean
 
 # Essayez cette configuration alternative :
 run-alt: $(KERNEL_BIN) $(DISK_IMG)
-	qemu-system-arm -M vexpress-a9 -cpu cortex-a9 \
+	$(QEMU) -M vexpress-a9 -cpu cortex-a9 \
 		-m 1G \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
@@ -382,7 +388,7 @@ run-alt: $(KERNEL_BIN) $(DISK_IMG)
 		-device virtio-blk-device,drive=disk0,bus=virtio-mmio-bus.0
 
 run-trace: $(KERNEL_BIN) $(DISK_IMG)
-	qemu-system-arm -M vexpress-a9 -cpu cortex-a9 \
+	$(QEMU) -M vexpress-a9 -cpu cortex-a9 \
 		-m 1G \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
@@ -392,7 +398,7 @@ run-trace: $(KERNEL_BIN) $(DISK_IMG)
 		-D qemu-virtio.log 
 
 run-mmio: $(KERNEL_BIN) $(DISK_IMG)
-	qemu-system-arm -M virt -cpu cortex-a15 \
+	$(QEMU) -M virt -cpu cortex-a15 \
 		-m 1G -smp 1 \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
@@ -401,7 +407,7 @@ run-mmio: $(KERNEL_BIN) $(DISK_IMG)
 		-d int,guest_errors,unimp -D qemu.log
 
 run: $(KERNEL_BIN) $(DISK_IMG)
-	qemu-system-arm -M virt,highmem=off -cpu cortex-a15 \
+	$(QEMU) -M virt,highmem=off -cpu cortex-a15 \
 		-m 1G -smp 1 \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
@@ -412,7 +418,7 @@ run: $(KERNEL_BIN) $(DISK_IMG)
 #-global virtio-mmio.force-legacy=true
 
 debug: $(KERNEL_BIN) $(DISK_IMG)
-	qemu-system-arm -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
 		-kernel $(KERNEL_BIN) -nographic -s -S \
 		-drive file=$(DISK_IMG),format=raw,if=none,id=disk0 \
 		-device virtio-blk-device,drive=disk0
@@ -437,7 +443,7 @@ help:
 # Debug targets
 test-kernel: $(KERNEL_BIN)
 	@echo "Testing kernel without disk..."
-	qemu-system-arm \
+	$(QEMU) \
 		-M vexpress-a9 -cpu cortex-a9 \
 		-m 1G \
 		-kernel $(KERNEL_BIN) \
@@ -445,19 +451,19 @@ test-kernel: $(KERNEL_BIN)
 
 debug-verbose: $(KERNEL_BIN)
 	@echo "Running with verbose debug..."
-	qemu-system-arm -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
 		-kernel $(KERNEL_BIN) -nographic \
 		-d cpu,int,guest_errors
 
 debug-monitor: $(KERNEL_BIN)
 	@echo "Running with QEMU monitor (type 'info registers' then 'quit')..."
-	qemu-system-arm -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
 		-kernel $(KERNEL_BIN) -nographic \
 		-monitor stdio
 
 debug-trace: $(KERNEL_BIN)
 	@echo "Running with execution trace..."
-	qemu-system-arm -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
 		-kernel $(KERNEL_BIN) -nographic \
 		-d exec,cpu -D qemu.log
 	@echo "Check qemu.log for execution trace"
@@ -486,7 +492,7 @@ symbols: $(KERNEL_ELF)
 # Test avec machine differente
 test-versatile: $(KERNEL_BIN)
 	@echo "Testing with versatile machine..."
-	qemu-system-arm -machine versatilepb -cpu arm1176 -m 256M \
+	$(QEMU) -machine versatilepb -cpu arm1176 -m 256M \
 		-kernel $(KERNEL_BIN) -nographic
 
 # Test simple d'affichage
@@ -506,7 +512,7 @@ test-simple:
 	$(LD) test_simple.o -Ttext=0x40000000 -o test_simple.elf
 	$(OBJCOPY) -O binary test_simple.elf test_simple.bin
 	@echo "Running simple test (should print 'Hi')..."
-	qemu-system-arm -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
 		-kernel test_simple.bin -nographic
 	@rm -f test_simple.s test_simple.o test_simple.elf test_simple.bin
 

@@ -1,11 +1,11 @@
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -58,17 +58,6 @@ static int top_prev_count = 0;
 static int top_have_prev = 0;
 static struct termios top_saved_termios;
 static int top_termios_saved = 0;
-
-static unsigned long long now_us(void)
-{
-    struct timeval tv;
-
-    if (gettimeofday(&tv, NULL) != 0)
-        return 0;
-
-    return ((unsigned long long)tv.tv_sec * 1000000ULL) +
-           (unsigned long long)tv.tv_usec;
-}
 
 static void top_buf_free(top_buf_t *buf)
 {
@@ -168,6 +157,43 @@ static void top_enable_interactive(void)
         top_termios_saved = 1;
 }
 
+static void top_set_raw_timeout(unsigned delay_sec)
+{
+    struct termios raw;
+    unsigned deciseconds;
+
+    if (!top_termios_saved)
+        return;
+    if (tcgetattr(STDIN_FILENO, &raw) < 0)
+        return;
+
+    deciseconds = delay_sec * 10u;
+    if (deciseconds == 0)
+        deciseconds = 1;
+    if (deciseconds > 255u)
+        deciseconds = 255u;
+
+    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = (cc_t)deciseconds;
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+}
+
+static void top_set_raw_poll(void)
+{
+    struct termios raw;
+
+    if (!top_termios_saved)
+        return;
+    if (tcgetattr(STDIN_FILENO, &raw) < 0)
+        return;
+
+    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+}
+
 static void top_restore_terminal(void)
 {
     if (top_termios_saved) {
@@ -193,13 +219,13 @@ static void handle_key(char c, unsigned *delay_sec)
         break;
     case '+':
     case '=':
-        if (*delay_sec > 1)
-            (*delay_sec)--;
+        if (*delay_sec < 60)
+            (*delay_sec)++;
         break;
     case '-':
     case '_':
-        if (*delay_sec < 60)
-            (*delay_sec)++;
+        if (*delay_sec > 1)
+            (*delay_sec)--;
         break;
     case 'r':
     case 'R':
@@ -553,7 +579,7 @@ static const char *state_color(char state)
     case 'T':
     case 't': return C_YELLOW;
     case 'D': return C_MAGENTA;
-    default:  return C_BLUE;
+    default:  return C_CYAN;
     }
 }
 
@@ -639,28 +665,34 @@ static void render_top(unsigned delay_sec, int iteration)
 
 static void top_delay(unsigned *delay_sec)
 {
-    unsigned long long deadline;
+    char c;
+    ssize_t n;
 
     if (*delay_sec == 0)
         return;
 
-    deadline = now_us() + ((unsigned long long)*delay_sec * 1000000ULL);
-    while (top_running) {
-        unsigned long long now = now_us();
-        unsigned long long remaining;
+    top_set_raw_timeout(*delay_sec);
 
-        poll_input(delay_sec);
-        if (!top_running)
+    for (;;) {
+        errno = 0;
+        n = read(STDIN_FILENO, &c, 1);
+        if (n == 1) {
+            handle_key(c, delay_sec);
+            top_set_raw_poll();
+            poll_input(delay_sec);
             break;
-
-        if (now == 0 || now >= deadline)
+        }
+        if (n == 0)
             break;
-
-        remaining = deadline - now;
-        if (remaining > 100000ULL)
-            remaining = 100000ULL;
-        usleep((useconds_t)remaining);
+        if (errno == EINTR) {
+            if (!top_running)
+                break;
+            continue;
+        }
+        break;
     }
+
+    top_set_raw_poll();
 }
 
 static int parse_args(int argc, char **argv, unsigned *delay_sec, int *count)

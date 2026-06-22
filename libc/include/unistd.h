@@ -132,6 +132,8 @@ int kill(pid_t pid, int sig);
 
 #define TTY_STTY_SET_FOREGROUND_PGID 1
 #define TTY_GTTY_GET_FOREGROUND_PGID 1
+#define TTY_STTY_SET_FOREGROUND_PGID_FD 2
+#define TTY_GTTY_GET_FOREGROUND_PGID_FD 2
 
 /* Syscall générique */
 long syscall(long number, ...);

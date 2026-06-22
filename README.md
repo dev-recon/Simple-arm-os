@@ -32,7 +32,9 @@ ArmOS currently provides:
 - FAT32 compatibility mount
 - VirtIO block device support
 - `/proc` virtual filesystem
-- UART-backed console/TTY
+- UART-backed rescue console/TTY on `tty0`
+- Optional VirtIO-GPU graphical console/TTY on `tty1`
+- VirtIO input keyboard support for the graphical console
 - Shell: `mash`
 - Newlib-based userland
 - Core utilities such as `cat`, `echo`, `pwd`, `ls`, `cp`, `mv`, `rm`,
@@ -46,12 +48,16 @@ ArmOS currently provides:
 Current supported platform:
 
 - QEMU `virt`
+- QEMU 10.0.2 is the supported v0.2 reference emulator
+- QEMU 11.0.1 has been smoke-tested, but its macOS/Cocoa graphical window
+  scaling differs from 10.0.2
 - ARM Cortex-A15
 - ARMv7-A, 32-bit
 - GICv2
 - ARM generic timer
 - VirtIO block device
 - UART console
+- Optional VirtIO-GPU display and VirtIO input keyboard
 
 Future targets may include Raspberry Pi boards or an AArch64 port, but the
 current development platform is QEMU `virt`.
@@ -108,8 +114,7 @@ See:
 
 Known areas still under investigation include:
 
-- long-idle TTY/read wakeups
-- terminal/raw mode support
+- graphical console polish such as resize, richer scrollback, and copy/paste
 - procfs transient entries during fork/exit storms
 - cleanup of old debug code and unused kernel paths
 
@@ -133,6 +138,13 @@ Rebuilds the project, recreates disk images, and starts QEMU.
 ```
 
 Boots an existing `kernel.bin` and `disk.img` without rebuilding.
+
+```sh
+./boot-graphics.sh
+```
+
+Boots the same kernel and disk with VirtIO-GPU enabled. The UART terminal stays
+available as `tty0`; the graphical QEMU window exposes `tty1`.
 
 Exit QEMU with:
 
@@ -168,9 +180,7 @@ Planned cleanup work includes:
 
 Near-term work:
 
-- harden TTY and long-idle shell behavior
-- add minimal termios/raw mode
-- split the diagnostic `ps` into `lps` and provide a compact POSIX-like `ps`
+- continue graphical console polish while preserving UART `tty0`
 - improve shell/userland polish
 - continue procfs cleanup
 - reduce dead code and warnings

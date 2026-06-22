@@ -435,15 +435,30 @@ static void test_dev_tty(void)
         expect((st.st_mode & 0777) == 0666, "/dev/tty0 mode is 666", st.st_mode & 0777);
     }
 
+    if (expect(stat("/dev/tty", &st) == 0, "stat /dev/tty", 0) == 0) {
+        expect(S_ISCHR(st.st_mode), "/dev/tty is char device", st.st_mode);
+        expect((st.st_mode & 0777) == 0666, "/dev/tty mode is 666", st.st_mode & 0777);
+    }
+
     if (expect(stat("/dev/console", &st) == 0, "stat /dev/console", 0) == 0) {
         expect(S_ISCHR(st.st_mode), "/dev/console is char device", st.st_mode);
         expect((st.st_mode & 0777) == 0666, "/dev/console mode is 666", st.st_mode & 0777);
     }
 
+    expect(access("/dev/tty", F_OK) == 0, "access /dev/tty exists", 0);
+    expect(access("/dev/tty", R_OK | W_OK) == 0, "access /dev/tty read-write", 0);
+    expect(access("/dev/tty", X_OK) < 0, "access /dev/tty execute fails", 0);
     expect(access("/dev/tty0", F_OK) == 0, "access /dev/tty0 exists", 0);
     expect(access("/dev/tty0", R_OK | W_OK) == 0, "access /dev/tty0 read-write", 0);
     expect(access("/dev/tty0", X_OK) < 0, "access /dev/tty0 execute fails", 0);
     expect(access("/dev/console", F_OK) == 0, "access /dev/console exists", 0);
+
+    fd = open("/dev/tty", O_WRONLY, 0);
+    if (expect(fd >= 0, "open /dev/tty write-only", fd) >= 0) {
+        if (expect(fstat(fd, &fst) == 0, "fstat /dev/tty", 0) == 0)
+            expect(S_ISCHR(fst.st_mode), "fstat /dev/tty is char device", fst.st_mode);
+        close(fd);
+    }
 
     fd = open("/dev/tty0", O_WRONLY, 0);
     if (expect(fd >= 0, "open /dev/tty0 write-only", fd) >= 0) {
@@ -506,6 +521,7 @@ static void test_posix_compat_syscalls(void)
     struct timezone tz;
     struct termios tio;
     struct winsize wsz;
+    struct winsize original_wsz;
     time_t now = 0;
     int fd;
     int dupfd;
@@ -553,10 +569,12 @@ static void test_posix_compat_syscalls(void)
     }
 
     expect(ioctl(STDIN_FILENO, TCGETS, &tio) == 0, "ioctl TCGETS accepts tty", 0);
+    memset(&original_wsz, 0, sizeof(original_wsz));
     if (expect(ioctl(STDIN_FILENO, TIOCGWINSZ, &wsz) == 0,
                "ioctl TIOCGWINSZ accepts tty", 0) == 0) {
-        expect(wsz.ws_col == 80, "ioctl TIOCGWINSZ reports 80 columns", wsz.ws_col);
-        expect(wsz.ws_row == 24, "ioctl TIOCGWINSZ reports 24 rows", wsz.ws_row);
+        original_wsz = wsz;
+        expect(wsz.ws_col > 0, "ioctl TIOCGWINSZ reports columns", wsz.ws_col);
+        expect(wsz.ws_row > 0, "ioctl TIOCGWINSZ reports rows", wsz.ws_row);
     }
     wsz.ws_row = 25;
     wsz.ws_col = 100;
@@ -577,10 +595,7 @@ static void test_posix_compat_syscalls(void)
            "ioctl TIOCSWINSZ accepts unchanged size", 0);
     expect(winch_signal_seen == 1, "ioctl unchanged winsize skips SIGWINCH", winch_signal_seen);
     signal(SIGWINCH, SIG_DFL);
-    wsz.ws_row = 24;
-    wsz.ws_col = 80;
-    wsz.ws_xpixel = 0;
-    wsz.ws_ypixel = 0;
+    wsz = original_wsz;
     expect(ioctl(STDIN_FILENO, TIOCSWINSZ, &wsz) == 0,
            "ioctl TIOCSWINSZ restores default size", 0);
     expect(tcgetattr(STDIN_FILENO, &tio) == 0, "tcgetattr accepts tty", 0);
@@ -1651,8 +1666,11 @@ static void test_lifecycle_orphan_reaper(void)
 
 static void test_identity(void)
 {
-    expect(getuid() == 1000, "shell runs as user uid", getuid());
-    expect(getgid() == 1000, "shell runs as user gid", getgid());
+    int uid = getuid();
+    int gid = getgid();
+
+    expect(uid == 0 || uid == 1000, "process uid is root or user", uid);
+    expect(gid == 0 || gid == 1000, "process gid is root or user", gid);
 }
 
 static void test_terminal_process_group(void)
@@ -1675,10 +1693,10 @@ static void test_terminal_process_group(void)
     if (old_pgrp != self_pgrp) {
         skip("tcsetpgrp foreground mutation (not foreground job)");
         errno = 0;
-        expect(tcgetpgrp(99) < 0 && errno == ENOTTY, "tcgetpgrp rejects non-tty fd", errno);
+        expect(tcgetpgrp(99) < 0 && errno == EBADF, "tcgetpgrp rejects closed fd", errno);
         errno = 0;
-        expect(tcsetpgrp(99, self_pgrp) < 0 && errno == ENOTTY,
-               "tcsetpgrp rejects non-tty fd", errno);
+        expect(tcsetpgrp(99, self_pgrp) < 0 && errno == EBADF,
+               "tcsetpgrp rejects closed fd", errno);
         return;
     }
 
@@ -1687,9 +1705,9 @@ static void test_terminal_process_group(void)
     expect(current == self_pgrp, "tcgetpgrp observes tcsetpgrp", current);
 
     errno = 0;
-    expect(tcgetpgrp(99) < 0 && errno == ENOTTY, "tcgetpgrp rejects non-tty fd", errno);
+    expect(tcgetpgrp(99) < 0 && errno == EBADF, "tcgetpgrp rejects closed fd", errno);
     errno = 0;
-    expect(tcsetpgrp(99, self_pgrp) < 0 && errno == ENOTTY, "tcsetpgrp rejects non-tty fd", errno);
+    expect(tcsetpgrp(99, self_pgrp) < 0 && errno == EBADF, "tcsetpgrp rejects closed fd", errno);
 
     if (old_pgrp >= 0)
         tcsetpgrp(STDIN_FILENO, old_pgrp);
@@ -1770,7 +1788,7 @@ static void test_process_session_info(void)
             found = 1;
             expect(sysinfo_scratch.procs[i].sid > 0, "sysinfo reports process sid",
                    sysinfo_scratch.procs[i].sid);
-            expect(sysinfo_scratch.procs[i].tty == 0, "sysinfo reports controlling tty",
+            expect(sysinfo_scratch.procs[i].tty >= 0, "sysinfo reports controlling tty",
                    sysinfo_scratch.procs[i].tty);
             break;
         }

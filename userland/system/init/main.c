@@ -2,6 +2,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -20,6 +21,35 @@ static char *const init_envp[] = {
     NULL
 };
 
+static char *const root_envp[] = {
+    "PATH=/bin:/usr/bin:/sbin:/opt/kilo/bin",
+    "HOME=/root",
+    "USER=root",
+    "PS1=root# ",
+    "MASH_BANNER=0",
+    NULL
+};
+
+static int attach_stdio_fd(int fd)
+{
+    if (fd < 0)
+        return -1;
+
+    dup2(fd, STDIN_FILENO);
+    dup2(fd, STDOUT_FILENO);
+    dup2(fd, STDERR_FILENO);
+    if (fd > STDERR_FILENO)
+        close(fd);
+    return 0;
+}
+
+static int attach_stdio_to(const char *tty_path)
+{
+    int fd = open(tty_path, O_RDWR, 0);
+
+    return attach_stdio_fd(fd);
+}
+
 static int spawn_shell(void)
 {
     char *const argv[] = { "mash", NULL };
@@ -32,6 +62,8 @@ static int spawn_shell(void)
     }
 
     if (pid == 0) {
+        if (attach_stdio_to("/dev/tty0") < 0)
+            perror("init: attach /dev/tty0");
         chdir("/home/user");
         if (setgid(1000) < 0)
             perror("init: setgid");
@@ -45,9 +77,42 @@ static int spawn_shell(void)
     return pid;
 }
 
+static int spawn_root_graphics_shell(void)
+{
+    char *const argv[] = { "mash", NULL };
+    int tty_fd;
+    int pid;
+
+    tty_fd = open("/dev/tty1", O_RDWR, 0);
+    if (tty_fd < 0) {
+        fprintf(stderr, "init: tty1 unavailable, graphics shell disabled\n");
+        return 0;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        perror("init: fork tty1");
+        close(tty_fd);
+        return -1;
+    }
+
+    if (pid == 0) {
+        if (attach_stdio_fd(tty_fd) < 0)
+            _exit(0);
+        chdir("/root");
+        execve("/sbin/mash", argv, root_envp);
+        perror("init: exec /sbin/mash tty1");
+        _exit(127);
+    }
+
+    close(tty_fd);
+    return pid;
+}
+
 int main(void)
 {
     int shell_pid;
+    int root_shell_pid;
     int waited;
     int status;
 
@@ -57,38 +122,41 @@ int main(void)
     signal(SIGTTOU, SIG_IGN);
     chdir("/");
 
+    shell_pid = -1;
+    root_shell_pid = spawn_root_graphics_shell();
+
     while (1) {
-        shell_pid = spawn_shell();
         if (shell_pid < 0) {
+            shell_pid = spawn_shell();
+            if (shell_pid > 0)
+                fprintf(stderr, "init: tty0 shell pid %d\n", shell_pid);
+        }
+
+        if (root_shell_pid < 0)
+            root_shell_pid = spawn_root_graphics_shell();
+
+        status = 0;
+        waited = waitpid(-1, &status, 0);
+
+        if (waited < 0) {
+            if (errno == EINTR)
+                continue;
+            perror("init: waitpid");
             sleep(1);
             continue;
         }
 
-        while (1) {
-            status = 0;
-            waited = waitpid(-1, &status, 0);
-
-            if (waited < 0) {
-                if (errno == EINTR)
-                    continue;
-                perror("init: waitpid");
-                break;
-            }
-
-            if (waited == shell_pid)
-                break;
-
-            /*
-             * Reaped an orphan adopted by PID 1. Keep waiting for the login
-             * shell so zombies do not accumulate under init.
-             */
+        if (waited == shell_pid) {
+            fprintf(stderr, "init: tty0 shell exited, restarting\n");
+            shell_pid = -1;
+        } else if (waited == root_shell_pid) {
+            fprintf(stderr, "init: tty1 shell exited, restarting\n");
+            root_shell_pid = -1;
         }
 
         /*
-         * PID 1 owns the console session for now. If mash unexpectedly exits,
-         * restart it instead of leaving the system without an interactive shell.
+         * Other children are orphans adopted by PID 1. Reaping them here keeps
+         * the system clean without coupling tty0 and tty1 lifetimes.
          */
-        fprintf(stderr, "init: shell exited, restarting\n");
-        sleep(1);
     }
 }

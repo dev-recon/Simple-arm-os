@@ -6,6 +6,7 @@
 bool virtio_gpu_init(void);
 bool virtio_gpu_is_initialized(void);
 int virtio_gpu_flush(void);
+int virtio_gpu_flush_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height);
 void virtio_gpu_draw_test_pattern(void);
 
 #endif

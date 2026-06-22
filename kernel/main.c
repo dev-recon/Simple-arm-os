@@ -7,6 +7,7 @@
 #include <kernel/keyboard.h>
 #include <kernel/display.h>
 #include <kernel/virtio_gpu.h>
+#include <kernel/virtio_input.h>
 #include <kernel/vfs.h>
 #include <kernel/ata.h>
 
@@ -235,10 +236,22 @@ void kernel_main(void)
     init_keyboard();
   
     init_display();
-    if (virtio_gpu_init())
+    if (virtio_gpu_init()) {
         KBOOT_OKF("GPU: virtio-gpu %ux%ux%u", FB_WIDTH, FB_HEIGHT, FB_BPP);
-    else
+        if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0) {
+            tty_set_active(TTY_GRAPHICS_ID);
+            KBOOT_OKF("TTY: console tty1 on virtio-gpu");
+            if (virtio_input_init(TTY_GRAPHICS_ID)) {
+                KBOOT_OKF("Input: virtio-keyboard on tty1");
+            } else {
+                KBOOT_WARN("Input: virtio-keyboard unavailable");
+            }
+        } else {
+            KBOOT_WARN("TTY: tty1 framebuffer backend unavailable");
+        }
+    } else {
         KBOOT_WARN("GPU: virtio-gpu unavailable");
+    }
     KBOOT_OKF("TTY: console tty0 on uart0");
       
     //kprintf("Initialize IDE ... ");
@@ -280,10 +293,23 @@ void kernel_main(void)
 
     //trigger_timer_interrupt();
     /* Phase 5: Gestion des processus (APReS allocateurs) */
+    init_process_system();
+
+    if (framebuffer_base) {
+        if (display_start_daemon() == 0)
+            KBOOT_OK("Display: cursor daemon");
+        else
+            KBOOT_WARN("Display: cursor daemon unavailable");
+    }
+
     KBOOT_OK("Process: scheduler ready");
 
     /* Main scheduler loop */
-    init_main() ;
+    KINFO("Starting scheduler with unified system...\n");
+    print_signal_stack_stats();
+    sched_start();
+
+    panic("Returned from unified scheduler!");
 
 }
 

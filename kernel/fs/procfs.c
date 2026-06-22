@@ -9,6 +9,7 @@
 #include <kernel/file.h>
 #include <kernel/disk_layout.h>
 #include <kernel/tty.h>
+#include <kernel/virtio_input.h>
 #include <kernel/interrupt.h>
 #include <kernel/kernel.h>
 #include <kernel/virtio_block.h>
@@ -139,6 +140,7 @@ static const char* proc_task_state_name(task_state_t state)
 static char proc_task_state_char(task_state_t state)
 {
     switch (state) {
+        case TASK_READY:
         case TASK_RUNNING:         return 'R';
         case TASK_ZOMBIE:          return 'Z';
         case TASK_TERMINATED:      return 'X';
@@ -443,6 +445,7 @@ static int proc_copy_link(char* buf, size_t bufsiz, const char* target)
 static int proc_fd_target(process_t* proc, int fd, char* target, size_t size)
 {
     file_t* file;
+    int tty_id;
 
     if (!proc || fd < 0 || fd >= MAX_FILES || !target || size == 0)
         return -ENOENT;
@@ -476,7 +479,13 @@ static int proc_fd_target(process_t* proc, int fd, char* target, size_t size)
     }
 
     if (file_is_tty(file)) {
-        snprintf(target, size, "/dev/tty0");
+        tty_id = tty_id_from_file(file);
+        if (tty_id == TTY_GRAPHICS_ID)
+            snprintf(target, size, "/dev/tty1");
+        else if (tty_id == TTY_CONSOLE_ID)
+            snprintf(target, size, "/dev/tty0");
+        else
+            return tty_id;
         return 0;
     }
 
@@ -669,37 +678,42 @@ static void proc_append_flag_names(char* buf, size_t cap, size_t* len,
     proc_append(buf, cap, len, "\n");
 }
 
-static void proc_fill_tty(char* buf, size_t cap, size_t* len)
+static const proc_flag_name_t proc_tty_iflag_names[] = {
+    { INLCR, "INLCR" },
+    { IGNCR, "IGNCR" },
+    { ICRNL, "ICRNL" },
+    { IXON,  "IXON" },
+    { IXOFF, "IXOFF" },
+};
+
+static const proc_flag_name_t proc_tty_oflag_names[] = {
+    { OPOST, "OPOST" },
+    { ONLCR, "ONLCR" },
+    { OCRNL, "OCRNL" },
+    { ONOCR, "ONOCR" },
+    { ONLRET, "ONLRET" },
+};
+
+static const proc_flag_name_t proc_tty_lflag_names[] = {
+    { ECHO, "ECHO" },
+    { ICANON, "ICANON" },
+    { ISIG, "ISIG" },
+    { IEXTEN, "IEXTEN" },
+    { ECHOE, "ECHOE" },
+    { ECHOK, "ECHOK" },
+    { ECHOCTL, "ECHOCTL" },
+    { ECHOKE, "ECHOKE" },
+};
+
+static const proc_flag_name_t proc_tty_cflag_names[] = {
+    { CS8, "CS8" },
+    { CREAD, "CREAD" },
+    { HUPCL, "HUPCL" },
+};
+
+static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
+                              int tty_id, const char* name)
 {
-    static const proc_flag_name_t iflag_names[] = {
-        { INLCR, "INLCR" },
-        { IGNCR, "IGNCR" },
-        { ICRNL, "ICRNL" },
-        { IXON,  "IXON" },
-        { IXOFF, "IXOFF" },
-    };
-    static const proc_flag_name_t oflag_names[] = {
-        { OPOST, "OPOST" },
-        { ONLCR, "ONLCR" },
-        { OCRNL, "OCRNL" },
-        { ONOCR, "ONOCR" },
-        { ONLRET, "ONLRET" },
-    };
-    static const proc_flag_name_t lflag_names[] = {
-        { ECHO, "ECHO" },
-        { ICANON, "ICANON" },
-        { ISIG, "ISIG" },
-        { IEXTEN, "IEXTEN" },
-        { ECHOE, "ECHOE" },
-        { ECHOK, "ECHOK" },
-        { ECHOCTL, "ECHOCTL" },
-        { ECHOKE, "ECHOKE" },
-    };
-    static const proc_flag_name_t cflag_names[] = {
-        { CS8, "CS8" },
-        { CREAD, "CREAD" },
-        { HUPCL, "HUPCL" },
-    };
     uint32_t tty_tx_enqueued = 0;
     uint32_t tty_tx_drained = 0;
     uint32_t tty_tx_full_waits = 0;
@@ -715,27 +729,61 @@ static void proc_fill_tty(char* buf, size_t cap, size_t* len)
     uint32_t tty_char_wakeups = 0;
     uint32_t tty_line_wakeups = 0;
     uint32_t tty_eof_wakeups = 0;
+    uint32_t input_chars = 0;
+    uint32_t ctrl_c_seen = 0;
+    uint32_t sigint_delivered = 0;
+    uint32_t sigint_missed = 0;
+    uint32_t ctrl_z_seen = 0;
+    uint32_t sigtstp_delivered = 0;
+    uint32_t sigtstp_missed = 0;
+    int last_signal = 0;
+    pid_t last_signal_pgid = 0;
+    int last_signal_delivered = 0;
     struct termios tio;
+    struct tty_struct *tty = tty_id == TTY_GRAPHICS_ID ? &tty1 : &tty0;
     uint16_t rows = 0;
     uint16_t cols = 0;
     uint16_t xpixel = 0;
     uint16_t ypixel = 0;
+    bool backend = tty_has_backend_for_id(tty_id);
+    bool active = tty_get_active() == tty_id;
+    bool pending = tty_output_pending_for_id(tty_id);
+    unsigned long flags;
 
-    tty_get_tx_stats(&tty_tx_enqueued, &tty_tx_drained,
-                     &tty_tx_full_waits, &tty_tx_drain_calls);
-    tty_get_input_stats(&tty_input_depth, &tty_input_capacity,
-                        &tty_eof_pending, &tty_iflag, &tty_oflag,
-                        &tty_lflag, &tty_vmin, &tty_vtime,
-                        &tty_char_wakeups, &tty_line_wakeups,
-                        &tty_eof_wakeups);
-    tty_get_termios(&tio);
-    tty_get_winsize(&rows, &cols, &xpixel, &ypixel);
+    tty_get_tx_stats_for_id(tty_id, &tty_tx_enqueued, &tty_tx_drained,
+                            &tty_tx_full_waits, &tty_tx_drain_calls);
+    tty_get_input_stats_for_id(tty_id, &tty_input_depth, &tty_input_capacity,
+                               &tty_eof_pending, &tty_iflag, &tty_oflag,
+                               &tty_lflag, &tty_vmin, &tty_vtime,
+                               &tty_char_wakeups, &tty_line_wakeups,
+                               &tty_eof_wakeups);
+    tty_get_termios_for_id(tty_id, &tio);
+    tty_get_winsize_for_id(tty_id, &rows, &cols, &xpixel, &ypixel);
 
-    proc_append(buf, cap, len, "tty0\n");
+    spin_lock_irqsave(&tty->lock, &flags);
+    input_chars = tty->input_chars;
+    ctrl_c_seen = tty->ctrl_c_seen;
+    sigint_delivered = tty->sigint_delivered;
+    sigint_missed = tty->sigint_missed;
+    ctrl_z_seen = tty->ctrl_z_seen;
+    sigtstp_delivered = tty->sigtstp_delivered;
+    sigtstp_missed = tty->sigtstp_missed;
+    last_signal = tty->last_signal;
+    last_signal_pgid = tty->last_signal_pgid;
+    last_signal_delivered = tty->last_signal_delivered;
+    spin_unlock_irqrestore(&tty->lock, flags);
+
+    proc_append(buf, cap, len, "%s\n", name);
+    proc_append(buf, cap, len, "device backend %s active %u output_pending %u input_route %s\n",
+                backend ? "present" : "none",
+                active ? 1 : 0,
+                pending ? 1 : 0,
+                tty_id == TTY_CONSOLE_ID ? "uart/default" :
+                virtio_input_is_initialized() ? "virtio-keyboard" : "none");
     proc_append(buf, cap, len, "winsize rows %u cols %u xpixel %u ypixel %u\n",
                 rows, cols, xpixel, ypixel);
     proc_append(buf, cap, len, "input depth %u capacity %u chars %u eof %u\n",
-                tty_input_depth, tty_input_capacity, tty0.input_chars, tty_eof_pending);
+                tty_input_depth, tty_input_capacity, input_chars, tty_eof_pending);
     proc_append(buf, cap, len, "wake char %u line %u eof %u\n",
                 tty_char_wakeups, tty_line_wakeups, tty_eof_wakeups);
     proc_append(buf, cap, len, "output enq %u drain %u full %u drain_calls %u\n",
@@ -747,17 +795,17 @@ static void proc_fill_tty(char* buf, size_t cap, size_t* len)
                 (tty_lflag & ISIG) ? "signal" : "nosignal",
                 (tty_lflag & ECHO) ? "echo" : "noecho");
     proc_append_flag_names(buf, cap, len, "iflag_names ",
-                           tty_iflag, iflag_names,
-                           sizeof(iflag_names) / sizeof(iflag_names[0]));
+                           tty_iflag, proc_tty_iflag_names,
+                           sizeof(proc_tty_iflag_names) / sizeof(proc_tty_iflag_names[0]));
     proc_append_flag_names(buf, cap, len, "oflag_names ",
-                           tty_oflag, oflag_names,
-                           sizeof(oflag_names) / sizeof(oflag_names[0]));
+                           tty_oflag, proc_tty_oflag_names,
+                           sizeof(proc_tty_oflag_names) / sizeof(proc_tty_oflag_names[0]));
     proc_append_flag_names(buf, cap, len, "lflag_names ",
-                           tty_lflag, lflag_names,
-                           sizeof(lflag_names) / sizeof(lflag_names[0]));
+                           tty_lflag, proc_tty_lflag_names,
+                           sizeof(proc_tty_lflag_names) / sizeof(proc_tty_lflag_names[0]));
     proc_append_flag_names(buf, cap, len, "cflag_names ",
-                           tio.c_cflag, cflag_names,
-                           sizeof(cflag_names) / sizeof(cflag_names[0]));
+                           tio.c_cflag, proc_tty_cflag_names,
+                           sizeof(proc_tty_cflag_names) / sizeof(proc_tty_cflag_names[0]));
     proc_append(buf, cap, len, "cc intr %u quit %u erase %u kill %u eof %u susp %u werase %u\n",
                 tio.c_cc[VINTR],
                 tio.c_cc[VQUIT],
@@ -767,20 +815,62 @@ static void proc_fill_tty(char* buf, size_t cap, size_t* len)
                 tio.c_cc[VSUSP],
                 tio.c_cc[VWERASE]);
     proc_append(buf, cap, len, "jobctl fg_pgid %d read_wait_pid %d read_wait_state %d\n",
-                tty_get_foreground_pgid(),
-                tty_get_read_wait_pid(),
-                tty_get_read_wait_state());
+                tty_get_foreground_pgid_for_id(tty_id),
+                tty_get_read_wait_pid_for_id(tty_id),
+                tty_get_read_wait_state_for_id(tty_id));
     proc_append(buf, cap, len,
                 "signal ctrl_c %u delivered %u missed %u ctrl_z %u delivered %u missed %u last %d pgid %d delivered %d\n",
-                tty0.ctrl_c_seen,
-                tty0.sigint_delivered,
-                tty0.sigint_missed,
-                tty0.ctrl_z_seen,
-                tty0.sigtstp_delivered,
-                tty0.sigtstp_missed,
-                tty0.last_signal,
-                tty0.last_signal_pgid,
-                tty0.last_signal_delivered);
+                ctrl_c_seen,
+                sigint_delivered,
+                sigint_missed,
+                ctrl_z_seen,
+                sigtstp_delivered,
+                sigtstp_missed,
+                last_signal,
+                last_signal_pgid,
+                last_signal_delivered);
+    if (tty_id == TTY_GRAPHICS_ID) {
+        uint32_t vk_irq = 0;
+        uint32_t vk_used = 0;
+        uint32_t vk_keys = 0;
+        uint32_t vk_emit = 0;
+        uint32_t vk_type = 0;
+        uint32_t vk_code = 0;
+        uint32_t vk_value = 0;
+        uint32_t vk_irq_status = 0;
+        uint32_t vk_qsize = 0;
+        uint32_t vk_last_used = 0;
+        uint32_t vk_status = 0;
+
+        virtio_input_get_stats(&vk_irq, &vk_used, &vk_keys, &vk_emit,
+                               &vk_type, &vk_code, &vk_value,
+                               &vk_irq_status, &vk_qsize, &vk_last_used,
+                               &vk_status);
+        proc_append(buf, cap, len,
+                    "virtio_input init %u route_irq %u irq_count %u used %u keys %u emitted %u qsize %u last_used %u status 0x%02X last_irq 0x%X last_event type %u code %u value %u\n",
+                    virtio_input_is_initialized() ? 1 : 0,
+                    virtio_input_get_irq(),
+                    vk_irq,
+                    vk_used,
+                    vk_keys,
+                    vk_emit,
+                    vk_qsize,
+                    vk_last_used,
+                    vk_status,
+                    vk_irq_status,
+                    vk_type,
+                    vk_code,
+                    vk_value);
+    }
+}
+
+static void proc_fill_tty(char* buf, size_t cap, size_t* len)
+{
+    proc_fill_tty_one(buf, cap, len, TTY_CONSOLE_ID, "tty0");
+    if (tty_has_backend_for_id(TTY_GRAPHICS_ID)) {
+        proc_append(buf, cap, len, "\n");
+        proc_fill_tty_one(buf, cap, len, TTY_GRAPHICS_ID, "tty1");
+    }
 }
 
 static void proc_fill_stat(char* buf, size_t cap, size_t* len)
@@ -809,14 +899,88 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
     uint32_t tty_char_wakeups = 0;
     uint32_t tty_line_wakeups = 0;
     uint32_t tty_eof_wakeups = 0;
+    uint32_t tty_input_chars = 0;
+    uint32_t tty_ctrl_c_seen = 0;
+    uint32_t tty_sigint_delivered = 0;
+    uint32_t tty_sigint_missed = 0;
+    uint32_t tty_ctrl_z_seen = 0;
+    uint32_t tty_sigtstp_delivered = 0;
+    uint32_t tty_sigtstp_missed = 0;
+    int tty_last_signal = 0;
+    pid_t tty_last_signal_pgid = 0;
+    int tty_last_signal_delivered = 0;
+    pid_t tty_foreground_pgid = 0;
+    pid_t tty_read_wait_pid = 0;
+    int tty_read_wait_state = -1;
+    const int tty_ids[] = { TTY_CONSOLE_ID, TTY_GRAPHICS_ID };
 
-    tty_get_tx_stats(&tty_tx_enqueued, &tty_tx_drained,
-                     &tty_tx_full_waits, &tty_tx_drain_calls);
-    tty_get_input_stats(&tty_input_depth, &tty_input_capacity,
-                        &tty_eof_pending, &tty_iflag, &tty_oflag,
-                        &tty_lflag, &tty_vmin, &tty_vtime,
-                        &tty_char_wakeups, &tty_line_wakeups,
-                        &tty_eof_wakeups);
+    for (size_t i = 0; i < sizeof(tty_ids) / sizeof(tty_ids[0]); i++) {
+        int tty_id = tty_ids[i];
+        struct tty_struct *tty = tty_id == TTY_GRAPHICS_ID ? &tty1 : &tty0;
+        uint32_t tx_enqueued = 0;
+        uint32_t tx_drained = 0;
+        uint32_t tx_full_waits = 0;
+        uint32_t tx_drain_calls = 0;
+        uint32_t in_depth = 0;
+        uint32_t in_capacity = 0;
+        uint32_t eof_pending = 0;
+        uint32_t iflag = 0;
+        uint32_t oflag = 0;
+        uint32_t lflag = 0;
+        uint32_t vmin = 0;
+        uint32_t vtime = 0;
+        uint32_t char_wakeups = 0;
+        uint32_t line_wakeups = 0;
+        uint32_t eof_wakeups = 0;
+        unsigned long flags;
+
+        if (tty_id != TTY_CONSOLE_ID && !tty_has_backend_for_id(tty_id))
+            continue;
+
+        tty_get_tx_stats_for_id(tty_id, &tx_enqueued, &tx_drained,
+                                &tx_full_waits, &tx_drain_calls);
+        tty_get_input_stats_for_id(tty_id, &in_depth, &in_capacity,
+                                   &eof_pending, &iflag, &oflag, &lflag,
+                                   &vmin, &vtime, &char_wakeups,
+                                   &line_wakeups, &eof_wakeups);
+
+        tty_tx_enqueued += tx_enqueued;
+        tty_tx_drained += tx_drained;
+        tty_tx_full_waits += tx_full_waits;
+        tty_tx_drain_calls += tx_drain_calls;
+        tty_input_depth += in_depth;
+        tty_input_capacity += in_capacity;
+        tty_eof_pending += eof_pending;
+        tty_char_wakeups += char_wakeups;
+        tty_line_wakeups += line_wakeups;
+        tty_eof_wakeups += eof_wakeups;
+
+        if (tty_id == TTY_CONSOLE_ID) {
+            tty_iflag = iflag;
+            tty_oflag = oflag;
+            tty_lflag = lflag;
+            tty_vmin = vmin;
+            tty_vtime = vtime;
+            tty_foreground_pgid = tty_get_foreground_pgid_for_id(tty_id);
+            tty_read_wait_pid = tty_get_read_wait_pid_for_id(tty_id);
+            tty_read_wait_state = tty_get_read_wait_state_for_id(tty_id);
+        }
+
+        spin_lock_irqsave(&tty->lock, &flags);
+        tty_input_chars += tty->input_chars;
+        tty_ctrl_c_seen += tty->ctrl_c_seen;
+        tty_sigint_delivered += tty->sigint_delivered;
+        tty_sigint_missed += tty->sigint_missed;
+        tty_ctrl_z_seen += tty->ctrl_z_seen;
+        tty_sigtstp_delivered += tty->sigtstp_delivered;
+        tty_sigtstp_missed += tty->sigtstp_missed;
+        if (tty->last_signal) {
+            tty_last_signal = tty->last_signal;
+            tty_last_signal_pgid = tty->last_signal_pgid;
+            tty_last_signal_delivered = tty->last_signal_delivered;
+        }
+        spin_unlock_irqrestore(&tty->lock, flags);
+    }
 
     proc_append(buf, cap, len, "cpu  0 0 0 %u 0 0 0 0 0 0\n", get_system_ticks());
     proc_append(buf, cap, len, "intr %u\n", gic_get_total_irq_count());
@@ -870,19 +1034,19 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
                 tty_eof_wakeups);
     proc_append(buf, cap, len,
                 "tty_diag fg_pgid %d read_wait_pid %d read_wait_state %d input %u ctrl_c %u sigint_delivered %u sigint_missed %u ctrl_z %u sigtstp_delivered %u sigtstp_missed %u last_signal %d last_pgid %d last_delivered %d\n",
-                tty_get_foreground_pgid(),
-                tty_get_read_wait_pid(),
-                tty_get_read_wait_state(),
-                tty0.input_chars,
-                tty0.ctrl_c_seen,
-                tty0.sigint_delivered,
-                tty0.sigint_missed,
-                tty0.ctrl_z_seen,
-                tty0.sigtstp_delivered,
-                tty0.sigtstp_missed,
-                tty0.last_signal,
-                tty0.last_signal_pgid,
-                tty0.last_signal_delivered);
+                tty_foreground_pgid,
+                tty_read_wait_pid,
+                tty_read_wait_state,
+                tty_input_chars,
+                tty_ctrl_c_seen,
+                tty_sigint_delivered,
+                tty_sigint_missed,
+                tty_ctrl_z_seen,
+                tty_sigtstp_delivered,
+                tty_sigtstp_missed,
+                tty_last_signal,
+                tty_last_signal_pgid,
+                tty_last_signal_delivered);
 }
 
 static void proc_fill_tasks(char* buf, size_t cap, size_t* len)

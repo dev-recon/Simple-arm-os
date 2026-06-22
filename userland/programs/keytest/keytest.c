@@ -1,11 +1,13 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <termios.h>
 #include <unistd.h>
 
 static struct termios saved_termios;
 static int have_saved_termios;
+static FILE *log_file;
 
 static void restore_terminal(void)
 {
@@ -34,6 +36,23 @@ static const char *key_name(unsigned char c)
     return "extended";
 }
 
+static void usage(void)
+{
+    printf("usage: keytest [-o file]\n");
+    printf("       Press q or Ctrl-D to quit. Ctrl-C remains an emergency exit.\n");
+}
+
+static void log_line(const char *line)
+{
+    printf("%s", line);
+    fflush(stdout);
+
+    if (log_file) {
+        fputs(line, log_file);
+        fflush(log_file);
+    }
+}
+
 static int enter_rawish_mode(void)
 {
     struct termios raw;
@@ -60,26 +79,59 @@ static int enter_rawish_mode(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     unsigned int count = 0;
+    const char *log_path = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-o") == 0) {
+            if (i + 1 >= argc) {
+                usage();
+                return 1;
+            }
+            log_path = argv[++i];
+        } else if (strcmp(argv[i], "-h") == 0 ||
+                   strcmp(argv[i], "--help") == 0) {
+            usage();
+            return 0;
+        } else {
+            usage();
+            return 1;
+        }
+    }
+
+    if (log_path) {
+        log_file = fopen(log_path, "w");
+        if (!log_file) {
+            printf("keytest: cannot open %s: errno=%d\n", log_path, errno);
+            return 1;
+        }
+    }
 
     if (enter_rawish_mode() < 0)
         return 1;
 
     atexit(restore_terminal);
 
-    printf("keytest: raw input test. Press q or Ctrl-D to quit.\n");
-    printf("keytest: Ctrl+C is intentionally still handled by the TTY.\n");
+    log_line("keytest: raw input test. Press q or Ctrl-D to quit.\n");
+    log_line("keytest: Ctrl+C is intentionally still handled by the TTY.\n");
+    if (log_path) {
+        char line[160];
+        snprintf(line, sizeof(line), "keytest: logging to %s\n", log_path);
+        log_line(line);
+    }
 
     while (1) {
         unsigned char c;
+        char line[160];
         ssize_t n = read(STDIN_FILENO, &c, 1);
 
         if (n < 0) {
             if (errno == EINTR)
                 continue;
-            printf("keytest: read failed errno=%d\n", errno);
+            snprintf(line, sizeof(line), "keytest: read failed errno=%d\n", errno);
+            log_line(line);
             return 1;
         }
 
@@ -88,17 +140,22 @@ int main(void)
 
         count++;
         if (c >= 0x20 && c < 0x7f) {
-            printf("%04u: dec=%3u hex=0x%02x char='%c' %s\n",
-                   count, (unsigned)c, (unsigned)c, c, key_name(c));
+            snprintf(line, sizeof(line),
+                     "%04u: dec=%3u hex=0x%02x char='%c' %s\n",
+                     count, (unsigned)c, (unsigned)c, c, key_name(c));
         } else {
-            printf("%04u: dec=%3u hex=0x%02x %s\n",
-                   count, (unsigned)c, (unsigned)c, key_name(c));
+            snprintf(line, sizeof(line),
+                     "%04u: dec=%3u hex=0x%02x %s\n",
+                     count, (unsigned)c, (unsigned)c, key_name(c));
         }
+        log_line(line);
 
         if (c == 'q' || c == 0x04)
             break;
     }
 
-    printf("keytest: done\n");
+    log_line("keytest: done\n");
+    if (log_file)
+        fclose(log_file);
     return 0;
 }

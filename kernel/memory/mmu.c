@@ -763,7 +763,7 @@ static uint32_t allocate_asid(void)
     flush_all_tlb_local();
     kernel_lifecycle_stats.asid_rollovers++;
 
-    KWARN("MMU: ASID generation rollover -> %u\n", asid_generation);
+    KINFO("MMU: ASID generation rollover -> %u\n", asid_generation);
 
     for (uint32_t asid = ASID_MIN_USER; asid <= MAX_ASID; asid++) {
         if (!asid_hw_reserved(asid) && !asid_map[asid]) {

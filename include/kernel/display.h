@@ -40,6 +40,11 @@ typedef struct {
 } display_state_t;
 
 extern const font_t font_meslo_12x24;
+extern const font_t font_meslo_10x20;
+extern const font_t font_meslo_8x16;
+extern const font_t font_spleen_8x16;
+extern const font_t font_spleen_12x24;
+extern const font_t font_vga_8x16;
 
 /* Display functions */
 void init_display(void);
@@ -49,6 +54,11 @@ void draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg);
 void console_putchar(char c);
 void console_puts(const char* str);
 void scroll_screen(void);
+int framebuffer_attach_tty_backend(int tty_id);
+void display_cursor_tick(void);
+int display_start_daemon(void);
+void display_scrollback_up(uint32_t lines);
+void display_scrollback_down(uint32_t lines);
 
 /* Framebuffer file operations */
 ssize_t framebuffer_read(file_t* file, void* buffer, size_t count);

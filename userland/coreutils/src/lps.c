@@ -468,7 +468,7 @@ static const char *state_color(char state)
         case 'T': return "\033[0;31m";
         case 't': return "\033[1;33m";
         case 'D': return "\033[1;33m";
-        default:  return "\033[0;37m";
+        default:  return "\033[36m";
     }
 }
 
@@ -544,7 +544,7 @@ static void print_event_table(const proc_counters_t *c)
 
 static void print_tty_table(const proc_counters_t *c)
 {
-    printf("\n\033[1mTTY tty0\033[0m\n");
+    printf("\n\033[1mTTY summary\033[0m  (per-tty details: /proc/tty)\n");
     printf("  \033[1m%-8s %12s %12s %12s %12s\033[0m\n",
            "output", "enqueued", "drained", "full-wait", "drain-call");
     printf("  %-8s %12u %12u %12u %12u\n",

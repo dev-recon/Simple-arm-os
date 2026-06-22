@@ -1,5 +1,74 @@
 # Changelog
 
+## ArmOS v0.2 - 2026-06-22
+
+ArmOS v0.2 focuses on making the system feel like a small interactive Unix-like
+environment rather than only a serial-console kernel lab.
+
+### Highlights
+
+- Userland `init` under `/sbin/init`, with process reaping delegated to
+  userland policy.
+- Newlib is now the reference userland C library; the older in-tree libc and
+  early programs are archived under `userland/legacy/`.
+- Root and user sessions, `su`, `/root`, and more Unix-like ownership display.
+- Improved `mash` shell behavior, job control, `$?`, `wait`, `fg`, `bg`, and
+  POSIX-style `jobs` output.
+- Compact POSIX-like `ps`, with the detailed ArmOS diagnostic view moved to
+  `lps`.
+- More userland utilities, including `top`, `kload`, `ttyinfo`, `keytest`,
+  `grep`, `sed`, `sort`, `uniq`, `wc`, `which`, `who`, `whoami`, `uname`,
+  `date`, `uptime`, `free`, `df`, `mount`, and `umount`.
+- `/dev/null`, `/dev/tty`, `/dev/tty0`, `/dev/tty1`, and `/dev/console`
+  support.
+- Better `termios` coverage, raw/non-canonical mode, terminal-generated
+  signals, foreground process groups, and background TTY read behavior.
+- Optional VirtIO-GPU graphical console on `tty1`.
+- VirtIO input keyboard support for `tty1`, including a Mac French development
+  layout fallback.
+- Graphical console bitmap font rendering, ANSI colors, cursor blinking through
+  a dedicated `displayd` kernel task, and simple scrollback.
+- `kilo` editor usable on both UART and graphical console paths.
+- QEMU scripts support selecting an alternate QEMU binary through `QEMU=...`
+  while defaulting to the system/Homebrew QEMU.
+
+### Supported Emulator
+
+ArmOS v0.2 is validated against QEMU 10.0.2 on macOS as the reference
+emulator. QEMU 11.0.1 has been smoke-tested, including the graphical boot path,
+but its macOS/Cocoa window scaling differs from 10.0.2 and should be treated as
+compatible-but-not-reference for this release.
+
+### Stability Baseline
+
+The UART console remains the required rescue path. `boot.sh` should stay usable
+even if the graphical console regresses. The graphical boot path is additive:
+
+```sh
+./boot-graphics.sh
+```
+
+Useful validation commands:
+
+```sh
+systest
+ttytest
+ttytest --interactive-canon
+ttytest --interactive-raw
+keytest
+kilo /home/user/hello.c
+top
+lps
+```
+
+Known areas still under active development:
+
+- graphical-console resize and richer scrollback;
+- host-style mouse selection/copy-paste in the graphical window;
+- full UTF-8/accent rendering;
+- more complete login/getty model for multiple consoles;
+- broader POSIX/newlib compatibility for larger ports.
+
 ## ArmOS v0.1 - 2026-06-18
 
 Initial public release of ArmOS.

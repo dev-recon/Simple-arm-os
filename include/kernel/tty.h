@@ -7,12 +7,19 @@
 #include <kernel/task.h>
 
 #define TTY_INPUT_BUF_SIZE  512
-#define TTY_OUTPUT_BUF_SIZE 512
+#define TTY_OUTPUT_BUF_SIZE 4096
+#define TTY_MAX             2
+#define TTY_CONSOLE_ID      0
+#define TTY_GRAPHICS_ID     1
 #define DEV_TTY_RDEV        ((4u << 8) | 0u)
+#define DEV_TTY1_RDEV       ((4u << 8) | 1u)
+#define DEV_CTTY_RDEV       ((5u << 8) | 0u)
 #define DEV_CONSOLE_RDEV    ((5u << 8) | 1u)
 
 #define TTY_STTY_SET_FOREGROUND_PGID 1
 #define TTY_GTTY_GET_FOREGROUND_PGID 1
+#define TTY_STTY_SET_FOREGROUND_PGID_FD 2
+#define TTY_GTTY_GET_FOREGROUND_PGID_FD 2
 
 #define NCCS 32
 
@@ -71,6 +78,9 @@ typedef struct tty_backend_ops {
 } tty_backend_ops_t;
 
 struct tty_struct {
+    int id;
+    const tty_backend_ops_t *backend;
+
     /* Buffers circulaires */
     char input_buf[TTY_INPUT_BUF_SIZE];
     uint32_t input_head;
@@ -149,10 +159,17 @@ struct tty_struct {
 #define TCIOFLUSH 2
 
 extern struct tty_struct tty0;
+extern struct tty_struct tty1;
 
 void tty_init(void);
 int tty_attach_backend(const tty_backend_ops_t *ops);
+int tty_attach_backend_to(int tty_id, const tty_backend_ops_t *ops);
+int tty_set_active(int tty_id);
+int tty_get_active(void);
+bool tty_has_backend_for_id(int tty_id);
+bool tty_output_pending_for_id(int tty_id);
 void tty_input_char(char c);
+void tty_input_char_to_id(int tty_id, char c);
 bool tty_has_pending_output(void);
 void tty_drain_output(void);
 ssize_t tty_read(char *buf, size_t count);
@@ -160,16 +177,29 @@ ssize_t tty_write(const char *buf, size_t count);
 int tty_get_termios(struct termios *tio);
 int tty_set_termios(const struct termios *tio, int flush_input);
 int tty_flush(int queue_selector);
+int tty_get_termios_for_id(int tty_id, struct termios *tio);
+int tty_set_termios_for_id(int tty_id, const struct termios *tio, int flush_input);
+int tty_flush_for_id(int tty_id, int queue_selector);
 void tty_get_winsize(uint16_t *rows, uint16_t *cols,
                      uint16_t *xpixel, uint16_t *ypixel);
 int tty_set_winsize(uint16_t rows, uint16_t cols,
                     uint16_t xpixel, uint16_t ypixel);
+void tty_get_winsize_for_id(int tty_id, uint16_t *rows, uint16_t *cols,
+                            uint16_t *xpixel, uint16_t *ypixel);
+int tty_set_winsize_for_id(int tty_id, uint16_t rows, uint16_t cols,
+                           uint16_t xpixel, uint16_t ypixel);
 int tty_set_foreground_pgid(pid_t pgid);
 pid_t tty_get_foreground_pgid(void);
+int tty_set_foreground_pgid_for_id(int tty_id, pid_t pgid);
+pid_t tty_get_foreground_pgid_for_id(int tty_id);
 pid_t tty_get_read_wait_pid(void);
 int tty_get_read_wait_state(void);
+pid_t tty_get_read_wait_pid_for_id(int tty_id);
+int tty_get_read_wait_state_for_id(int tty_id);
 void tty_get_tx_stats(uint32_t *enqueued, uint32_t *drained,
                       uint32_t *full_waits, uint32_t *drain_calls);
+void tty_get_tx_stats_for_id(int tty_id, uint32_t *enqueued, uint32_t *drained,
+                             uint32_t *full_waits, uint32_t *drain_calls);
 void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
                          uint32_t *eof_pending, uint32_t *iflag,
                          uint32_t *oflag, uint32_t *lflag,
@@ -177,8 +207,18 @@ void tty_get_input_stats(uint32_t *depth, uint32_t *capacity,
                          uint32_t *char_wakeups,
                          uint32_t *line_wakeups,
                          uint32_t *eof_wakeups);
+void tty_get_input_stats_for_id(int tty_id, uint32_t *depth, uint32_t *capacity,
+                                uint32_t *eof_pending, uint32_t *iflag,
+                                uint32_t *oflag, uint32_t *lflag,
+                                uint32_t *vmin, uint32_t *vtime,
+                                uint32_t *char_wakeups,
+                                uint32_t *line_wakeups,
+                                uint32_t *eof_wakeups);
 bool is_tty_device_path(const char* path);
 void fill_tty_device_stat(const char* path, struct stat* st);
+int tty_id_from_device_path(const char* path);
+int tty_id_from_file(file_t* file);
+int tty_current_controlling_id(void);
 file_t* create_tty_console_file(const char* name, int flags);
 
 #endif

@@ -142,21 +142,53 @@ static void cleanup_failed_fork_child(task_t* parent, task_t* child)
     kernel_lifecycle_stats.tasks_destroyed++;
 }
 
-int sys_stty(int cmd, uint32_t arg)
+static int syscall_tty_id_from_fd(int fd)
 {
+    file_t *file;
+
+    if (!current_task || !current_task->process)
+        return -EINVAL;
+    if (fd < 0 || fd >= MAX_FILES)
+        return -EBADF;
+
+    file = current_task->process->files[fd];
+    if (!file)
+        return -EBADF;
+    if (!file_is_tty(file))
+        return -ENOTTY;
+
+    return tty_id_from_file(file);
+}
+
+int sys_stty(int cmd, uint32_t arg, uint32_t arg2)
+{
+    int tty_id;
+
     switch (cmd) {
     case TTY_STTY_SET_FOREGROUND_PGID:
         return tty_set_foreground_pgid((pid_t)arg);
+    case TTY_STTY_SET_FOREGROUND_PGID_FD:
+        tty_id = syscall_tty_id_from_fd((int)arg);
+        if (tty_id < 0)
+            return tty_id;
+        return tty_set_foreground_pgid_for_id(tty_id, (pid_t)arg2);
     default:
         return -EINVAL;
     }
 }
 
-int sys_gtty(int cmd)
+int sys_gtty(int cmd, uint32_t arg)
 {
+    int tty_id;
+
     switch (cmd) {
     case TTY_GTTY_GET_FOREGROUND_PGID:
         return tty_get_foreground_pgid();
+    case TTY_GTTY_GET_FOREGROUND_PGID_FD:
+        tty_id = syscall_tty_id_from_fd((int)arg);
+        if (tty_id < 0)
+            return tty_id;
+        return tty_get_foreground_pgid_for_id(tty_id);
     default:
         return -EINVAL;
     }

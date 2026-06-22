@@ -3,12 +3,780 @@
 #include <kernel/kernel.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
+#include <kernel/tty.h>
+#include <kernel/virtio_gpu.h>
+#include <kernel/timer.h>
+#include <kernel/task.h>
 
 static display_state_t display = {0};
+static bool framebuffer_dirty = false;
+static uint32_t dirty_x0;
+static uint32_t dirty_y0;
+static uint32_t dirty_x1;
+static uint32_t dirty_y1;
 
 /* Variable globale pour le framebuffer */
 uint8_t* framebuffer_base = NULL;
 
+#define CONSOLE_MAX_COLS 160
+#define CONSOLE_MAX_ROWS 64
+#define SCROLLBACK_ROWS 256
+
+typedef struct {
+    char ch;
+    uint32_t fg;
+    uint32_t bg;
+} console_cell_t;
+
+static console_cell_t console_cells[CONSOLE_MAX_ROWS][CONSOLE_MAX_COLS];
+static console_cell_t scrollback_cells[SCROLLBACK_ROWS][CONSOLE_MAX_COLS];
+static bool console_cells_ready = false;
+static uint32_t scrollback_head;
+static uint32_t scrollback_count;
+static uint32_t scrollback_offset;
+static volatile int32_t scrollback_pending_lines;
+
+typedef enum {
+    ANSI_STATE_NORMAL = 0,
+    ANSI_STATE_ESC,
+    ANSI_STATE_CSI,
+} ansi_state_t;
+
+static ansi_state_t ansi_state = ANSI_STATE_NORMAL;
+static uint32_t ansi_params[8];
+static uint32_t ansi_param_count;
+static bool ansi_param_active;
+static bool ansi_reverse = false;
+static bool cursor_visible = true;
+static bool cursor_drawn = false;
+static bool cursor_blink_on = true;
+static bool wrap_enabled = true;
+static bool pending_wrap = false;
+static uint32_t cursor_drawn_x;
+static uint32_t cursor_drawn_y;
+static uint32_t cursor_blink_last_tick;
+static uint32_t saved_cursor_x;
+static uint32_t saved_cursor_y;
+static task_t *displayd_task;
+
+static void console_put_cell(uint32_t col, uint32_t row, char c,
+                             uint32_t fg, uint32_t bg);
+static void console_erase_cursor(void);
+static void console_render_scrollback(void);
+static void display_process_scrollback_request(void);
+
+#define CURSOR_BLINK_TICKS      (TIMER_FREQ / 2)
+#define CURSOR_BAR_MIN_WIDTH    2
+
+static const uint32_t ansi_colors[8] = {
+    0xFF000000, /* black */
+    0xFFAA0000, /* red */
+    0xFF00AA00, /* green */
+    0xFFAA5500, /* yellow/brown */
+    0xFF0000AA, /* blue */
+    0xFFAA00AA, /* magenta */
+    0xFF00AAAA, /* cyan */
+    0xFFAAAAAA, /* white */
+};
+
+static const uint32_t ansi_bright_colors[8] = {
+    0xFF555555, /* bright black */
+    0xFFFF5555, /* bright red */
+    0xFF55FF55, /* bright green */
+    0xFFFFFF55, /* bright yellow */
+    0xFF5555FF, /* bright blue */
+    0xFFFF55FF, /* bright magenta */
+    0xFF55FFFF, /* bright cyan */
+    0xFFFFFFFF, /* bright white */
+};
+
+static const uint32_t default_fg_color = 0xFFFFFFFF;
+static const uint32_t default_bg_color = 0xFF000000;
+
+static void console_reset_attrs(void)
+{
+    display.fg_color = default_fg_color;
+    display.bg_color = default_bg_color;
+    ansi_reverse = false;
+}
+
+static void framebuffer_mark_dirty(uint32_t x, uint32_t y,
+                                   uint32_t width, uint32_t height)
+{
+    if (!framebuffer_base || width == 0 || height == 0)
+        return;
+
+    if (x >= display.width || y >= display.height)
+        return;
+    if (x + width > display.width)
+        width = display.width - x;
+    if (y + height > display.height)
+        height = display.height - y;
+
+    if (!framebuffer_dirty) {
+        dirty_x0 = x;
+        dirty_y0 = y;
+        dirty_x1 = x + width;
+        dirty_y1 = y + height;
+        framebuffer_dirty = true;
+        return;
+    }
+
+    if (x < dirty_x0)
+        dirty_x0 = x;
+    if (y < dirty_y0)
+        dirty_y0 = y;
+    if (x + width > dirty_x1)
+        dirty_x1 = x + width;
+    if (y + height > dirty_y1)
+        dirty_y1 = y + height;
+}
+
+static void framebuffer_flush_dirty(void)
+{
+    if (cursor_drawn && !cursor_blink_on)
+        console_erase_cursor();
+
+    if (cursor_visible && framebuffer_base && display.font) {
+        if (cursor_drawn &&
+            (cursor_drawn_x != display.cursor_x ||
+             cursor_drawn_y != display.cursor_y))
+            console_erase_cursor();
+    } else if (cursor_drawn) {
+        console_erase_cursor();
+    }
+
+    if (cursor_visible && framebuffer_base && display.font &&
+        scrollback_offset == 0 &&
+        cursor_blink_on &&
+        display.cursor_x < display.text_cols &&
+        display.cursor_y < display.text_rows &&
+        display.cursor_x < CONSOLE_MAX_COLS &&
+        display.cursor_y < CONSOLE_MAX_ROWS &&
+        !cursor_drawn) {
+        uint32_t x = display.cursor_x * display.font->width;
+        uint32_t y = display.cursor_y * display.font->height;
+        uint32_t bar_width = display.font->width / 5;
+
+        if (bar_width < CURSOR_BAR_MIN_WIDTH)
+            bar_width = CURSOR_BAR_MIN_WIDTH;
+        if (bar_width > display.font->width)
+            bar_width = display.font->width;
+
+        for (uint32_t yy = 0; yy < display.font->height; yy++) {
+            for (uint32_t xx = 0; xx < bar_width; xx++)
+                put_pixel(x + xx, y + yy, default_fg_color);
+        }
+        framebuffer_mark_dirty(x, y, bar_width, display.font->height);
+        cursor_drawn = true;
+        cursor_drawn_x = display.cursor_x;
+        cursor_drawn_y = display.cursor_y;
+    }
+
+    if (!framebuffer_dirty)
+        return;
+
+    virtio_gpu_flush_rect(dirty_x0, dirty_y0,
+                          dirty_x1 - dirty_x0,
+                          dirty_y1 - dirty_y0);
+    framebuffer_dirty = false;
+}
+
+void display_cursor_tick(void)
+{
+    uint32_t now;
+
+    if (!framebuffer_base || !display.font || !cursor_visible)
+        return;
+
+    now = get_system_ticks();
+    if ((uint32_t)(now - cursor_blink_last_tick) < CURSOR_BLINK_TICKS)
+        return;
+
+    cursor_blink_last_tick = now;
+    cursor_blink_on = !cursor_blink_on;
+    framebuffer_flush_dirty();
+}
+
+static void displayd_main(void *arg)
+{
+    (void)arg;
+
+    while (1) {
+        task_sleep_ms(100);
+        display_process_scrollback_request();
+        display_cursor_tick();
+    }
+}
+
+int display_start_daemon(void)
+{
+    if (!framebuffer_base)
+        return -ENODEV;
+
+    if (displayd_task)
+        return 0;
+
+    displayd_task = task_create_process("displayd", displayd_main, NULL,
+                                        20, TASK_TYPE_KERNEL);
+    if (!displayd_task)
+        return -ENOMEM;
+
+    displayd_task->context.is_first_run = 1;
+    displayd_task->context.ttbr0 = (uint32_t)ttbr0_pgdir;
+    displayd_task->context.asid = ASID_KERNEL;
+    displayd_task->context.returns_to_user = 0;
+    add_to_ready_queue(displayd_task);
+    return 0;
+}
+
+static void console_reset_cells(void)
+{
+    uint32_t rows = display.text_rows;
+    uint32_t cols = display.text_cols;
+
+    if (rows > CONSOLE_MAX_ROWS)
+        rows = CONSOLE_MAX_ROWS;
+    if (cols > CONSOLE_MAX_COLS)
+        cols = CONSOLE_MAX_COLS;
+
+    for (uint32_t y = 0; y < rows; y++) {
+        for (uint32_t x = 0; x < cols; x++) {
+            console_cells[y][x].ch = ' ';
+            console_cells[y][x].fg = display.fg_color;
+            console_cells[y][x].bg = display.bg_color;
+        }
+    }
+    console_cells_ready = true;
+    cursor_drawn = false;
+    scrollback_offset = 0;
+}
+
+static void console_reset_scrollback(void)
+{
+    scrollback_head = 0;
+    scrollback_count = 0;
+    scrollback_offset = 0;
+    scrollback_pending_lines = 0;
+}
+
+static uint32_t scrollback_oldest_index(void)
+{
+    if (scrollback_count < SCROLLBACK_ROWS)
+        return 0;
+    return scrollback_head;
+}
+
+static uint32_t scrollback_index(uint32_t logical_line)
+{
+    return (scrollback_oldest_index() + logical_line) % SCROLLBACK_ROWS;
+}
+
+static void scrollback_push_line(const console_cell_t *line, uint32_t cols)
+{
+    if (!line || cols == 0)
+        return;
+
+    if (cols > CONSOLE_MAX_COLS)
+        cols = CONSOLE_MAX_COLS;
+
+    memcpy(scrollback_cells[scrollback_head], line,
+           cols * sizeof(console_cell_t));
+    for (uint32_t col = cols; col < CONSOLE_MAX_COLS; col++) {
+        scrollback_cells[scrollback_head][col].ch = ' ';
+        scrollback_cells[scrollback_head][col].fg = default_fg_color;
+        scrollback_cells[scrollback_head][col].bg = default_bg_color;
+    }
+
+    scrollback_head = (scrollback_head + 1) % SCROLLBACK_ROWS;
+    if (scrollback_count < SCROLLBACK_ROWS)
+        scrollback_count++;
+}
+
+static void draw_cell_snapshot(uint32_t col, uint32_t row,
+                               const console_cell_t *cell)
+{
+    char ch = cell && cell->ch ? cell->ch : ' ';
+    uint32_t fg = cell ? cell->fg : default_fg_color;
+    uint32_t bg = cell ? cell->bg : default_bg_color;
+
+    draw_char(col * display.font->width,
+              row * display.font->height,
+              ch, fg, bg);
+}
+
+static void console_render_scrollback(void)
+{
+    uint32_t rows = display.text_rows;
+    uint32_t cols = display.text_cols;
+    uint32_t total_lines;
+    uint32_t bottom_start;
+    uint32_t start_line;
+
+    if (!display.font || !console_cells_ready)
+        return;
+
+    if (rows > CONSOLE_MAX_ROWS)
+        rows = CONSOLE_MAX_ROWS;
+    if (cols > CONSOLE_MAX_COLS)
+        cols = CONSOLE_MAX_COLS;
+    if (rows == 0 || cols == 0)
+        return;
+
+    console_erase_cursor();
+
+    total_lines = scrollback_count + rows;
+    bottom_start = total_lines > rows ? total_lines - rows : 0;
+    if (scrollback_offset > bottom_start)
+        scrollback_offset = bottom_start;
+    start_line = bottom_start - scrollback_offset;
+
+    for (uint32_t row = 0; row < rows; row++) {
+        uint32_t logical = start_line + row;
+
+        if (logical < scrollback_count) {
+            uint32_t idx = scrollback_index(logical);
+            for (uint32_t col = 0; col < cols; col++)
+                draw_cell_snapshot(col, row, &scrollback_cells[idx][col]);
+        } else {
+            uint32_t visible_row = logical - scrollback_count;
+            for (uint32_t col = 0; col < cols; col++)
+                draw_cell_snapshot(col, row, &console_cells[visible_row][col]);
+        }
+    }
+
+    framebuffer_mark_dirty(0, 0, display.width, display.height);
+    framebuffer_flush_dirty();
+}
+
+static void console_scrollback_reset_view(void)
+{
+    if (scrollback_offset == 0)
+        return;
+
+    scrollback_offset = 0;
+    console_render_scrollback();
+}
+
+static void display_scrollback_apply_up(uint32_t lines)
+{
+    if (!framebuffer_base || !display.font || lines == 0 || scrollback_count == 0)
+        return;
+
+    if (scrollback_offset + lines > scrollback_count)
+        scrollback_offset = scrollback_count;
+    else
+        scrollback_offset += lines;
+
+    console_render_scrollback();
+}
+
+static void display_scrollback_apply_down(uint32_t lines)
+{
+    if (!framebuffer_base || !display.font || lines == 0 || scrollback_offset == 0)
+        return;
+
+    if (lines >= scrollback_offset)
+        scrollback_offset = 0;
+    else
+        scrollback_offset -= lines;
+
+    console_render_scrollback();
+}
+
+void display_scrollback_up(uint32_t lines)
+{
+    uint32_t irq_flags;
+
+    if (lines > SCROLLBACK_ROWS)
+        lines = SCROLLBACK_ROWS;
+
+    irq_flags = disable_interrupts_save();
+    scrollback_pending_lines += (int32_t)lines;
+    restore_interrupts(irq_flags);
+}
+
+void display_scrollback_down(uint32_t lines)
+{
+    uint32_t irq_flags;
+
+    if (lines > SCROLLBACK_ROWS)
+        lines = SCROLLBACK_ROWS;
+
+    irq_flags = disable_interrupts_save();
+    scrollback_pending_lines -= (int32_t)lines;
+    restore_interrupts(irq_flags);
+}
+
+static void display_process_scrollback_request(void)
+{
+    uint32_t irq_flags;
+    int32_t lines;
+
+    irq_flags = disable_interrupts_save();
+    lines = scrollback_pending_lines;
+    scrollback_pending_lines = 0;
+    restore_interrupts(irq_flags);
+
+    if (lines == 0)
+        return;
+
+    if (lines > 0)
+        display_scrollback_apply_up((uint32_t)lines);
+    else
+        display_scrollback_apply_down((uint32_t)-lines);
+}
+
+static uint32_t ansi_param_or(uint32_t index, uint32_t fallback)
+{
+    if (index >= ansi_param_count)
+        return fallback;
+    return ansi_params[index] ? ansi_params[index] : fallback;
+}
+
+static uint32_t console_fg(void)
+{
+    return ansi_reverse ? display.bg_color : display.fg_color;
+}
+
+static uint32_t console_bg(void)
+{
+    return ansi_reverse ? display.fg_color : display.bg_color;
+}
+
+static void console_clear_cell(uint32_t col, uint32_t row)
+{
+    console_put_cell(col, row, ' ', console_fg(), console_bg());
+}
+
+static void console_clear_line_range(uint32_t row, uint32_t first_col,
+                                     uint32_t last_col)
+{
+    if (!display.font || row >= display.text_rows ||
+        first_col >= display.text_cols)
+        return;
+
+    if (last_col >= display.text_cols)
+        last_col = display.text_cols - 1;
+
+    for (uint32_t col = first_col; col <= last_col; col++)
+        console_clear_cell(col, row);
+}
+
+static void console_clear_line_from_cursor(void)
+{
+    console_clear_line_range(display.cursor_y, display.cursor_x,
+                             display.text_cols - 1);
+}
+
+static void console_clear_line_to_cursor(void)
+{
+    console_clear_line_range(display.cursor_y, 0, display.cursor_x);
+}
+
+static void console_clear_line_full(void)
+{
+    console_clear_line_range(display.cursor_y, 0, display.text_cols - 1);
+}
+
+static void console_clear_from_cursor_down(void)
+{
+    if (!display.font)
+        return;
+
+    console_clear_line_from_cursor();
+    for (uint32_t row = display.cursor_y + 1; row < display.text_rows; row++)
+        console_clear_line_range(row, 0, display.text_cols - 1);
+}
+
+static void console_clear_to_cursor_up(void)
+{
+    if (!display.font)
+        return;
+
+    for (uint32_t row = 0; row < display.cursor_y; row++)
+        console_clear_line_range(row, 0, display.text_cols - 1);
+    console_clear_line_to_cursor();
+}
+
+static void console_save_cursor(void)
+{
+    saved_cursor_x = display.cursor_x;
+    saved_cursor_y = display.cursor_y;
+}
+
+static void console_restore_cursor(void)
+{
+    display.cursor_x = saved_cursor_x;
+    display.cursor_y = saved_cursor_y;
+    pending_wrap = false;
+
+    if (display.cursor_x >= display.text_cols)
+        display.cursor_x = display.text_cols ? display.text_cols - 1 : 0;
+    if (display.cursor_y >= display.text_rows)
+        display.cursor_y = display.text_rows ? display.text_rows - 1 : 0;
+}
+
+static void console_erase_cursor(void)
+{
+    if (!cursor_drawn || !display.font)
+        return;
+
+    if (cursor_drawn_x < display.text_cols &&
+        cursor_drawn_y < display.text_rows &&
+        cursor_drawn_x < CONSOLE_MAX_COLS &&
+        cursor_drawn_y < CONSOLE_MAX_ROWS) {
+        console_cell_t *cell = &console_cells[cursor_drawn_y][cursor_drawn_x];
+        draw_char(cursor_drawn_x * display.font->width,
+                  cursor_drawn_y * display.font->height,
+                  cell->ch, cell->fg, cell->bg);
+        framebuffer_mark_dirty(cursor_drawn_x * display.font->width,
+                               cursor_drawn_y * display.font->height,
+                               display.font->width,
+                               display.font->height);
+    }
+
+    cursor_drawn = false;
+}
+
+static void console_linefeed(void)
+{
+    display.cursor_y++;
+    if (display.cursor_y >= display.text_rows)
+        scroll_screen();
+}
+
+static void console_printable_char(char c)
+{
+    if (!display.text_cols || !display.text_rows)
+        return;
+
+    if (pending_wrap && wrap_enabled) {
+        display.cursor_x = 0;
+        console_linefeed();
+        pending_wrap = false;
+    }
+
+    console_put_cell(display.cursor_x, display.cursor_y, c,
+                     console_fg(), console_bg());
+
+    if (display.cursor_x + 1 >= display.text_cols) {
+        if (wrap_enabled)
+            pending_wrap = true;
+    } else {
+        display.cursor_x++;
+        pending_wrap = false;
+    }
+}
+
+static void console_apply_sgr(void)
+{
+    bool bold = false;
+
+    if (ansi_param_count == 0) {
+        console_reset_attrs();
+        return;
+    }
+
+    for (uint32_t i = 0; i < ansi_param_count; i++) {
+        uint32_t p = ansi_params[i];
+
+        if (p == 0) {
+            bold = false;
+            console_reset_attrs();
+        } else if (p == 1) {
+            bold = true;
+        } else if (p == 7) {
+            ansi_reverse = true;
+        } else if (p == 22) {
+            bold = false;
+        } else if (p == 27) {
+            ansi_reverse = false;
+        } else if (p >= 30 && p <= 37) {
+            display.fg_color = bold ? ansi_bright_colors[p - 30] :
+                                      ansi_colors[p - 30];
+        } else if (p == 39) {
+            display.fg_color = default_fg_color;
+        } else if (p >= 40 && p <= 47) {
+            display.bg_color = ansi_colors[p - 40];
+        } else if (p == 49) {
+            display.bg_color = default_bg_color;
+        } else if (p >= 90 && p <= 97) {
+            display.fg_color = ansi_bright_colors[p - 90];
+        } else if (p >= 100 && p <= 107) {
+            display.bg_color = ansi_bright_colors[p - 100];
+        }
+    }
+}
+
+static void console_handle_csi(char final)
+{
+    uint32_t n;
+
+    switch (final) {
+        case 'A':
+            n = ansi_param_or(0, 1);
+            display.cursor_y = n > display.cursor_y ? 0 : display.cursor_y - n;
+            pending_wrap = false;
+            break;
+        case 'B':
+            n = ansi_param_or(0, 1);
+            display.cursor_y += n;
+            if (display.cursor_y >= display.text_rows)
+                display.cursor_y = display.text_rows - 1;
+            pending_wrap = false;
+            break;
+        case 'C':
+            n = ansi_param_or(0, 1);
+            display.cursor_x += n;
+            if (display.cursor_x >= display.text_cols)
+                display.cursor_x = display.text_cols - 1;
+            pending_wrap = false;
+            break;
+        case 'D':
+            n = ansi_param_or(0, 1);
+            display.cursor_x = n > display.cursor_x ? 0 : display.cursor_x - n;
+            pending_wrap = false;
+            break;
+        case 'H':
+        case 'f': {
+            uint32_t row = ansi_param_or(0, 1);
+            uint32_t col = ansi_param_or(1, 1);
+            display.cursor_y = row > 0 ? row - 1 : 0;
+            display.cursor_x = col > 0 ? col - 1 : 0;
+            if (display.cursor_y >= display.text_rows)
+                display.cursor_y = display.text_rows - 1;
+            if (display.cursor_x >= display.text_cols)
+                display.cursor_x = display.text_cols - 1;
+            pending_wrap = false;
+            break;
+        }
+        case 'J':
+            n = (ansi_param_count == 0) ? 0 : ansi_params[0];
+            if (n == 0)
+                console_clear_from_cursor_down();
+            else if (n == 1)
+                console_clear_to_cursor_up();
+            else if (n == 2 || n == 3)
+                clear_screen();
+            break;
+        case 'K':
+            n = (ansi_param_count == 0) ? 0 : ansi_params[0];
+            if (n == 0)
+                console_clear_line_from_cursor();
+            else if (n == 1)
+                console_clear_line_to_cursor();
+            else if (n == 2)
+                console_clear_line_full();
+            break;
+        case 'm':
+            console_apply_sgr();
+            break;
+        case 's':
+            console_save_cursor();
+            break;
+        case 'u':
+            console_restore_cursor();
+            break;
+        case 'h':
+            if (ansi_params[0] == 25)
+                cursor_visible = true;
+            else if (ansi_params[0] == 7)
+                wrap_enabled = true;
+            break;
+        case 'l':
+            if (ansi_params[0] == 25)
+                cursor_visible = false;
+            else if (ansi_params[0] == 7)
+                wrap_enabled = false;
+            break;
+        default:
+            break;
+    }
+}
+
+static bool console_is_csi_final(char c)
+{
+    return c == 'A' || c == 'B' || c == 'C' || c == 'D' ||
+           c == 'H' || c == 'f' || c == 'J' || c == 'K' ||
+           c == 'm' || c == 'h' || c == 'l' || c == 's' ||
+           c == 'u';
+}
+
+static bool console_consume_ansi(char c)
+{
+    switch (ansi_state) {
+        case ANSI_STATE_NORMAL:
+            if ((uint8_t)c == 0x1B) {
+                ansi_state = ANSI_STATE_ESC;
+                return true;
+            }
+            return false;
+
+        case ANSI_STATE_ESC:
+            if (c == '[') {
+                memset(ansi_params, 0, sizeof(ansi_params));
+                ansi_param_count = 0;
+                ansi_param_active = false;
+                ansi_state = ANSI_STATE_CSI;
+                return true;
+            }
+            if (c == '7') {
+                console_save_cursor();
+                ansi_state = ANSI_STATE_NORMAL;
+                return true;
+            }
+            if (c == '8') {
+                console_restore_cursor();
+                ansi_state = ANSI_STATE_NORMAL;
+                return true;
+            }
+            if (c == 'c') {
+                console_reset_attrs();
+                clear_screen();
+                ansi_state = ANSI_STATE_NORMAL;
+                return true;
+            }
+            ansi_state = ANSI_STATE_NORMAL;
+            return true;
+
+        case ANSI_STATE_CSI:
+            if (c == '?' || c == '>' || c == '=') {
+                return true;
+            }
+            if (c >= '0' && c <= '9') {
+                if (ansi_param_count == 0)
+                    ansi_param_count = 1;
+                ansi_param_active = true;
+                ansi_params[ansi_param_count - 1] =
+                    ansi_params[ansi_param_count - 1] * 10u + (uint32_t)(c - '0');
+                return true;
+            }
+            if (c == ';') {
+                if (ansi_param_count == 0)
+                    ansi_param_count = 1;
+                if (ansi_param_count < 8)
+                    ansi_param_count++;
+                ansi_param_active = false;
+                return true;
+            }
+            if (c == ':') {
+                return true;
+            }
+            if (console_is_csi_final(c)) {
+                if (ansi_param_active && ansi_param_count == 0)
+                    ansi_param_count = 1;
+                console_handle_csi(c);
+                ansi_state = ANSI_STATE_NORMAL;
+                return true;
+            }
+            ansi_state = ANSI_STATE_NORMAL;
+            return true;
+    }
+
+    ansi_state = ANSI_STATE_NORMAL;
+    return false;
+}
 
 void init_display(void)
 {
@@ -38,7 +806,7 @@ void init_display(void)
     display.bpp = FB_BPP;
     display.pitch = FB_WIDTH * (FB_BPP / 8);
     display.framebuffer = framebuffer_base;
-    display.font = &font_meslo_12x24;
+    display.font = &font_vga_8x16;
     
     /* Test d'acces au framebuffer */
     KINFO("Testing framebuffer access...\n");
@@ -56,8 +824,9 @@ void init_display(void)
         display.text_rows = display.height / display.font->height;
         display.cursor_x = 0;
         display.cursor_y = 0;
-        display.fg_color = 0xFFFFFFFF;
-        display.bg_color = 0xFF000000;
+        cursor_blink_on = true;
+        cursor_blink_last_tick = get_system_ticks();
+        console_reset_attrs();
         
         clear_screen();
         KINFO("Display initialized: %d x %d (RAM-based)\n", 
@@ -76,6 +845,8 @@ void init_display(void)
 
 void clear_screen(void)
 {
+    console_erase_cursor();
+
     uint32_t* fb32 = (uint32_t*)display.framebuffer;
     uint32_t pixels = display.width * display.height;
     uint32_t i;
@@ -86,6 +857,9 @@ void clear_screen(void)
     
     display.cursor_x = 0;
     display.cursor_y = 0;
+    pending_wrap = false;
+    console_reset_cells();
+    framebuffer_mark_dirty(0, 0, display.width, display.height);
 }
 
 void put_pixel(uint32_t x, uint32_t y, uint32_t color)
@@ -139,48 +913,80 @@ void draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg)
     }
 }
 
+static void console_put_cell(uint32_t col, uint32_t row, char c,
+                             uint32_t fg, uint32_t bg)
+{
+    if (!display.font || col >= display.text_cols || row >= display.text_rows)
+        return;
+
+    if (col >= CONSOLE_MAX_COLS || row >= CONSOLE_MAX_ROWS)
+        return;
+
+    if (cursor_drawn && cursor_drawn_x == col && cursor_drawn_y == row)
+        console_erase_cursor();
+
+    if (console_cells_ready &&
+        console_cells[row][col].ch == c &&
+        console_cells[row][col].fg == fg &&
+        console_cells[row][col].bg == bg)
+        return;
+
+    draw_char(col * display.font->width,
+              row * display.font->height,
+              c, fg, bg);
+
+    console_cells[row][col].ch = c;
+    console_cells[row][col].fg = fg;
+    console_cells[row][col].bg = bg;
+    console_cells_ready = true;
+    framebuffer_mark_dirty(col * display.font->width,
+                           row * display.font->height,
+                           display.font->width,
+                           display.font->height);
+}
+
 void console_putchar(char c)
 {
+    console_scrollback_reset_view();
+    console_erase_cursor();
+
+    if (console_consume_ansi(c))
+        return;
+
     switch (c) {
         case '\n':
             display.cursor_x = 0;
-            display.cursor_y++;
+            pending_wrap = false;
+            console_linefeed();
             break;
             
         case '\r':
             display.cursor_x = 0;
+            pending_wrap = false;
             break;
             
         case '\b':
+        case 0x7F:
+            pending_wrap = false;
             if (display.cursor_x > 0) {
                 display.cursor_x--;
-                draw_char(display.cursor_x * display.font->width,
-                         display.cursor_y * display.font->height, ' ',
-                         display.fg_color, display.bg_color);
+                console_put_cell(display.cursor_x, display.cursor_y, ' ',
+                                 console_fg(), console_bg());
             }
             break;
             
         case '\t':
-            display.cursor_x = (display.cursor_x + 8) & ~7;
+            do {
+                console_printable_char(' ');
+                if (pending_wrap)
+                    break;
+            } while ((display.cursor_x & 7) != 0);
             break;
             
         default:
-            if (c >= 32 && c <= 126) {
-                draw_char(display.cursor_x * display.font->width,
-                         display.cursor_y * display.font->height, c,
-                         display.fg_color, display.bg_color);
-                display.cursor_x++;
-            }
+            if (c >= 32 && c <= 126)
+                console_printable_char(c);
             break;
-    }
-    
-    if (display.cursor_x >= display.text_cols) {
-        display.cursor_x = 0;
-        display.cursor_y++;
-    }
-    
-    if (display.cursor_y >= display.text_rows) {
-        scroll_screen();
     }
 }
 
@@ -211,8 +1017,35 @@ void scroll_screen(void)
     for (i = 0; i < display.width * font_h; i++) {
         last_line[i] = display.bg_color;
     }
+
+    if (console_cells_ready) {
+        uint32_t rows = display.text_rows;
+        uint32_t cols = display.text_cols;
+
+        if (rows > CONSOLE_MAX_ROWS)
+            rows = CONSOLE_MAX_ROWS;
+        if (cols > CONSOLE_MAX_COLS)
+            cols = CONSOLE_MAX_COLS;
+
+        if (rows > 0 && cols > 0)
+            scrollback_push_line(console_cells[0], cols);
+
+        for (uint32_t row = 1; row < rows; row++)
+            memcpy(console_cells[row - 1], console_cells[row],
+                   cols * sizeof(console_cell_t));
+
+        if (rows > 0) {
+            for (uint32_t col = 0; col < cols; col++) {
+                console_cells[rows - 1][col].ch = ' ';
+                console_cells[rows - 1][col].fg = display.fg_color;
+                console_cells[rows - 1][col].bg = display.bg_color;
+            }
+        }
+    }
     
     display.cursor_y = display.text_rows - 1;
+    pending_wrap = false;
+    framebuffer_mark_dirty(0, 0, display.width, display.height);
 }
 
 ssize_t framebuffer_write(file_t* file, const void* buffer, size_t count)
@@ -226,6 +1059,8 @@ ssize_t framebuffer_write(file_t* file, const void* buffer, size_t count)
     for (i = 0; i < count; i++) {
         console_putchar(data[i]);
     }
+
+    framebuffer_flush_dirty();
     
     return count;
 }
@@ -247,4 +1082,73 @@ ssize_t framebuffer_read(file_t* file, void* buffer, size_t count)
     file->offset += to_copy;
     
     return to_copy;
+}
+
+static void framebuffer_tty_putc(char c)
+{
+    if (!framebuffer_base)
+        return;
+
+    console_putchar(c);
+    framebuffer_flush_dirty();
+}
+
+static bool framebuffer_tty_try_putc(char c)
+{
+    if (!framebuffer_base)
+        return false;
+
+    console_putchar(c);
+    return true;
+}
+
+static void framebuffer_tty_puts(const char *s)
+{
+    if (!framebuffer_base || !s)
+        return;
+
+    while (*s)
+        console_putchar(*s++);
+    framebuffer_flush_dirty();
+}
+
+static void framebuffer_tty_set_tx_irq_enabled(bool enabled)
+{
+    (void)enabled;
+    framebuffer_flush_dirty();
+}
+
+static bool framebuffer_tty_has_data(void)
+{
+    return false;
+}
+
+static int framebuffer_tty_getc(void)
+{
+    return -1;
+}
+
+static const tty_backend_ops_t framebuffer_tty_backend = {
+    .putc = framebuffer_tty_putc,
+    .try_putc = framebuffer_tty_try_putc,
+    .puts = framebuffer_tty_puts,
+    .set_tx_irq_enabled = framebuffer_tty_set_tx_irq_enabled,
+    .has_data = framebuffer_tty_has_data,
+    .getc = framebuffer_tty_getc,
+};
+
+int framebuffer_attach_tty_backend(int tty_id)
+{
+    if (!framebuffer_base)
+        return -ENODEV;
+
+    int ret = tty_attach_backend_to(tty_id, &framebuffer_tty_backend);
+    if (ret == 0) {
+        tty_set_winsize_for_id(tty_id,
+                               (uint16_t)display.text_rows,
+                               (uint16_t)display.text_cols,
+                               (uint16_t)display.width,
+                               (uint16_t)display.height);
+    }
+    return ret;
 }

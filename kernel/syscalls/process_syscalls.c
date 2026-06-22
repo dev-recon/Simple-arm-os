@@ -598,6 +598,7 @@ int sys_dup(int oldfd)
 int sys_dup2(int oldfd, int newfd)
 {
     file_t* file;
+    file_t* new_file;
     
     if (oldfd < 0 || oldfd >= MAX_FILES) return -EBADF;
     if (newfd < 0 || newfd >= MAX_FILES) return -EBADF;
@@ -615,10 +616,15 @@ int sys_dup2(int oldfd, int newfd)
         close_file(old_newfd);
     }
     
-    current_task->process->files[newfd] = get_file(file);
-    if (!current_task->process->files[newfd])
+    new_file = get_file(file);
+    if (!new_file)
         return -EBADF;
+
+    current_task->process->files[newfd] = new_file;
     current_task->process->fd_flags[newfd] = 0;
+
+    if (newfd == STDIN_FILENO && file_is_tty(new_file))
+        current_task->process->controlling_tty = tty_id_from_file(new_file);
     
     return newfd;
 }
@@ -680,6 +686,7 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
     file_t* file;
     struct termios tio;
     struct winsize wsz;
+    int tty_id;
 
     if (!current_task || !current_task->process)
         return -EINVAL;
@@ -690,14 +697,18 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
     if (!file)
         return -EBADF;
 
+    tty_id = file_is_tty(file) ? tty_id_from_file(file) : -ENOTTY;
+    if (file_is_tty(file) && tty_id < 0)
+        return tty_id;
+
     switch (request) {
     case TIOCGWINSZ:
         if (!file_is_tty(file))
             return -ENOTTY;
         if (!arg)
             return -EFAULT;
-        tty_get_winsize(&wsz.ws_row, &wsz.ws_col,
-                        &wsz.ws_xpixel, &wsz.ws_ypixel);
+        tty_get_winsize_for_id(tty_id, &wsz.ws_row, &wsz.ws_col,
+                               &wsz.ws_xpixel, &wsz.ws_ypixel);
         return copy_to_user((void*)arg, &wsz, sizeof(wsz)) < 0 ? -EFAULT : 0;
 
     case TIOCSWINSZ:
@@ -707,15 +718,15 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
             return -EFAULT;
         if (copy_from_user(&wsz, (void*)arg, sizeof(wsz)) < 0)
             return -EFAULT;
-        return tty_set_winsize(wsz.ws_row, wsz.ws_col,
-                               wsz.ws_xpixel, wsz.ws_ypixel);
+        return tty_set_winsize_for_id(tty_id, wsz.ws_row, wsz.ws_col,
+                                      wsz.ws_xpixel, wsz.ws_ypixel);
 
     case TCGETS:
         if (!file_is_tty(file))
             return -ENOTTY;
         if (!arg)
             return -EFAULT;
-        if (tty_get_termios(&tio) < 0)
+        if (tty_get_termios_for_id(tty_id, &tio) < 0)
             return -EINVAL;
         return copy_to_user((void*)arg, &tio, sizeof(tio)) < 0 ? -EFAULT : 0;
 
@@ -733,7 +744,7 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
             if (current_task)
                 yield();
         }
-        return tty_set_termios(&tio, 0);
+        return tty_set_termios_for_id(tty_id, &tio, 0);
 
     case TCSETS:
         if (!file_is_tty(file))
@@ -742,7 +753,7 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
             return -EFAULT;
         if (copy_from_user(&tio, (void*)arg, sizeof(tio)) < 0)
             return -EFAULT;
-        return tty_set_termios(&tio, 0);
+        return tty_set_termios_for_id(tty_id, &tio, 0);
 
     case TCSETSF:
         if (!file_is_tty(file))
@@ -751,12 +762,12 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
             return -EFAULT;
         if (copy_from_user(&tio, (void*)arg, sizeof(tio)) < 0)
             return -EFAULT;
-        return tty_set_termios(&tio, 1);
+        return tty_set_termios_for_id(tty_id, &tio, 1);
 
     case TCFLSH:
         if (!file_is_tty(file))
             return -ENOTTY;
-        return tty_flush((int)arg);
+        return tty_flush_for_id(tty_id, (int)arg);
     default:
         return -ENOTTY;
     }
@@ -1573,7 +1584,7 @@ int sys_sysinfo(struct sysinfo_response *resp)
     if (!resp) return -EINVAL;
 
     static const char state_char[8] = {
-        'S', /* TASK_READY           */
+        'R', /* TASK_READY           */
         'R', /* TASK_RUNNING         */
         'S', /* TASK_BLOCKED         */
         'Z', /* TASK_ZOMBIE          */

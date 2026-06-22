@@ -16,6 +16,7 @@
 /* GIC functions */
 void init_gic(void);
 void enable_irq(uint32_t irq);
+void enable_irq_level(uint32_t irq);
 void disable_irq(uint32_t irq);
 void clear_irq(uint32_t irq);
 

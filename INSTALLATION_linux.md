@@ -4,6 +4,8 @@ This guide sets up ArmOS on Linux. Debian and Ubuntu are the primary reference
 distributions for now.
 
 ArmOS targets an ARMv7-A Cortex-A15 kernel running on QEMU `virt`.
+The supported v0.2 reference emulator is QEMU 10.0.2. Other QEMU versions may
+work, but 10.0.2 is the version to use when reproducing release behavior.
 
 ## Disk Layout
 
