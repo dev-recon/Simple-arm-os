@@ -83,6 +83,10 @@ RAW_SYSCALL sys_shm_unlink, 191
 RAW_SYSCALL sys_shm_map, 192
 RAW_SYSCALL sys_shm_unmap, 193
 RAW_SYSCALL sys_shutdown, 194
+RAW_SYSCALL sys_socket, 281
+RAW_SYSCALL sys_bind, 282
+RAW_SYSCALL sys_listen, 284
+RAW_SYSCALL sys_accept, 285
 
 .global __signal_return_trampoline
 .type __signal_return_trampoline, %function

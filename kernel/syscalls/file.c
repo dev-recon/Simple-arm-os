@@ -31,6 +31,7 @@
 #include <kernel/dirent.h>
 #include <kernel/tty.h>
 #include <kernel/null.h>
+#include <kernel/virtio_net.h>
 #include <kernel/spinlock.h>
 #include <asm/mmu.h>
 
@@ -526,6 +527,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     char* full_path;
     file_t* tty_file;
     file_t* null_file;
+    file_t* net_echo_file;
 
     int fd;
 
@@ -599,6 +601,31 @@ int sys_open(const char* pathname, int flags, mode_t mode)
         }
 
         current_task->process->files[fd] = null_file;
+        current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
+        kfree(full_path);
+        return fd;
+    }
+
+    if (is_net_echo_device_path(full_path)) {
+        if (flags & O_DIRECTORY) {
+            kfree(full_path);
+            return -ENOTDIR;
+        }
+
+        fd = allocate_fd(current_task);
+        if (fd < 0) {
+            kfree(full_path);
+            return fd;
+        }
+
+        net_echo_file = create_net_echo_device_file("netecho", flags & ~O_CLOEXEC);
+        if (!net_echo_file) {
+            free_fd(current_task, fd);
+            kfree(full_path);
+            return -ENODEV;
+        }
+
+        current_task->process->files[fd] = net_echo_file;
         current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
         kfree(full_path);
         return fd;
@@ -706,6 +733,15 @@ int sys_stat(const char* pathname, struct stat* statbuf)
         }
         return 0;
     }
+
+    if (is_net_echo_device_path(full_path)) {
+        fill_net_echo_device_stat(&kstat);
+        kfree(full_path);
+        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
     
     inode = path_lookup(full_path);
     kfree(full_path);
@@ -749,6 +785,15 @@ int sys_lstat(const char* pathname, struct stat* statbuf)
 
     if (is_tty_device_path(full_path)) {
         fill_tty_device_stat(full_path, &kstat);
+        kfree(full_path);
+        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
+
+    if (is_net_echo_device_path(full_path)) {
+        fill_net_echo_device_stat(&kstat);
         kfree(full_path);
         if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
             return -EFAULT;

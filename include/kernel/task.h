@@ -66,6 +66,8 @@ typedef enum file_type {
     FILE_TYPE_TTY,
     FILE_TYPE_NULL,
     FILE_TYPE_PIPE,
+    FILE_TYPE_NETECHO,
+    FILE_TYPE_SOCKET,
 } file_type_t;
 typedef struct inode_operations inode_operations_t;
 

@@ -30,6 +30,7 @@
 #include <kernel/signal.h>
 #include <kernel/file.h>
 #include <kernel/mount.h>
+#include <kernel/virtio_net.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 #include <kernel/timer.h>
@@ -40,7 +41,7 @@ typedef int (*syscall_func_t)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-function-type"
 
-static syscall_func_t syscall_table[256] = {
+static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_exit] = (syscall_func_t)sys_exit,
     [__NR_fork] = (syscall_func_t)sys_fork,
     [__NR_read] = (syscall_func_t)sys_read,
@@ -103,6 +104,10 @@ static syscall_func_t syscall_table[256] = {
     [__NR_shm_map]   = (syscall_func_t)sys_shm_map,
     [__NR_shm_unmap] = (syscall_func_t)sys_shm_unmap,
     [__NR_shutdown]  = (syscall_func_t)sys_shutdown,
+    [__NR_socket]    = (syscall_func_t)sys_socket,
+    [__NR_bind]      = (syscall_func_t)sys_bind,
+    [__NR_listen]    = (syscall_func_t)sys_listen,
+    [__NR_accept]    = (syscall_func_t)sys_accept,
 
 };
 
@@ -1095,7 +1100,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
     signal_check_result_t sig_result = SIGNAL_CHECK_NONE;
     int result;
 
-    if (syscall_num >= 256 || !syscall_table[syscall_num]) {
+    if (syscall_num >= MAX_SYSCALLS || !syscall_table[syscall_num]) {
         return -ENOSYS;
     }
 

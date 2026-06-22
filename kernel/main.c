@@ -25,6 +25,7 @@
 #include <kernel/display.h>
 #include <kernel/virtio_gpu.h>
 #include <kernel/virtio_input.h>
+#include <kernel/virtio_net.h>
 #include <kernel/vfs.h>
 #include <kernel/ata.h>
 
@@ -254,6 +255,16 @@ void kernel_main(void)
         KBOOT_WARN("GPU: virtio-gpu unavailable");
     }
     KBOOT_OKF("TTY: console tty0 on uart0");
+
+    if (virtio_net_init()) {
+        uint8_t mac[6];
+        virtio_net_get_mac(mac);
+        KBOOT_OKF("Net: virtio-net %02X:%02X:%02X:%02X:%02X:%02X irq %u",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                  virtio_net_get_irq());
+    } else {
+        KBOOT_WARN("Net: virtio-net unavailable");
+    }
       
     //kprintf("Initialize IDE ... ");
     //init_ide();
@@ -311,4 +322,3 @@ void kernel_main(void)
     panic("Returned from unified scheduler!");
 
 }
-

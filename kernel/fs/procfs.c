@@ -30,6 +30,7 @@
 #include <kernel/interrupt.h>
 #include <kernel/kernel.h>
 #include <kernel/virtio_block.h>
+#include <kernel/virtio_net.h>
 #include <asm/arm.h>
 
 extern uint32_t task_count;
@@ -53,6 +54,8 @@ static file_operations_t procfs_dir_ops;
 #define PROC_INO_DMESG      11u
 #define PROC_INO_INTERRUPTS 12u
 #define PROC_INO_TTY        13u
+#define PROC_INO_NET_DIR    14u
+#define PROC_INO_NET_DEV    15u
 #define PROC_PID_BASE       100000u
 #define PROC_PID_STRIDE     512u
 #define PROC_PID_DIR        0u
@@ -359,10 +362,22 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_INTERRUPTS, S_IFREG | 0444, 0);
         if (strcmp(name, "tty") == 0)
             return proc_make_inode(PROC_INO_TTY, S_IFREG | 0444, 0);
+        if (strcmp(name, "net") == 0)
+            return proc_make_inode(PROC_INO_NET_DIR, S_IFDIR | 0555, 0);
         if (strcmp(name, "self") == 0)
             return proc_make_inode(PROC_INO_SELF, S_IFLNK | 0777, 0);
         if (proc_parse_pid(name, &pid) && proc_pid_exists(pid))
             return proc_make_inode(proc_pid_ino(pid, PROC_PID_DIR), S_IFDIR | 0555, 0);
+        return NULL;
+    }
+
+    if (dir_ino == PROC_INO_NET_DIR) {
+        if (strcmp(name, ".") == 0)
+            return proc_make_inode(PROC_INO_NET_DIR, S_IFDIR | 0555, 0);
+        if (strcmp(name, "..") == 0)
+            return proc_make_inode(PROC_INO_ROOT, S_IFDIR | 0555, 0);
+        if (strcmp(name, "dev") == 0)
+            return proc_make_inode(PROC_INO_NET_DEV, S_IFREG | 0444, 0);
         return NULL;
     }
 
@@ -653,6 +668,7 @@ static void proc_fill_dmesg(char* buf, size_t cap, size_t* len)
 static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
 {
     uint32_t virtio_irq = virtio_blk_get_irq();
+    uint32_t virtio_net_irq = virtio_net_get_irq();
 
     proc_append(buf, cap, len, "           CPU0\n");
     proc_append(buf, cap, len, "%3u: %10u GICv2  timer\n",
@@ -667,8 +683,64 @@ static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "%3u: %10u GICv2  virtio-blk\n",
                 virtio_irq,
                 gic_get_irq_count(virtio_irq));
+    if (virtio_net_is_initialized()) {
+        proc_append(buf, cap, len, "%3u: %10u GICv2  virtio-net\n",
+                    virtio_net_irq,
+                    gic_get_irq_count(virtio_net_irq));
+    }
     proc_append(buf, cap, len, "TOT: %10u\n", gic_get_total_irq_count());
     proc_append(buf, cap, len, "LAST:%10u\n", gic_get_last_irq_id());
+}
+
+static void proc_fill_net_dev(char* buf, size_t cap, size_t* len)
+{
+    uint8_t mac[6] = {0};
+    uint32_t irq_count = 0;
+    uint32_t last_irq_status = 0;
+    uint32_t status = 0;
+    uint32_t phys = 0;
+    uint32_t irq = 0;
+    uint32_t rx_packets = 0;
+    uint32_t rx_bytes = 0;
+    uint32_t rx_drops = 0;
+    uint32_t rx_last_len = 0;
+    uint32_t tx_packets = 0;
+    uint32_t tx_bytes = 0;
+    uint32_t tx_drops = 0;
+    uint32_t rx_arp = 0;
+    uint32_t tx_arp = 0;
+    uint32_t rx_ipv4 = 0;
+    uint32_t rx_icmp = 0;
+    uint32_t tx_icmp = 0;
+    uint32_t rx_tcp = 0;
+    uint32_t tx_tcp = 0;
+    uint32_t tcp_echo = 0;
+    uint32_t echo_enabled = 0;
+
+    proc_append(buf, cap, len,
+                "Inter-|   Receive                                                |  Transmit\n");
+    proc_append(buf, cap, len,
+                " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n");
+
+    if (!virtio_net_is_initialized())
+        return;
+
+    virtio_net_get_mac(mac);
+    virtio_net_get_stats(&irq_count, &last_irq_status, &status, &phys, &irq,
+                         &rx_packets, &rx_bytes, &rx_drops, &rx_last_len,
+                         &tx_packets, &tx_bytes, &tx_drops, &rx_arp,
+                         &tx_arp, &rx_ipv4, &rx_icmp, &tx_icmp, &rx_tcp,
+                         &tx_tcp, &tcp_echo, &echo_enabled);
+    proc_append(buf, cap, len,
+                "vnet0: %8u %7u %4u %4u %4u %5u %10u %9u %8u %7u %4u %4u %4u %5u %7u %10u\n",
+                rx_bytes, rx_packets, 0, rx_drops, 0, 0, 0, 0,
+                tx_bytes, tx_packets, 0, tx_drops, 0, 0, 0, 0);
+    proc_append(buf, cap, len,
+                "      mac %02X:%02X:%02X:%02X:%02X:%02X irq %u irq_count %u last_irq 0x%X status 0x%02X phys 0x%08X rx_last_len %u arp rx %u tx %u ipv4 rx %u icmp rx %u tx %u tcp rx %u tx %u echo %u enabled %u\n",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                irq, irq_count, last_irq_status, status, phys, rx_last_len,
+                rx_arp, tx_arp, rx_ipv4, rx_icmp, tx_icmp, rx_tcp, tx_tcp,
+                tcp_echo, echo_enabled);
 }
 
 typedef struct proc_flag_name {
@@ -1255,6 +1327,7 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_DMESG:   proc_fill_dmesg(buf, cap, len); return 0;
         case PROC_INO_INTERRUPTS: proc_fill_interrupts(buf, cap, len); return 0;
         case PROC_INO_TTY:     proc_fill_tty(buf, cap, len); return 0;
+        case PROC_INO_NET_DEV: proc_fill_net_dev(buf, cap, len); return 0;
         default: break;
     }
 
@@ -1398,6 +1471,7 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         { "dmesg",   PROC_INO_DMESG,  DT_REG },
         { "interrupts", PROC_INO_INTERRUPTS, DT_REG },
         { "tty",     PROC_INO_TTY,    DT_REG },
+        { "net",     PROC_INO_NET_DIR, DT_DIR },
         { "self",    PROC_INO_SELF,    DT_LNK },
     };
     uint32_t offset = file->offset;
@@ -1447,6 +1521,28 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
 
     spin_unlock_irqrestore(&task_lock, flags);
     return 0;
+}
+
+static int procfs_net_readdir(file_t* file, dirent_t* dirent)
+{
+    static const struct {
+        const char* name;
+        uint32_t ino;
+        uint8_t type;
+    } entries[] = {
+        { ".",   PROC_INO_NET_DIR, DT_DIR },
+        { "..",  PROC_INO_ROOT,    DT_DIR },
+        { "dev", PROC_INO_NET_DEV, DT_REG },
+    };
+    uint32_t offset = file->offset;
+
+    if (offset >= sizeof(entries) / sizeof(entries[0]))
+        return 0;
+
+    proc_fill_dirent(dirent, entries[offset].ino, entries[offset].type,
+                     entries[offset].name);
+    file->offset++;
+    return 1;
 }
 
 static int procfs_pid_readdir(file_t* file, dirent_t* dirent)
@@ -1545,6 +1641,8 @@ static int procfs_readdir(file_t* file, dirent_t* dirent)
     ino = file->inode->first_cluster;
     if (ino == PROC_INO_ROOT)
         return procfs_root_readdir(file, dirent);
+    if (ino == PROC_INO_NET_DIR)
+        return procfs_net_readdir(file, dirent);
     if (ino >= PROC_PID_BASE && proc_ino_type(ino) == PROC_PID_DIR)
         return procfs_pid_readdir(file, dirent);
     if (ino >= PROC_PID_BASE && proc_ino_type(ino) == PROC_PID_FD_DIR)
