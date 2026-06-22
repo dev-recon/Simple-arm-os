@@ -20,6 +20,7 @@ uint8_t* framebuffer_base = NULL;
 
 #define CONSOLE_MAX_COLS 160
 #define CONSOLE_MAX_ROWS 64
+#define SCROLLBACK_ROWS 256
 
 typedef struct {
     char ch;
@@ -28,7 +29,12 @@ typedef struct {
 } console_cell_t;
 
 static console_cell_t console_cells[CONSOLE_MAX_ROWS][CONSOLE_MAX_COLS];
+static console_cell_t scrollback_cells[SCROLLBACK_ROWS][CONSOLE_MAX_COLS];
 static bool console_cells_ready = false;
+static uint32_t scrollback_head;
+static uint32_t scrollback_count;
+static uint32_t scrollback_offset;
+static volatile int32_t scrollback_pending_lines;
 
 typedef enum {
     ANSI_STATE_NORMAL = 0,
@@ -56,6 +62,8 @@ static task_t *displayd_task;
 static void console_put_cell(uint32_t col, uint32_t row, char c,
                              uint32_t fg, uint32_t bg);
 static void console_erase_cursor(void);
+static void console_render_scrollback(void);
+static void display_process_scrollback_request(void);
 
 #define CURSOR_BLINK_TICKS      (TIMER_FREQ / 2)
 #define CURSOR_BAR_MIN_WIDTH    2
@@ -139,6 +147,7 @@ static void framebuffer_flush_dirty(void)
     }
 
     if (cursor_visible && framebuffer_base && display.font &&
+        scrollback_offset == 0 &&
         cursor_blink_on &&
         display.cursor_x < display.text_cols &&
         display.cursor_y < display.text_rows &&
@@ -194,7 +203,8 @@ static void displayd_main(void *arg)
     (void)arg;
 
     while (1) {
-        task_sleep_ms(500);
+        task_sleep_ms(100);
+        display_process_scrollback_request();
         display_cursor_tick();
     }
 }
@@ -239,6 +249,182 @@ static void console_reset_cells(void)
     }
     console_cells_ready = true;
     cursor_drawn = false;
+    scrollback_offset = 0;
+}
+
+static void console_reset_scrollback(void)
+{
+    scrollback_head = 0;
+    scrollback_count = 0;
+    scrollback_offset = 0;
+    scrollback_pending_lines = 0;
+}
+
+static uint32_t scrollback_oldest_index(void)
+{
+    if (scrollback_count < SCROLLBACK_ROWS)
+        return 0;
+    return scrollback_head;
+}
+
+static uint32_t scrollback_index(uint32_t logical_line)
+{
+    return (scrollback_oldest_index() + logical_line) % SCROLLBACK_ROWS;
+}
+
+static void scrollback_push_line(const console_cell_t *line, uint32_t cols)
+{
+    if (!line || cols == 0)
+        return;
+
+    if (cols > CONSOLE_MAX_COLS)
+        cols = CONSOLE_MAX_COLS;
+
+    memcpy(scrollback_cells[scrollback_head], line,
+           cols * sizeof(console_cell_t));
+    for (uint32_t col = cols; col < CONSOLE_MAX_COLS; col++) {
+        scrollback_cells[scrollback_head][col].ch = ' ';
+        scrollback_cells[scrollback_head][col].fg = default_fg_color;
+        scrollback_cells[scrollback_head][col].bg = default_bg_color;
+    }
+
+    scrollback_head = (scrollback_head + 1) % SCROLLBACK_ROWS;
+    if (scrollback_count < SCROLLBACK_ROWS)
+        scrollback_count++;
+}
+
+static void draw_cell_snapshot(uint32_t col, uint32_t row,
+                               const console_cell_t *cell)
+{
+    char ch = cell && cell->ch ? cell->ch : ' ';
+    uint32_t fg = cell ? cell->fg : default_fg_color;
+    uint32_t bg = cell ? cell->bg : default_bg_color;
+
+    draw_char(col * display.font->width,
+              row * display.font->height,
+              ch, fg, bg);
+}
+
+static void console_render_scrollback(void)
+{
+    uint32_t rows = display.text_rows;
+    uint32_t cols = display.text_cols;
+    uint32_t total_lines;
+    uint32_t bottom_start;
+    uint32_t start_line;
+
+    if (!display.font || !console_cells_ready)
+        return;
+
+    if (rows > CONSOLE_MAX_ROWS)
+        rows = CONSOLE_MAX_ROWS;
+    if (cols > CONSOLE_MAX_COLS)
+        cols = CONSOLE_MAX_COLS;
+    if (rows == 0 || cols == 0)
+        return;
+
+    console_erase_cursor();
+
+    total_lines = scrollback_count + rows;
+    bottom_start = total_lines > rows ? total_lines - rows : 0;
+    if (scrollback_offset > bottom_start)
+        scrollback_offset = bottom_start;
+    start_line = bottom_start - scrollback_offset;
+
+    for (uint32_t row = 0; row < rows; row++) {
+        uint32_t logical = start_line + row;
+
+        if (logical < scrollback_count) {
+            uint32_t idx = scrollback_index(logical);
+            for (uint32_t col = 0; col < cols; col++)
+                draw_cell_snapshot(col, row, &scrollback_cells[idx][col]);
+        } else {
+            uint32_t visible_row = logical - scrollback_count;
+            for (uint32_t col = 0; col < cols; col++)
+                draw_cell_snapshot(col, row, &console_cells[visible_row][col]);
+        }
+    }
+
+    framebuffer_mark_dirty(0, 0, display.width, display.height);
+    framebuffer_flush_dirty();
+}
+
+static void console_scrollback_reset_view(void)
+{
+    if (scrollback_offset == 0)
+        return;
+
+    scrollback_offset = 0;
+    console_render_scrollback();
+}
+
+static void display_scrollback_apply_up(uint32_t lines)
+{
+    if (!framebuffer_base || !display.font || lines == 0 || scrollback_count == 0)
+        return;
+
+    if (scrollback_offset + lines > scrollback_count)
+        scrollback_offset = scrollback_count;
+    else
+        scrollback_offset += lines;
+
+    console_render_scrollback();
+}
+
+static void display_scrollback_apply_down(uint32_t lines)
+{
+    if (!framebuffer_base || !display.font || lines == 0 || scrollback_offset == 0)
+        return;
+
+    if (lines >= scrollback_offset)
+        scrollback_offset = 0;
+    else
+        scrollback_offset -= lines;
+
+    console_render_scrollback();
+}
+
+void display_scrollback_up(uint32_t lines)
+{
+    uint32_t irq_flags;
+
+    if (lines > SCROLLBACK_ROWS)
+        lines = SCROLLBACK_ROWS;
+
+    irq_flags = disable_interrupts_save();
+    scrollback_pending_lines += (int32_t)lines;
+    restore_interrupts(irq_flags);
+}
+
+void display_scrollback_down(uint32_t lines)
+{
+    uint32_t irq_flags;
+
+    if (lines > SCROLLBACK_ROWS)
+        lines = SCROLLBACK_ROWS;
+
+    irq_flags = disable_interrupts_save();
+    scrollback_pending_lines -= (int32_t)lines;
+    restore_interrupts(irq_flags);
+}
+
+static void display_process_scrollback_request(void)
+{
+    uint32_t irq_flags;
+    int32_t lines;
+
+    irq_flags = disable_interrupts_save();
+    lines = scrollback_pending_lines;
+    scrollback_pending_lines = 0;
+    restore_interrupts(irq_flags);
+
+    if (lines == 0)
+        return;
+
+    if (lines > 0)
+        display_scrollback_apply_up((uint32_t)lines);
+    else
+        display_scrollback_apply_down((uint32_t)-lines);
 }
 
 static uint32_t ansi_param_or(uint32_t index, uint32_t fallback)
@@ -761,6 +947,7 @@ static void console_put_cell(uint32_t col, uint32_t row, char c,
 
 void console_putchar(char c)
 {
+    console_scrollback_reset_view();
     console_erase_cursor();
 
     if (console_consume_ansi(c))
@@ -839,6 +1026,9 @@ void scroll_screen(void)
             rows = CONSOLE_MAX_ROWS;
         if (cols > CONSOLE_MAX_COLS)
             cols = CONSOLE_MAX_COLS;
+
+        if (rows > 0 && cols > 0)
+            scrollback_push_line(console_cells[0], cols);
 
         for (uint32_t row = 1; row < rows; row++)
             memcpy(console_cells[row - 1], console_cells[row],

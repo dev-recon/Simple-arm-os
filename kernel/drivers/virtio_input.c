@@ -7,6 +7,7 @@
 #include <kernel/string.h>
 #include <kernel/kprintf.h>
 #include <kernel/interrupt.h>
+#include <kernel/display.h>
 #include <asm/arm.h>
 
 #define VIRTIO_ID_INPUT        18
@@ -425,9 +426,25 @@ static void input_handle_key(uint16_t code, uint32_t value)
         input_emit_char(0x1B);
         return;
     case KEY_UP:
+        if (input.opt) {
+            display_scrollback_up(24);
+            return;
+        }
+        if (input.shift) {
+            display_scrollback_up(1);
+            return;
+        }
         input_emit_string("\033[A");
         return;
     case KEY_DOWN:
+        if (input.opt) {
+            display_scrollback_down(24);
+            return;
+        }
+        if (input.shift) {
+            display_scrollback_down(1);
+            return;
+        }
         input_emit_string("\033[B");
         return;
     case KEY_RIGHT:

@@ -57,6 +57,8 @@ void scroll_screen(void);
 int framebuffer_attach_tty_backend(int tty_id);
 void display_cursor_tick(void);
 int display_start_daemon(void);
+void display_scrollback_up(uint32_t lines);
+void display_scrollback_down(uint32_t lines);
 
 /* Framebuffer file operations */
 ssize_t framebuffer_read(file_t* file, void* buffer, size_t count);
