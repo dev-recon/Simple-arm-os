@@ -105,12 +105,8 @@ USERFS_FILES := $(shell find $(USERFS_DIR) -type f 2>/dev/null)
 USERFS_DIRS  := $(shell find $(USERFS_DIR) -type d 2>/dev/null)
 USERFS_LINKS := $(shell find $(USERFS_DIR) -type l 2>/dev/null)
 USERFS_BIN_FILES := $(shell find $(USERFS_DIR)/bin -type f 2>/dev/null)
-FAT32_MNT_FILES := \
-	$(USERFS_DIR)/README.TXT \
-	$(USERFS_DIR)/hello.txt \
-	$(USERFS_DIR)/test.txt \
-	$(USERFS_DIR)/home/user/profile.txt \
-	$(USERFS_DIR)/tmp/README
+FAT32_MNT_PATHS := README.TXT hello.txt test.txt home/user/profile.txt tmp/README
+FAT32_MNT_FILES := $(foreach file,$(FAT32_MNT_PATHS),$(wildcard $(USERFS_DIR)/$(file)))
 
 # Cibles
 TARGET = kernel
@@ -143,7 +139,7 @@ $(FAT32_IMG): $(USERFS_DIR) $(FAT32_MNT_FILES)
 	@for dir in home home/user tmp; do \
 		mmd -i $(FAT32_IMG) "::$$dir" || true; \
 	done
-	@for file in README.TXT hello.txt test.txt home/user/profile.txt tmp/README; do \
+	@for file in $(FAT32_MNT_PATHS); do \
 		if [ -f "$(USERFS_DIR)/$$file" ]; then \
 			mcopy -o -i $(FAT32_IMG) "$(USERFS_DIR)/$$file" "::$$file"; \
 		fi; \
