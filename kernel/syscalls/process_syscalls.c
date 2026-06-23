@@ -31,6 +31,7 @@
 #include <kernel/fat32.h>
 #include <kernel/tty.h>
 #include <kernel/null.h>
+#include <kernel/virtio_net.h>
 #include <kernel/mount.h>
 #include <kernel/virtio_block.h>
 
@@ -1090,7 +1091,9 @@ int sys_access(const char* pathname, int mode)
 
     if (!full_path) return -ENOENT;
 
-    if (is_null_device_path(full_path) || is_tty_device_path(full_path)) {
+    if (is_null_device_path(full_path) ||
+        is_tty_device_path(full_path) ||
+        is_net_echo_device_path(full_path)) {
         kfree(full_path);
         return (mode & MAY_EXEC) ? -EACCES : 0;
     }

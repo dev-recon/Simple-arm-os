@@ -23,6 +23,7 @@
 #include <kernel/ata.h>
 #include <kernel/virtio_block.h>
 #include <kernel/virtio_input.h>
+#include <kernel/virtio_net.h>
 #include <kernel/uart.h>
 #include <kernel/ide.h>
 #include <kernel/kprintf.h>
@@ -199,6 +200,12 @@ void irq_c_handler(void)
         gicc[0x010/4] = irq_id;  /* GICC_EOIR */
         return;
     }
+
+    if (int_id == virtio_net_get_irq()) {
+        virtio_net_irq_handler();
+        gicc[0x010/4] = irq_id;  /* GICC_EOIR */
+        return;
+    }
     
     /* Router vers les handlers specifiques pour machine virt */
     switch (int_id) {
@@ -227,7 +234,6 @@ void irq_c_handler(void)
         /* VirtIO IRQs non utilises pour l'instant. Les laisser visibles plutot
          * que les router dans l'ancien handler ATA, qui manipule un etat de
          * queue different du driver virtio_block.c. */
-        case VIRT_VIRTIO_NET_IRQ:
         case VIRT_VIRTIO_CONSOLE_IRQ:
         case VIRT_VIRTIO_RNG_IRQ:
         case 79:

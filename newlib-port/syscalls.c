@@ -93,6 +93,10 @@ extern long sys_shm_open(const char *name, unsigned long size, int flags);
 extern long sys_shm_unlink(const char *name);
 extern long sys_shm_map(int id, void *addr, int flags);
 extern long sys_shm_unmap(void *addr, unsigned long size);
+extern long sys_socket(int domain, int type, int protocol);
+extern long sys_bind(int sockfd, const void *addr, unsigned long addrlen);
+extern long sys_listen(int sockfd, int backlog);
+extern long sys_accept(int sockfd, void *addr, unsigned long *addrlen);
 extern void sys_exit(int status);
 extern void __signal_return_trampoline(void);
 
@@ -674,6 +678,26 @@ int dup(int oldfd)
 int dup2(int oldfd, int newfd)
 {
     return ret_errno(sys_dup2(oldfd, newfd));
+}
+
+int socket(int domain, int type, int protocol)
+{
+    return ret_errno(sys_socket(domain, type, protocol));
+}
+
+int bind(int sockfd, const void *addr, unsigned long addrlen)
+{
+    return ret_errno(sys_bind(sockfd, addr, addrlen));
+}
+
+int listen(int sockfd, int backlog)
+{
+    return ret_errno(sys_listen(sockfd, backlog));
+}
+
+int accept(int sockfd, void *addr, unsigned long *addrlen)
+{
+    return ret_errno(sys_accept(sockfd, addr, addrlen));
 }
 
 int fcntl(int fd, int cmd, ...)

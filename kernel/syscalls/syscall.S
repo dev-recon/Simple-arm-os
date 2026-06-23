@@ -27,6 +27,7 @@
 .global save_user_bank
 .global signal_return_trampoline
 .equ __NR_rt_sigreturn, 173
+.equ MAX_SYSCALLS,     512     /* Keep in sync with include/kernel/syscalls.h */
 .equ CTX_USR_R0,       88
 .equ CTX_USR_R10,     128
 .equ CTX_USR_R11,     132
@@ -109,7 +110,7 @@ swi_handler:
     //pop {r0-r3, lr}
 
     /* Validate syscall number. */
-    cmp r7, #256
+    cmp r7, #MAX_SYSCALLS
     movhs r0, #-38              /* invalid syscall: -ENOSYS */
     subhs sp, sp, #12           /* build the same small frame as the normal path */
     bhs syscall_return

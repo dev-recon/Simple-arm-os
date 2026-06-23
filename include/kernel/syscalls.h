@@ -106,7 +106,13 @@ struct process;
 #define __NR_shm_map            192
 #define __NR_shm_unmap          193
 #define __NR_shutdown           194
+#define __NR_socket             281
+#define __NR_bind               282
+#define __NR_listen             284
+#define __NR_accept             285
 #define __NR_sysinfo            116     /* reused for getprocs — remplacer par /proc plus tard */
+
+#define MAX_SYSCALLS            512
 
 /* Informations sur un processus */
 struct proc_info {
@@ -204,6 +210,10 @@ int sys_sync(void);
 int sys_umask(int mask);
 int sys_chmod(const char* pathname, mode_t mode);
 int sys_chown(const char* pathname, uid_t owner, gid_t group);
+int sys_socket(int domain, int type, int protocol);
+int sys_bind(int sockfd, const void* addr, uint32_t addrlen);
+int sys_listen(int sockfd, int backlog);
+int sys_accept(int sockfd, void* addr, uint32_t* addrlen);
 
 /* Process syscalls */
 #define WNOHANG    1
