@@ -27,8 +27,33 @@ select_qemu() {
     fi
 }
 
+select_display() {
+    if [ -n "${QEMU_DISPLAY:-}" ]; then
+        printf '%s\n' "$QEMU_DISPLAY"
+        return
+    fi
+
+    case "$(uname -s)" in
+        Darwin)
+            printf '%s\n' "cocoa,show-cursor=on"
+            ;;
+        Linux)
+            if "$QEMU" -display help 2>/dev/null | grep -q '^gtk\b'; then
+                printf '%s\n' "gtk,show-cursor=on"
+            elif "$QEMU" -display help 2>/dev/null | grep -q '^sdl\b'; then
+                printf '%s\n' "sdl,show-cursor=on"
+            else
+                printf '%s\n' "default"
+            fi
+            ;;
+        *)
+            printf '%s\n' "default"
+            ;;
+    esac
+}
+
 QEMU="$(select_qemu "${1:-}")"
-QEMU_DISPLAY="${QEMU_DISPLAY:-cocoa,show-cursor=on}"
+QEMU_DISPLAY="$(select_display)"
 
 GPU_DEVICE="virtio-gpu-device"
 if [ -n "${GPU_XRES:-}" ] || [ -n "${GPU_YRES:-}" ]; then
