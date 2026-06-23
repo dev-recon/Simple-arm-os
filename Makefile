@@ -134,7 +134,7 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 # ext2 est le root complet, FAT32 sert surtout d'espace de compatibilite/echange.
 $(FAT32_IMG): $(USERFS_DIR) $(FAT32_MNT_FILES)
 	@echo "=== Creating FAT32 image ($(FAT32_SIZE_MB) MB) ==="
-	dd if=/dev/zero of=$(FAT32_IMG) bs=1m count=$(FAT32_SIZE_MB) 2>/dev/null
+	dd if=/dev/zero of=$(FAT32_IMG) bs=1048576 count=$(FAT32_SIZE_MB) 2>/dev/null
 	mkfs.fat -F 32 -n "OSKERNEL" $(FAT32_IMG)
 	@for dir in home home/user tmp; do \
 		mmd -i $(FAT32_IMG) "::$$dir" || true; \
@@ -166,7 +166,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 		echo "DEBUGFS=$(DEBUGFS)"; \
 		exit 1; \
 	fi
-	dd if=/dev/zero of=$(EXT2_IMG) bs=1m count=$(EXT2_SIZE_MB) 2>/dev/null
+	dd if=/dev/zero of=$(EXT2_IMG) bs=1048576 count=$(EXT2_SIZE_MB) 2>/dev/null
 	$(MKE2FS) -q -t ext2 -F -L OS_EXT2 $(EXT2_IMG)
 	@( find $(USERFS_DIR) -type d | sort | while read dir; do \
 	       if [ "$$dir" != "$(USERFS_DIR)" ]; then \
@@ -232,9 +232,9 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 # Disque final = ext2 + FAT32 concaténés
 $(DISK_IMG): $(FAT32_IMG) $(EXT2_IMG)
 	@echo "=== Assembling $(DISK_IMG) (ext2 + FAT32) ==="
-	dd if=/dev/zero of=$(DISK_IMG) bs=1m count=$(DISK_SIZE_MB) 2>/dev/null
-	dd if=$(EXT2_IMG) of=$(DISK_IMG) bs=1m seek=0 conv=notrunc 2>/dev/null
-	dd if=$(FAT32_IMG) of=$(DISK_IMG) bs=1m seek=$(EXT2_SIZE_MB) conv=notrunc 2>/dev/null
+	dd if=/dev/zero of=$(DISK_IMG) bs=1048576 count=$(DISK_SIZE_MB) 2>/dev/null
+	dd if=$(EXT2_IMG) of=$(DISK_IMG) bs=1048576 seek=0 conv=notrunc 2>/dev/null
+	dd if=$(FAT32_IMG) of=$(DISK_IMG) bs=1048576 seek=$(EXT2_SIZE_MB) conv=notrunc 2>/dev/null
 	@echo "Disk image $(DISK_IMG) created ($(DISK_SIZE_MB) MB)"
 
 # Creer le repertoire userfs avec des fichiers de test
@@ -300,7 +300,7 @@ debug-run-userfs: $(KERNEL_BIN) userfs.bin
 # Version alternative plus simple (un seul niveau de fichiers)
 disk-simple: $(USERFS_DIR)
 	@echo "Creating simple disk image..."
-	dd if=/dev/zero of=$(DISK_IMG) bs=1m count=$(DISK_SIZE_MB) 2>/dev/null
+	dd if=/dev/zero of=$(DISK_IMG) bs=1048576 count=$(DISK_SIZE_MB) 2>/dev/null
 	mkfs.fat -F 32 -n "OSKERNEL" $(DISK_IMG)
 	
 	# Copier seulement les fichiers du niveau racine
@@ -357,7 +357,7 @@ extract-disk: $(DISK_IMG)
 # Creer un disque de boot avec le kernel (optionnel)
 boot-disk: $(KERNEL_BIN) $(USERFS_DIR)
 	@echo "Creating bootable disk with kernel..."
-	dd if=/dev/zero of=boot_$(DISK_IMG) bs=1m count=$(DISK_SIZE_MB) 2>/dev/null
+	dd if=/dev/zero of=boot_$(DISK_IMG) bs=1048576 count=$(DISK_SIZE_MB) 2>/dev/null
 	mkfs.fat -F 32 -n "ARMBOOT" boot_$(DISK_IMG)
 	mcopy -i boot_$(DISK_IMG) $(KERNEL_BIN) ::$(KERNEL_BIN)
 	@if [ -d $(USERFS_DIR) ]; then \
