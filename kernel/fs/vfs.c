@@ -87,6 +87,17 @@ bool vfs_is_mounted(const char* path)
     return false;
 }
 
+bool vfs_is_mountpoint(const char* path)
+{
+    if (!path)
+        return false;
+
+    if (strcmp(path, "/") == 0)
+        return true;
+
+    return vfs_is_mounted(path);
+}
+
 int vfs_mount_ex(const char* path, inode_t* root, const char* source,
                  const char* fstype, const char* options)
 {

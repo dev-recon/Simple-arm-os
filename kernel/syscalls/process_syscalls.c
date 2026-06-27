@@ -91,6 +91,37 @@ static bool vfs_path_is_self_or_descendant(const char* parent, const char* child
            (child[len] == '\0' || child[len] == '/');
 }
 
+static bool vfs_inode_has_external_refs(inode_t* inode)
+{
+    task_t* task;
+    int checked = 0;
+
+    if (!inode || !task_list_head)
+        return false;
+
+    task = task_list_head;
+    do {
+        if (task->type == TASK_TYPE_PROCESS && task->process) {
+            for (int fd = 0; fd < MAX_FILES; fd++) {
+                file_t* file = task->process->files[fd];
+                inode_t* open_inode = file ? file->inode : NULL;
+
+                if (open_inode == inode)
+                    return true;
+                if (open_inode &&
+                    open_inode->i_op == inode->i_op &&
+                    open_inode->first_cluster == inode->first_cluster)
+                    return true;
+            }
+        }
+
+        task = task->next;
+        checked++;
+    } while (task && task != task_list_head && checked < MAX_TASKS);
+
+    return false;
+}
+
 int sys_sync(void)
 {
     int ret = 0;
@@ -869,6 +900,20 @@ int sys_link(const char* oldpath, const char* newpath)
     kfree(new_kpath);
     if (!new_full) { kfree(old_full); return -ENOENT; }
 
+    result = vfs_check_search_permission(old_full, false);
+    if (result < 0) {
+        kfree(old_full);
+        kfree(new_full);
+        return result;
+    }
+
+    result = vfs_check_search_permission(new_full, false);
+    if (result < 0) {
+        kfree(old_full);
+        kfree(new_full);
+        return result;
+    }
+
     target = path_lookup_ex(old_full, false);
     if (!target) {
         kfree(old_full);
@@ -938,6 +983,13 @@ int sys_symlink(const char* target, const char* linkpath)
         return -ENOENT;
     }
 
+    result = vfs_check_search_permission(link_full, false);
+    if (result < 0) {
+        kfree(target_kpath);
+        kfree(link_full);
+        return result;
+    }
+
     result = split_path(link_full, &parent_path, &name);
     if (result != 0) {
         kfree(target_kpath);
@@ -987,6 +1039,12 @@ int sys_readlink(const char* pathname, char* buf, size_t bufsiz)
     kfree(kernel_path);
     if (!full_path) return -ENOENT;
 
+    result = vfs_check_search_permission(full_path, false);
+    if (result < 0) {
+        kfree(full_path);
+        return result;
+    }
+
     inode = path_lookup_ex(full_path, false);
     kfree(full_path);
     if (!inode) return -ENOENT;
@@ -1023,6 +1081,12 @@ int sys_chdir(const char* path)
     if (!abs_path) return -ENOMEM;
 
     path_canonicalize(abs_path);
+
+    int search_ret = vfs_check_search_permission(abs_path, true);
+    if (search_ret < 0) {
+        kfree(abs_path);
+        return search_ret;
+    }
 
     inode = path_lookup(abs_path);
     if (!inode) {
@@ -1125,6 +1189,12 @@ int sys_access(const char* pathname, int mode)
 
     if (!full_path) return -ENOENT;
 
+    int search_ret = vfs_check_search_permission(full_path, false);
+    if (search_ret < 0) {
+        kfree(full_path);
+        return search_ret;
+    }
+
     if (is_null_device_path(full_path) ||
         is_tty_device_path(full_path) ||
         is_net_echo_device_path(full_path)) {
@@ -1172,6 +1242,17 @@ int sys_chmod(const char* pathname, mode_t mode)
     kfree(kernel_path);
     if (!full_path) return -ENOENT;
 
+    ret = vfs_check_search_permission(full_path, false);
+    if (ret < 0) {
+        kfree(full_path);
+        return ret;
+    }
+
+    if (vfs_is_mountpoint(full_path)) {
+        kfree(full_path);
+        return -EBUSY;
+    }
+
     inode = path_lookup(full_path);
     kfree(full_path);
     if (!inode) return -ENOENT;
@@ -1207,6 +1288,17 @@ int sys_chown(const char* pathname, uid_t owner, gid_t group)
     full_path = resolve_path(kernel_path);
     kfree(kernel_path);
     if (!full_path) return -ENOENT;
+
+    ret = vfs_check_search_permission(full_path, false);
+    if (ret < 0) {
+        kfree(full_path);
+        return ret;
+    }
+
+    if (vfs_is_mountpoint(full_path)) {
+        kfree(full_path);
+        return -EBUSY;
+    }
 
     inode = path_lookup(full_path);
     kfree(full_path);
@@ -1259,6 +1351,17 @@ int sys_unlink(const char* pathname)
     
     if (!full_path) return -ENOENT;
 
+    result = vfs_check_search_permission(full_path, false);
+    if (result < 0) {
+        kfree(full_path);
+        return result;
+    }
+
+    if (vfs_is_mountpoint(full_path)) {
+        kfree(full_path);
+        return -EBUSY;
+    }
+
     /* Vérifier que le fichier existe */
     target_inode = path_lookup_ex(full_path, false);
     if (!target_inode) {
@@ -1271,6 +1374,12 @@ int sys_unlink(const char* pathname)
         put_inode(target_inode);
         kfree(full_path);
         return -EISDIR;
+    }
+
+    if (vfs_inode_has_external_refs(target_inode)) {
+        put_inode(target_inode);
+        kfree(full_path);
+        return -EBUSY;
     }
     
     /* Séparer le chemin parent et le nom du fichier */
@@ -1352,6 +1461,18 @@ int sys_rename(const char* oldpath, const char* newpath)
     new_full = resolve_path(new_kpath); kfree(new_kpath);
     if (!new_full) { kfree(old_full); return -ENOENT; }
 
+    result = vfs_check_search_permission(old_full, false);
+    if (result != 0) { kfree(old_full); kfree(new_full); return result; }
+
+    result = vfs_check_search_permission(new_full, false);
+    if (result != 0) { kfree(old_full); kfree(new_full); return result; }
+
+    if (vfs_is_mountpoint(old_full) || vfs_is_mountpoint(new_full)) {
+        kfree(old_full);
+        kfree(new_full);
+        return -EBUSY;
+    }
+
     result = split_path(old_full, &old_parent_path, &old_name);
     if (result != 0) { kfree(old_full); kfree(new_full); return result; }
 
@@ -1376,6 +1497,8 @@ int sys_rename(const char* oldpath, const char* newpath)
     inode_t* rename_target = path_lookup_ex(old_full, false);
     if (!rename_target) {
         result = -ENOENT;
+    } else if (vfs_inode_has_external_refs(rename_target)) {
+        result = -EBUSY;
     } else if (S_ISDIR(rename_target->mode) &&
                vfs_path_is_self_or_descendant(old_full, new_full)) {
         result = -EINVAL;
@@ -1421,6 +1544,17 @@ int sys_rmdir(const char* pathname)
     kfree(kernel_path);
     if (!abs_path) return -ENOMEM;
 
+    result = vfs_check_search_permission(abs_path, false);
+    if (result < 0) {
+        kfree(abs_path);
+        return result;
+    }
+
+    if (vfs_is_mountpoint(abs_path)) {
+        kfree(abs_path);
+        return -EBUSY;
+    }
+
     target_inode = path_lookup_ex(abs_path, false);
     if (!target_inode) {
         kfree(abs_path);
@@ -1431,6 +1565,12 @@ int sys_rmdir(const char* pathname)
         put_inode(target_inode);
         kfree(abs_path);
         return -ENOTDIR;
+    }
+
+    if (vfs_inode_has_external_refs(target_inode)) {
+        put_inode(target_inode);
+        kfree(abs_path);
+        return -EBUSY;
     }
 
     result = split_path(abs_path, &parent_path, &dir_name);
@@ -1489,6 +1629,12 @@ int sys_mkdir(const char* pathname, mode_t mode)
     abs_path = resolve_path(kernel_path);
     kfree(kernel_path);
     if (!abs_path) return -ENOMEM;
+
+    result = vfs_check_search_permission(abs_path, false);
+    if (result < 0) {
+        kfree(abs_path);
+        return result;
+    }
 
     result = split_path(abs_path, &parent_path, &dir_name);
     if (result != 0) {

@@ -558,6 +558,80 @@ char* resolve_path(const char* path) {
     return full_path;
 }
 
+int vfs_check_search_permission(const char* path, bool include_final)
+{
+    char current_path[MAX_PATH];
+    char* path_copy;
+    char* token;
+    char* saveptr;
+
+    if (!path || path[0] != '/')
+        return -EINVAL;
+
+    if (current_uid() == 0)
+        return 0;
+
+    inode_t* root = path_lookup("/");
+    if (!root)
+        return -ENOENT;
+    int root_ret = inode_permission(root, MAY_EXEC) ? 0 : -EACCES;
+    put_inode(root);
+    if (root_ret < 0 || strcmp(path, "/") == 0)
+        return include_final ? root_ret : 0;
+
+    path_copy = strdup(path);
+    if (!path_copy)
+        return -ENOMEM;
+
+    current_path[0] = '\0';
+    saveptr = NULL;
+    token = strtok_r(path_copy + 1, "/", &saveptr);
+
+    while (token) {
+        char* next = strtok_r(NULL, "/", &saveptr);
+        bool is_final = (next == NULL);
+
+        if (is_final && !include_final)
+            break;
+
+        if (current_path[0] == '\0') {
+            snprintf(current_path, sizeof(current_path), "/%s", token);
+        } else {
+            size_t len = strlen(current_path);
+            if (len + 1 + strlen(token) >= sizeof(current_path)) {
+                kfree(path_copy);
+                return -EINVAL;
+            }
+            strcat(current_path, "/");
+            strcat(current_path, token);
+        }
+
+        inode_t* inode = path_lookup(current_path);
+        if (!inode) {
+            kfree(path_copy);
+            return -ENOENT;
+        }
+
+        if (!S_ISDIR(inode->mode)) {
+            put_inode(inode);
+            kfree(path_copy);
+            return -ENOTDIR;
+        }
+
+        if (!inode_permission(inode, MAY_EXEC)) {
+            put_inode(inode);
+            kfree(path_copy);
+            return -EACCES;
+        }
+
+        put_inode(inode);
+        token = next;
+    }
+
+    kfree(path_copy);
+    return 0;
+}
+
 int sys_open(const char* pathname, int flags, mode_t mode)
 {
     char* kernel_path;
@@ -580,6 +654,12 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     kfree(kernel_path);
     
     if (!full_path) return -ENOENT;
+
+    int search_ret = vfs_check_search_permission(full_path, false);
+    if (search_ret < 0) {
+        kfree(full_path);
+        return search_ret;
+    }
 
     if (is_tty_device_path(full_path)) {
         int tty_id = tty_id_from_device_path(full_path);
@@ -753,6 +833,12 @@ int sys_stat(const char* pathname, struct stat* statbuf)
 
     if (!full_path) return -ENOENT;
 
+    int search_ret = vfs_check_search_permission(full_path, false);
+    if (search_ret < 0) {
+        kfree(full_path);
+        return search_ret;
+    }
+
     if (is_null_device_path(full_path)) {
         fill_null_device_stat(&kstat);
         kfree(full_path);
@@ -810,6 +896,12 @@ int sys_lstat(const char* pathname, struct stat* statbuf)
     full_path = resolve_path(kernel_path);
     kfree(kernel_path);
     if (!full_path) return -ENOENT;
+
+    int search_ret = vfs_check_search_permission(full_path, false);
+    if (search_ret < 0) {
+        kfree(full_path);
+        return search_ret;
+    }
 
     if (is_null_device_path(full_path)) {
         fill_null_device_stat(&kstat);
