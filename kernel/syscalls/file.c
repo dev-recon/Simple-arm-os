@@ -447,6 +447,7 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     
     file->inode = inode;
     file->flags = flags & ~O_CLOEXEC;
+    vfs_inode_opened(inode);
 
     if (flags & O_APPEND) {
         //KDEBUG("APPEND FLAG DETECTED offset = %d...\n", inode->size);
@@ -748,7 +749,11 @@ int sys_open(const char* pathname, int flags, mode_t mode)
         return fd;
     }
 
+    if (flags & O_CREAT)
+        vfs_begin_mutation();
     fd = kernel_open(full_path, flags, mode);
+    if (flags & O_CREAT)
+        vfs_end_mutation();
 
     //KDEBUG("sys_open: '%s' flags=0x%x -> fd=%d\n", pathname, flags, fd);
   
@@ -1026,8 +1031,10 @@ void close_file(file_t* file)
     if (do_close) {
         if (file->f_op && file->f_op->close)
             file->f_op->close(file);
-        if (file->inode)
+        if (file->inode) {
+            vfs_inode_closed(file->inode);
             put_inode(file->inode);
+        }
         kfree(file);
     }
 }

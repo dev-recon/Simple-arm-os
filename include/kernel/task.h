@@ -84,6 +84,8 @@ struct inode {
     uint32_t blocks;
     nlink_t nlink;
     uint32_t ref_count;
+    uint32_t open_count;
+    uint32_t flags;
     
     /* Filesystem specific */
     uint32_t first_cluster;

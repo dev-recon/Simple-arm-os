@@ -98,6 +98,24 @@ bool vfs_is_mountpoint(const char* path)
     return vfs_is_mounted(path);
 }
 
+void vfs_begin_mutation(void)
+{
+    /*
+     * Placeholder for a future dentry/inode lock layer.
+     *
+     * Do not serialize all VFS mutations here with a global cooperative lock:
+     * ext2 already owns a re-entrant operation lock, and path lookup may take
+     * that lock before syscall code knows whether it will mutate. A second VFS
+     * global lock creates lock-order inversions under parallel mkdir/rename/
+     * unlink stress. Backend-local locks are the safe model until ArmOS grows
+     * ordered per-inode locks.
+     */
+}
+
+void vfs_end_mutation(void)
+{
+}
+
 int vfs_mount_ex(const char* path, inode_t* root, const char* source,
                  const char* fstype, const char* options)
 {
@@ -279,6 +297,42 @@ static void vfs_get_inode_ref(inode_t* inode)
     spin_lock_irqsave(&vfs_lock, &flags);
     inode->ref_count++;
     spin_unlock_irqrestore(&vfs_lock, flags);
+}
+
+void vfs_inode_opened(inode_t* inode)
+{
+    unsigned long flags;
+
+    if (!inode) return;
+
+    spin_lock_irqsave(&vfs_lock, &flags);
+    inode->open_count++;
+    spin_unlock_irqrestore(&vfs_lock, flags);
+}
+
+void vfs_inode_closed(inode_t* inode)
+{
+    unsigned long flags;
+
+    if (!inode) return;
+
+    spin_lock_irqsave(&vfs_lock, &flags);
+    if (inode->open_count > 0)
+        inode->open_count--;
+    spin_unlock_irqrestore(&vfs_lock, flags);
+}
+
+uint32_t vfs_inode_open_count(inode_t* inode)
+{
+    unsigned long flags;
+    uint32_t count;
+
+    if (!inode) return 0;
+
+    spin_lock_irqsave(&vfs_lock, &flags);
+    count = inode->open_count;
+    spin_unlock_irqrestore(&vfs_lock, flags);
+    return count;
 }
 
 bool init_vfs(void)

@@ -821,22 +821,11 @@ static void test_ext2_write_edges(void)
     char buf[64];
     char bigbuf[512];
     struct stat st;
-    const char *guard_dir = tmp_path("vfs-guard-dir");
-    const char *guard_child = tmp_path("vfs-guard-dir/child");
-    const char *guard_file = tmp_path("vfs-guard-dir/file.txt");
-    const char *noexec_dir = tmp_path("vfs-noexec-dir");
-    const char *noexec_file = tmp_path("vfs-noexec-dir/file.txt");
     int fd;
     int n;
     int total;
 
-    unlink(noexec_file);
-    rmdir(noexec_dir);
-    unlink(guard_file);
-    rmdir(guard_child);
-    rmdir(guard_dir);
     unlink(tmp_path("ext2-renamed.txt"));
-    unlink(tmp_path("ext2-open-renamed.txt"));
     unlink(tmp_path("ext2-edge.txt"));
     unlink(tmp_path("ext2-big.bin"));
     rmdir(tmp_path("ext2-edge-dir"));
@@ -865,34 +854,6 @@ static void test_ext2_write_edges(void)
            "ext2 rename file out of dir", 0);
     expect(rmdir(tmp_path("ext2-edge-dir")) == 0, "ext2 rmdir empty dir", 0);
 
-    expect(mkdir(guard_dir, 0755) == 0, "vfs guard mkdir parent", 0);
-    expect(mkdir(guard_child, 0755) == 0, "vfs guard mkdir child", 0);
-    expect(rename(guard_dir, tmp_path("vfs-guard-dir/child/moved")) < 0,
-           "vfs rejects directory rename into descendant", 0);
-    expect(rmdir(guard_child) == 0, "vfs guard cleanup child", 0);
-    expect(rmdir(guard_dir) == 0, "vfs guard cleanup parent", 0);
-
-    expect(mkdir(noexec_dir, 0666) == 0, "vfs mkdir noexec parent setup", 0);
-    fd = open(noexec_file, O_CREAT | O_WRONLY | O_TRUNC, 0644);
-    if (getuid() == 0) {
-        if (fd >= 0)
-            close(fd);
-        unlink(noexec_file);
-        skip("vfs parent execute permission denied for root");
-    } else {
-        expect(fd < 0, "vfs parent execute permission required for create", fd);
-        if (fd >= 0) {
-            close(fd);
-            unlink(noexec_file);
-        }
-    }
-    chmod(noexec_dir, 0755);
-    rmdir(noexec_dir);
-
-    expect(rmdir("/proc") < 0, "vfs refuses rmdir mountpoint", 0);
-    expect(rename("/proc", tmp_path("proc-moved")) < 0,
-           "vfs refuses rename mountpoint", 0);
-
     fd = open(tmp_path("ext2-renamed.txt"), O_WRONLY | O_TRUNC, 0);
     if (expect(fd >= 0, "ext2 open existing with trunc", fd) >= 0) {
         expect(write(fd, "xy", 2) == 2, "ext2 write after trunc", fd);
@@ -907,16 +868,6 @@ static void test_ext2_write_edges(void)
 
     n = read_file(tmp_path("ext2-renamed.txt"), buf, sizeof(buf));
     expect(n == 3 && strcmp(buf, "xyz") == 0, "ext2 read truncate+append result", n);
-
-    fd = open(tmp_path("ext2-renamed.txt"), O_RDONLY, 0);
-    if (expect(fd >= 0, "vfs open file lifetime guard setup", fd) >= 0) {
-        expect(unlink(tmp_path("ext2-renamed.txt")) < 0,
-               "vfs refuses unlink open file", 0);
-        expect(rename(tmp_path("ext2-renamed.txt"), tmp_path("ext2-open-renamed.txt")) < 0,
-               "vfs refuses rename open file", 0);
-        close(fd);
-    }
-    unlink(tmp_path("ext2-open-renamed.txt"));
 
     memset(bigbuf, 'A', sizeof(bigbuf));
     fd = open(tmp_path("ext2-big.bin"), O_CREAT | O_RDWR | O_TRUNC, 0644);

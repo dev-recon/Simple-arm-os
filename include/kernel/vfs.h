@@ -94,6 +94,11 @@ int  vfs_mount_ex(const char* path, inode_t* root, const char* source,
 int  vfs_umount(const char* path);
 bool vfs_is_mounted(const char* path);
 bool vfs_is_mountpoint(const char* path);
+void vfs_begin_mutation(void);
+void vfs_end_mutation(void);
+void vfs_inode_opened(inode_t* inode);
+void vfs_inode_closed(inode_t* inode);
+uint32_t vfs_inode_open_count(inode_t* inode);
 void vfs_format_mounts(char* buf, size_t cap, size_t* len);
 int  vfs_statfs(const char* path, struct statfs* st);
 inode_t* create_inode(void);

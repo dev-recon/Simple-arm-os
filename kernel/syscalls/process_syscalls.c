@@ -99,6 +99,9 @@ static bool vfs_inode_has_external_refs(inode_t* inode)
     if (!inode || !task_list_head)
         return false;
 
+    if (vfs_inode_open_count(inode) > 0)
+        return true;
+
     task = task_list_head;
     do {
         if (task->type == TASK_TYPE_PROCESS && task->process) {
@@ -883,7 +886,7 @@ int sys_link(const char* oldpath, const char* newpath)
     char *old_kpath, *new_kpath;
     char *old_full, *new_full;
     char *new_parent_path, *new_name;
-    inode_t *target, *new_parent;
+    inode_t *target = NULL, *new_parent = NULL;
     int result;
 
     old_kpath = copy_string_from_user(oldpath);
@@ -914,23 +917,8 @@ int sys_link(const char* oldpath, const char* newpath)
         return result;
     }
 
-    target = path_lookup_ex(old_full, false);
-    if (!target) {
-        kfree(old_full);
-        kfree(new_full);
-        return -ENOENT;
-    }
-
-    if (S_ISDIR(target->mode)) {
-        put_inode(target);
-        kfree(old_full);
-        kfree(new_full);
-        return -EPERM;
-    }
-
     result = split_path(new_full, &new_parent_path, &new_name);
     if (result != 0) {
-        put_inode(target);
         kfree(old_full);
         kfree(new_full);
         return result;
@@ -939,6 +927,19 @@ int sys_link(const char* oldpath, const char* newpath)
     if (vfs_is_special_basename(new_name)) {
         result = -EINVAL;
         goto out_link;
+    }
+
+    vfs_begin_mutation();
+
+    target = path_lookup_ex(old_full, false);
+    if (!target) {
+        result = -ENOENT;
+        goto out_link_locked;
+    }
+
+    if (S_ISDIR(target->mode)) {
+        result = -EPERM;
+        goto out_link_locked;
     }
 
     new_parent = path_lookup(new_parent_path);
@@ -952,9 +953,11 @@ int sys_link(const char* oldpath, const char* newpath)
         result = ext2_link_inode(new_parent, new_name, target);
     }
 
+out_link_locked:
     if (new_parent) put_inode(new_parent);
+    if (target) put_inode(target);
+    vfs_end_mutation();
 out_link:
-    put_inode(target);
     kfree(old_full);
     kfree(new_full);
     kfree(new_parent_path);
@@ -1002,6 +1005,8 @@ int sys_symlink(const char* target, const char* linkpath)
         goto out_symlink;
     }
 
+    vfs_begin_mutation();
+
     parent = path_lookup(parent_path);
     if (!parent) {
         result = -ENOENT;
@@ -1014,6 +1019,7 @@ int sys_symlink(const char* target, const char* linkpath)
     }
 
     if (parent) put_inode(parent);
+    vfs_end_mutation();
 out_symlink:
     kfree(target_kpath);
     kfree(link_full);
@@ -1253,17 +1259,23 @@ int sys_chmod(const char* pathname, mode_t mode)
         return -EBUSY;
     }
 
+    vfs_begin_mutation();
     inode = path_lookup(full_path);
     kfree(full_path);
-    if (!inode) return -ENOENT;
+    if (!inode) {
+        vfs_end_mutation();
+        return -ENOENT;
+    }
 
     if (current_uid() != 0 && current_uid() != inode->uid) {
         put_inode(inode);
+        vfs_end_mutation();
         return -EPERM;
     }
 
     if (inode->i_op != &ext2_inode_ops) {
         put_inode(inode);
+        vfs_end_mutation();
         return -EROFS;
     }
 
@@ -1272,6 +1284,7 @@ int sys_chmod(const char* pathname, mode_t mode)
     ret = ext2_update_inode_metadata(inode);
 
     put_inode(inode);
+    vfs_end_mutation();
     return ret;
 }
 
@@ -1300,23 +1313,30 @@ int sys_chown(const char* pathname, uid_t owner, gid_t group)
         return -EBUSY;
     }
 
+    vfs_begin_mutation();
     inode = path_lookup(full_path);
     kfree(full_path);
-    if (!inode) return -ENOENT;
+    if (!inode) {
+        vfs_end_mutation();
+        return -ENOENT;
+    }
 
     if (current_uid() != 0) {
         put_inode(inode);
+        vfs_end_mutation();
         return -EPERM;
     }
 
     if (inode->i_op != &ext2_inode_ops) {
         put_inode(inode);
+        vfs_end_mutation();
         return -EROFS;
     }
 
     if ((owner != (uid_t)-1 && owner > 0xFFFFu) ||
         (group != (gid_t)-1 && group > 0xFFFFu)) {
         put_inode(inode);
+        vfs_end_mutation();
         return -EINVAL;
     }
 
@@ -1329,6 +1349,7 @@ int sys_chown(const char* pathname, uid_t owner, gid_t group)
     ret = ext2_update_inode_metadata(inode);
 
     put_inode(inode);
+    vfs_end_mutation();
     return ret;
 }
 
@@ -1362,9 +1383,12 @@ int sys_unlink(const char* pathname)
         return -EBUSY;
     }
 
+    vfs_begin_mutation();
+
     /* Vérifier que le fichier existe */
     target_inode = path_lookup_ex(full_path, false);
     if (!target_inode) {
+        vfs_end_mutation();
         kfree(full_path);
         return -ENOENT;
     }
@@ -1372,12 +1396,14 @@ int sys_unlink(const char* pathname)
     /* Vérifier que ce n'est pas un répertoire */
     if (S_ISDIR(target_inode->mode)) {
         put_inode(target_inode);
+        vfs_end_mutation();
         kfree(full_path);
         return -EISDIR;
     }
 
     if (vfs_inode_has_external_refs(target_inode)) {
         put_inode(target_inode);
+        vfs_end_mutation();
         kfree(full_path);
         return -EBUSY;
     }
@@ -1386,12 +1412,14 @@ int sys_unlink(const char* pathname)
     result = split_path(full_path, &parent_path, &filename);
     if (result != 0) {
         put_inode(target_inode);
+        vfs_end_mutation();
         kfree(full_path);
         return result;
     }
     
     if (vfs_is_special_basename(filename)) {
         put_inode(target_inode);
+        vfs_end_mutation();
         kfree(full_path);
         kfree(parent_path);
         kfree(filename);
@@ -1402,6 +1430,7 @@ int sys_unlink(const char* pathname)
     parent_inode = path_lookup(parent_path);
     if (!parent_inode) {
         put_inode(target_inode);
+        vfs_end_mutation();
         kfree(full_path);
         kfree(parent_path);
         kfree(filename);
@@ -1412,6 +1441,7 @@ int sys_unlink(const char* pathname)
     if (!inode_permission(parent_inode, MAY_WRITE | MAY_EXEC)) {
         put_inode(target_inode);
         put_inode(parent_inode);
+        vfs_end_mutation();
         kfree(full_path);
         kfree(parent_path);
         kfree(filename);
@@ -1432,6 +1462,7 @@ int sys_unlink(const char* pathname)
     
     put_inode(target_inode);
     put_inode(parent_inode);
+    vfs_end_mutation();
     kfree(full_path);
     kfree(parent_path);
     kfree(filename);
@@ -1473,11 +1504,14 @@ int sys_rename(const char* oldpath, const char* newpath)
         return -EBUSY;
     }
 
+    vfs_begin_mutation();
+
     result = split_path(old_full, &old_parent_path, &old_name);
-    if (result != 0) { kfree(old_full); kfree(new_full); return result; }
+    if (result != 0) { vfs_end_mutation(); kfree(old_full); kfree(new_full); return result; }
 
     result = split_path(new_full, &new_parent_path, &new_name);
     if (result != 0) {
+        vfs_end_mutation();
         kfree(old_full); kfree(new_full);
         kfree(old_parent_path); kfree(old_name);
         return result;
@@ -1520,6 +1554,7 @@ int sys_rename(const char* oldpath, const char* newpath)
     put_inode(new_parent);
 
 out:
+    vfs_end_mutation();
     kfree(old_full); kfree(new_full);
     kfree(old_parent_path); kfree(old_name);
     kfree(new_parent_path); kfree(new_name);
@@ -1555,20 +1590,25 @@ int sys_rmdir(const char* pathname)
         return -EBUSY;
     }
 
+    vfs_begin_mutation();
+
     target_inode = path_lookup_ex(abs_path, false);
     if (!target_inode) {
+        vfs_end_mutation();
         kfree(abs_path);
         return -ENOENT;
     }
 
     if (!S_ISDIR(target_inode->mode)) {
         put_inode(target_inode);
+        vfs_end_mutation();
         kfree(abs_path);
         return -ENOTDIR;
     }
 
     if (vfs_inode_has_external_refs(target_inode)) {
         put_inode(target_inode);
+        vfs_end_mutation();
         kfree(abs_path);
         return -EBUSY;
     }
@@ -1576,12 +1616,14 @@ int sys_rmdir(const char* pathname)
     result = split_path(abs_path, &parent_path, &dir_name);
     if (result != 0) {
         put_inode(target_inode);
+        vfs_end_mutation();
         kfree(abs_path);
         return result;
     }
 
     if (vfs_is_special_basename(dir_name)) {
         put_inode(target_inode);
+        vfs_end_mutation();
         kfree(abs_path);
         kfree(parent_path);
         kfree(dir_name);
@@ -1591,6 +1633,7 @@ int sys_rmdir(const char* pathname)
     parent_inode = path_lookup(parent_path);
     if (!parent_inode) {
         put_inode(target_inode);
+        vfs_end_mutation();
         kfree(abs_path);
         kfree(parent_path);
         kfree(dir_name);
@@ -1606,6 +1649,7 @@ int sys_rmdir(const char* pathname)
 
     put_inode(target_inode);
     put_inode(parent_inode);
+    vfs_end_mutation();
     kfree(abs_path);
     kfree(parent_path);
     kfree(dir_name);
@@ -1636,13 +1680,17 @@ int sys_mkdir(const char* pathname, mode_t mode)
         return result;
     }
 
+    vfs_begin_mutation();
+
     result = split_path(abs_path, &parent_path, &dir_name);
     if (result != 0) {
+        vfs_end_mutation();
         kfree(abs_path);
         return result;
     }
 
     if (vfs_is_special_basename(dir_name)) {
+        vfs_end_mutation();
         kfree(abs_path);
         kfree(parent_path);
         kfree(dir_name);
@@ -1651,6 +1699,7 @@ int sys_mkdir(const char* pathname, mode_t mode)
 
     parent_inode = path_lookup(parent_path);
     if (!parent_inode) {
+        vfs_end_mutation();
         kfree(abs_path);
         kfree(parent_path);
         kfree(dir_name);
@@ -1659,6 +1708,7 @@ int sys_mkdir(const char* pathname, mode_t mode)
 
     if (!S_ISDIR(parent_inode->mode)) {
         put_inode(parent_inode);
+        vfs_end_mutation();
         kfree(abs_path);
         kfree(parent_path);
         kfree(dir_name);
@@ -1673,6 +1723,7 @@ int sys_mkdir(const char* pathname, mode_t mode)
         result = parent_inode->i_op->mkdir(parent_inode, dir_name, mode | S_IFDIR);
 
     put_inode(parent_inode);
+    vfs_end_mutation();
     kfree(abs_path);
     kfree(parent_path);
     kfree(dir_name);
