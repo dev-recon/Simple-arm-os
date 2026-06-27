@@ -286,7 +286,7 @@ bool init_vfs(void)
         return false;
     }
 
-    /* Monter ext2 comme racine depuis le debut du disk.img. */
+    /* Mount the ext2 root filesystem from the partition declared in disk_layout.h. */
     KINFO("[VFS] Mounting %s (%s) at LBA %u\n",
           ext2_part->name, ext2_part->mountpoint, (uint32_t)ext2_part->lba_start);
     inode_t* ext2_root = ext2_mount(ext2_part->lba_start);

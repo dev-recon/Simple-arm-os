@@ -617,20 +617,23 @@ Contributor rules:
 
 ### Disk Partition Layout
 
-ArmOS currently uses a simple fixed disk image layout described in
-`include/kernel/disk_layout.h`:
+ArmOS generates a real MBR partition table for `disk.img`. The build still
+keeps `include/kernel/disk_layout.h` as the compiled fallback, but the kernel
+reads sector 0 at boot and updates the runtime layout from the MBR before VFS
+mounts `/`.
 
 ```text
-virtio0p1   ext2    LBA 0             64 MB   root filesystem
+LBA 0       MBR     partition table
+virtio0p1   ext2    LBA 2048          512 MB  root filesystem
 virtio0p2   FAT32   LBA after p1      64 MB   compatibility mount
 ```
 
 The root filesystem is ext2. FAT32 is kept for compatibility and cross-checking,
 not as the canonical full userland filesystem.
 
-This is intentionally simpler than parsing a real MBR/GPT. If real partition
-table support is added later, keep this static layout as a fallback until the
-new path is heavily tested.
+The MBR path is deliberately small: it recognizes the first ext2 partition
+(`0x83`) and the first FAT32 partition (`0x0b` or `0x0c`). If the disk has no
+valid MBR, ArmOS falls back to the compiled layout.
 
 ### VFS
 

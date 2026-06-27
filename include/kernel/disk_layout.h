@@ -22,9 +22,12 @@
 #include <kernel/types.h>
 
 #define DISK_SECTOR_SIZE       512ULL
-#define DISK_EXT2_SIZE_MB      64ULL
+#define DISK_RESERVED_MB       1ULL
+#define DISK_EXT2_SIZE_MB      512ULL
 #define DISK_FAT32_SIZE_MB     64ULL
 #define DISK_MB_TO_SECTORS(mb) ((uint64_t)(mb) * 1024ULL * 1024ULL / DISK_SECTOR_SIZE)
+#define DISK_EXT2_START_MB     DISK_RESERVED_MB
+#define DISK_FAT32_START_MB    (DISK_EXT2_START_MB + DISK_EXT2_SIZE_MB)
 
 typedef enum {
     DISK_FS_EXT2 = 1,
@@ -46,31 +49,9 @@ typedef struct {
     uint64_t sector_count;
 } disk_partition_t;
 
-static const disk_partition_t kernel_disk_partitions[DISK_PART_COUNT] = {
-    {
-        .id = DISK_PART_EXT2_ROOT,
-        .fs_type = DISK_FS_EXT2,
-        .name = "virtio0p1",
-        .mountpoint = "/",
-        .lba_start = 0,
-        .sector_count = DISK_MB_TO_SECTORS(DISK_EXT2_SIZE_MB),
-    },
-    {
-        .id = DISK_PART_FAT32_MNT,
-        .fs_type = DISK_FS_FAT32,
-        .name = "virtio0p2",
-        .mountpoint = "/mnt",
-        .lba_start = DISK_MB_TO_SECTORS(DISK_EXT2_SIZE_MB),
-        .sector_count = DISK_MB_TO_SECTORS(DISK_FAT32_SIZE_MB),
-    },
-};
+extern disk_partition_t kernel_disk_partitions[DISK_PART_COUNT];
 
-static inline const disk_partition_t* disk_partition_get(disk_partition_id_t id)
-{
-    if (id >= DISK_PART_COUNT) {
-        return NULL;
-    }
-    return &kernel_disk_partitions[id];
-}
+const disk_partition_t* disk_partition_get(disk_partition_id_t id);
+bool disk_layout_init_from_mbr(void);
 
 #endif

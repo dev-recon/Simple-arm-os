@@ -13,7 +13,7 @@ The default generated disk layout is:
 
 - `ext2.img`: primary root filesystem, mounted as `/`
 - `fat32.img`: secondary compatibility filesystem, mounted as `/mnt`
-- `disk.img`: concatenation of ext2 first, FAT32 second
+- `disk.img`: MBR at sector 0, ext2 as partition 1, FAT32 as partition 2
 
 Generated images are build artifacts and should not be committed.
 

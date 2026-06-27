@@ -29,7 +29,7 @@ for dir in userfs userland kernel newlib-port; do
     fi
 done
 
-for tool in make "${ARCH}gcc" "${ARCH}ld" "${ARCH}objcopy" "${ARCH}objdump" mkfs.fat mcopy mmd mke2fs debugfs; do
+for tool in make python3 "${ARCH}gcc" "${ARCH}ld" "${ARCH}objcopy" "${ARCH}objdump" mkfs.fat mcopy mmd mke2fs debugfs; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Error: required tool '$tool' not found in PATH" >&2
         exit 1

@@ -47,7 +47,7 @@ for dir in "$USERFS_DIR" "$USERLAND_DIR"; do
     fi
 done
 
-for tool in make arm-none-eabi-gcc arm-none-eabi-ld arm-none-eabi-objcopy arm-none-eabi-objdump mkfs.fat mcopy mmd mke2fs debugfs; do
+for tool in make python3 arm-none-eabi-gcc arm-none-eabi-ld arm-none-eabi-objcopy arm-none-eabi-objdump mkfs.fat mcopy mmd mke2fs debugfs; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Error: required tool '$tool' not found in PATH"
         exit 1

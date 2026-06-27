@@ -39,6 +39,7 @@
 #include <kernel/ide.h>
 #include <kernel/ramfs.h>
 #include <kernel/userfs_loader.h>
+#include <kernel/disk_layout.h>
 
 #include <kernel/task.h>
 #include <kernel/kernel_tasks.h>
@@ -291,13 +292,22 @@ void kernel_main(void)
         disk_sectors = ata_get_capacity_sectors();
         disk_mb = (uint32_t)(disk_sectors / 2048u);
         KBOOT_OKF("Block: virtio0 %uMB, irq 47", disk_mb);
+        if (!disk_layout_init_from_mbr()) {
+            KBOOT_WARN("Partition: using compiled fallback layout");
+        }
     }
 
     if (!init_vfs()) {
         KBOOT_WARN("VFS: mount failed");
     } else {
-        KBOOT_OKF("Partition: virtio0p1 ext2 64MB");
-        KBOOT_OKF("Partition: virtio0p2 fat32 64MB");
+        const disk_partition_t* ext2_part = disk_partition_get(DISK_PART_EXT2_ROOT);
+        const disk_partition_t* fat32_part = disk_partition_get(DISK_PART_FAT32_MNT);
+        KBOOT_OKF("Partition: %s ext2 %uMB",
+                  ext2_part ? ext2_part->name : "virtio0p1",
+                  ext2_part ? (uint32_t)(ext2_part->sector_count / 2048ULL) : 0);
+        KBOOT_OKF("Partition: %s fat32 %uMB",
+                  fat32_part ? fat32_part->name : "virtio0p2",
+                  fat32_part ? (uint32_t)(fat32_part->sector_count / 2048ULL) : 0);
         KBOOT_OKF("VFS: mounted ext2 on /");
         KBOOT_OKF("VFS: mounted proc on /proc");
         KBOOT_OKF("VFS: fat32 available on /mnt (manual)");

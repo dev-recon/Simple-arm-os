@@ -58,6 +58,7 @@ KERNEL_OBJS = \
 	kernel/fs/mount.o \
 	kernel/fs/fat32.o \
 	kernel/fs/fat32_vfs.o \
+	kernel/fs/disk_layout.o \
 	kernel/fs/ext2_vfs.o \
 	kernel/fs/procfs.o \
 	kernel/fs/userfs_loader.o \
@@ -96,11 +97,21 @@ DISK_IMG     = disk.img
 FAT32_IMG    = fat32.img
 EXT2_IMG     = ext2.img
 FAT32_SIZE_MB = 64
-EXT2_SIZE_MB = 64
-DISK_SIZE_MB = $(shell echo $$(($(FAT32_SIZE_MB) + $(EXT2_SIZE_MB))))
+EXT2_SIZE_MB = 512
+DISK_RESERVED_MB = 1
+DISK_SIZE_MB = $(shell echo $$(($(DISK_RESERVED_MB) + $(EXT2_SIZE_MB) + $(FAT32_SIZE_MB))))
+DISK_MB_SECTORS = 2048
+DISK_EXT2_START_MB = $(DISK_RESERVED_MB)
+DISK_FAT32_START_MB = $(shell echo $$(($(DISK_EXT2_START_MB) + $(EXT2_SIZE_MB))))
+DISK_EXT2_START_SECTOR = $(shell echo $$(($(DISK_EXT2_START_MB) * $(DISK_MB_SECTORS))))
+DISK_FAT32_START_SECTOR = $(shell echo $$(($(DISK_FAT32_START_MB) * $(DISK_MB_SECTORS))))
+DISK_EXT2_SECTORS = $(shell echo $$(($(EXT2_SIZE_MB) * $(DISK_MB_SECTORS))))
+DISK_FAT32_SECTORS = $(shell echo $$(($(FAT32_SIZE_MB) * $(DISK_MB_SECTORS))))
 USERFS_DIR   = userfs
 USERLAND_DIR = userland
 EXT2_STAGING = /tmp/ext2_staging
+PYTHON ?= python3
+MBR_TOOL = tools/make_mbr.py
 USERFS_FILES := $(shell find $(USERFS_DIR) -type f 2>/dev/null)
 USERFS_DIRS  := $(shell find $(USERFS_DIR) -type d 2>/dev/null)
 USERFS_LINKS := $(shell find $(USERFS_DIR) -type l 2>/dev/null)
@@ -229,12 +240,16 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	$(DEBUGFS) -R 'ls -l /bin' $(EXT2_IMG) >/dev/null
 	@echo "ext2 image created"
 
-# Disque final = ext2 + FAT32 concaténés
-$(DISK_IMG): $(FAT32_IMG) $(EXT2_IMG)
-	@echo "=== Assembling $(DISK_IMG) (ext2 + FAT32) ==="
+# Disque final = MBR + partitions alignees. La premiere partition commence a
+# 1 MiB (LBA 2048), comme sur un disque Linux classique.
+$(DISK_IMG): $(FAT32_IMG) $(EXT2_IMG) $(MBR_TOOL)
+	@echo "=== Assembling $(DISK_IMG) (MBR + ext2 + FAT32) ==="
 	dd if=/dev/zero of=$(DISK_IMG) bs=1048576 count=$(DISK_SIZE_MB) 2>/dev/null
-	dd if=$(EXT2_IMG) of=$(DISK_IMG) bs=1048576 seek=0 conv=notrunc 2>/dev/null
-	dd if=$(FAT32_IMG) of=$(DISK_IMG) bs=1048576 seek=$(EXT2_SIZE_MB) conv=notrunc 2>/dev/null
+	$(PYTHON) $(MBR_TOOL) $(DISK_IMG) \
+		$(DISK_EXT2_START_SECTOR) $(DISK_EXT2_SECTORS) \
+		$(DISK_FAT32_START_SECTOR) $(DISK_FAT32_SECTORS)
+	dd if=$(EXT2_IMG) of=$(DISK_IMG) bs=1048576 seek=$(DISK_EXT2_START_MB) conv=notrunc 2>/dev/null
+	dd if=$(FAT32_IMG) of=$(DISK_IMG) bs=1048576 seek=$(DISK_FAT32_START_MB) conv=notrunc 2>/dev/null
 	@echo "Disk image $(DISK_IMG) created ($(DISK_SIZE_MB) MB)"
 
 # Creer le repertoire userfs avec des fichiers de test
