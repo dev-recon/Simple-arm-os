@@ -101,6 +101,7 @@ void vfs_inode_closed(inode_t* inode);
 uint32_t vfs_inode_open_count(inode_t* inode);
 void vfs_format_mounts(char* buf, size_t cap, size_t* len);
 int  vfs_statfs(const char* path, struct statfs* st);
+int  vfs_sync(void);
 inode_t* create_inode(void);
 inode_t* get_inode(uint32_t ino);
 inode_t* get_root_inode(void);
@@ -130,7 +131,6 @@ uint32_t get_next_inode_number(void);
 /* Helper functions */
 
 
-/* NOTE: Ces fonctions sont implementees dans les fichiers syscalls,
- * pas dans VFS, pour eviter les conflits de declaration */
+/* Syscall entry points live in syscall modules, not in VFS. */
 
 #endif

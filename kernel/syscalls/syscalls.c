@@ -1105,6 +1105,10 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
     }
 
     proc = current_task;
+    if (proc) {
+        proc->current_syscall = syscall_num;
+        proc->last_syscall = syscall_num;
+    }
     //uint32_t usr_r11 = proc->context.usr_r[11];
 
     //if( syscall_num != __NR_read &&
@@ -1143,6 +1147,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
     }
 
     if (sig_result == SIGNAL_CHECK_EXITED) {
+        proc->current_syscall = 0;
         return result;
     }
 
@@ -1154,6 +1159,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
         proc->state == TASK_ZOMBIE ||
         proc->state == TASK_TERMINATED) {
         yield();
+        proc->current_syscall = 0;
         return result;
     }
 
@@ -1162,7 +1168,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
         yield();
     }
 
-
+    proc->current_syscall = 0;
     return result;
 }
 

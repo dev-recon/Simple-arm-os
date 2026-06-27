@@ -129,10 +129,38 @@ typedef struct {
     bool     mounted;
 } ext2_fs_t;
 
+typedef struct {
+    uint32_t mounted;
+    uint32_t dirty;
+    uint32_t block_size;
+    uint32_t blocks_count;
+    uint32_t groups_count;
+    uint32_t inodes_per_group;
+    uint32_t blocks_per_group;
+    uint32_t cache_hits;
+    uint32_t cache_misses;
+    uint32_t cache_writes;
+    uint32_t cache_waits;
+    uint32_t op_waits;
+    uint32_t read_blocks;
+    uint32_t write_blocks;
+    uint32_t syncs;
+    uint32_t sync_errors;
+    uint32_t check_errors;
+    uint32_t sb_free_blocks;
+    uint32_t sb_free_inodes;
+    uint32_t gd_free_blocks_sum;
+    uint32_t gd_free_inodes_sum;
+    uint32_t gd_used_dirs_sum;
+} ext2_stats_t;
+
 struct statfs;
 
 inode_t* ext2_mount(uint64_t lba_start);
 int ext2_statfs(struct statfs* st);
+int ext2_sync(void);
+void ext2_get_stats(ext2_stats_t* out);
+int ext2_check(char* buf, size_t cap, size_t* len);
 inode_t* ext2_create_file(inode_t* parent, const char* name, mode_t mode);
 int ext2_link_inode(inode_t* parent, const char* name, inode_t* target);
 int ext2_create_symlink(inode_t* parent, const char* name, const char* target);

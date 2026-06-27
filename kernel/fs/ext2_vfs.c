@@ -26,6 +26,8 @@
 #include <kernel/spinlock.h>
 #include <kernel/task.h>
 #include <kernel/timer.h>
+#include <kernel/virtio_block.h>
+#include <kernel/stdarg.h>
 
 extern int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer);
 extern int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer);
@@ -37,6 +39,7 @@ static ext2_fs_t ext2_fs;
 
 static int ext2_read_disk_inode(uint32_t ino, ext2_inode_t* out);
 static int ext2_write_disk_inode(uint32_t ino, const ext2_inode_t* in);
+static int ext2_read_group_desc(uint32_t group, ext2_group_desc_t* out);
 
 /* Forward declarations */
 static inode_t* ext2_inode_lookup(inode_t* dir, const char* name);
@@ -114,26 +117,114 @@ static spinlock_t ext2_op_lock = SPINLOCK_INIT("ext2_op");
 static volatile bool ext2_op_busy;
 static task_t* ext2_op_owner;
 static uint32_t ext2_op_depth;
+static volatile bool ext2_dirty;
+static ext2_stats_t ext2_stats;
+
+typedef struct ext2_wait_queue {
+    spinlock_t lock;
+    task_t* waiters[MAX_TASKS];
+} ext2_wait_queue_t;
+
+static ext2_wait_queue_t ext2_op_waitq = {
+    .lock = SPINLOCK_INIT("ext2_op_waitq"),
+};
+static ext2_wait_queue_t ext2_cache_waitq = {
+    .lock = SPINLOCK_INIT("ext2_cache_waitq"),
+};
+
+static void ext2_mark_dirty(void)
+{
+    ext2_dirty = true;
+    ext2_stats.dirty = 1;
+}
+
+static bool ext2_wait_prepare(ext2_wait_queue_t* queue)
+{
+    unsigned long flags;
+
+    if (!queue || !current_task)
+        return false;
+
+    spin_lock_irqsave(&queue->lock, &flags);
+    for (uint32_t i = 0; i < MAX_TASKS; i++) {
+        if (queue->waiters[i] == current_task)
+            break;
+        if (!queue->waiters[i]) {
+            queue->waiters[i] = current_task;
+            break;
+        }
+    }
+    current_task->wakeup_time = get_system_ticks() + TIMER_FREQ;
+    task_set_interruptible(current_task);
+    spin_unlock_irqrestore(&queue->lock, flags);
+    return true;
+}
+
+static void ext2_wait_finish(ext2_wait_queue_t* queue)
+{
+    unsigned long flags;
+
+    if (!queue || !current_task)
+        return;
+
+    spin_lock_irqsave(&queue->lock, &flags);
+    for (uint32_t i = 0; i < MAX_TASKS; i++) {
+        if (queue->waiters[i] == current_task) {
+            queue->waiters[i] = NULL;
+            break;
+        }
+    }
+    current_task->wakeup_time = 0;
+    spin_unlock_irqrestore(&queue->lock, flags);
+}
+
+static void ext2_wait_wake_all(ext2_wait_queue_t* queue)
+{
+    unsigned long flags;
+
+    if (!queue)
+        return;
+
+    spin_lock_irqsave(&queue->lock, &flags);
+    for (uint32_t i = 0; i < MAX_TASKS; i++) {
+        task_t* waiter = queue->waiters[i];
+        if (!waiter)
+            continue;
+        queue->waiters[i] = NULL;
+        waiter->wakeup_time = 0;
+        if (waiter->state == TASK_INTERRUPTIBLE ||
+            waiter->state == TASK_UNINTERRUPTIBLE)
+            add_to_ready_queue(waiter);
+    }
+    spin_unlock_irqrestore(&queue->lock, flags);
+}
+
+static bool ext2_op_try_acquire(void)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&ext2_op_lock, &flags);
+    if (ext2_op_busy && ext2_op_owner && ext2_op_owner == current_task) {
+        ext2_op_depth++;
+        spin_unlock_irqrestore(&ext2_op_lock, flags);
+        return true;
+    }
+    if (!ext2_op_busy) {
+        ext2_op_busy = true;
+        ext2_op_owner = current_task;
+        ext2_op_depth = 1;
+        spin_unlock_irqrestore(&ext2_op_lock, flags);
+        return true;
+    }
+    spin_unlock_irqrestore(&ext2_op_lock, flags);
+    return false;
+}
 
 static void ext2_op_acquire(void)
 {
     while (1) {
-        unsigned long flags;
-
-        spin_lock_irqsave(&ext2_op_lock, &flags);
-        if (ext2_op_busy && ext2_op_owner && ext2_op_owner == current_task) {
-            ext2_op_depth++;
-            spin_unlock_irqrestore(&ext2_op_lock, flags);
+        if (ext2_op_try_acquire())
             return;
-        }
-        if (!ext2_op_busy) {
-            ext2_op_busy = true;
-            ext2_op_owner = current_task;
-            ext2_op_depth = 1;
-            spin_unlock_irqrestore(&ext2_op_lock, flags);
-            return;
-        }
-        spin_unlock_irqrestore(&ext2_op_lock, flags);
 
         if (!current_task) {
             asm volatile("yield" ::: "memory");
@@ -143,11 +234,19 @@ static void ext2_op_acquire(void)
         /*
          * The ext2 backend lock protects on-disk directory and inode updates.
          * Waiting tasks must not stay runnable and spin on yield(): under
-         * parallel metadata stress that can starve the actual lock owner while
-         * it is sleeping for VirtIO completion. Use a short scheduler sleep
-         * until ArmOS grows proper wait queues.
+         * parallel metadata stress that can starve a lock owner sleeping for
+         * VirtIO completion. Register before rechecking the lock; the timeout
+         * is only a lost-wakeup safety net.
          */
-        task_sleep_ms(1);
+        ext2_stats.op_waits++;
+        if (!ext2_wait_prepare(&ext2_op_waitq))
+            continue;
+        if (ext2_op_try_acquire()) {
+            ext2_wait_finish(&ext2_op_waitq);
+            return;
+        }
+        schedule();
+        ext2_wait_finish(&ext2_op_waitq);
     }
 }
 
@@ -170,28 +269,44 @@ static void ext2_op_release(void)
     ext2_op_owner = NULL;
     ext2_op_depth = 0;
     spin_unlock_irqrestore(&ext2_op_lock, flags);
+    ext2_wait_wake_all(&ext2_op_waitq);
+}
+
+static bool ext2_cache_try_acquire(void)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&ext2_cache_lock, &flags);
+    if (!ext2_cache_busy) {
+        ext2_cache_busy = true;
+        ext2_cache_owner = current_task;
+        spin_unlock_irqrestore(&ext2_cache_lock, flags);
+        return true;
+    }
+    spin_unlock_irqrestore(&ext2_cache_lock, flags);
+    return false;
 }
 
 static void ext2_cache_acquire(void)
 {
     while (1) {
-        unsigned long flags;
-
-        spin_lock_irqsave(&ext2_cache_lock, &flags);
-        if (!ext2_cache_busy) {
-            ext2_cache_busy = true;
-            ext2_cache_owner = current_task;
-            spin_unlock_irqrestore(&ext2_cache_lock, flags);
+        if (ext2_cache_try_acquire())
             return;
-        }
-        spin_unlock_irqrestore(&ext2_cache_lock, flags);
 
         if (!current_task) {
             asm volatile("yield" ::: "memory");
             continue;
         }
 
-        task_sleep_ms(1);
+        ext2_stats.cache_waits++;
+        if (!ext2_wait_prepare(&ext2_cache_waitq))
+            continue;
+        if (ext2_cache_try_acquire()) {
+            ext2_wait_finish(&ext2_cache_waitq);
+            return;
+        }
+        schedule();
+        ext2_wait_finish(&ext2_cache_waitq);
     }
 }
 
@@ -208,6 +323,7 @@ static void ext2_cache_release(void)
     ext2_cache_busy = false;
     ext2_cache_owner = NULL;
     spin_unlock_irqrestore(&ext2_cache_lock, flags);
+    ext2_wait_wake_all(&ext2_cache_waitq);
 }
 
 static bool ext2_valid_disk_inode_ptr(const ext2_inode_t* di)
@@ -271,10 +387,12 @@ static int ext2_read_block(uint32_t block, void* buf)
     ext2_cache_acquire();
     entry = ext2_block_cache_find(block);
     if (entry && entry->data) {
+        ext2_stats.cache_hits++;
         memcpy(buf, entry->data, ext2_fs.block_size);
         ext2_cache_release();
         return 0;
     }
+    ext2_stats.cache_misses++;
     ext2_cache_release();
 
     /*
@@ -285,6 +403,7 @@ static int ext2_read_block(uint32_t block, void* buf)
     ret = blk_read_sectors(lba, ext2_fs.sectors_per_block, buf);
     if (ret < 0)
         return ret;
+    ext2_stats.read_blocks++;
 
     ext2_cache_acquire();
     entry = ext2_block_cache_pick();
@@ -308,6 +427,8 @@ static int ext2_write_block(uint32_t block, void* buf)
     ret = blk_write_sectors(lba, ext2_fs.sectors_per_block, buf);
     if (ret < 0 || ext2_fs.block_size == 0)
         return ret;
+    ext2_stats.write_blocks++;
+    ext2_mark_dirty();
 
     ext2_cache_acquire();
     entry = ext2_block_cache_find(block);
@@ -318,6 +439,7 @@ static int ext2_write_block(uint32_t block, void* buf)
         memcpy(entry->data, buf, ext2_fs.block_size);
         entry->block = block;
         entry->valid = true;
+        ext2_stats.cache_writes++;
     }
 
     ext2_cache_release();
@@ -353,8 +475,191 @@ static int ext2_write_superblock(const ext2_superblock_t* in)
 
     memcpy(buf, in, sizeof(*in));
     int ret = blk_write_sectors(ext2_fs.lba_start + 2, 2, buf);
+    if (ret >= 0) {
+        ext2_stats.write_blocks++;
+        ext2_mark_dirty();
+    }
     kfree(buf);
     return ret;
+}
+
+int ext2_sync(void)
+{
+    int ret = 0;
+
+    if (!ext2_fs.mounted)
+        return 0;
+
+    ext2_op_acquire();
+    ext2_stats.syncs++;
+    if (ext2_dirty) {
+        ret = virtio_blk_flush();
+        if (ret < 0) {
+            ext2_stats.sync_errors++;
+            ret = -EIO;
+        } else {
+            ext2_dirty = false;
+            ext2_stats.dirty = 0;
+        }
+    }
+    ext2_op_release();
+    return ret;
+}
+
+static void ext2_check_append(char* buf, size_t cap, size_t* len,
+                              const char* fmt, ...)
+{
+    va_list args;
+    int written;
+
+    if (!buf || !len || *len >= cap)
+        return;
+
+    va_start(args, fmt);
+    written = vsnprintf(buf + *len, (int)(cap - *len), fmt, args);
+    va_end(args);
+
+    if (written < 0)
+        return;
+    if ((size_t)written >= cap - *len)
+        *len = cap - 1;
+    else
+        *len += (size_t)written;
+}
+
+int ext2_check(char* buf, size_t cap, size_t* len)
+{
+    ext2_superblock_t sb;
+    uint32_t free_blocks_sum = 0;
+    uint32_t free_inodes_sum = 0;
+    uint32_t used_dirs_sum = 0;
+    uint32_t errors = 0;
+    int ret = 0;
+
+    if (!buf || !len || cap == 0)
+        return -EINVAL;
+
+    *len = 0;
+    if (!ext2_fs.mounted) {
+        ext2_check_append(buf, cap, len, "ext2: not mounted\n");
+        return -ENODEV;
+    }
+
+    ext2_op_acquire();
+    if (ext2_read_superblock(&sb) < 0) {
+        ext2_check_append(buf, cap, len, "ext2: superblock read failed\n");
+        ext2_stats.check_errors++;
+        ext2_op_release();
+        return -EIO;
+    }
+
+    if (sb.s_magic != EXT2_MAGIC) {
+        ext2_check_append(buf, cap, len, "ext2: bad magic 0x%04X\n", sb.s_magic);
+        errors++;
+    }
+    if (ext2_fs.block_size == 0 || ext2_fs.sectors_per_block == 0) {
+        ext2_check_append(buf, cap, len, "ext2: invalid block geometry\n");
+        errors++;
+    }
+    if (sb.s_blocks_count != ext2_fs.blocks_count) {
+        ext2_check_append(buf, cap, len, "ext2: block count mismatch sb=%u runtime=%u\n",
+                          sb.s_blocks_count, ext2_fs.blocks_count);
+        errors++;
+    }
+    if (sb.s_free_blocks_count > sb.s_blocks_count) {
+        ext2_check_append(buf, cap, len, "ext2: free blocks exceed total blocks\n");
+        errors++;
+    }
+    if (sb.s_free_inodes_count > sb.s_inodes_count) {
+        ext2_check_append(buf, cap, len, "ext2: free inodes exceed total inodes\n");
+        errors++;
+    }
+
+    for (uint32_t group = 0; group < ext2_fs.groups_count; group++) {
+        ext2_group_desc_t gd;
+        if (ext2_read_group_desc(group, &gd) < 0) {
+            ext2_check_append(buf, cap, len, "ext2: group %u descriptor read failed\n", group);
+            errors++;
+            continue;
+        }
+        free_blocks_sum += gd.bg_free_blocks_count;
+        free_inodes_sum += gd.bg_free_inodes_count;
+        used_dirs_sum += gd.bg_used_dirs_count;
+    }
+
+    if (free_blocks_sum != sb.s_free_blocks_count) {
+        ext2_check_append(buf, cap, len, "ext2: free block sum mismatch sb=%u groups=%u\n",
+                          sb.s_free_blocks_count, free_blocks_sum);
+        errors++;
+    }
+    if (free_inodes_sum != sb.s_free_inodes_count) {
+        ext2_check_append(buf, cap, len, "ext2: free inode sum mismatch sb=%u groups=%u\n",
+                          sb.s_free_inodes_count, free_inodes_sum);
+        errors++;
+    }
+
+    ext2_stats.sb_free_blocks = sb.s_free_blocks_count;
+    ext2_stats.sb_free_inodes = sb.s_free_inodes_count;
+    ext2_stats.gd_free_blocks_sum = free_blocks_sum;
+    ext2_stats.gd_free_inodes_sum = free_inodes_sum;
+    ext2_stats.gd_used_dirs_sum = used_dirs_sum;
+    ext2_stats.check_errors += errors;
+
+    ext2_check_append(buf, cap, len, "ext2: block_size=%u blocks=%u free=%u groups=%u\n",
+                      ext2_fs.block_size, sb.s_blocks_count,
+                      sb.s_free_blocks_count, ext2_fs.groups_count);
+    ext2_check_append(buf, cap, len, "ext2: inodes=%u free=%u used_dirs=%u\n",
+                      sb.s_inodes_count, sb.s_free_inodes_count,
+                      used_dirs_sum);
+    ext2_check_append(buf, cap, len, "ext2: group_sums free_blocks=%u free_inodes=%u\n",
+                      free_blocks_sum, free_inodes_sum);
+    ext2_check_append(buf, cap, len, "ext2: %s\n",
+                      errors == 0 ? "looks consistent" : "inconsistencies found");
+
+    if (errors)
+        ret = -EIO;
+    ext2_op_release();
+    return ret;
+}
+
+void ext2_get_stats(ext2_stats_t* out)
+{
+    ext2_superblock_t sb;
+    uint32_t free_blocks_sum = 0;
+    uint32_t free_inodes_sum = 0;
+    uint32_t used_dirs_sum = 0;
+
+    if (!out)
+        return;
+
+    if (ext2_fs.mounted) {
+        ext2_op_acquire();
+        if (ext2_read_superblock(&sb) == 0) {
+            ext2_stats.sb_free_blocks = sb.s_free_blocks_count;
+            ext2_stats.sb_free_inodes = sb.s_free_inodes_count;
+        }
+        for (uint32_t group = 0; group < ext2_fs.groups_count; group++) {
+            ext2_group_desc_t gd;
+            if (ext2_read_group_desc(group, &gd) == 0) {
+                free_blocks_sum += gd.bg_free_blocks_count;
+                free_inodes_sum += gd.bg_free_inodes_count;
+                used_dirs_sum += gd.bg_used_dirs_count;
+            }
+        }
+        ext2_stats.gd_free_blocks_sum = free_blocks_sum;
+        ext2_stats.gd_free_inodes_sum = free_inodes_sum;
+        ext2_stats.gd_used_dirs_sum = used_dirs_sum;
+        ext2_op_release();
+    }
+
+    *out = ext2_stats;
+    out->mounted = ext2_fs.mounted ? 1 : 0;
+    out->dirty = ext2_dirty ? 1 : 0;
+    out->block_size = ext2_fs.block_size;
+    out->blocks_count = ext2_fs.blocks_count;
+    out->groups_count = ext2_fs.groups_count;
+    out->inodes_per_group = ext2_fs.inodes_per_group;
+    out->blocks_per_group = ext2_fs.blocks_per_group;
 }
 
 int ext2_statfs(struct statfs* st)
@@ -2785,6 +3090,14 @@ inode_t* ext2_mount(uint64_t lba_start)
     /* Group descriptor table starts right after the superblock's block */
     ext2_fs.gdesc_block       = sb->s_first_data_block + 1;
     ext2_fs.mounted           = true;
+    memset(&ext2_stats, 0, sizeof(ext2_stats));
+    ext2_dirty = false;
+    ext2_stats.mounted = 1;
+    ext2_stats.block_size = ext2_fs.block_size;
+    ext2_stats.blocks_count = ext2_fs.blocks_count;
+    ext2_stats.groups_count = ext2_fs.groups_count;
+    ext2_stats.inodes_per_group = ext2_fs.inodes_per_group;
+    ext2_stats.blocks_per_group = ext2_fs.blocks_per_group;
     ext2_block_cache_reset();
 
     KINFO("[EXT2] Mounted: block_size=%u inodes_per_group=%u inode_size=%u gdesc_block=%u\n",

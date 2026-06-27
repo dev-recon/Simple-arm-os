@@ -14,9 +14,23 @@
 #include <string.h>
 #include "arm_os_abi.h"
 
+static void print_ext2_check(void)
+{
+    FILE* f = fopen("/proc/fs/ext2/check", "r");
+    char line[160];
+
+    if (!f)
+        return;
+
+    while (fgets(line, sizeof(line), f))
+        printf("%s", line);
+    fclose(f);
+}
+
 static int check_path(const char* path)
 {
     struct statfs st;
+    int status = 0;
 
     if (statfs(path, &st) < 0) {
         printf("%s: statfs failed\n", path);
@@ -29,15 +43,24 @@ static int check_path(const char* path)
 
     if (st.f_bsize == 0 || st.f_blocks == 0) {
         printf("%s: invalid block geometry\n", path);
-        return 1;
+        status = 1;
     }
     if (st.f_bfree > st.f_blocks || st.f_bavail > st.f_blocks) {
         printf("%s: inconsistent free block counters\n", path);
-        return 1;
+        status = 1;
+    }
+    if (st.f_files && st.f_ffree > st.f_files) {
+        printf("%s: inconsistent free inode counters\n", path);
+        status = 1;
     }
 
-    printf("%s: looks plausible\n", path);
-    return 0;
+    if (st.f_type == 0xEF53) {
+        print_ext2_check();
+    }
+
+    if (status == 0)
+        printf("%s: looks plausible\n", path);
+    return status;
 }
 
 int main(int argc, char** argv)

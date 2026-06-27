@@ -31,6 +31,8 @@
 #include <kernel/kernel.h>
 #include <kernel/virtio_block.h>
 #include <kernel/virtio_net.h>
+#include <kernel/ext2.h>
+#include <kernel/syscalls.h>
 #include <asm/arm.h>
 
 extern uint32_t task_count;
@@ -40,6 +42,8 @@ extern spinlock_t task_lock;
 static inode_operations_t procfs_inode_ops;
 static file_operations_t procfs_file_ops;
 static file_operations_t procfs_dir_ops;
+
+#define PROC_FILE_BUFFER_SIZE 16384u
 
 #define PROC_INO_ROOT       1u
 #define PROC_INO_MEMINFO    2u
@@ -57,6 +61,11 @@ static file_operations_t procfs_dir_ops;
 #define PROC_INO_NET_DIR    14u
 #define PROC_INO_NET_DEV    15u
 #define PROC_INO_NET_TCP    16u
+#define PROC_INO_FS_DIR     17u
+#define PROC_INO_FS_EXT2    18u
+#define PROC_INO_FS_EXT2_STATS 19u
+#define PROC_INO_FS_EXT2_CHECK 20u
+#define PROC_INO_SCHED_TRACE 21u
 #define PROC_PID_BASE       100000u
 #define PROC_PID_STRIDE     512u
 #define PROC_PID_DIR        0u
@@ -365,6 +374,10 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_TTY, S_IFREG | 0444, 0);
         if (strcmp(name, "net") == 0)
             return proc_make_inode(PROC_INO_NET_DIR, S_IFDIR | 0555, 0);
+        if (strcmp(name, "fs") == 0)
+            return proc_make_inode(PROC_INO_FS_DIR, S_IFDIR | 0555, 0);
+        if (strcmp(name, "sched_trace") == 0)
+            return proc_make_inode(PROC_INO_SCHED_TRACE, S_IFREG | 0444, 0);
         if (strcmp(name, "self") == 0)
             return proc_make_inode(PROC_INO_SELF, S_IFLNK | 0777, 0);
         if (proc_parse_pid(name, &pid) && proc_pid_exists(pid))
@@ -381,6 +394,28 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_NET_DEV, S_IFREG | 0444, 0);
         if (strcmp(name, "tcp") == 0)
             return proc_make_inode(PROC_INO_NET_TCP, S_IFREG | 0444, 0);
+        return NULL;
+    }
+
+    if (dir_ino == PROC_INO_FS_DIR) {
+        if (strcmp(name, ".") == 0)
+            return proc_make_inode(PROC_INO_FS_DIR, S_IFDIR | 0555, 0);
+        if (strcmp(name, "..") == 0)
+            return proc_make_inode(PROC_INO_ROOT, S_IFDIR | 0555, 0);
+        if (strcmp(name, "ext2") == 0)
+            return proc_make_inode(PROC_INO_FS_EXT2, S_IFDIR | 0555, 0);
+        return NULL;
+    }
+
+    if (dir_ino == PROC_INO_FS_EXT2) {
+        if (strcmp(name, ".") == 0)
+            return proc_make_inode(PROC_INO_FS_EXT2, S_IFDIR | 0555, 0);
+        if (strcmp(name, "..") == 0)
+            return proc_make_inode(PROC_INO_FS_DIR, S_IFDIR | 0555, 0);
+        if (strcmp(name, "stats") == 0)
+            return proc_make_inode(PROC_INO_FS_EXT2_STATS, S_IFREG | 0444, 0);
+        if (strcmp(name, "check") == 0)
+            return proc_make_inode(PROC_INO_FS_EXT2_CHECK, S_IFREG | 0444, 0);
         return NULL;
     }
 
@@ -786,6 +821,121 @@ static void proc_fill_net_tcp(char* buf, size_t cap, size_t* len)
                     0u, 0u, accepted_state, 0u, 0u, 0u, 0u, 0u,
                     pending_accept, 0u);
     }
+}
+
+static void proc_fill_fs_ext2(char* buf, size_t cap, size_t* len)
+{
+    ext2_stats_t st;
+
+    ext2_get_stats(&st);
+    proc_append(buf, cap, len, "mounted %u\n", st.mounted);
+    proc_append(buf, cap, len, "dirty %u\n", st.dirty);
+    proc_append(buf, cap, len, "block_size %u\n", st.block_size);
+    proc_append(buf, cap, len, "blocks %u\n", st.blocks_count);
+    proc_append(buf, cap, len, "groups %u\n", st.groups_count);
+    proc_append(buf, cap, len, "blocks_per_group %u\n", st.blocks_per_group);
+    proc_append(buf, cap, len, "inodes_per_group %u\n", st.inodes_per_group);
+    proc_append(buf, cap, len, "cache_hits %u\n", st.cache_hits);
+    proc_append(buf, cap, len, "cache_misses %u\n", st.cache_misses);
+    proc_append(buf, cap, len, "cache_writes %u\n", st.cache_writes);
+    proc_append(buf, cap, len, "cache_waits %u\n", st.cache_waits);
+    proc_append(buf, cap, len, "op_waits %u\n", st.op_waits);
+    proc_append(buf, cap, len, "read_blocks %u\n", st.read_blocks);
+    proc_append(buf, cap, len, "write_blocks %u\n", st.write_blocks);
+    proc_append(buf, cap, len, "syncs %u\n", st.syncs);
+    proc_append(buf, cap, len, "sync_errors %u\n", st.sync_errors);
+    proc_append(buf, cap, len, "check_errors %u\n", st.check_errors);
+    proc_append(buf, cap, len, "sb_free_blocks %u\n", st.sb_free_blocks);
+    proc_append(buf, cap, len, "sb_free_inodes %u\n", st.sb_free_inodes);
+    proc_append(buf, cap, len, "gd_free_blocks_sum %u\n", st.gd_free_blocks_sum);
+    proc_append(buf, cap, len, "gd_free_inodes_sum %u\n", st.gd_free_inodes_sum);
+    proc_append(buf, cap, len, "gd_used_dirs_sum %u\n", st.gd_used_dirs_sum);
+}
+
+static void proc_fill_fs_ext2_check(char* buf, size_t cap, size_t* len)
+{
+    (void)ext2_check(buf, cap, len);
+}
+
+static const char* proc_sched_event_name(uint32_t event)
+{
+    switch (event) {
+        case SCHED_TRACE_UNINTR_TIMEOUT: return "unintr_timeout";
+        case SCHED_TRACE_REFUSE_CRITICAL: return "refuse_critical";
+        case SCHED_TRACE_REFUSE_BROKEN_LIST: return "refuse_broken_list";
+        case SCHED_TRACE_REFUSE_NULL_NEXT: return "refuse_null_next";
+        case SCHED_TRACE_REFUSE_INVALID_TASK: return "refuse_invalid_task";
+        case SCHED_TRACE_REFUSE_LOOP: return "refuse_loop";
+        default: return "unknown";
+    }
+}
+
+static const char* proc_syscall_name(uint32_t nr)
+{
+    switch (nr) {
+        case 0: return "-";
+        case __NR_exit: return "exit";
+        case __NR_fork: return "fork";
+        case __NR_read: return "read";
+        case __NR_write: return "write";
+        case __NR_open: return "open";
+        case __NR_close: return "close";
+        case __NR_waitpid: return "waitpid";
+        case __NR_unlink: return "unlink";
+        case __NR_execve: return "execve";
+        case __NR_lseek: return "lseek";
+        case __NR_mount: return "mount";
+        case __NR_umount: return "umount";
+        case __NR_sync: return "sync";
+        case __NR_rename: return "rename";
+        case __NR_mkdir: return "mkdir";
+        case __NR_rmdir: return "rmdir";
+        case __NR_brk: return "brk";
+        case __NR_ioctl: return "ioctl";
+        case __NR_pipe: return "pipe";
+        case __NR_stat: return "stat";
+        case __NR_lstat: return "lstat";
+        case __NR_fstat: return "fstat";
+        case __NR_getdents: return "getdents";
+        case __NR_nanosleep: return "nanosleep";
+        default: return "?";
+    }
+}
+
+static void proc_fill_sched_trace(char* buf, size_t cap, size_t* len)
+{
+    sched_trace_event_t events[SCHED_TRACE_SIZE];
+    uint32_t total = 0;
+    uint32_t written = 0;
+
+    sched_trace_snapshot(events, SCHED_TRACE_SIZE, &total, &written);
+    proc_append(buf, cap, len,
+                "seq tick event pid tid state wake syscall current_pid current_tid current_syscall name current\n");
+
+    for (uint32_t i = 0; i < written; i++) {
+        sched_trace_event_t* e = &events[i];
+        proc_append(buf, cap, len,
+                    "%u %u %s pid=%u tid=%u st=%u wake=%u sc=%u(%s) cur=%u/%u csc=%u(%s) task=%p next=%p prev=%p name=%s current=%s\n",
+                    e->seq,
+                    e->tick,
+                    proc_sched_event_name(e->event),
+                    e->pid,
+                    e->tid,
+                    e->state,
+                    e->wakeup_time,
+                    e->syscall,
+                    proc_syscall_name(e->syscall),
+                    e->current_pid,
+                    e->current_tid,
+                    e->current_syscall,
+                    proc_syscall_name(e->current_syscall),
+                    (void*)e->task_ptr,
+                    (void*)e->next_ptr,
+                    (void*)e->prev_ptr,
+                    e->name,
+                    e->current_name);
+    }
+    proc_append(buf, cap, len, "total %u shown %u\n", total, written);
 }
 
 typedef struct proc_flag_name {
@@ -1374,6 +1524,9 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_TTY:     proc_fill_tty(buf, cap, len); return 0;
         case PROC_INO_NET_DEV: proc_fill_net_dev(buf, cap, len); return 0;
         case PROC_INO_NET_TCP: proc_fill_net_tcp(buf, cap, len); return 0;
+        case PROC_INO_FS_EXT2_STATS: proc_fill_fs_ext2(buf, cap, len); return 0;
+        case PROC_INO_FS_EXT2_CHECK: proc_fill_fs_ext2_check(buf, cap, len); return 0;
+        case PROC_INO_SCHED_TRACE: proc_fill_sched_trace(buf, cap, len); return 0;
         default: break;
     }
 
@@ -1406,13 +1559,14 @@ static int procfs_open(inode_t* inode, file_t* file)
 
     data = kmalloc(sizeof(*data));
     if (!data) return -ENOMEM;
-    data->data = kmalloc(8192);
+    data->data = kmalloc(PROC_FILE_BUFFER_SIZE);
     if (!data->data) {
         kfree(data);
         return -ENOMEM;
     }
 
-    ret = proc_generate_file(inode->first_cluster, data->data, 8192, &data->size);
+    ret = proc_generate_file(inode->first_cluster, data->data,
+                             PROC_FILE_BUFFER_SIZE, &data->size);
     if (ret < 0) {
         kfree(data->data);
         kfree(data);
@@ -1518,6 +1672,8 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         { "interrupts", PROC_INO_INTERRUPTS, DT_REG },
         { "tty",     PROC_INO_TTY,    DT_REG },
         { "net",     PROC_INO_NET_DIR, DT_DIR },
+        { "fs",      PROC_INO_FS_DIR, DT_DIR },
+        { "sched_trace", PROC_INO_SCHED_TRACE, DT_REG },
         { "self",    PROC_INO_SELF,    DT_LNK },
     };
     uint32_t offset = file->offset;
@@ -1580,6 +1736,51 @@ static int procfs_net_readdir(file_t* file, dirent_t* dirent)
         { "..",  PROC_INO_ROOT,    DT_DIR },
         { "dev", PROC_INO_NET_DEV, DT_REG },
         { "tcp", PROC_INO_NET_TCP, DT_REG },
+    };
+    uint32_t offset = file->offset;
+
+    if (offset >= sizeof(entries) / sizeof(entries[0]))
+        return 0;
+
+    proc_fill_dirent(dirent, entries[offset].ino, entries[offset].type,
+                     entries[offset].name);
+    file->offset++;
+    return 1;
+}
+
+static int procfs_fs_readdir(file_t* file, dirent_t* dirent)
+{
+    static const struct {
+        const char* name;
+        uint32_t ino;
+        uint8_t type;
+    } entries[] = {
+        { ".",    PROC_INO_FS_DIR,  DT_DIR },
+        { "..",   PROC_INO_ROOT,    DT_DIR },
+        { "ext2", PROC_INO_FS_EXT2, DT_DIR },
+    };
+    uint32_t offset = file->offset;
+
+    if (offset >= sizeof(entries) / sizeof(entries[0]))
+        return 0;
+
+    proc_fill_dirent(dirent, entries[offset].ino, entries[offset].type,
+                     entries[offset].name);
+    file->offset++;
+    return 1;
+}
+
+static int procfs_ext2_readdir(file_t* file, dirent_t* dirent)
+{
+    static const struct {
+        const char* name;
+        uint32_t ino;
+        uint8_t type;
+    } entries[] = {
+        { ".",     PROC_INO_FS_EXT2,       DT_DIR },
+        { "..",    PROC_INO_FS_DIR,        DT_DIR },
+        { "stats", PROC_INO_FS_EXT2_STATS, DT_REG },
+        { "check", PROC_INO_FS_EXT2_CHECK, DT_REG },
     };
     uint32_t offset = file->offset;
 
@@ -1690,6 +1891,10 @@ static int procfs_readdir(file_t* file, dirent_t* dirent)
         return procfs_root_readdir(file, dirent);
     if (ino == PROC_INO_NET_DIR)
         return procfs_net_readdir(file, dirent);
+    if (ino == PROC_INO_FS_DIR)
+        return procfs_fs_readdir(file, dirent);
+    if (ino == PROC_INO_FS_EXT2)
+        return procfs_ext2_readdir(file, dirent);
     if (ino >= PROC_PID_BASE && proc_ino_type(ino) == PROC_PID_DIR)
         return procfs_pid_readdir(file, dirent);
     if (ino >= PROC_PID_BASE && proc_ino_type(ino) == PROC_PID_FD_DIR)

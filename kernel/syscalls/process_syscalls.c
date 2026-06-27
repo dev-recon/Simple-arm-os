@@ -127,19 +127,7 @@ static bool vfs_inode_has_external_refs(inode_t* inode)
 
 int sys_sync(void)
 {
-    int ret = 0;
-    int blk_ret;
-
-    if (is_dirty_inodes())
-        sync_dirty_inodes();
-    if (is_fat_dirty() && sync_fat_to_disk() < 0)
-        ret = -EIO;
-
-    blk_ret = virtio_blk_flush();
-    if (blk_ret < 0)
-        ret = -EIO;
-
-    return ret;
+    return vfs_sync();
 }
 
 int sys_mount(const char* source, const char* target, const char* fstype,

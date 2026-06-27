@@ -30,6 +30,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/task.h>
 #include <kernel/file.h>
+#include <kernel/virtio_block.h>
 
 #define MAX_INODES 1024
 #define MAX_SYMLINK_DEPTH 8
@@ -259,6 +260,22 @@ int vfs_statfs(const char* path, struct statfs* st)
         return ext2_statfs(st);
 
     return -ENOENT;
+}
+
+int vfs_sync(void)
+{
+    int ret = 0;
+
+    if (is_dirty_inodes())
+        sync_dirty_inodes();
+    if (is_fat_dirty() && sync_fat_to_disk() < 0)
+        ret = -EIO;
+    if (ext2_sync() < 0)
+        ret = -EIO;
+    if (virtio_blk_flush() < 0)
+        ret = -EIO;
+
+    return ret;
 }
 
 /* File operations for FAT32 */

@@ -22,6 +22,7 @@
 #include <kernel/task.h>
 #include <kernel/process.h>
 #include <kernel/virtio_block.h>
+#include <kernel/vfs.h>
 #include <asm/arm.h>
 
 #define PSCI_0_2_FN_SYSTEM_OFF 0x84000008u
@@ -60,7 +61,11 @@ static void shutdown_processes(void)
 
 static void shutdown_drivers(void)
 {
-    KINFO("Shutdown: flushing and stopping block device\n");
+    KINFO("Shutdown: syncing filesystems\n");
+    if (vfs_sync() < 0)
+        KERROR("Shutdown: filesystem sync failed\n");
+
+    KINFO("Shutdown: stopping block device\n");
     virtio_blk_shutdown();
 }
 

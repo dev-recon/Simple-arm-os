@@ -56,6 +56,42 @@ typedef struct kernel_lifecycle_stats {
 
 extern volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
 
+#define SCHED_TRACE_SIZE 64
+
+typedef enum sched_trace_event_type {
+    SCHED_TRACE_UNINTR_TIMEOUT = 1,
+    SCHED_TRACE_REFUSE_CRITICAL,
+    SCHED_TRACE_REFUSE_BROKEN_LIST,
+    SCHED_TRACE_REFUSE_NULL_NEXT,
+    SCHED_TRACE_REFUSE_INVALID_TASK,
+    SCHED_TRACE_REFUSE_LOOP,
+} sched_trace_event_type_t;
+
+typedef struct sched_trace_event {
+    uint32_t seq;
+    uint32_t tick;
+    uint32_t event;
+    uint32_t syscall;
+    uint32_t pid;
+    uint32_t tid;
+    uint32_t state;
+    uint32_t wakeup_time;
+    uint32_t current_pid;
+    uint32_t current_tid;
+    uint32_t current_syscall;
+    uintptr_t task_ptr;
+    uintptr_t next_ptr;
+    uintptr_t prev_ptr;
+    char name[TASK_NAME_MAX];
+    char current_name[TASK_NAME_MAX];
+} sched_trace_event_t;
+
+typedef struct task task_t;
+
+void sched_trace_record(sched_trace_event_type_t event, task_t* task);
+void sched_trace_snapshot(sched_trace_event_t* out, uint32_t max,
+                          uint32_t* total, uint32_t* written);
+
 /* Forward declarations for structures */
 typedef struct inode inode_t;
 typedef struct file file_t;
@@ -341,6 +377,14 @@ typedef struct task {
             void* thread_data;      /* Donnees thread */
         } thread;
     };
+
+    /*
+     * Scheduler diagnostics only. Keep these fields at the end so adding
+     * tracing does not move legacy task_t offsets used by ARM assembly or
+     * low-level debug code.
+     */
+    uint32_t current_syscall;               /* Syscall currently executing, or 0 */
+    uint32_t last_syscall;                  /* Last syscall entered by this task */
 
 } __attribute__((aligned(8))) task_t;
 

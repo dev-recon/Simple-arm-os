@@ -30,6 +30,10 @@
 #include <asm/arm.h>
 #include <kernel/file.h>
 
+_Static_assert(offsetof(task_t, context) == 48,
+               "task_t.context offset must match syscall.S/task_switch.S");
+_Static_assert(sizeof(task_context_t) == 168,
+               "task_context_t layout must match task_switch.S offsets");
 
 //const uint32_t TASK_CONTEXT_OFF = offsetof(task_t, context);
 
@@ -50,6 +54,9 @@ volatile int need_resched = 0;
 task_t* idle_task = NULL;
 task_t* init_process = NULL;
 volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
+static spinlock_t sched_trace_lock = SPINLOCK_INIT("sched_trace");
+static sched_trace_event_t sched_trace[SCHED_TRACE_SIZE];
+static uint32_t sched_trace_seq;
 //static int yield_count = 0;
 
 /* === NOUVELLES VARIABLES POUR PROCESSUS === */
@@ -72,6 +79,76 @@ uint64_t task_runtime_ticks(task_t* task)
         return 0;
 
     return task->total_runtime;
+}
+
+static uint32_t task_trace_pid(task_t* task)
+{
+    return (task && task->type == TASK_TYPE_PROCESS && task->process)
+        ? (uint32_t)task->process->pid
+        : 0;
+}
+
+void sched_trace_record(sched_trace_event_type_t event, task_t* task)
+{
+    unsigned long flags;
+    sched_trace_event_t* dst;
+
+    spin_lock_irqsave(&sched_trace_lock, &flags);
+    dst = &sched_trace[sched_trace_seq % SCHED_TRACE_SIZE];
+    memset(dst, 0, sizeof(*dst));
+    dst->seq = sched_trace_seq + 1;
+    dst->tick = get_system_ticks();
+    dst->event = event;
+    dst->syscall = task ? task->current_syscall : 0;
+    dst->pid = task_trace_pid(task);
+    dst->tid = task ? task->task_id : 0;
+    dst->state = task ? (uint32_t)task->state : 0xffffffffu;
+    dst->wakeup_time = task ? task->wakeup_time : 0;
+    dst->current_pid = task_trace_pid(current_task);
+    dst->current_tid = current_task ? current_task->task_id : 0;
+    dst->current_syscall = current_task ? current_task->current_syscall : 0;
+    dst->task_ptr = (uintptr_t)task;
+    dst->next_ptr = task ? (uintptr_t)task->next : 0;
+    dst->prev_ptr = task ? (uintptr_t)task->prev : 0;
+    if (task)
+        strncpy(dst->name, task->name, TASK_NAME_MAX - 1);
+    if (current_task)
+        strncpy(dst->current_name, current_task->name, TASK_NAME_MAX - 1);
+    sched_trace_seq++;
+    spin_unlock_irqrestore(&sched_trace_lock, flags);
+}
+
+void sched_trace_snapshot(sched_trace_event_t* out, uint32_t max,
+                          uint32_t* total, uint32_t* written)
+{
+    unsigned long flags;
+    uint32_t seq;
+    uint32_t count;
+    uint32_t start;
+
+    if (total)
+        *total = 0;
+    if (written)
+        *written = 0;
+    if (!out || max == 0)
+        return;
+
+    spin_lock_irqsave(&sched_trace_lock, &flags);
+    seq = sched_trace_seq;
+    count = seq < SCHED_TRACE_SIZE ? seq : SCHED_TRACE_SIZE;
+    if (count > max)
+        count = max;
+    start = seq >= count ? seq - count : 0;
+
+    for (uint32_t i = 0; i < count; i++)
+        out[i] = sched_trace[(start + i) % SCHED_TRACE_SIZE];
+
+    spin_unlock_irqrestore(&sched_trace_lock, flags);
+
+    if (total)
+        *total = seq;
+    if (written)
+        *written = count;
 }
 
 void debug_context_switch_entry(void);
@@ -1298,6 +1375,7 @@ static void for_each_task(task_t* current)
             KERROR("for_each_task: broken task list near %s\n",
                    current ? current->name : "?");
             kernel_lifecycle_stats.scheduler_refused++;
+            sched_trace_record(SCHED_TRACE_REFUSE_BROKEN_LIST, current);
             return;
         }
 
@@ -1308,8 +1386,10 @@ static void for_each_task(task_t* current)
 
             //KDEBUG("Waking up task %s from sleep\n", task->name);
             
-            if (task->state == TASK_UNINTERRUPTIBLE)
+            if (task->state == TASK_UNINTERRUPTIBLE) {
                 kernel_lifecycle_stats.uninterruptible_timeouts++;
+                sched_trace_record(SCHED_TRACE_UNINTR_TIMEOUT, task);
+            }
             task->state = TASK_READY;
             if (task->type == TASK_TYPE_PROCESS && task->process)
                 task->process->state = (proc_state_t)PROC_READY;
@@ -1319,6 +1399,7 @@ static void for_each_task(task_t* current)
         if (!task->next) {
             KERROR("for_each_task: task %s has NULL next\n", task->name);
             kernel_lifecycle_stats.scheduler_refused++;
+            sched_trace_record(SCHED_TRACE_REFUSE_NULL_NEXT, task);
             return;
         }
         task = task->next;
@@ -1346,6 +1427,7 @@ void schedule(void)
 
     if (get_critical_section()) {
         kernel_lifecycle_stats.scheduler_refused++;
+        sched_trace_record(SCHED_TRACE_REFUSE_CRITICAL, current_task);
         unset_critical_section();
     }
 
@@ -1531,6 +1613,7 @@ void schedule_to(task_t *next_task)
         KERROR("SCHED_TO: refusing invalid task %s state=%d\n",
                next_task->name, next_task->state);
         kernel_lifecycle_stats.scheduler_refused++;
+        sched_trace_record(SCHED_TRACE_REFUSE_INVALID_TASK, next_task);
         return;
     }
 
@@ -1742,6 +1825,7 @@ static task_t* schedule_next_task(void)
         if (count > MAX_TASKS) {
             KERROR("schedule_next_task: Loop protection triggered!\n");
             kernel_lifecycle_stats.scheduler_refused++;
+            sched_trace_record(SCHED_TRACE_REFUSE_LOOP, current);
             break;
         }
         
