@@ -40,6 +40,7 @@ static int ext2_write_disk_inode(uint32_t ino, const ext2_inode_t* in);
 
 /* Forward declarations */
 static inode_t* ext2_inode_lookup(inode_t* dir, const char* name);
+static inode_t* ext2_inode_lookup_op(inode_t* dir, const char* name);
 static int      ext2_inode_mkdir(inode_t* dir, const char* name, uint16_t mode);
 static int      ext2_inode_unlink(inode_t* dir, const char* name);
 static int      ext2_inode_rmdir(inode_t* dir, const char* name);
@@ -57,12 +58,14 @@ static int      ext2_truncate_inode_unlocked(inode_t* inode);
 static int      ext2_remove_dir_entry(inode_t* dir, const char* name);
 static int      ext2_adjust_link_count(inode_t* inode, int delta);
 static ssize_t  ext2_file_read(file_t* file, void* buffer, size_t count);
+static ssize_t  ext2_file_read_unlocked(file_t* file, void* buffer, size_t count);
 static ssize_t  ext2_file_write(file_t* file, const void* buffer, size_t count);
 static int      ext2_file_open(inode_t* inode, file_t* file);
 static int      ext2_file_close(file_t* file);
 static off_t    ext2_file_lseek(file_t* file, off_t offset, int whence);
 static int      ext2_file_truncate(file_t* file, off_t length);
 static int      ext2_dir_readdir(file_t* file, dirent_t* dirent);
+static int      ext2_dir_readdir_unlocked(file_t* file, dirent_t* dirent);
 static ssize_t  ext2_file_write_op(file_t* file, const void* buffer, size_t count);
 
 file_operations_t ext2_file_ops = {
@@ -85,7 +88,7 @@ file_operations_t ext2_dir_ops = {
 };
 
 inode_operations_t ext2_inode_ops = {
-    .lookup = ext2_inode_lookup,
+    .lookup = ext2_inode_lookup_op,
     .create = NULL,
     .mkdir  = ext2_inode_mkdir_op,
     .unlink = ext2_inode_unlink_op,
@@ -137,7 +140,14 @@ static void ext2_op_acquire(void)
             continue;
         }
 
-        yield();
+        /*
+         * The ext2 backend lock protects on-disk directory and inode updates.
+         * Waiting tasks must not stay runnable and spin on yield(): under
+         * parallel metadata stress that can starve the actual lock owner while
+         * it is sleeping for VirtIO completion. Use a short scheduler sleep
+         * until ArmOS grows proper wait queues.
+         */
+        task_sleep_ms(1);
     }
 }
 
@@ -181,7 +191,7 @@ static void ext2_cache_acquire(void)
             continue;
         }
 
-        yield();
+        task_sleep_ms(1);
     }
 }
 
@@ -259,31 +269,32 @@ static int ext2_read_block(uint32_t block, void* buf)
         return blk_read_sectors(lba, ext2_fs.sectors_per_block, buf);
 
     ext2_cache_acquire();
-
     entry = ext2_block_cache_find(block);
     if (entry && entry->data) {
         memcpy(buf, entry->data, ext2_fs.block_size);
         ext2_cache_release();
         return 0;
     }
+    ext2_cache_release();
 
+    /*
+     * Do the potentially sleeping VirtIO I/O outside the cache critical
+     * section. Holding ext2_cache while wait_for_used() sleeps can block other
+     * tasks behind a cache owner that is no longer runnable.
+     */
+    ret = blk_read_sectors(lba, ext2_fs.sectors_per_block, buf);
+    if (ret < 0)
+        return ret;
+
+    ext2_cache_acquire();
     entry = ext2_block_cache_pick();
     if (entry && ext2_block_cache_data(entry)) {
-        ret = blk_read_sectors(lba, ext2_fs.sectors_per_block, entry->data);
-        if (ret < 0) {
-            ext2_cache_release();
-            return ret;
-        }
+        memcpy(entry->data, buf, ext2_fs.block_size);
         entry->block = block;
         entry->valid = true;
-        memcpy(buf, entry->data, ext2_fs.block_size);
-        ext2_cache_release();
-        return 0;
     }
-
-    ret = blk_read_sectors(lba, ext2_fs.sectors_per_block, buf);
     ext2_cache_release();
-    return ret;
+    return 0;
 }
 
 static int ext2_write_block(uint32_t block, void* buf)
@@ -294,13 +305,11 @@ static int ext2_write_block(uint32_t block, void* buf)
 
     if (!buf) return -EINVAL;
 
-    ext2_cache_acquire();
     ret = blk_write_sectors(lba, ext2_fs.sectors_per_block, buf);
-    if (ret < 0 || ext2_fs.block_size == 0) {
-        ext2_cache_release();
+    if (ret < 0 || ext2_fs.block_size == 0)
         return ret;
-    }
 
+    ext2_cache_acquire();
     entry = ext2_block_cache_find(block);
     if (!entry)
         entry = ext2_block_cache_pick();
@@ -351,13 +360,18 @@ static int ext2_write_superblock(const ext2_superblock_t* in)
 int ext2_statfs(struct statfs* st)
 {
     ext2_superblock_t sb;
+    int ret = 0;
 
     if (!st)
         return -EINVAL;
     if (!ext2_fs.mounted)
         return -ENODEV;
-    if (ext2_read_superblock(&sb) < 0)
-        return -EIO;
+
+    ext2_op_acquire();
+    if (ext2_read_superblock(&sb) < 0) {
+        ret = -EIO;
+        goto out;
+    }
 
     memset(st, 0, sizeof(*st));
     st->f_type = EXT2_MAGIC;
@@ -369,7 +383,10 @@ int ext2_statfs(struct statfs* st)
     st->f_ffree = sb.s_free_inodes_count;
     st->f_namelen = MAX_NAME;
     st->f_frsize = ext2_fs.block_size;
-    return 0;
+
+out:
+    ext2_op_release();
+    return ret;
 }
 
 static int ext2_read_group_desc(uint32_t group, ext2_group_desc_t* out)
@@ -869,21 +886,32 @@ static int ext2_write_disk_inode(uint32_t ino, const ext2_inode_t* in)
 int ext2_update_inode_metadata(inode_t* inode)
 {
     ext2_inode_t disk;
+    int ret = 0;
 
     if (!inode) return -EINVAL;
     if (!ext2_fs.mounted) return -ENODEV;
-    if (ext2_read_disk_inode(inode->first_cluster, &disk) < 0) return -EIO;
+
+    ext2_op_acquire();
+    if (ext2_read_disk_inode(inode->first_cluster, &disk) < 0) {
+        ret = -EIO;
+        goto out;
+    }
 
     disk.i_mode = inode->mode;
     disk.i_uid = inode->uid;
     disk.i_gid = inode->gid;
     disk.i_ctime = inode->ctime ? inode->ctime : get_current_time();
 
-    if (ext2_write_disk_inode(inode->first_cluster, &disk) < 0)
-        return -EIO;
+    if (ext2_write_disk_inode(inode->first_cluster, &disk) < 0) {
+        ret = -EIO;
+        goto out;
+    }
 
     inode->ctime = disk.i_ctime;
-    return 0;
+
+out:
+    ext2_op_release();
+    return ret;
 }
 
 /* Resolve logical block index → physical block number. */
@@ -1636,6 +1664,22 @@ static inode_t* ext2_inode_lookup(inode_t* dir, const char* name)
     return NULL;
 }
 
+static inode_t* ext2_inode_lookup_op(inode_t* dir, const char* name)
+{
+    inode_t* ret;
+
+    /*
+     * Path lookup races with directory mutation because ext2 directory entries
+     * are rewritten in place. Keep the backend coherent by serializing lookups
+     * with create/unlink/rmdir/rename until ArmOS grows ordered inode/dentry
+     * locks.
+     */
+    ext2_op_acquire();
+    ret = ext2_inode_lookup(dir, name);
+    ext2_op_release();
+    return ret;
+}
+
 static int ext2_remove_dir_entry(inode_t* dir, const char* name)
 {
     ext2_inode_t disk;
@@ -1948,19 +1992,30 @@ static int ext2_inode_rename(inode_t* old_dir, const char* old_name,
 
 static int ext2_file_open(inode_t* inode, file_t* file)
 {
+    int ret = 0;
+
     if (!inode || !file) return -EBADF;
     if (S_ISDIR(inode->mode) && ((file->flags & O_ACCMODE) != O_RDONLY))
         return -EISDIR;
 
+    ext2_op_acquire();
+
     ext2_inode_t* di = kmalloc(sizeof(ext2_inode_t));
-    if (!di) return -ENOMEM;
+    if (!di) {
+        ret = -ENOMEM;
+        goto out;
+    }
 
     if (ext2_read_disk_inode(inode->first_cluster, di) < 0) {
         kfree(di);
-        return -EIO;
+        ret = -EIO;
+        goto out;
     }
     file->private_data = di;
-    return 0;
+
+out:
+    ext2_op_release();
+    return ret;
 }
 
 static int ext2_file_close(file_t* file)
@@ -2420,6 +2475,17 @@ static int ext2_file_truncate(file_t* file, off_t length)
 
 static ssize_t ext2_file_read(file_t* file, void* buffer, size_t count)
 {
+    ssize_t ret;
+
+    ext2_op_acquire();
+    ret = ext2_file_read_unlocked(file, buffer, count);
+    ext2_op_release();
+
+    return ret;
+}
+
+static ssize_t ext2_file_read_unlocked(file_t* file, void* buffer, size_t count)
+{
     if (!file || !buffer) return -EBADF;
 
     ext2_inode_t* di = (ext2_inode_t*)file->private_data;
@@ -2558,6 +2624,17 @@ static off_t ext2_file_lseek(file_t* file, off_t offset, int whence)
 /* ---------- file_operations — directories ---------- */
 
 static int ext2_dir_readdir(file_t* file, dirent_t* dirent)
+{
+    int ret;
+
+    ext2_op_acquire();
+    ret = ext2_dir_readdir_unlocked(file, dirent);
+    ext2_op_release();
+
+    return ret;
+}
+
+static int ext2_dir_readdir_unlocked(file_t* file, dirent_t* dirent)
 {
     if (!file || !dirent) return -EBADF;
 
