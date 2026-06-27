@@ -310,6 +310,51 @@ static void test_access_umask(void)
     umask(old_mask);
 }
 
+static void test_open_permission_enforcement(void)
+{
+    const char *path = tmp_path("open-perms.txt");
+    char buf[32];
+    int fd;
+    int n;
+
+    unlink(path);
+    fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (expect(fd >= 0, "open perms create file", fd) < 0)
+        return;
+    expect(write(fd, "secret", 6) == 6, "open perms seed file", 0);
+    close(fd);
+
+    if (getuid() == 0) {
+        skip("open permission denial checks skipped for root");
+        unlink(path);
+        return;
+    }
+
+    expect(chmod(path, 0400) == 0, "open perms chmod read-only", 0);
+    fd = open(path, O_RDONLY, 0);
+    if (expect(fd >= 0, "open read allowed by mode", fd) >= 0)
+        close(fd);
+    expect(open(path, O_WRONLY, 0) < 0, "open write denied by mode", 0);
+    expect(open(path, O_WRONLY | O_TRUNC, 0) < 0,
+           "open truncate denied by mode", 0);
+    n = read_file(path, buf, sizeof(buf));
+    expect(n == 6 && strcmp(buf, "secret") == 0,
+           "failed O_TRUNC preserves contents", n);
+
+    expect(chmod(path, 0200) == 0, "open perms chmod write-only", 0);
+    expect(open(path, O_RDONLY, 0) < 0, "open read denied by mode", 0);
+    fd = open(path, O_WRONLY, 0);
+    if (expect(fd >= 0, "open write allowed by mode", fd) >= 0)
+        close(fd);
+
+    expect(chmod(path, 0000) == 0, "open perms chmod none", 0);
+    expect(open(path, O_RDONLY, 0) < 0, "open read denied with 000", 0);
+    expect(open(path, O_WRONLY, 0) < 0, "open write denied with 000", 0);
+
+    chmod(path, 0600);
+    unlink(path);
+}
+
 static void test_pipe_dup2(void)
 {
     int pipefd[2];
@@ -510,19 +555,41 @@ static void test_chmod_chown_syscalls(void)
         original_uid = st.st_uid;
     }
 
-    expect(chown(path, (uid_t)-1, 789) == 0, "chown gid-only syscall", 0);
-    if (expect(stat(path, &st) == 0, "chown gid-only stat", 0) == 0) {
-        expect(st.st_gid == 789, "chown gid-only updates gid", st.st_gid);
-        expect(st.st_uid == original_uid, "chown gid-only keeps uid", st.st_uid);
+    if (getuid() == 0) {
+        expect(chown(path, (uid_t)-1, 789) == 0, "chown gid-only syscall", 0);
+        if (expect(stat(path, &st) == 0, "chown gid-only stat", 0) == 0) {
+            expect(st.st_gid == 789, "chown gid-only updates gid", st.st_gid);
+            expect(st.st_uid == original_uid, "chown gid-only keeps uid", st.st_uid);
+        }
+
+        expect(chown(path, 123, 456) == 0, "chown uid/gid syscall", 0);
+        if (expect(stat(path, &st) == 0, "chown stat", 0) == 0) {
+            expect(st.st_uid == 123, "chown uid visible", st.st_uid);
+            expect(st.st_gid == 456, "chown gid visible", st.st_gid);
+        }
+    } else {
+        expect(chown(path, (uid_t)-1, 789) < 0,
+               "chown gid-only denied for non-root", 0);
+        expect(chown(path, 123, 456) < 0,
+               "chown uid/gid denied for non-root", 0);
     }
 
-    expect(chown(path, 123, 456) == 0, "chown uid/gid syscall", 0);
-    if (expect(stat(path, &st) == 0, "chown stat", 0) == 0) {
-        expect(st.st_uid == 123, "chown uid visible", st.st_uid);
-        expect(st.st_gid == 456, "chown gid visible", st.st_gid);
-    }
-
+    chmod(path, 0600);
     unlink(path);
+}
+
+static void test_proc_net_syscalls(void)
+{
+    char buf[512];
+    int n;
+
+    n = read_file("/proc/net/dev", buf, sizeof(buf));
+    expect(n > 0 && strstr(buf, "Inter-|") != NULL,
+           "proc net dev readable", n);
+
+    n = read_file("/proc/net/tcp", buf, sizeof(buf));
+    expect(n > 0 && strstr(buf, "local_address") != NULL,
+           "proc net tcp readable", n);
 }
 
 static void test_posix_compat_syscalls(void)
@@ -1846,12 +1913,14 @@ int main(int argc, char **argv)
     test_process_session_info();
     test_file_io();
     test_access_umask();
+    test_open_permission_enforcement();
     test_pipe_dup2();
     test_fd_access_modes();
     test_stat_syscalls();
     test_dev_null();
     test_dev_tty();
     test_chmod_chown_syscalls();
+    test_proc_net_syscalls();
     test_posix_compat_syscalls();
     test_ext2_links_and_dirents();
     test_ext2_write_edges();

@@ -1178,7 +1178,7 @@ int sys_chown(const char* pathname, uid_t owner, gid_t group)
     kfree(full_path);
     if (!inode) return -ENOENT;
 
-    if (current_uid() != 0 && current_uid() != inode->uid) {
+    if (current_uid() != 0) {
         put_inode(inode);
         return -EPERM;
     }

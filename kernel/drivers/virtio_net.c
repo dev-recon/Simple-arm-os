@@ -1795,3 +1795,34 @@ void virtio_net_get_stats(uint32_t *irq_count, uint32_t *last_irq_status,
     if (echo_enabled)
         *echo_enabled = net.echo_enabled ? 1u : 0u;
 }
+
+static uint32_t net_tcp_state_for_proc(net_socket_state_t state)
+{
+    switch (state) {
+        case NET_SOCK_LISTEN:    return 0x0A; /* Linux /proc/net/tcp LISTEN */
+        case NET_SOCK_CONNECTED: return 0x01; /* ESTABLISHED */
+        case NET_SOCK_CLOSED:    return 0x07; /* CLOSE */
+        default:                 return 0;
+    }
+}
+
+void virtio_net_get_tcp_diag(uint32_t *local_ip, uint16_t *local_port,
+                             uint32_t *listener_state,
+                             uint32_t *pending_accept,
+                             uint32_t *accepted_state)
+{
+    /*
+     * Diagnostic snapshot used by procfs. Keep it read-only and compact so the
+     * network driver does not expose its internal socket objects to procfs.
+     */
+    if (local_ip)
+        *local_ip = VIRTIO_NET_IP;
+    if (local_port)
+        *local_port = NETECHO_PORT;
+    if (listener_state)
+        *listener_state = net.listener ? net_tcp_state_for_proc(net.listener->state) : 0;
+    if (pending_accept)
+        *pending_accept = net.pending_accept ? 1u : 0u;
+    if (accepted_state)
+        *accepted_state = net.accepted ? net_tcp_state_for_proc(net.accepted->state) : 0;
+}

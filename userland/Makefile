@@ -42,10 +42,16 @@ SYSTEM_TOOL_TARGETS := $(SYSTEM_TOOLS:%=nl-%)
 
 PROGRAM_DIRS := $(sort $(dir $(wildcard programs/*/*.c)))
 PROGRAMS := $(patsubst programs/%/,%,$(PROGRAM_DIRS))
-PROGRAM_TARGETS := $(PROGRAMS:%=nl-%)
 
 EXTERNAL_DIRS := $(sort $(dir $(wildcard opt/*/src/*.c)))
 EXTERNALS := $(patsubst opt/%/src/,%,$(EXTERNAL_DIRS))
+
+ifneq ($(ENABLE_TCC),1)
+PROGRAMS := $(filter-out tcc,$(PROGRAMS))
+EXTERNALS := $(filter-out tcc,$(EXTERNALS))
+endif
+
+PROGRAM_TARGETS := $(PROGRAMS:%=nl-%)
 EXTERNAL_TARGETS := $(EXTERNALS:%=nl-%)
 
 SYSTEM_TARGETS := nl-init nl-mash $(SYSTEM_TOOL_TARGETS)

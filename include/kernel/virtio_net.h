@@ -37,5 +37,9 @@ void virtio_net_get_stats(uint32_t *irq_count, uint32_t *last_irq_status,
                           uint32_t *rx_icmp, uint32_t *tx_icmp,
                           uint32_t *rx_tcp, uint32_t *tx_tcp,
                           uint32_t *tcp_echo, uint32_t *echo_enabled);
+void virtio_net_get_tcp_diag(uint32_t *local_ip, uint16_t *local_port,
+                             uint32_t *listener_state,
+                             uint32_t *pending_accept,
+                             uint32_t *accepted_state);
 
 #endif

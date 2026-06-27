@@ -258,6 +258,7 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     int fd;
     char* filename = NULL;
     char opened_name[256];
+    bool opened_existing;
 
     opened_name[0] = '\0';
     
@@ -267,6 +268,7 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     /* Find inode */
     inode = (flags & O_NOFOLLOW) ? path_lookup_ex(kernel_path, false)
                                  : path_lookup(kernel_path);
+    opened_existing = inode != NULL;
     //kfree(kernel_path);
     
 /*     if (!inode) {
@@ -367,23 +369,6 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
             return -EEXIST;
         }
 
-        if ((flags & O_TRUNC) && ((flags & O_ACCMODE) != O_RDONLY)) {
-            int truncate_result;
-
-            if (inode->f_op == &fat32_file_ops) {
-                truncate_result = truncate_file_inode(inode, opened_name);
-            } else if (inode->f_op == &ext2_file_ops) {
-                truncate_result = ext2_truncate_inode(inode);
-            } else {
-                truncate_result = -EROFS;
-            }
-
-            if (truncate_result < 0) {
-                put_inode(inode);
-                kfree(kernel_path);
-                return truncate_result;
-            }
-        }
     }
     
     kfree(kernel_path);
@@ -392,6 +377,24 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     if (!check_file_permission(inode, flags)) {
         put_inode(inode);
         return -EACCES;
+    }
+
+    if (opened_existing &&
+        (flags & O_TRUNC) && ((flags & O_ACCMODE) != O_RDONLY)) {
+        int truncate_result;
+
+        if (inode->f_op == &fat32_file_ops) {
+            truncate_result = truncate_file_inode(inode, opened_name);
+        } else if (inode->f_op == &ext2_file_ops) {
+            truncate_result = ext2_truncate_inode(inode);
+        } else {
+            truncate_result = -EROFS;
+        }
+
+        if (truncate_result < 0) {
+            put_inode(inode);
+            return truncate_result;
+        }
     }
     
     /* Allocate file descriptor */
@@ -905,12 +908,35 @@ void close_file(file_t* file)
 
 static bool check_file_permission(inode_t* inode, int flags)
 {
-    /* Suppression des warnings unused parameter */
-    (void)inode;
-    (void)flags;
-    
-    /* TODO: Implement proper permission checking */
-    return true;
+    int mask = 0;
+
+    if (!inode)
+        return false;
+
+    /*
+     * POSIX open() access bits are not permission bits. Translate the requested
+     * file access into the inode permission model used by access() and execve().
+     * O_TRUNC also needs write permission, even if a buggy caller forgot to use
+     * O_WRONLY/O_RDWR.
+     */
+    switch (flags & O_ACCMODE) {
+        case O_RDONLY:
+            mask |= MAY_READ;
+            break;
+        case O_WRONLY:
+            mask |= MAY_WRITE;
+            break;
+        case O_RDWR:
+            mask |= MAY_READ | MAY_WRITE;
+            break;
+        default:
+            return false;
+    }
+
+    if (flags & O_TRUNC)
+        mask |= MAY_WRITE;
+
+    return inode_permission(inode, mask);
 }
 
 

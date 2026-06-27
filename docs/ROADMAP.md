@@ -1,0 +1,111 @@
+# ArmOS Roadmap
+
+This roadmap tracks the seven Linux-1.0-inspired workstreams currently active in
+ArmOS. The goal is not to clone Linux line by line, but to converge toward the
+same useful Unix contracts while keeping the kernel understandable and debuggable.
+
+## 1. Unix Permissions
+
+Status: started.
+
+Immediate goals:
+- Enforce read/write/execute permissions consistently at `open`, `access`, and
+  `execve` boundaries.
+- Keep root (`uid 0`) semantics explicit.
+- Tighten ownership rules for administrative calls such as `chown`.
+- Add regression coverage for user/root access decisions.
+
+First milestone: implemented.
+- `open()` maps its access flags to inode permission checks.
+- `O_TRUNC` happens only after write permission is granted.
+- `systest` covers read/write permission denial for non-root users.
+
+## 2. `/dev` And TTY
+
+Status: active and usable.
+
+Immediate goals:
+- Preserve tty0/UART as the recovery console in every boot mode.
+- Keep tty1/virtio-gpu optional and isolated from tty0 failure paths.
+- Continue improving termios, canonical/raw behavior, job control, and device
+  aliases such as `/dev/tty`, `/dev/tty0`, `/dev/tty1`, `/dev/console`, and
+  `/dev/null`.
+- Prepare the line discipline so future framebuffer/keyboard backends do not
+  leak backend details into userland.
+
+First milestone:
+- `/dev/tty` resolves through the process controlling terminal.
+
+## 3. `/proc`
+
+Status: active.
+
+Immediate goals:
+- Keep Linux-like low-risk files (`meminfo`, `uptime`, `stat`, `mounts`,
+  `interrupts`, `tty`, `net/dev`) readable from userland.
+- Expand per-process entries (`status`, `stat`, `maps`, `fd`, `cwd`, `exe`,
+  `root`) without holding scheduler locks while formatting large outputs.
+- Add simple network visibility under `/proc/net`.
+
+First milestone: implemented.
+- Add `/proc/net/tcp` as a minimal TCP visibility endpoint.
+
+## 4. Syscalls And Toolchain Support
+
+Status: active.
+
+Immediate goals:
+- Keep newlib as the reference libc.
+- Fill the syscalls needed by small Unix tools and TCC before attempting larger
+  packages.
+- Keep syscall ABI glue documented and tested in `systest`.
+- Avoid kernel changes driven only by TCC quirks unless they match a real Unix
+  contract.
+
+First milestone:
+- Maintain `getcwd`, `fcntl`, `ioctl`, `stat`, `lstat`, `fstat`, `statfs`, and
+  process-control syscalls as stable contracts.
+- Keep experimental TCC sources out of the default userland build unless
+  `ENABLE_TCC=1` is set.
+
+## 5. VFS And ext2 Hardening
+
+Status: active.
+
+Immediate goals:
+- Keep ext2 read/write paths robust under parallel userland tests.
+- Improve cross-filesystem behavior for userland tools (`cp`, `mv`, `rm`).
+- Add lightweight consistency checks for ext2 metadata and block allocation.
+- Keep FAT32 as a compatibility filesystem mounted manually on `/mnt`.
+
+First milestone:
+- Keep permission checks and mount metadata coherent across VFS filesystems.
+
+## 6. Minimal Networking
+
+Status: active.
+
+Immediate goals:
+- Keep virtio-net DTB probing automatic.
+- Maintain `/proc/net/dev` counters and IRQ visibility.
+- Keep the current TCP echo path as a diagnostic stepping stone, not a full TCP
+  stack contract.
+- Add small userland tools before adding broad socket semantics.
+
+First milestone: started.
+- Expose TCP diagnostic state in `/proc/net/tcp`.
+- Add a small `netstat` command based on `/proc/net/dev` and `/proc/net/tcp`.
+
+## 7. Userland Init
+
+Status: active.
+
+Immediate goals:
+- Keep `/sbin/init` in userland as PID 1.
+- Keep zombie reaping reliable.
+- Restart tty shells cleanly without coupling tty0 and tty1 lifetimes.
+- Move toward a small declarative init configuration once the current behavior
+  remains stable.
+
+First milestone:
+- Preserve tty0 user shell and optional tty1 root shell startup behavior.

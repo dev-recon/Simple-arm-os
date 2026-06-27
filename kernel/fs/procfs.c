@@ -56,6 +56,7 @@ static file_operations_t procfs_dir_ops;
 #define PROC_INO_TTY        13u
 #define PROC_INO_NET_DIR    14u
 #define PROC_INO_NET_DEV    15u
+#define PROC_INO_NET_TCP    16u
 #define PROC_PID_BASE       100000u
 #define PROC_PID_STRIDE     512u
 #define PROC_PID_DIR        0u
@@ -378,6 +379,8 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_ROOT, S_IFDIR | 0555, 0);
         if (strcmp(name, "dev") == 0)
             return proc_make_inode(PROC_INO_NET_DEV, S_IFREG | 0444, 0);
+        if (strcmp(name, "tcp") == 0)
+            return proc_make_inode(PROC_INO_NET_TCP, S_IFREG | 0444, 0);
         return NULL;
     }
 
@@ -741,6 +744,48 @@ static void proc_fill_net_dev(char* buf, size_t cap, size_t* len)
                 irq, irq_count, last_irq_status, status, phys, rx_last_len,
                 rx_arp, tx_arp, rx_ipv4, rx_icmp, tx_icmp, rx_tcp, tx_tcp,
                 tcp_echo, echo_enabled);
+}
+
+static uint32_t proc_tcp_addr_le(uint32_t ip)
+{
+    return ((ip & 0x000000FFu) << 24) |
+           ((ip & 0x0000FF00u) << 8)  |
+           ((ip & 0x00FF0000u) >> 8)  |
+           ((ip & 0xFF000000u) >> 24);
+}
+
+static void proc_fill_net_tcp(char* buf, size_t cap, size_t* len)
+{
+    uint32_t local_ip = 0;
+    uint16_t local_port = 0;
+    uint32_t listener_state = 0;
+    uint32_t pending_accept = 0;
+    uint32_t accepted_state = 0;
+
+    proc_append(buf, cap, len,
+                "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
+
+    if (!virtio_net_is_initialized())
+        return;
+
+    virtio_net_get_tcp_diag(&local_ip, &local_port, &listener_state,
+                            &pending_accept, &accepted_state);
+
+    if (listener_state) {
+        proc_append(buf, cap, len,
+                    "   0: %08X:%04X %08X:%04X %02X %08X:%08X 00:%08X %08X %5u %8u %u\n",
+                    proc_tcp_addr_le(local_ip), local_port,
+                    0u, 0u, listener_state, 0u, 0u, 0u, 0u, 0u,
+                    pending_accept, 0u);
+    }
+
+    if (accepted_state) {
+        proc_append(buf, cap, len,
+                    "   1: %08X:%04X %08X:%04X %02X %08X:%08X 00:%08X %08X %5u %8u %u\n",
+                    proc_tcp_addr_le(local_ip), local_port,
+                    0u, 0u, accepted_state, 0u, 0u, 0u, 0u, 0u,
+                    pending_accept, 0u);
+    }
 }
 
 typedef struct proc_flag_name {
@@ -1328,6 +1373,7 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_INTERRUPTS: proc_fill_interrupts(buf, cap, len); return 0;
         case PROC_INO_TTY:     proc_fill_tty(buf, cap, len); return 0;
         case PROC_INO_NET_DEV: proc_fill_net_dev(buf, cap, len); return 0;
+        case PROC_INO_NET_TCP: proc_fill_net_tcp(buf, cap, len); return 0;
         default: break;
     }
 
@@ -1533,6 +1579,7 @@ static int procfs_net_readdir(file_t* file, dirent_t* dirent)
         { ".",   PROC_INO_NET_DIR, DT_DIR },
         { "..",  PROC_INO_ROOT,    DT_DIR },
         { "dev", PROC_INO_NET_DEV, DT_REG },
+        { "tcp", PROC_INO_NET_TCP, DT_REG },
     };
     uint32_t offset = file->offset;
 
