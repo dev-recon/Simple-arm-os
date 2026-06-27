@@ -69,6 +69,28 @@ static file_operations_t pipe_write_fops = {
 extern char* resolve_path(const char* path);
 extern inode_operations_t ext2_inode_ops;
 
+static bool vfs_is_special_basename(const char* name)
+{
+    return !name || name[0] == '\0' ||
+           strcmp(name, ".") == 0 ||
+           strcmp(name, "..") == 0;
+}
+
+static bool vfs_path_is_self_or_descendant(const char* parent, const char* child)
+{
+    size_t len;
+
+    if (!parent || !child)
+        return false;
+
+    if (strcmp(parent, "/") == 0)
+        return child[0] == '/';
+
+    len = strlen(parent);
+    return strncmp(parent, child, len) == 0 &&
+           (child[len] == '\0' || child[len] == '/');
+}
+
 int sys_sync(void)
 {
     int ret = 0;
@@ -869,10 +891,15 @@ int sys_link(const char* oldpath, const char* newpath)
         return result;
     }
 
+    if (vfs_is_special_basename(new_name)) {
+        result = -EINVAL;
+        goto out_link;
+    }
+
     new_parent = path_lookup(new_parent_path);
     if (!new_parent) {
         result = -ENOENT;
-    } else if (!inode_permission(new_parent, MAY_WRITE)) {
+    } else if (!inode_permission(new_parent, MAY_WRITE | MAY_EXEC)) {
         result = -EACCES;
     } else if (new_parent->i_op != &ext2_inode_ops || target->i_op != &ext2_inode_ops) {
         result = -EXDEV;
@@ -881,6 +908,7 @@ int sys_link(const char* oldpath, const char* newpath)
     }
 
     if (new_parent) put_inode(new_parent);
+out_link:
     put_inode(target);
     kfree(old_full);
     kfree(new_full);
@@ -917,10 +945,15 @@ int sys_symlink(const char* target, const char* linkpath)
         return result;
     }
 
+    if (vfs_is_special_basename(name)) {
+        result = -EINVAL;
+        goto out_symlink;
+    }
+
     parent = path_lookup(parent_path);
     if (!parent) {
         result = -ENOENT;
-    } else if (!inode_permission(parent, MAY_WRITE)) {
+    } else if (!inode_permission(parent, MAY_WRITE | MAY_EXEC)) {
         result = -EACCES;
     } else if (parent->i_op != &ext2_inode_ops) {
         result = -EROFS;
@@ -929,6 +962,7 @@ int sys_symlink(const char* target, const char* linkpath)
     }
 
     if (parent) put_inode(parent);
+out_symlink:
     kfree(target_kpath);
     kfree(link_full);
     kfree(parent_path);
@@ -1247,6 +1281,14 @@ int sys_unlink(const char* pathname)
         return result;
     }
     
+    if (vfs_is_special_basename(filename)) {
+        put_inode(target_inode);
+        kfree(full_path);
+        kfree(parent_path);
+        kfree(filename);
+        return -EINVAL;
+    }
+
     /* Trouver le répertoire parent */
     parent_inode = path_lookup(parent_path);
     if (!parent_inode) {
@@ -1258,7 +1300,7 @@ int sys_unlink(const char* pathname)
     }
     
     /* Vérifier les permissions d'écriture sur le parent */
-    if (!inode_permission(parent_inode, MAY_WRITE)) {
+    if (!inode_permission(parent_inode, MAY_WRITE | MAY_EXEC)) {
         put_inode(target_inode);
         put_inode(parent_inode);
         kfree(full_path);
@@ -1320,24 +1362,36 @@ int sys_rename(const char* oldpath, const char* newpath)
         return result;
     }
 
+    if (vfs_is_special_basename(old_name) || vfs_is_special_basename(new_name)) {
+        result = -EINVAL;
+        goto out;
+    }
+
     old_parent = path_lookup(old_parent_path);
     if (!old_parent) { result = -ENOENT; goto out; }
 
     new_parent = path_lookup(new_parent_path);
     if (!new_parent) { put_inode(old_parent); result = -ENOENT; goto out; }
 
-    if (old_parent->i_op != new_parent->i_op) {
+    inode_t* rename_target = path_lookup_ex(old_full, false);
+    if (!rename_target) {
+        result = -ENOENT;
+    } else if (S_ISDIR(rename_target->mode) &&
+               vfs_path_is_self_or_descendant(old_full, new_full)) {
+        result = -EINVAL;
+    } else if (old_parent->i_op != new_parent->i_op) {
         result = -EXDEV;
     } else if (!old_parent->i_op || !old_parent->i_op->rename) {
         result = -ENOSYS;
-    } else if (!inode_permission(old_parent, MAY_WRITE)) {
+    } else if (!inode_permission(old_parent, MAY_WRITE | MAY_EXEC)) {
         result = -EACCES;
-    } else if (!inode_permission(new_parent, MAY_WRITE)) {
+    } else if (!inode_permission(new_parent, MAY_WRITE | MAY_EXEC)) {
         result = -EACCES;
     } else {
         result = old_parent->i_op->rename(old_parent, old_name,
                                           new_parent, new_name);
     }
+    if (rename_target) put_inode(rename_target);
 
     put_inode(old_parent);
     put_inode(new_parent);
@@ -1386,6 +1440,14 @@ int sys_rmdir(const char* pathname)
         return result;
     }
 
+    if (vfs_is_special_basename(dir_name)) {
+        put_inode(target_inode);
+        kfree(abs_path);
+        kfree(parent_path);
+        kfree(dir_name);
+        return -EINVAL;
+    }
+
     parent_inode = path_lookup(parent_path);
     if (!parent_inode) {
         put_inode(target_inode);
@@ -1397,7 +1459,7 @@ int sys_rmdir(const char* pathname)
 
     if (!parent_inode->i_op || !parent_inode->i_op->rmdir)
         result = -ENOSYS;
-    else if (!inode_permission(parent_inode, MAY_WRITE))
+    else if (!inode_permission(parent_inode, MAY_WRITE | MAY_EXEC))
         result = -EACCES;
     else
         result = parent_inode->i_op->rmdir(parent_inode, dir_name);
@@ -1434,6 +1496,13 @@ int sys_mkdir(const char* pathname, mode_t mode)
         return result;
     }
 
+    if (vfs_is_special_basename(dir_name)) {
+        kfree(abs_path);
+        kfree(parent_path);
+        kfree(dir_name);
+        return -EINVAL;
+    }
+
     parent_inode = path_lookup(parent_path);
     if (!parent_inode) {
         kfree(abs_path);
@@ -1450,7 +1519,7 @@ int sys_mkdir(const char* pathname, mode_t mode)
         return -ENOTDIR;
     }
 
-    if (!inode_permission(parent_inode, MAY_WRITE))
+    if (!inode_permission(parent_inode, MAY_WRITE | MAY_EXEC))
         result = -EACCES;
     else if (!parent_inode->i_op || !parent_inode->i_op->mkdir)
         result = -ENOSYS;

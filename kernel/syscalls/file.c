@@ -296,6 +296,11 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
         //KDEBUG("kernel_open: INODE IS NULL for %s\n", kernel_path);
         if (flags & O_CREAT) {
             char* parent_path;
+
+            if (flags & O_DIRECTORY) {
+                kfree(kernel_path);
+                return -EINVAL;
+            }
             
             /* Séparer le chemin */
             if (split_path(kernel_path, &parent_path, &filename) != 0) {
@@ -310,6 +315,30 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
                 kfree(filename);
                 kfree(kernel_path);
                 return -ENOENT;
+            }
+
+            if (!S_ISDIR(parent->mode)) {
+                put_inode(parent);
+                kfree(parent_path);
+                kfree(filename);
+                kfree(kernel_path);
+                return -ENOTDIR;
+            }
+
+            if (!inode_permission(parent, MAY_WRITE | MAY_EXEC)) {
+                put_inode(parent);
+                kfree(parent_path);
+                kfree(filename);
+                kfree(kernel_path);
+                return -EACCES;
+            }
+
+            if (!filename[0] || strcmp(filename, ".") == 0 || strcmp(filename, "..") == 0) {
+                put_inode(parent);
+                kfree(parent_path);
+                kfree(filename);
+                kfree(kernel_path);
+                return -EINVAL;
             }
 
             if (parent->i_op != &fat32_inode_ops && parent->i_op != &ext2_inode_ops) {
@@ -377,6 +406,11 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     if (!check_file_permission(inode, flags)) {
         put_inode(inode);
         return -EACCES;
+    }
+
+    if ((flags & O_DIRECTORY) && !S_ISDIR(inode->mode)) {
+        put_inode(inode);
+        return -ENOTDIR;
     }
 
     if (opened_existing &&
