@@ -46,6 +46,7 @@ RAW_SYSCALL sys_lseek, 19
 RAW_SYSCALL sys_getpid, 20
 RAW_SYSCALL sys_getuid, 24
 RAW_SYSCALL sys_access, 33
+RAW_SYSCALL sys_nice, 34
 RAW_SYSCALL sys_sync, 36
 RAW_SYSCALL sys_kill, 37
 RAW_SYSCALL sys_rename, 38
@@ -69,6 +70,8 @@ RAW_SYSCALL sys_gettimeofday, 78
 RAW_SYSCALL sys_symlink, 83
 RAW_SYSCALL sys_readlink, 85
 RAW_SYSCALL sys_ftruncate, 93
+RAW_SYSCALL sys_getpriority, 96
+RAW_SYSCALL sys_setpriority, 97
 RAW_SYSCALL sys_statfs, 99
 RAW_SYSCALL sys_stat, 106
 RAW_SYSCALL sys_lstat, 107

@@ -91,6 +91,8 @@ struct process;
 #define __NR_symlink             83
 #define __NR_readlink            85
 #define __NR_ftruncate           93
+#define __NR_getpriority         96
+#define __NR_setpriority         97
 #define __NR_statfs              99
 #define __NR_stat               106
 #define __NR_lstat              107
@@ -235,6 +237,9 @@ int sys_setuid(uid_t uid);
 int sys_getuid(void);
 int sys_setgid(gid_t gid);
 int sys_getgid(void);
+int sys_nice(int inc);
+int sys_getpriority(int which, int who);
+int sys_setpriority(int which, int who, int prio);
 int sys_time(time_t* tloc);
 int sys_gettimeofday(struct timeval* tv, struct timezone* tz);
 int sys_setpgid(pid_t pid, pid_t pgid);

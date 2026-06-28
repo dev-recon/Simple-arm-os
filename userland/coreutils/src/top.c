@@ -40,6 +40,7 @@ typedef struct top_task {
     int tty;
     unsigned runtime_ticks;
     unsigned cpu_pct_x10;
+    unsigned priority;
     unsigned ctx;
     unsigned pf;
     unsigned rss_kb;
@@ -438,6 +439,10 @@ static void enrich_from_status(top_task_t *task)
     p = line_after_key(buf, "VmRSS:");
     if (p)
         parse_uint(p, &task->rss_kb);
+
+    p = line_after_key(buf, "Priority:");
+    if (p)
+        parse_uint(p, &task->priority);
 }
 
 static int load_tasks(top_task_t *tasks, int max_tasks)
@@ -471,6 +476,7 @@ static int load_tasks(top_task_t *tasks, int max_tasks)
             if (e->d_ino != 0 && is_digit(e->d_name[0])) {
                 memset(&tasks[count], 0, sizeof(tasks[count]));
                 tasks[count].tty = -1;
+                tasks[count].priority = 10;
                 sprintf(path, "/proc/%s/stat", e->d_name);
                 if (read_file(path, statbuf, sizeof(statbuf)) >= 0 &&
                     parse_proc_stat(statbuf, &tasks[count]) == 0) {
@@ -641,10 +647,10 @@ static void render_top(unsigned delay_sec, int iteration)
                    pct_x10 % 10u,
                    count);
 
-    top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
-                   "PID", "TTY", "STATE", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
-    top_buf_append(&frame, C_DIM "----------------------------------------------------------------------" C_RESET "\033[0K\r\n",
-                   (int)strlen(C_DIM "----------------------------------------------------------------------" C_RESET "\033[0K\r\n"));
+    top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %3s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
+                   "PID", "TTY", "STATE", "PRI", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
+    top_buf_append(&frame, C_DIM "--------------------------------------------------------------------------" C_RESET "\033[0K\r\n",
+                   (int)strlen(C_DIM "--------------------------------------------------------------------------" C_RESET "\033[0K\r\n"));
 
     for (int i = 0; i < count; i++) {
         char timebuf[16];
@@ -655,11 +661,12 @@ static void render_top(unsigned delay_sec, int iteration)
         format_count(top_tasks[i].ctx, ctxbuf, sizeof(ctxbuf));
         top_buf_printf(&frame, C_CYAN "%5d" C_RESET " ", top_tasks[i].pid);
         append_tty(&frame, top_tasks[i].tty);
-        top_buf_printf(&frame, "%*s %s%-8s" C_RESET " %3u.%u %8s %8s %6u %5uK %s\033[0K\r\n",
+        top_buf_printf(&frame, "%*s %s%-8s" C_RESET " %3u %3u.%u %8s %8s %6u %5uK %s\033[0K\r\n",
                        top_tasks[i].tty >= 0 ? 4 : 7,
                        "",
                        color,
                        state_name(top_tasks[i].state),
+                       top_tasks[i].priority,
                        top_tasks[i].cpu_pct_x10 / 10u,
                        top_tasks[i].cpu_pct_x10 % 10u,
                        timebuf,

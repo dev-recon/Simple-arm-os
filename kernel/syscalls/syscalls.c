@@ -62,6 +62,9 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_getuid] = (syscall_func_t)sys_getuid,
     [__NR_setgid] = (syscall_func_t)sys_setgid,
     [__NR_getgid] = (syscall_func_t)sys_getgid,
+    [__NR_nice] = (syscall_func_t)sys_nice,
+    [__NR_getpriority] = (syscall_func_t)sys_getpriority,
+    [__NR_setpriority] = (syscall_func_t)sys_setpriority,
     [__NR_setpgid] = (syscall_func_t)sys_setpgid,
     [__NR_getpgrp] = (syscall_func_t)sys_getpgrp,
     [__NR_kill] = (syscall_func_t)sys_kill,
@@ -1241,6 +1244,124 @@ int sys_setgid(gid_t gid)
         return -EPERM;
 
     proc->process->gid = gid;
+    return 0;
+}
+
+#define PRIO_PROCESS 0
+
+static int scheduler_priority_to_nice(uint32_t priority)
+{
+    int nice = (int)priority - 10;
+
+    if (nice < -20)
+        return -20;
+    if (nice > 19)
+        return 19;
+    return nice;
+}
+
+static uint32_t nice_to_scheduler_priority(int nice)
+{
+    if (nice < -20)
+        nice = -20;
+    if (nice > 19)
+        nice = 19;
+
+    /*
+     * ArmOS priorities are scheduler priorities: lower values run first.
+     * Unix nice values are user-facing weights: lower values mean "nicer to me,
+     * less nice to others". Mapping nice 0 to scheduler priority 10 preserves
+     * the historical default used by user processes.
+     */
+    return (uint32_t)(nice + 10);
+}
+
+static bool can_change_task_priority(task_t *caller, task_t *target, int new_nice)
+{
+    int old_nice;
+
+    if (!caller || !caller->process || !target || !target->process)
+        return false;
+
+    if (caller->process->uid == 0)
+        return true;
+
+    if (caller->process->uid != target->process->uid)
+        return false;
+
+    old_nice = scheduler_priority_to_nice(target->priority);
+    return new_nice >= old_nice;
+}
+
+int sys_nice(int inc)
+{
+    task_t *proc = current_task;
+    int old_nice;
+    int new_nice;
+
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
+        return -EINVAL;
+
+    old_nice = scheduler_priority_to_nice(proc->priority);
+    new_nice = old_nice + inc;
+    if (new_nice < -20)
+        new_nice = -20;
+    if (new_nice > 19)
+        new_nice = 19;
+
+    if (!can_change_task_priority(proc, proc, new_nice))
+        return -EPERM;
+
+    task_set_priority(proc, nice_to_scheduler_priority(new_nice));
+    return 0;
+}
+
+int sys_getpriority(int which, int who)
+{
+    task_t *target;
+
+    if (which != PRIO_PROCESS)
+        return -EINVAL;
+
+    if (who == 0) {
+        target = current_task;
+    } else {
+        target = find_process_by_pid((pid_t)who);
+    }
+
+    if (!target || target->type != TASK_TYPE_PROCESS || !target->process)
+        return -ESRCH;
+
+    /*
+     * Match the Linux raw-syscall trick: expose 20 - nice so successful
+     * negative nice values are not mistaken for -errno by the libc wrapper.
+     */
+    return 20 - scheduler_priority_to_nice(target->priority);
+}
+
+int sys_setpriority(int which, int who, int prio)
+{
+    task_t *caller = current_task;
+    task_t *target;
+
+    if (which != PRIO_PROCESS)
+        return -EINVAL;
+    if (prio < -20 || prio > 19)
+        return -EINVAL;
+
+    if (who == 0) {
+        target = current_task;
+    } else {
+        target = find_process_by_pid((pid_t)who);
+    }
+
+    if (!target || target->type != TASK_TYPE_PROCESS || !target->process)
+        return -ESRCH;
+
+    if (!can_change_task_priority(caller, target, prio))
+        return -EPERM;
+
+    task_set_priority(target, nice_to_scheduler_priority(prio));
     return 0;
 }
 

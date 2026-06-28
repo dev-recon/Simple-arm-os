@@ -66,6 +66,9 @@ extern long sys_setuid(int uid);
 extern long sys_getuid(void);
 extern long sys_setgid(int gid);
 extern long sys_getgid(void);
+extern long sys_nice(int inc);
+extern long sys_getpriority(int which, int who);
+extern long sys_setpriority(int which, int who, int prio);
 extern long sys_getpgrp(void);
 extern long sys_setpgid(int pid, int pgid);
 extern long sys_fork(void);
@@ -591,6 +594,31 @@ gid_t getgid(void)
 int setgid(gid_t gid)
 {
     return ret_errno(sys_setgid((int)gid));
+}
+
+int getpriority(int which, id_t who)
+{
+    long ret = sys_getpriority(which, (int)who);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return 20 - (int)ret;
+}
+
+int setpriority(int which, id_t who, int prio)
+{
+    return ret_errno(sys_setpriority(which, (int)who, prio));
+}
+
+int nice(int inc)
+{
+    long ret = sys_nice(inc);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return getpriority(0, 0);
 }
 
 pid_t getpgrp(void)
