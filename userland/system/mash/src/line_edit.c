@@ -218,6 +218,21 @@ static void shell_set_line(char* line, int* len, int* cursor, const char* text) 
     shell_redraw_line(line, *len, *cursor);
 }
 
+static void shell_reap_jobs_during_edit(char* line, int len, int cursor) {
+    /*
+     * Background job notifications can arrive while the user is editing a
+     * command. Put the notification on its own clean line, then repaint the
+     * prompt and the edit buffer so typed text is not visually lost.
+     */
+    putc_tty('\r');
+    putc_tty('\033');
+    putc_tty('[');
+    putc_tty('K');
+
+    jobs_reap_background();
+    shell_redraw_line(line, len, cursor);
+}
+
 static void shell_insert_char(char* line, int* len, int* cursor, char c) {
     int i;
 
@@ -703,7 +718,7 @@ char* shell_read_line(void) {
     while (1) {
         c = getc_tty();
         if (c == -2) {
-            jobs_reap_background();
+            shell_reap_jobs_during_edit(input_buffer, len, cursor);
             pflush();
             continue;
         }
@@ -713,8 +728,7 @@ char* shell_read_line(void) {
             else
                 printf("\r\033[K");
 
-            jobs_reap_background();
-            shell_redraw_line(input_buffer, len, cursor);
+            shell_reap_jobs_during_edit(input_buffer, len, cursor);
             pflush();
             continue;
         }
