@@ -89,6 +89,21 @@
 #define F_SETFD     2
 #define F_GETFL     3
 #define F_SETFL     4
+#define F_GETLK     7
+#define F_SETLK     8
+#define F_SETLKW    9
+
+#define F_RDLCK     1
+#define F_WRLCK     2
+#define F_UNLCK     3
+
+struct flock_kernel {
+    int16_t l_type;
+    int16_t l_whence;
+    off_t l_start;
+    off_t l_len;
+    pid_t l_pid;
+};
 
 #define TCGETS      0x5401
 #define TCSETS      0x5402

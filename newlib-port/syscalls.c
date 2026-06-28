@@ -86,6 +86,7 @@ extern long sys_utime(const char *pathname, const void *times);
 extern long sys_fork(void);
 extern long sys_execve(const char *pathname, char *const argv[], char *const envp[]);
 extern long sys_waitpid(int pid, int *status, int options);
+extern long sys_wait4(int pid, int *status, int options, void *rusage);
 extern long sys_brk(unsigned long brk);
 extern long sys_link(const char *oldpath, const char *newpath);
 extern long sys_access(const char *pathname, int mode);
@@ -103,7 +104,12 @@ extern long sys_nanosleep(const struct timespec *req, struct timespec *rem);
 extern long sys_mknod(const char *pathname, int mode, unsigned long dev);
 extern long sys_mmap(void *addr, unsigned long length, int prot, int flags, int fd);
 extern long sys_munmap(void *addr, unsigned long length);
+extern long sys_mprotect(void *addr, unsigned long length, int prot);
 extern long sys_select(int nfds, void *readfds, void *writefds, void *exceptfds, void *timeout);
+extern long sys_poll(void *fds, unsigned long nfds, int timeout);
+extern long sys_readv(int fd, const void *iov, int iovcnt);
+extern long sys_writev(int fd, const void *iov, int iovcnt);
+extern long sys_getrusage(int who, void *usage);
 extern long sys_stty(int request, int value, int value2);
 extern long sys_gtty(int request, int value);
 extern long sys_sigaction(int sig, const void *act, void *oldact);
@@ -198,6 +204,38 @@ struct os_sigaction {
     uint32_t sa_mask;
     int sa_flags;
     void (*sa_restorer)(void);
+};
+
+typedef unsigned long nfds_t;
+
+struct iovec {
+    void *iov_base;
+    size_t iov_len;
+};
+
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
+};
+
+struct rusage {
+    struct timeval ru_utime;
+    struct timeval ru_stime;
+    long ru_maxrss;
+    long ru_ixrss;
+    long ru_idrss;
+    long ru_isrss;
+    long ru_minflt;
+    long ru_majflt;
+    long ru_nswap;
+    long ru_inblock;
+    long ru_oublock;
+    long ru_msgsnd;
+    long ru_msgrcv;
+    long ru_nsignals;
+    long ru_nvcsw;
+    long ru_nivcsw;
 };
 
 static int ret_errno(long ret)
@@ -727,6 +765,18 @@ pid_t waitpid(pid_t pid, int *status, int options)
     return (pid_t)ret;
 }
 
+pid_t wait4(pid_t pid, int *status, int options, struct rusage *rusage)
+{
+    long ret = sys_wait4(pid, status, options, rusage);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return (pid_t)-1;
+    }
+    if (status)
+        *status = wait_status_os_to_newlib(*status);
+    return (pid_t)ret;
+}
+
 int chmod(const char *path, mode_t mode)
 {
     return ret_errno(sys_chmod(path, (int)mode));
@@ -1035,6 +1085,36 @@ int select(int nfds, fd_set *readfds, fd_set *writefds,
     return ret_errno(sys_select(nfds, readfds, writefds, exceptfds, timeout));
 }
 
+int poll(struct pollfd *fds, nfds_t nfds, int timeout)
+{
+    return ret_errno(sys_poll(fds, nfds, timeout));
+}
+
+ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
+{
+    long ret = sys_readv(fd, iov, iovcnt);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return (ssize_t)ret;
+}
+
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
+{
+    long ret = sys_writev(fd, iov, iovcnt);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return (ssize_t)ret;
+}
+
+int getrusage(int who, struct rusage *usage)
+{
+    return ret_errno(sys_getrusage(who, usage));
+}
+
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
 {
     long ret;
@@ -1055,4 +1135,9 @@ void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
 int munmap(void *addr, size_t length)
 {
     return ret_errno(sys_munmap(addr, length));
+}
+
+int mprotect(void *addr, size_t length, int prot)
+{
+    return ret_errno(sys_mprotect(addr, length, prot));
 }

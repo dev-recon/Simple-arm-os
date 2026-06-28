@@ -191,6 +191,7 @@ bool tty_has_pending_output(void);
 void tty_drain_output(void);
 ssize_t tty_read(char *buf, size_t count);
 ssize_t tty_write(const char *buf, size_t count);
+bool tty_read_ready_for_id(int tty_id);
 int tty_get_termios(struct termios *tio);
 int tty_set_termios(const struct termios *tio, int flush_input);
 int tty_flush(int queue_selector);

@@ -59,6 +59,18 @@ struct utimbuf_kernel {
 #define ARMOS_MAP_FIXED     0x10
 #define ARMOS_MAP_ANON      0x20
 
+#define ARMOS_POLLIN        0x0001
+#define ARMOS_POLLPRI       0x0002
+#define ARMOS_POLLOUT       0x0004
+#define ARMOS_POLLERR       0x0008
+#define ARMOS_POLLHUP       0x0010
+#define ARMOS_POLLNVAL      0x0020
+
+#define ARMOS_RUSAGE_SELF   0
+#define ARMOS_RUSAGE_CHILDREN (-1)
+
+#define ARMOS_IOV_MAX       64
+
 struct pipe_buffer {
     char data[PIPE_BUF_SIZE];
     size_t read_pos;
@@ -714,10 +726,48 @@ int sys_dup2(int oldfd, int newfd)
     return newfd;
 }
 
+static bool fd_read_ready(file_t *file)
+{
+    if (!file || !can_read(file))
+        return false;
+
+    if (file->type == FILE_TYPE_TTY) {
+        int tty_id = tty_id_from_file(file);
+        return tty_id >= 0 && tty_read_ready_for_id(tty_id);
+    }
+
+    if (file->type == FILE_TYPE_PIPE) {
+        struct pipe_inode_info *pipe = (struct pipe_inode_info *)file->private_data;
+        struct pipe_buffer *buffer = pipe ? pipe->buffer : NULL;
+        return buffer && (buffer->count > 0 || buffer->writers == 0 || buffer->closed_write);
+    }
+
+    if (file->type == FILE_TYPE_SOCKET)
+        return false;
+
+    return file->f_op && file->f_op->read;
+}
+
+static bool fd_write_ready(file_t *file)
+{
+    if (!file || !can_write(file))
+        return false;
+
+    if (file->type == FILE_TYPE_PIPE) {
+        struct pipe_inode_info *pipe = (struct pipe_inode_info *)file->private_data;
+        struct pipe_buffer *buffer = pipe ? pipe->buffer : NULL;
+        return buffer && buffer->readers > 0 && !buffer->closed_read &&
+               buffer->count < PIPE_BUF_SIZE;
+    }
+
+    return file->f_op && file->f_op->write;
+}
+
 int sys_fcntl(int fd, int cmd, uint32_t arg)
 {
     file_t* file;
     int newfd;
+    struct flock_kernel fl;
 
     if (!current_task || !current_task->process)
         return -EINVAL;
@@ -759,6 +809,25 @@ int sys_fcntl(int fd, int cmd, uint32_t arg)
     case F_SETFL:
         file->flags = (file->flags & O_ACCMODE) |
                       (arg & (O_APPEND | O_NONBLOCK | O_SYNC | O_DSYNC | O_RSYNC));
+        return 0;
+
+    case F_GETLK:
+        if (!arg)
+            return -EFAULT;
+        if (copy_from_user(&fl, (void *)arg, sizeof(fl)) < 0)
+            return -EFAULT;
+        fl.l_type = F_UNLCK;
+        fl.l_pid = 0;
+        return copy_to_user((void *)arg, &fl, sizeof(fl)) < 0 ? -EFAULT : 0;
+
+    case F_SETLK:
+    case F_SETLKW:
+        if (!arg)
+            return -EFAULT;
+        if (copy_from_user(&fl, (void *)arg, sizeof(fl)) < 0)
+            return -EFAULT;
+        if (fl.l_type != F_RDLCK && fl.l_type != F_WRLCK && fl.l_type != F_UNLCK)
+            return -EINVAL;
         return 0;
 
     default:
@@ -907,34 +976,273 @@ int sys_times(void* buf)
     return (int)ticks;
 }
 
-int sys_select(int nfds, void* readfds, void* writefds, void* exceptfds, void* timeout)
-{
-    struct timeval tv;
-    uint32_t ms;
+static uint32_t vm_rss_kb(vm_space_t *vm);
 
-    if (nfds < 0)
+static void fill_rusage_for_task(task_t *task, struct rusage_kernel *usage)
+{
+    uint32_t runtime;
+
+    memset(usage, 0, sizeof(*usage));
+    if (!task)
+        return;
+
+    runtime = task->total_runtime > 0xffffffffu ? 0xffffffffu : (uint32_t)task->total_runtime;
+    usage->ru_utime.tv_sec = (time_t)(runtime / TIMER_FREQ);
+    usage->ru_utime.tv_usec = (uint32_t)((runtime % TIMER_FREQ) * (1000000u / TIMER_FREQ));
+    usage->ru_minflt = (int32_t)task->page_faults;
+    usage->ru_majflt = 0;
+    usage->ru_nvcsw = (int32_t)task->switch_count;
+    if (task->type == TASK_TYPE_PROCESS && task->process && task->process->vm)
+        usage->ru_maxrss = (int32_t)vm_rss_kb(task->process->vm);
+}
+
+int sys_getrusage(int who, struct rusage_kernel* usage)
+{
+    struct rusage_kernel local;
+
+    if (!usage)
+        return -EFAULT;
+    if (who != ARMOS_RUSAGE_SELF && who != ARMOS_RUSAGE_CHILDREN)
         return -EINVAL;
 
     /*
-     * Minimal POSIX-compatible sleep use-case: select(0, NULL, NULL, NULL, tv).
-     * Real descriptor readiness needs per-file poll callbacks, which ArmOS does
-     * not expose yet. Return ENOSYS rather than pretending fds are ready.
+     * ArmOS currently tracks per-live-task counters. Child aggregate accounting
+     * will need process-level lifetime accumulation before destroy_process().
      */
-    if (nfds != 0 || readfds || writefds || exceptfds)
-        return -ENOSYS;
+    fill_rusage_for_task(who == ARMOS_RUSAGE_SELF ? current_task : NULL, &local);
+    return copy_to_user(usage, &local, sizeof(local)) < 0 ? -EFAULT : 0;
+}
 
-    if (!timeout) {
+static int select_words_for_nfds(int nfds)
+{
+    return (nfds + 31) / 32;
+}
+
+static bool fdset_has(uint32_t *set, int fd)
+{
+    return (set[fd / 32] & (1u << (fd % 32))) != 0;
+}
+
+static void fdset_set(uint32_t *set, int fd)
+{
+    set[fd / 32] |= (1u << (fd % 32));
+}
+
+static int select_scan(int nfds, uint32_t *in_read, uint32_t *in_write,
+                       uint32_t *out_read, uint32_t *out_write,
+                       uint32_t *out_except)
+{
+    int ready = 0;
+
+    memset(out_read, 0, sizeof(uint32_t) * select_words_for_nfds(nfds));
+    memset(out_write, 0, sizeof(uint32_t) * select_words_for_nfds(nfds));
+    memset(out_except, 0, sizeof(uint32_t) * select_words_for_nfds(nfds));
+
+    for (int fd = 0; fd < nfds; fd++) {
+        file_t *file = NULL;
+
+        if (fd >= MAX_FILES)
+            break;
+        if (!current_task || !current_task->process)
+            return -EINVAL;
+
+        file = current_task->process->files[fd];
+        if (!file)
+            continue;
+
+        if (in_read && fdset_has(in_read, fd) && fd_read_ready(file)) {
+            fdset_set(out_read, fd);
+            ready++;
+        }
+        if (in_write && fdset_has(in_write, fd) && fd_write_ready(file)) {
+            fdset_set(out_write, fd);
+            ready++;
+        }
+    }
+
+    return ready;
+}
+
+int sys_select(int nfds, void* readfds, void* writefds, void* exceptfds, void* timeout)
+{
+    struct timeval tv;
+    uint32_t ms = 0;
+    uint32_t deadline = 0;
+    uint32_t read_in[8], write_in[8];
+    uint32_t read_out[8], write_out[8], except_out[8];
+    uint32_t *read_ptr = NULL, *write_ptr = NULL;
+    int words;
+    int ready;
+
+    if (nfds < 0 || nfds > MAX_FILES)
+        return -EINVAL;
+
+    words = select_words_for_nfds(nfds);
+    memset(read_in, 0, sizeof(read_in));
+    memset(write_in, 0, sizeof(write_in));
+    if (readfds) {
+        if (copy_from_user(read_in, readfds, words * sizeof(uint32_t)) < 0)
+            return -EFAULT;
+        read_ptr = read_in;
+    }
+    if (writefds) {
+        if (copy_from_user(write_in, writefds, words * sizeof(uint32_t)) < 0)
+            return -EFAULT;
+        write_ptr = write_in;
+    }
+
+    if (!timeout && nfds == 0) {
         return sys_pause();
     }
 
-    if (copy_from_user(&tv, timeout, sizeof(tv)) < 0)
-        return -EFAULT;
-    if (tv.tv_usec >= 1000000u)
-        return -EINVAL;
+    if (timeout) {
+        if (copy_from_user(&tv, timeout, sizeof(tv)) < 0)
+            return -EFAULT;
+        if (tv.tv_usec >= 1000000u)
+            return -EINVAL;
+        ms = (uint32_t)tv.tv_sec * 1000u + (tv.tv_usec + 999u) / 1000u;
+        deadline = get_system_ticks() + (ms * TIMER_FREQ + 999u) / 1000u;
+    }
 
-    ms = (uint32_t)tv.tv_sec * 1000u + (tv.tv_usec + 999u) / 1000u;
-    task_sleep_ms(ms);
-    return 0;
+    while (1) {
+        ready = select_scan(nfds, read_ptr, write_ptr, read_out, write_out, except_out);
+        if (ready < 0)
+            return ready;
+        if (ready > 0 || (timeout && ms == 0))
+            break;
+        if (timeout && get_system_ticks() >= deadline)
+            break;
+        if (has_pending_signals(current_task))
+            return -EINTR;
+        task_sleep_ms(1);
+    }
+
+    if (readfds && copy_to_user(readfds, read_out, words * sizeof(uint32_t)) < 0)
+        return -EFAULT;
+    if (writefds && copy_to_user(writefds, write_out, words * sizeof(uint32_t)) < 0)
+        return -EFAULT;
+    if (exceptfds && copy_to_user(exceptfds, except_out, words * sizeof(uint32_t)) < 0)
+        return -EFAULT;
+
+    return ready > 0 ? ready : 0;
+}
+
+int sys_poll(struct pollfd_kernel* fds, uint32_t nfds, int timeout_ms)
+{
+    struct pollfd_kernel local[64];
+    uint32_t deadline = 0;
+    int ready;
+
+    if (!fds && nfds)
+        return -EFAULT;
+    if (nfds > 64)
+        return -EINVAL;
+    if (timeout_ms >= 0)
+        deadline = get_system_ticks() + ((uint32_t)timeout_ms * TIMER_FREQ + 999u) / 1000u;
+
+    if (nfds && copy_from_user(local, fds, nfds * sizeof(local[0])) < 0)
+        return -EFAULT;
+
+    while (1) {
+        ready = 0;
+        for (uint32_t i = 0; i < nfds; i++) {
+            file_t *file = NULL;
+
+            local[i].revents = 0;
+            if (local[i].fd < 0)
+                continue;
+            if (local[i].fd >= MAX_FILES || !current_task || !current_task->process ||
+                !(file = current_task->process->files[local[i].fd])) {
+                local[i].revents = ARMOS_POLLNVAL;
+                ready++;
+                continue;
+            }
+            if ((local[i].events & ARMOS_POLLIN) && fd_read_ready(file))
+                local[i].revents |= ARMOS_POLLIN;
+            if ((local[i].events & ARMOS_POLLOUT) && fd_write_ready(file))
+                local[i].revents |= ARMOS_POLLOUT;
+            if (local[i].revents)
+                ready++;
+        }
+
+        if (ready > 0 || timeout_ms == 0)
+            break;
+        if (timeout_ms >= 0 && get_system_ticks() >= deadline)
+            break;
+        if (has_pending_signals(current_task))
+            return -EINTR;
+        task_sleep_ms(1);
+    }
+
+    if (nfds && copy_to_user(fds, local, nfds * sizeof(local[0])) < 0)
+        return -EFAULT;
+    return ready;
+}
+
+ssize_t sys_readv(int fd, const struct iovec_kernel* iov, int iovcnt)
+{
+    struct iovec_kernel local[ARMOS_IOV_MAX];
+    ssize_t total = 0;
+
+    if (iovcnt < 0 || iovcnt > ARMOS_IOV_MAX)
+        return -EINVAL;
+    if (iovcnt == 0)
+        return 0;
+    if (!iov)
+        return -EFAULT;
+    if (copy_from_user(local, iov, (size_t)iovcnt * sizeof(local[0])) < 0)
+        return -EFAULT;
+
+    for (int i = 0; i < iovcnt; i++) {
+        int ret;
+
+        if (local[i].iov_len == 0)
+            continue;
+        if (!local[i].iov_base)
+            return total > 0 ? total : -EFAULT;
+
+        ret = sys_read(fd, local[i].iov_base, local[i].iov_len);
+        if (ret < 0)
+            return total > 0 ? total : ret;
+        total += ret;
+        if ((size_t)ret < local[i].iov_len)
+            break;
+    }
+
+    return total;
+}
+
+ssize_t sys_writev(int fd, const struct iovec_kernel* iov, int iovcnt)
+{
+    struct iovec_kernel local[ARMOS_IOV_MAX];
+    ssize_t total = 0;
+
+    if (iovcnt < 0 || iovcnt > ARMOS_IOV_MAX)
+        return -EINVAL;
+    if (iovcnt == 0)
+        return 0;
+    if (!iov)
+        return -EFAULT;
+    if (copy_from_user(local, iov, (size_t)iovcnt * sizeof(local[0])) < 0)
+        return -EFAULT;
+
+    for (int i = 0; i < iovcnt; i++) {
+        int ret;
+
+        if (local[i].iov_len == 0)
+            continue;
+        if (!local[i].iov_base)
+            return total > 0 ? total : -EFAULT;
+
+        ret = sys_write(fd, local[i].iov_base, local[i].iov_len);
+        if (ret < 0)
+            return total > 0 ? total : ret;
+        total += ret;
+        if ((size_t)ret < local[i].iov_len)
+            break;
+    }
+
+    return total;
 }
 
 int sys_alarm(uint32_t seconds)
@@ -2247,18 +2555,14 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
     if (!task || task->type != TASK_TYPE_PROCESS || !task->process || !task->process->vm)
         return (void *)-EINVAL;
 
-    /*
-     * Level-1 mmap support: anonymous private mappings only.
-     * File-backed mappings require page-cache/VFS coherency, and MAP_FIXED
-     * needs stricter replacement semantics. Return ENOSYS for those rather
-     * than providing surprising half-behaviour.
-     */
-    if (!(flags & ARMOS_MAP_ANON) || fd != -1)
-        return (void *)-ENOSYS;
     if ((flags & ARMOS_MAP_SHARED) || !(flags & ARMOS_MAP_PRIVATE))
         return (void *)-ENOSYS;
     if (flags & ARMOS_MAP_FIXED)
         return (void *)-ENOSYS;
+    if ((flags & ARMOS_MAP_ANON) && fd != -1)
+        return (void *)-EINVAL;
+    if (!(flags & ARMOS_MAP_ANON) && (fd < 0 || fd >= MAX_FILES))
+        return (void *)-EBADF;
     if (length == 0)
         return (void *)-EINVAL;
     if (prot & ~(ARMOS_PROT_READ | ARMOS_PROT_WRITE | ARMOS_PROT_EXEC))
@@ -2299,6 +2603,48 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
         }
     }
 
+    if (!(flags & ARMOS_MAP_ANON)) {
+        file_t *file = task->process->files[fd];
+        uint32_t saved_offset;
+        uint32_t copied = 0;
+
+        if (!file || !can_read(file) || !file->f_op || !file->f_op->read) {
+            vm_unmap_range(vm, vaddr, size);
+            return (void *)-EBADF;
+        }
+
+        saved_offset = file->offset;
+        file->offset = 0;
+        while (copied < length) {
+            uint32_t page = vaddr + ALIGN_DOWN(copied, PAGE_SIZE);
+            uint32_t phys = get_physical_address(vm->pgdir, page);
+            uint32_t page_off = copied % PAGE_SIZE;
+            uint32_t chunk = PAGE_SIZE - page_off;
+            int ret;
+
+            if (!phys) {
+                file->offset = saved_offset;
+                vm_unmap_range(vm, vaddr, size);
+                return (void *)-EFAULT;
+            }
+            if (chunk > length - copied)
+                chunk = length - copied;
+
+            ret = file->f_op->read(file, (void *)(phys + page_off), chunk);
+            if (ret < 0) {
+                file->offset = saved_offset;
+                vm_unmap_range(vm, vaddr, size);
+                return (void *)ret;
+            }
+            if (ret == 0)
+                break;
+            copied += (uint32_t)ret;
+            if ((uint32_t)ret < chunk)
+                break;
+        }
+        file->offset = saved_offset;
+    }
+
     return (void *)vaddr;
 }
 
@@ -2318,4 +2664,54 @@ int sys_munmap(void* addr, size_t length)
         return -EINVAL;
 
     return vm_unmap_range(task->process->vm, start, size);
+}
+
+int sys_mprotect(void* addr, size_t length, int prot)
+{
+    task_t *task = current_task;
+    vm_space_t *vm;
+    vma_t *vma;
+    uint32_t start = (uint32_t)addr;
+    uint32_t size;
+    uint32_t flags = 0;
+
+    if (!task || task->type != TASK_TYPE_PROCESS || !task->process || !task->process->vm)
+        return -EINVAL;
+    if (!addr || !IS_PAGE_ALIGNED(start) || length == 0)
+        return -EINVAL;
+    if (prot == 0 || (prot & ~(ARMOS_PROT_READ | ARMOS_PROT_WRITE | ARMOS_PROT_EXEC)))
+        return -EINVAL;
+
+    size = ALIGN_UP((uint32_t)length, PAGE_SIZE);
+    if (size == 0 || start + size <= start || start + size > get_split_boundary())
+        return -EINVAL;
+
+    vm = task->process->vm;
+    vma = find_vma(vm, start);
+    if (!vma || start != vma->start || start + size != vma->end)
+        return -ENOSYS;
+
+    if (prot & ARMOS_PROT_READ)
+        flags |= VMA_READ;
+    if (prot & ARMOS_PROT_WRITE)
+        flags |= VMA_WRITE;
+    if (prot & ARMOS_PROT_EXEC)
+        flags |= VMA_EXEC;
+
+    for (uint32_t page = start; page < start + size; page += PAGE_SIZE) {
+        uint32_t phys = get_physical_address(vm->pgdir, page);
+        int ret;
+
+        if (!phys)
+            continue;
+        if (flags & VMA_WRITE)
+            ret = set_user_page_writable(vm->pgdir, page, vm->asid);
+        else
+            ret = set_user_page_readonly(vm->pgdir, page, vm->asid);
+        if (ret < 0)
+            return ret;
+    }
+
+    vma->flags = flags;
+    return 0;
 }

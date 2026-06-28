@@ -930,6 +930,51 @@ void tty_input_char(char c) {
     tty_input_char_to_id(TTY_CONSOLE_ID, c);
 }
 
+bool tty_read_ready_for_id(int tty_id)
+{
+    struct tty_struct *tty = tty_by_id(tty_id);
+    unsigned long flags;
+    struct termios tio;
+    uint32_t pos;
+    bool ready = false;
+
+    if (!tty)
+        return false;
+
+    if (tty == &tty0) {
+        while (tty_backend_has_data()) {
+            int c = tty_backend_getc();
+            if (c < 0)
+                break;
+            tty_input_char((char)c);
+        }
+    }
+
+    spin_lock_irqsave(&tty->lock, &flags);
+    tio = tty->termios;
+
+    if (tty->eof_pending) {
+        ready = true;
+    } else if (tty->input_head != tty->input_tail) {
+        if (!(tio.c_lflag & ICANON)) {
+            ready = true;
+        } else {
+            pos = tty->input_tail;
+            while (pos != tty->input_head) {
+                char c = tty->input_buf[pos];
+                if (c == '\n' || c == '\r') {
+                    ready = true;
+                    break;
+                }
+                pos = (pos + 1) % TTY_INPUT_BUF_SIZE;
+            }
+        }
+    }
+
+    spin_unlock_irqrestore(&tty->lock, flags);
+    return ready;
+}
+
 static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
 {
     size_t read = 0;

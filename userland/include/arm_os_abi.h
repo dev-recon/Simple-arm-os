@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <time.h>
 
@@ -111,6 +112,7 @@ int shm_unmap(void *addr, size_t size);
 int nanosleep(const struct timespec *req, struct timespec *rem);
 unsigned int sleep(unsigned int seconds);
 int usleep(useconds_t useconds);
+pid_t wait4(pid_t pid, int *status, int options, struct rusage *rusage);
 int lstat(const char *pathname, struct stat *statbuf);
 int symlink(const char *target, const char *linkpath);
 int readlink(const char *pathname, char *buf, size_t bufsiz);

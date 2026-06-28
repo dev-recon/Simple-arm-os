@@ -72,6 +72,7 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_times] = (syscall_func_t)sys_times,
     [__NR_getpriority] = (syscall_func_t)sys_getpriority,
     [__NR_setpriority] = (syscall_func_t)sys_setpriority,
+    [__NR_getrusage] = (syscall_func_t)sys_getrusage,
     [__NR_setpgid] = (syscall_func_t)sys_setpgid,
     [__NR_getpgrp] = (syscall_func_t)sys_getpgrp,
     [__NR_setsid] = (syscall_func_t)sys_setsid,
@@ -108,6 +109,9 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_fstat] = (syscall_func_t)sys_fstat,
     [__NR_getdents] = (syscall_func_t)sys_getdents,
     [__NR_select] = (syscall_func_t)sys_select,
+    [__NR_readv] = (syscall_func_t)sys_readv,
+    [__NR_writev] = (syscall_func_t)sys_writev,
+    [__NR_poll] = (syscall_func_t)sys_poll,
     [__NR_stty]     = (syscall_func_t)sys_stty,
     [__NR_gtty]     = (syscall_func_t)sys_gtty,
     [__NR_gettimeofday] = (syscall_func_t)sys_gettimeofday,
@@ -121,6 +125,8 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_shutdown]  = (syscall_func_t)sys_shutdown,
     [__NR_mmap]      = (syscall_func_t)sys_mmap,
     [__NR_munmap]    = (syscall_func_t)sys_munmap,
+    [__NR_mprotect]  = (syscall_func_t)sys_mprotect,
+    [__NR_wait4]     = (syscall_func_t)sys_wait4,
     [__NR_socket]    = (syscall_func_t)sys_socket,
     [__NR_bind]      = (syscall_func_t)sys_bind,
     [__NR_connect]   = (syscall_func_t)sys_connect,
@@ -996,6 +1002,32 @@ int sys_waitpid(pid_t pid, int* status, int options)
     //KDEBUG("sys_waitpid: returning to callee  = %d\n", sys_getppid());
 
     
+    return result;
+}
+
+int sys_wait4(pid_t pid, int* status, int options, struct rusage_kernel* rusage)
+{
+    struct rusage_kernel local;
+    task_t *parent = current_task;
+    int exit_code;
+    pid_t result;
+
+    result = kernel_waitpid(pid, &exit_code, options, parent);
+    if (result > 0 && status) {
+        if (copy_to_user(status, &exit_code, sizeof(int)) < 0)
+            return -EFAULT;
+    }
+
+    if (result > 0 && rusage) {
+        /*
+         * Child lifetime accounting is not persisted after destroy_process()
+         * yet. Return a valid zeroed rusage instead of exposing stale memory.
+         */
+        memset(&local, 0, sizeof(local));
+        if (copy_to_user(rusage, &local, sizeof(local)) < 0)
+            return -EFAULT;
+    }
+
     return result;
 }
 

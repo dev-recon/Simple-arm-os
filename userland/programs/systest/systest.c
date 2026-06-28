@@ -14,13 +14,16 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <termios.h>
@@ -606,6 +609,18 @@ static void test_posix_compat_syscalls(void)
     int fd;
     int dupfd;
     int flags;
+    struct iovec iov[2];
+    char readv_buf1[8];
+    char readv_buf2[8];
+    struct pollfd pfd;
+    int pipefd[2];
+    fd_set rfds;
+    struct timeval zero_tv;
+    struct rusage usage;
+    struct flock fl;
+    char *map;
+    pid_t child;
+    int child_status;
 
     unlink(path);
 
@@ -635,11 +650,78 @@ static void test_posix_compat_syscalls(void)
         if (expect(dupfd >= 10, "fcntl F_DUPFD min fd", dupfd) >= 0)
             close(dupfd);
 
+        memset(&fl, 0, sizeof(fl));
+        fl.l_type = F_WRLCK;
+        fl.l_whence = SEEK_SET;
+        expect(fcntl(fd, F_SETLK, &fl) == 0, "fcntl F_SETLK advisory lock", errno);
+        expect(fcntl(fd, F_GETLK, &fl) == 0, "fcntl F_GETLK advisory lock", errno);
+        expect(fl.l_type == F_UNLCK, "fcntl F_GETLK reports unlocked", fl.l_type);
+
         expect(ioctl(fd, TCGETS, &tio) < 0 && errno == ENOTTY,
                "ioctl TCGETS rejects regular file", errno);
         expect(tcflush(fd, TCIFLUSH) < 0 && errno == ENOTTY,
                "tcflush rejects regular file", errno);
         close(fd);
+    }
+
+    fd = open(path, O_RDWR | O_TRUNC, 0);
+    if (expect(fd >= 0, "readv/writev open", fd) >= 0) {
+        iov[0].iov_base = "vec";
+        iov[0].iov_len = 3;
+        iov[1].iov_base = "tor";
+        iov[1].iov_len = 3;
+        expect(writev(fd, iov, 2) == 6, "writev writes multiple buffers", errno);
+        lseek(fd, 0, SEEK_SET);
+        memset(readv_buf1, 0, sizeof(readv_buf1));
+        memset(readv_buf2, 0, sizeof(readv_buf2));
+        iov[0].iov_base = readv_buf1;
+        iov[0].iov_len = 3;
+        iov[1].iov_base = readv_buf2;
+        iov[1].iov_len = 3;
+        expect(readv(fd, iov, 2) == 6, "readv reads multiple buffers", errno);
+        expect(strcmp(readv_buf1, "vec") == 0 && strcmp(readv_buf2, "tor") == 0,
+               "readv/writev preserve data", 0);
+        close(fd);
+    }
+
+    if (expect(pipe(pipefd) == 0, "poll/select pipe create", errno) == 0) {
+        memset(&pfd, 0, sizeof(pfd));
+        pfd.fd = pipefd[0];
+        pfd.events = POLLIN;
+        expect(poll(&pfd, 1, 0) == 0, "poll empty pipe times out", pfd.revents);
+        write(pipefd[1], "x", 1);
+        expect(poll(&pfd, 1, 0) == 1 && (pfd.revents & POLLIN),
+               "poll detects readable pipe", pfd.revents);
+        FD_ZERO(&rfds);
+        FD_SET(pipefd[0], &rfds);
+        zero_tv.tv_sec = 0;
+        zero_tv.tv_usec = 0;
+        expect(select(pipefd[0] + 1, &rfds, NULL, NULL, &zero_tv) == 1 &&
+               FD_ISSET(pipefd[0], &rfds),
+               "select detects readable pipe", errno);
+        read(pipefd[0], readv_buf1, 1);
+        close(pipefd[0]);
+        close(pipefd[1]);
+    }
+
+    expect(getrusage(RUSAGE_SELF, &usage) == 0, "getrusage RUSAGE_SELF", errno);
+
+    map = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (expect(map != MAP_FAILED, "mmap for mprotect", errno) == 0) {
+        map[0] = 'm';
+        expect(mprotect(map, 4096, PROT_READ) == 0, "mprotect whole mapping read-only", errno);
+        munmap(map, 4096);
+    }
+
+    child = fork();
+    if (expect(child >= 0, "wait4 fork child", child) == 0) {
+        if (child == 0)
+            exit(33);
+        expect(wait4(child, &child_status, 0, &usage) == child,
+               "wait4 collects child", errno);
+        expect(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 33,
+               "wait4 status reports exit code", child_status);
     }
 
     if (!stdin_is_foreground_tty()) {

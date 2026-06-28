@@ -91,6 +91,7 @@ RAW_SYSCALL sys_dup2, 63
 RAW_SYSCALL sys_getpgrp, 65
 RAW_SYSCALL sys_setsid, 66
 RAW_SYSCALL sys_sigaction, 67
+RAW_SYSCALL sys_getrusage, 77
 RAW_SYSCALL sys_gettimeofday, 78
 RAW_SYSCALL sys_symlink, 83
 RAW_SYSCALL sys_readlink, 85
@@ -103,12 +104,17 @@ RAW_SYSCALL sys_fsync, 118
 RAW_SYSCALL sys_stat, 106
 RAW_SYSCALL sys_lstat, 107
 RAW_SYSCALL sys_fstat, 108
+RAW_SYSCALL sys_wait4, 114
 RAW_SYSCALL sys_sysinfo, 116
 RAW_SYSCALL sys_getppid, 119
+RAW_SYSCALL sys_mprotect, 125
 RAW_SYSCALL sys_getdents, 141
 RAW_SYSCALL5 sys_select, 142
+RAW_SYSCALL sys_readv, 145
+RAW_SYSCALL sys_writev, 146
 RAW_SYSCALL sys_getsid, 147
 RAW_SYSCALL sys_nanosleep, 162
+RAW_SYSCALL sys_poll, 168
 RAW_SYSCALL sys_getcwd, 183
 RAW_SYSCALL sys_shm_open, 190
 RAW_SYSCALL sys_shm_unlink, 191

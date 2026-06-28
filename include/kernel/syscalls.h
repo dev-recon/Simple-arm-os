@@ -89,6 +89,7 @@ struct process;
 #define __NR_setsid              66
 #define __NR_sigaction           67
 #define __NR_gettimeofday        78
+#define __NR_getrusage           77
 #define __NR_symlink             83
 #define __NR_readlink            85
 #define __NR_truncate            92
@@ -99,13 +100,18 @@ struct process;
 #define __NR_stat               106
 #define __NR_lstat              107
 #define __NR_fstat              108
+#define __NR_wait4              114
 #define __NR_fsync              118
+#define __NR_mprotect           125
 #define __NR_getppid            119  /* Moved to avoid conflicts */
 #define __NR_print              121
 #define __NR_getdents           141
 #define __NR_select             142
+#define __NR_readv              145
+#define __NR_writev             146
 #define __NR_getsid             147
 #define __NR_nanosleep          162
+#define __NR_poll               168
 #define __NR_rt_sigreturn       173
 #define __NR_getcwd             183     /* getcwd */
 #define __NR_shm_open           190
@@ -185,6 +191,36 @@ struct timezone {
     int tz_dsttime;
 };
 
+struct iovec_kernel {
+    void *iov_base;
+    size_t iov_len;
+};
+
+struct pollfd_kernel {
+    int fd;
+    int16_t events;
+    int16_t revents;
+};
+
+struct rusage_kernel {
+    struct timeval ru_utime;
+    struct timeval ru_stime;
+    int32_t ru_maxrss;
+    int32_t ru_ixrss;
+    int32_t ru_idrss;
+    int32_t ru_isrss;
+    int32_t ru_minflt;
+    int32_t ru_majflt;
+    int32_t ru_nswap;
+    int32_t ru_inblock;
+    int32_t ru_oublock;
+    int32_t ru_msgsnd;
+    int32_t ru_msgrcv;
+    int32_t ru_nsignals;
+    int32_t ru_nvcsw;
+    int32_t ru_nivcsw;
+};
+
 /* Syscall handler */
 int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2, 
                    uint32_t arg3, uint32_t arg4, uint32_t arg5);
@@ -229,6 +265,7 @@ int sys_connect(int sockfd, const void* addr, uint32_t addrlen);
 int sys_listen(int sockfd, int backlog);
 int sys_accept(int sockfd, void* addr, uint32_t* addrlen);
 int sys_select(int nfds, void* readfds, void* writefds, void* exceptfds, void* timeout);
+int sys_poll(struct pollfd_kernel* fds, uint32_t nfds, int timeout_ms);
 
 /* Process syscalls */
 #define WNOHANG    1
@@ -238,6 +275,7 @@ int sys_fork(void);
 int sys_execve(const char* filename, char* const argv[], char* const envp[]);
 void sys_exit(int status);
 int sys_waitpid(pid_t pid, int* status, int options);
+int sys_wait4(pid_t pid, int* status, int options, struct rusage_kernel* rusage);
 int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent);
 int kernel_open(char* kernel_path, int flags, mode_t mode);
 int sys_stty(int cmd, uint32_t arg, uint32_t arg2);
@@ -262,6 +300,7 @@ int sys_getpgrp(void);
 int sys_setsid(void);
 int sys_getsid(pid_t pid);
 int sys_times(void* buf);
+int sys_getrusage(int who, struct rusage_kernel* usage);
 int sys_alarm(uint32_t seconds);
 int sys_pause(void);
 int sys_utime(const char* pathname, const void* times);
@@ -282,6 +321,9 @@ int sys_shm_unmap(void *addr, size_t size);
 int sys_shutdown(void);
 void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd);
 int sys_munmap(void* addr, size_t length);
+int sys_mprotect(void* addr, size_t length, int prot);
+ssize_t sys_readv(int fd, const struct iovec_kernel* iov, int iovcnt);
+ssize_t sys_writev(int fd, const struct iovec_kernel* iov, int iovcnt);
 
 /* Additional process syscalls */
 int sys_dup(int oldfd);
