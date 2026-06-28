@@ -88,6 +88,8 @@ struct process;
 #define __NR_getpgrp             65
 #define __NR_setsid              66
 #define __NR_sigaction           67
+#define __NR_sigsuspend          72
+#define __NR_sigpending          73
 #define __NR_gettimeofday        78
 #define __NR_getrusage           77
 #define __NR_symlink             83
@@ -103,6 +105,8 @@ struct process;
 #define __NR_wait4              114
 #define __NR_fsync              118
 #define __NR_mprotect           125
+#define __NR_uname              122
+#define __NR_sigprocmask        126
 #define __NR_getppid            119  /* Moved to avoid conflicts */
 #define __NR_print              121
 #define __NR_getdents           141
@@ -221,6 +225,14 @@ struct rusage_kernel {
     int32_t ru_nivcsw;
 };
 
+struct utsname_kernel {
+    char sysname[65];
+    char nodename[65];
+    char release[65];
+    char version[65];
+    char machine[65];
+};
+
 /* Syscall handler */
 int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2, 
                    uint32_t arg3, uint32_t arg4, uint32_t arg5);
@@ -309,6 +321,9 @@ int sys_utime(const char* pathname, const void* times);
 int sys_kill(pid_t pid, int sig);
 int sys_signal(int sig, sig_handler_t handler);
 int sys_sigaction(int sig, const sigaction_t* act, sigaction_t* oldact);
+int sys_sigprocmask(int how, const sigset_t* set, sigset_t* oldset);
+int sys_sigpending(sigset_t* set);
+int sys_sigsuspend(const sigset_t* mask);
 void sys_sigreturn(void);
 int sys_nanosleep(const timespec_t *req, timespec_t *rem);
 
@@ -332,5 +347,6 @@ int sys_pipe(int pipefd[2]);
 int sys_chdir(const char* path);
 int sys_getcwd(char* buf, size_t size);
 int sys_sysinfo(struct sysinfo_response *resp);
+int sys_uname(struct utsname_kernel *name);
 
 #endif

@@ -13,6 +13,9 @@
 #ifndef ARMOS_POLL_H
 #define ARMOS_POLL_H
 
+#include <time.h>
+#include <signal.h>
+
 typedef unsigned long nfds_t;
 
 struct pollfd {
@@ -29,5 +32,7 @@ struct pollfd {
 #define POLLNVAL    0x0020
 
 int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+int ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *timeout,
+          const sigset_t *sigmask);
 
 #endif /* ARMOS_POLL_H */

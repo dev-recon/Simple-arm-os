@@ -960,6 +960,23 @@ int sys_gettimeofday(struct timeval* tv, struct timezone* tz)
     return 0;
 }
 
+int sys_uname(struct utsname_kernel *name)
+{
+    struct utsname_kernel local;
+
+    if (!name)
+        return -EFAULT;
+
+    memset(&local, 0, sizeof(local));
+    strcpy(local.sysname, "ArmOS");
+    strcpy(local.nodename, "armos");
+    strcpy(local.release, "0.1");
+    strcpy(local.version, "ArmOS 0.1 armv7l");
+    strcpy(local.machine, "armv7l");
+
+    return copy_to_user(name, &local, sizeof(local)) < 0 ? -EFAULT : 0;
+}
+
 int sys_times(void* buf)
 {
     struct tms_kernel ktms;

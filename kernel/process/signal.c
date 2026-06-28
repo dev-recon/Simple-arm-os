@@ -44,6 +44,11 @@ static void dump_core(task_t* proc);
 static void stop_process(task_t* proc, int sig);
 static void continue_process(task_t* proc);
 static uint32_t signal_deliverable_mask(task_t* proc);
+static uint32_t signal_sanitize_block_mask(uint32_t mask);
+
+#define ARMOS_SIG_SETMASK 0
+#define ARMOS_SIG_BLOCK   1
+#define ARMOS_SIG_UNBLOCK 2
 
 /* Actions par defaut pour chaque signal */
 static sig_default_action_t default_signal_actions[MAX_SIGNALS] = {
@@ -83,6 +88,18 @@ static bool signal_would_kill_or_stop_init(int sig)
     return action == SIG_ACT_TERM ||
            action == SIG_ACT_CORE ||
            action == SIG_ACT_STOP;
+}
+
+static uint32_t signal_sanitize_block_mask(uint32_t mask)
+{
+    /*
+     * POSIX forbids blocking SIGKILL/SIGSTOP. Bit 0 is not a real signal in
+     * ArmOS either, so keep it clear and make the invariant explicit.
+     */
+    mask &= ~(1u << 0);
+    mask &= ~(1u << SIGKILL);
+    mask &= ~(1u << SIGSTOP);
+    return mask;
 }
 
 static bool signal_would_kill_or_stop_init_effective(task_t* target, int sig)
@@ -719,6 +736,86 @@ int sys_sigaction(int sig, const sigaction_t* act, sigaction_t* oldact)
     }
     
     return 0;
+}
+
+int sys_sigprocmask(int how, const sigset_t* set, sigset_t* oldset)
+{
+    signal_state_t* sig_state;
+    uint32_t new_mask;
+
+    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+        return -EINVAL;
+
+    sig_state = &current_task->process->signals;
+
+    if (oldset) {
+        uint32_t old_mask = sig_state->blocked;
+        if (copy_to_user(oldset, &old_mask, sizeof(old_mask)) < 0)
+            return -EFAULT;
+    }
+
+    if (!set)
+        return 0;
+    if (copy_from_user(&new_mask, set, sizeof(new_mask)) < 0)
+        return -EFAULT;
+
+    new_mask = signal_sanitize_block_mask(new_mask);
+    switch (how) {
+    case ARMOS_SIG_SETMASK:
+        sig_state->blocked = new_mask;
+        break;
+    case ARMOS_SIG_BLOCK:
+        sig_state->blocked = signal_sanitize_block_mask(sig_state->blocked | new_mask);
+        break;
+    case ARMOS_SIG_UNBLOCK:
+        sig_state->blocked = signal_sanitize_block_mask(sig_state->blocked & ~new_mask);
+        break;
+    default:
+        return -EINVAL;
+    }
+
+    return 0;
+}
+
+int sys_sigpending(sigset_t* set)
+{
+    uint32_t pending;
+
+    if (!set)
+        return -EFAULT;
+    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+        return -EINVAL;
+
+    pending = current_task->process->signals.pending;
+    return copy_to_user(set, &pending, sizeof(pending)) < 0 ? -EFAULT : 0;
+}
+
+int sys_sigsuspend(const sigset_t* mask)
+{
+    signal_state_t* sig_state;
+    uint32_t new_mask;
+    uint32_t old_mask;
+
+    if (!mask)
+        return -EFAULT;
+    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+        return -EINVAL;
+    if (copy_from_user(&new_mask, mask, sizeof(new_mask)) < 0)
+        return -EFAULT;
+
+    sig_state = &current_task->process->signals;
+    old_mask = sig_state->blocked;
+    sig_state->blocked = signal_sanitize_block_mask(new_mask);
+
+    while (!has_pending_signals(current_task)) {
+        task_sleep_ms(1);
+        if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+            return -EINVAL;
+    }
+
+    sig_state = &current_task->process->signals;
+    sig_state->blocked = old_mask;
+    return -EINTR;
 }
 
 /**

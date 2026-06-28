@@ -79,6 +79,9 @@ extern long sys_getpgrp(void);
 extern long sys_setpgid(int pid, int pgid);
 extern long sys_setsid(void);
 extern long sys_getsid(int pid);
+extern long sys_sigprocmask(int how, const void *set, void *oldset);
+extern long sys_sigpending(void *set);
+extern long sys_sigsuspend(const void *mask);
 extern long sys_times(void *buf);
 extern long sys_alarm(unsigned int seconds);
 extern long sys_pause(void);
@@ -110,6 +113,7 @@ extern long sys_poll(void *fds, unsigned long nfds, int timeout);
 extern long sys_readv(int fd, const void *iov, int iovcnt);
 extern long sys_writev(int fd, const void *iov, int iovcnt);
 extern long sys_getrusage(int who, void *usage);
+extern long sys_uname(void *name);
 extern long sys_stty(int request, int value, int value2);
 extern long sys_gtty(int request, int value);
 extern long sys_sigaction(int sig, const void *act, void *oldact);
@@ -238,6 +242,14 @@ struct rusage {
     long ru_nivcsw;
 };
 
+struct utsname {
+    char sysname[65];
+    char nodename[65];
+    char release[65];
+    char version[65];
+    char machine[65];
+};
+
 static int ret_errno(long ret)
 {
     if (ret < 0) {
@@ -308,6 +320,36 @@ static int wait_status_os_to_newlib(int status)
     }
 
     return status;
+}
+
+static uint32_t sigset_newlib_to_os(sigset_t set)
+{
+    uint32_t out = 0;
+
+    for (int sig = 1; sig < 32; sig++) {
+        if ((uint32_t)set & (1u << sig)) {
+            int os_sig = signal_newlib_to_os(sig);
+            if (os_sig > 0 && os_sig < 32)
+                out |= (1u << os_sig);
+        }
+    }
+
+    return out;
+}
+
+static sigset_t sigset_os_to_newlib(uint32_t set)
+{
+    sigset_t out = 0;
+
+    for (int sig = 1; sig < 32; sig++) {
+        if (set & (1u << sig)) {
+            int nl_sig = signal_os_to_newlib(sig);
+            if (nl_sig > 0 && nl_sig < 32)
+                out |= (sigset_t)(1u << nl_sig);
+        }
+    }
+
+    return out;
 }
 
 static void copy_stat(struct stat *dst, const struct os_stat *src)
@@ -482,6 +524,15 @@ int stat(const char *pathname, struct stat *st)
 int statfs(const char *path, void *buf)
 {
     return ret_errno(sys_statfs(path, buf));
+}
+
+int uname(struct utsname *name)
+{
+    if (!name) {
+        errno = EFAULT;
+        return -1;
+    }
+    return ret_errno(sys_uname(name));
 }
 
 int lstat(const char *pathname, struct stat *st)
@@ -993,6 +1044,141 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact)
     return 0;
 }
 
+#ifdef sigemptyset
+#undef sigemptyset
+#endif
+#ifdef sigfillset
+#undef sigfillset
+#endif
+#ifdef sigaddset
+#undef sigaddset
+#endif
+#ifdef sigdelset
+#undef sigdelset
+#endif
+#ifdef sigismember
+#undef sigismember
+#endif
+
+int sigemptyset(sigset_t *set)
+{
+    if (!set) {
+        errno = EFAULT;
+        return -1;
+    }
+    *set = 0;
+    return 0;
+}
+
+int sigfillset(sigset_t *set)
+{
+    if (!set) {
+        errno = EFAULT;
+        return -1;
+    }
+    *set = ~(sigset_t)0;
+    return 0;
+}
+
+int sigaddset(sigset_t *set, const int sig)
+{
+    if (!set) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (sig <= 0 || sig >= 32) {
+        errno = EINVAL;
+        return -1;
+    }
+    *set |= (sigset_t)(1u << sig);
+    return 0;
+}
+
+int sigdelset(sigset_t *set, const int sig)
+{
+    if (!set) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (sig <= 0 || sig >= 32) {
+        errno = EINVAL;
+        return -1;
+    }
+    *set &= ~(sigset_t)(1u << sig);
+    return 0;
+}
+
+int sigismember(const sigset_t *set, int sig)
+{
+    if (!set) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (sig <= 0 || sig >= 32) {
+        errno = EINVAL;
+        return -1;
+    }
+    return ((*set & (sigset_t)(1u << sig)) != 0);
+}
+
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
+{
+    uint32_t os_set;
+    uint32_t os_old;
+    long ret;
+
+    os_set = set ? sigset_newlib_to_os(*set) : 0;
+    ret = sys_sigprocmask(how, set ? &os_set : NULL, oldset ? &os_old : NULL);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    if (oldset)
+        *oldset = sigset_os_to_newlib(os_old);
+    return 0;
+}
+
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
+{
+    return sigprocmask(how, set, oldset);
+}
+
+int sigpending(sigset_t *set)
+{
+    uint32_t os_set;
+    long ret;
+
+    if (!set) {
+        errno = EFAULT;
+        return -1;
+    }
+    ret = sys_sigpending(&os_set);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    *set = sigset_os_to_newlib(os_set);
+    return 0;
+}
+
+int sigsuspend(const sigset_t *mask)
+{
+    uint32_t os_mask;
+    long ret;
+
+    if (!mask) {
+        errno = EFAULT;
+        return -1;
+    }
+    os_mask = sigset_newlib_to_os(*mask);
+    ret = sys_sigsuspend(&os_mask);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return ret_errno(ret);
+}
+
 _sig_func_ptr _signal_r(struct _reent *r, int sig, _sig_func_ptr handler)
 {
     struct sigaction act;
@@ -1088,6 +1274,70 @@ int select(int nfds, fd_set *readfds, fd_set *writefds,
 int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 {
     return ret_errno(sys_poll(fds, nfds, timeout));
+}
+
+int pselect(int nfds, fd_set *readfds, fd_set *writefds,
+            fd_set *exceptfds, const struct timespec *timeout,
+            const sigset_t *sigmask)
+{
+    struct timeval tv;
+    sigset_t oldmask;
+    sigset_t tmpmask;
+    int ret;
+
+    /*
+     * ArmOS currently implements pselect in userland glue. That is enough for
+     * portable software expecting the symbol, but unlike Linux it is not an
+     * atomic mask+wait transition yet.
+     */
+    if (sigmask && sigprocmask(SIG_SETMASK, sigmask, &oldmask) < 0)
+        return -1;
+
+    if (timeout) {
+        if (timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000L) {
+            if (sigmask)
+                sigprocmask(SIG_SETMASK, &oldmask, NULL);
+            errno = EINVAL;
+            return -1;
+        }
+        tv.tv_sec = timeout->tv_sec;
+        tv.tv_usec = timeout->tv_nsec / 1000L;
+    }
+
+    ret = select(nfds, readfds, writefds, exceptfds, timeout ? &tv : NULL);
+    if (sigmask) {
+        tmpmask = oldmask;
+        sigprocmask(SIG_SETMASK, &tmpmask, NULL);
+    }
+    return ret;
+}
+
+int ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *timeout,
+          const sigset_t *sigmask)
+{
+    sigset_t oldmask;
+    sigset_t tmpmask;
+    int timeout_ms = -1;
+    int ret;
+
+    if (timeout) {
+        if (timeout->tv_sec < 0 || timeout->tv_nsec < 0 ||
+            timeout->tv_nsec >= 1000000000L) {
+            errno = EINVAL;
+            return -1;
+        }
+        timeout_ms = (int)(timeout->tv_sec * 1000L +
+                           (timeout->tv_nsec + 999999L) / 1000000L);
+    }
+
+    if (sigmask && sigprocmask(SIG_SETMASK, sigmask, &oldmask) < 0)
+        return -1;
+    ret = poll(fds, nfds, timeout_ms);
+    if (sigmask) {
+        tmpmask = oldmask;
+        sigprocmask(SIG_SETMASK, &tmpmask, NULL);
+    }
+    return ret;
 }
 
 ssize_t readv(int fd, const struct iovec *iov, int iovcnt)

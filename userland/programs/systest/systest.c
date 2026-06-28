@@ -24,6 +24,7 @@
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <sys/uio.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <termios.h>
@@ -43,6 +44,7 @@ static int verbose = 1;
 static volatile int cow_shared_value = 11;
 static volatile int sleep_signal_seen = 0;
 static volatile int winch_signal_seen = 0;
+static volatile int compat_signal_seen = 0;
 static struct sysinfo_response sysinfo_scratch;
 static char systest_tmp_root[64];
 
@@ -111,6 +113,12 @@ static void systest_winch_signal_handler(int sig)
 {
     (void)sig;
     winch_signal_seen++;
+}
+
+static void systest_compat_signal_handler(int sig)
+{
+    (void)sig;
+    compat_signal_seen++;
 }
 
 static int read_file(const char *path, char *buf, int size)
@@ -616,8 +624,13 @@ static void test_posix_compat_syscalls(void)
     int pipefd[2];
     fd_set rfds;
     struct timeval zero_tv;
+    struct timespec zero_ts;
     struct rusage usage;
     struct flock fl;
+    struct utsname uts;
+    sigset_t mask;
+    sigset_t oldmask;
+    sigset_t pending;
     char *map;
     pid_t child;
     int child_status;
@@ -699,12 +712,45 @@ static void test_posix_compat_syscalls(void)
         expect(select(pipefd[0] + 1, &rfds, NULL, NULL, &zero_tv) == 1 &&
                FD_ISSET(pipefd[0], &rfds),
                "select detects readable pipe", errno);
+        zero_ts.tv_sec = 0;
+        zero_ts.tv_nsec = 0;
+        pfd.revents = 0;
+        expect(ppoll(&pfd, 1, &zero_ts, NULL) == 1 && (pfd.revents & POLLIN),
+               "ppoll detects readable pipe", pfd.revents);
+        FD_ZERO(&rfds);
+        FD_SET(pipefd[0], &rfds);
+        expect(pselect(pipefd[0] + 1, &rfds, NULL, NULL, &zero_ts, NULL) == 1 &&
+               FD_ISSET(pipefd[0], &rfds),
+               "pselect detects readable pipe", errno);
         read(pipefd[0], readv_buf1, 1);
         close(pipefd[0]);
         close(pipefd[1]);
     }
 
     expect(getrusage(RUSAGE_SELF, &usage) == 0, "getrusage RUSAGE_SELF", errno);
+
+    if (expect(uname(&uts) == 0, "uname syscall", errno) == 0) {
+        expect(strcmp(uts.sysname, "ArmOS") == 0, "uname sysname", uts.sysname[0]);
+        expect(strcmp(uts.machine, "armv7l") == 0, "uname machine", uts.machine[0]);
+    }
+
+    if (expect(sigemptyset(&mask) == 0, "sigemptyset", errno) == 0 &&
+        expect(sigaddset(&mask, SIGUSR1) == 0, "sigaddset SIGUSR1", errno) == 0 &&
+        expect(sigprocmask(SIG_BLOCK, &mask, &oldmask) == 0,
+               "sigprocmask blocks SIGUSR1", errno) == 0) {
+        compat_signal_seen = 0;
+        signal(SIGUSR1, systest_compat_signal_handler);
+        kill(getpid(), SIGUSR1);
+        expect(sigpending(&pending) == 0 && sigismember(&pending, SIGUSR1) == 1,
+               "sigpending sees blocked SIGUSR1", errno);
+        expect(compat_signal_seen == 0, "blocked SIGUSR1 not delivered early",
+               compat_signal_seen);
+        sigprocmask(SIG_SETMASK, &oldmask, NULL);
+        sleep(0);
+        expect(compat_signal_seen == 1, "unblocked SIGUSR1 delivered",
+               compat_signal_seen);
+        signal(SIGUSR1, SIG_DFL);
+    }
 
     map = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

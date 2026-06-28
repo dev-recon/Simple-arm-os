@@ -91,6 +91,8 @@ RAW_SYSCALL sys_dup2, 63
 RAW_SYSCALL sys_getpgrp, 65
 RAW_SYSCALL sys_setsid, 66
 RAW_SYSCALL sys_sigaction, 67
+RAW_SYSCALL sys_sigsuspend, 72
+RAW_SYSCALL sys_sigpending, 73
 RAW_SYSCALL sys_getrusage, 77
 RAW_SYSCALL sys_gettimeofday, 78
 RAW_SYSCALL sys_symlink, 83
@@ -107,7 +109,9 @@ RAW_SYSCALL sys_fstat, 108
 RAW_SYSCALL sys_wait4, 114
 RAW_SYSCALL sys_sysinfo, 116
 RAW_SYSCALL sys_getppid, 119
+RAW_SYSCALL sys_uname, 122
 RAW_SYSCALL sys_mprotect, 125
+RAW_SYSCALL sys_sigprocmask, 126
 RAW_SYSCALL sys_getdents, 141
 RAW_SYSCALL5 sys_select, 142
 RAW_SYSCALL sys_readv, 145

@@ -908,6 +908,10 @@ static const char* proc_syscall_name(uint32_t nr)
         case __NR_dup: return "dup";
         case __NR_dup2: return "dup2";
         case __NR_setsid: return "setsid";
+        case __NR_sigaction: return "sigaction";
+        case __NR_sigsuspend: return "sigsuspend";
+        case __NR_sigpending: return "sigpending";
+        case __NR_sigprocmask: return "sigprocmask";
         case __NR_brk: return "brk";
         case __NR_geteuid: return "geteuid";
         case __NR_getegid: return "getegid";
@@ -916,6 +920,13 @@ static const char* proc_syscall_name(uint32_t nr)
         case __NR_fsync: return "fsync";
         case __NR_fcntl: return "fcntl";
         case __NR_select: return "select";
+        case __NR_poll: return "poll";
+        case __NR_readv: return "readv";
+        case __NR_writev: return "writev";
+        case __NR_wait4: return "wait4";
+        case __NR_getrusage: return "getrusage";
+        case __NR_mprotect: return "mprotect";
+        case __NR_uname: return "uname";
         case __NR_getsid: return "getsid";
         case __NR_pipe: return "pipe";
         case __NR_symlink: return "symlink";
