@@ -19,9 +19,11 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/select.h>
 #include <sys/times.h>
 #include <sys/types.h>
 #include <time.h>
+#include <utime.h>
 #include <unistd.h>
 
 #ifndef O_RDONLY
@@ -52,6 +54,8 @@ extern long sys_rmdir(const char *pathname);
 extern long sys_symlink(const char *target, const char *linkpath);
 extern long sys_readlink(const char *pathname, char *buf, unsigned long bufsiz);
 extern long sys_ftruncate(int fd, long length);
+extern long sys_truncate(const char *pathname, long length);
+extern long sys_fsync(int fd);
 extern long sys_statfs(const char *path, void *buf);
 extern long sys_stat(const char *pathname, void *st);
 extern long sys_lstat(const char *pathname, void *st);
@@ -64,13 +68,21 @@ extern long sys_getpid(void);
 extern long sys_getppid(void);
 extern long sys_setuid(int uid);
 extern long sys_getuid(void);
+extern long sys_geteuid(void);
 extern long sys_setgid(int gid);
 extern long sys_getgid(void);
+extern long sys_getegid(void);
 extern long sys_nice(int inc);
 extern long sys_getpriority(int which, int who);
 extern long sys_setpriority(int which, int who, int prio);
 extern long sys_getpgrp(void);
 extern long sys_setpgid(int pid, int pgid);
+extern long sys_setsid(void);
+extern long sys_getsid(int pid);
+extern long sys_times(void *buf);
+extern long sys_alarm(unsigned int seconds);
+extern long sys_pause(void);
+extern long sys_utime(const char *pathname, const void *times);
 extern long sys_fork(void);
 extern long sys_execve(const char *pathname, char *const argv[], char *const envp[]);
 extern long sys_waitpid(int pid, int *status, int options);
@@ -88,6 +100,10 @@ extern long sys_dup(int oldfd);
 extern long sys_dup2(int oldfd, int newfd);
 extern long sys_getdents(int fd, void *dirp, unsigned long count);
 extern long sys_nanosleep(const struct timespec *req, struct timespec *rem);
+extern long sys_mknod(const char *pathname, int mode, unsigned long dev);
+extern long sys_mmap(void *addr, unsigned long length, int prot, int flags, int fd);
+extern long sys_munmap(void *addr, unsigned long length);
+extern long sys_select(int nfds, void *readfds, void *writefds, void *exceptfds, void *timeout);
 extern long sys_stty(int request, int value, int value2);
 extern long sys_gtty(int request, int value);
 extern long sys_sigaction(int sig, const void *act, void *oldact);
@@ -98,6 +114,7 @@ extern long sys_shm_map(int id, void *addr, int flags);
 extern long sys_shm_unmap(void *addr, unsigned long size);
 extern long sys_socket(int domain, int type, int protocol);
 extern long sys_bind(int sockfd, const void *addr, unsigned long addrlen);
+extern long sys_connect(int sockfd, const void *addr, unsigned long addrlen);
 extern long sys_listen(int sockfd, int backlog);
 extern long sys_accept(int sockfd, void *addr, unsigned long *addrlen);
 extern void sys_exit(int status);
@@ -449,6 +466,16 @@ int _ftruncate(int fd, off_t length)
     return ftruncate(fd, length);
 }
 
+int truncate(const char *pathname, off_t length)
+{
+    return ret_errno(sys_truncate(pathname, (long)length));
+}
+
+int fsync(int fd)
+{
+    return ret_errno(sys_fsync(fd));
+}
+
 int _isatty(int fd)
 {
     struct armos_termios tio;
@@ -581,6 +608,11 @@ uid_t getuid(void)
     return (uid_t)sys_getuid();
 }
 
+uid_t geteuid(void)
+{
+    return (uid_t)sys_geteuid();
+}
+
 int setuid(uid_t uid)
 {
     return ret_errno(sys_setuid((int)uid));
@@ -589,6 +621,11 @@ int setuid(uid_t uid)
 gid_t getgid(void)
 {
     return (gid_t)sys_getgid();
+}
+
+gid_t getegid(void)
+{
+    return (gid_t)sys_getegid();
 }
 
 int setgid(gid_t gid)
@@ -634,6 +671,26 @@ pid_t getpgrp(void)
 int setpgid(pid_t pid, pid_t pgid)
 {
     return ret_errno(sys_setpgid(pid, pgid));
+}
+
+pid_t setsid(void)
+{
+    long ret = sys_setsid();
+    if (ret < 0) {
+        errno = (int)-ret;
+        return (pid_t)-1;
+    }
+    return (pid_t)ret;
+}
+
+pid_t getsid(pid_t pid)
+{
+    long ret = sys_getsid(pid);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return (pid_t)-1;
+    }
+    return (pid_t)ret;
 }
 
 int _fork(void)
@@ -726,6 +783,11 @@ int listen(int sockfd, int backlog)
 int accept(int sockfd, void *addr, unsigned long *addrlen)
 {
     return ret_errno(sys_accept(sockfd, addr, addrlen));
+}
+
+int connect(int sockfd, const void *addr, unsigned long addrlen)
+{
+    return ret_errno(sys_connect(sockfd, addr, addrlen));
 }
 
 int fcntl(int fd, int cmd, ...)
@@ -929,11 +991,68 @@ int shm_unmap(void *addr, size_t size)
 
 clock_t _times(struct tms *buf)
 {
-    if (buf) {
-        buf->tms_utime = 0;
-        buf->tms_stime = 0;
-        buf->tms_cutime = 0;
-        buf->tms_cstime = 0;
+    long ret = sys_times(buf);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return (clock_t)-1;
     }
-    return 0;
+    return (clock_t)ret;
+}
+
+clock_t times(struct tms *buf)
+{
+    return _times(buf);
+}
+
+unsigned int alarm(unsigned int seconds)
+{
+    long ret = sys_alarm(seconds);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return 0;
+    }
+    return (unsigned int)ret;
+}
+
+int pause(void)
+{
+    return ret_errno(sys_pause());
+}
+
+int utime(const char *pathname, const struct utimbuf *times)
+{
+    return ret_errno(sys_utime(pathname, times));
+}
+
+int mknod(const char *pathname, mode_t mode, unsigned long dev)
+{
+    return ret_errno(sys_mknod(pathname, (int)mode, dev));
+}
+
+int select(int nfds, fd_set *readfds, fd_set *writefds,
+           fd_set *exceptfds, struct timeval *timeout)
+{
+    return ret_errno(sys_select(nfds, readfds, writefds, exceptfds, timeout));
+}
+
+void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
+{
+    long ret;
+
+    if (offset != 0) {
+        errno = ENOSYS;
+        return (void *)-1;
+    }
+
+    ret = sys_mmap(addr, length, prot, flags, fd);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return (void *)-1;
+    }
+    return (void *)ret;
+}
+
+int munmap(void *addr, size_t length)
+{
+    return ret_errno(sys_munmap(addr, length));
 }

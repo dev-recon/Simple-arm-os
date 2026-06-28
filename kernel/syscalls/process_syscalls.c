@@ -34,8 +34,30 @@
 #include <kernel/virtio_net.h>
 #include <kernel/mount.h>
 #include <kernel/virtio_block.h>
+#include <asm/mmu.h>
 
 #define PIPE_BUF_SIZE 4096
+
+struct tms_kernel {
+    int32_t tms_utime;
+    int32_t tms_stime;
+    int32_t tms_cutime;
+    int32_t tms_cstime;
+};
+
+struct utimbuf_kernel {
+    time_t actime;
+    time_t modtime;
+};
+
+#define ARMOS_PROT_READ     0x1
+#define ARMOS_PROT_WRITE    0x2
+#define ARMOS_PROT_EXEC     0x4
+
+#define ARMOS_MAP_SHARED    0x01
+#define ARMOS_MAP_PRIVATE   0x02
+#define ARMOS_MAP_FIXED     0x10
+#define ARMOS_MAP_ANON      0x20
 
 struct pipe_buffer {
     char data[PIPE_BUF_SIZE];
@@ -869,6 +891,90 @@ int sys_gettimeofday(struct timeval* tv, struct timezone* tz)
     return 0;
 }
 
+int sys_times(void* buf)
+{
+    struct tms_kernel ktms;
+    uint32_t ticks = get_system_ticks();
+
+    if (buf) {
+        memset(&ktms, 0, sizeof(ktms));
+        if (current_task)
+            ktms.tms_utime = (int32_t)current_task->total_runtime;
+        if (copy_to_user(buf, &ktms, sizeof(ktms)) < 0)
+            return -EFAULT;
+    }
+
+    return (int)ticks;
+}
+
+int sys_select(int nfds, void* readfds, void* writefds, void* exceptfds, void* timeout)
+{
+    struct timeval tv;
+    uint32_t ms;
+
+    if (nfds < 0)
+        return -EINVAL;
+
+    /*
+     * Minimal POSIX-compatible sleep use-case: select(0, NULL, NULL, NULL, tv).
+     * Real descriptor readiness needs per-file poll callbacks, which ArmOS does
+     * not expose yet. Return ENOSYS rather than pretending fds are ready.
+     */
+    if (nfds != 0 || readfds || writefds || exceptfds)
+        return -ENOSYS;
+
+    if (!timeout) {
+        return sys_pause();
+    }
+
+    if (copy_from_user(&tv, timeout, sizeof(tv)) < 0)
+        return -EFAULT;
+    if (tv.tv_usec >= 1000000u)
+        return -EINVAL;
+
+    ms = (uint32_t)tv.tv_sec * 1000u + (tv.tv_usec + 999u) / 1000u;
+    task_sleep_ms(ms);
+    return 0;
+}
+
+int sys_alarm(uint32_t seconds)
+{
+    process_t* proc = current_task ? current_task->process : NULL;
+    uint32_t now = get_system_ticks();
+    uint32_t old_remaining = 0;
+
+    if (!proc)
+        return -EINVAL;
+
+    if (proc->alarm_active && proc->alarm_expire_tick > now) {
+        uint32_t ticks = proc->alarm_expire_tick - now;
+        old_remaining = (ticks + TIMER_FREQ - 1) / TIMER_FREQ;
+    }
+
+    if (seconds == 0) {
+        proc->alarm_active = 0;
+        proc->alarm_expire_tick = 0;
+    } else {
+        proc->alarm_expire_tick = now + seconds * TIMER_FREQ;
+        proc->alarm_active = 1;
+    }
+
+    return (int)old_remaining;
+}
+
+int sys_pause(void)
+{
+    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+        return -EINVAL;
+
+    while (!has_pending_signals(current_task)) {
+        task_set_interruptible(current_task);
+        schedule();
+    }
+
+    return -EINTR;
+}
+
 int sys_link(const char* oldpath, const char* newpath)
 {
     char *old_kpath, *new_kpath;
@@ -1016,6 +1122,85 @@ out_symlink:
     return result;
 }
 
+int sys_mknod(const char* pathname, mode_t mode, uint32_t dev)
+{
+    char* kernel_path;
+    char* abs_path;
+    char* parent_path;
+    char* name;
+    inode_t* parent = NULL;
+    inode_t* existing = NULL;
+    uint16_t type;
+    int result;
+
+    (void)dev; /* Major/minor dispatch is not implemented yet. */
+
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path) return -EFAULT;
+
+    abs_path = resolve_path(kernel_path);
+    kfree(kernel_path);
+    if (!abs_path) return -ENOMEM;
+
+    result = vfs_check_search_permission(abs_path, false);
+    if (result < 0) {
+        kfree(abs_path);
+        return result;
+    }
+
+    result = split_path(abs_path, &parent_path, &name);
+    if (result != 0) {
+        kfree(abs_path);
+        return result;
+    }
+
+    if (vfs_is_special_basename(name)) {
+        result = -EINVAL;
+        goto out;
+    }
+
+    type = mode & S_IFMT;
+    if (type == 0)
+        type = S_IFREG;
+    if (type != S_IFREG && type != S_IFCHR && type != S_IFBLK && type != S_IFIFO) {
+        result = -EINVAL;
+        goto out;
+    }
+
+    vfs_begin_mutation();
+
+    existing = path_lookup_ex(abs_path, false);
+    if (existing) {
+        put_inode(existing);
+        result = -EEXIST;
+        goto out_locked;
+    }
+
+    parent = path_lookup(parent_path);
+    if (!parent) {
+        result = -ENOENT;
+    } else if (!S_ISDIR(parent->mode)) {
+        result = -ENOTDIR;
+    } else if (!inode_permission(parent, MAY_WRITE | MAY_EXEC)) {
+        result = -EACCES;
+    } else if (parent->i_op != &ext2_inode_ops || !parent->i_op->create) {
+        result = -EROFS;
+    } else {
+        mode = type | ((mode & 07777) & ~(current_task->process ? current_task->process->umask : 0));
+        result = parent->i_op->create(parent, name, mode);
+    }
+
+    if (parent) put_inode(parent);
+
+out_locked:
+    vfs_end_mutation();
+out:
+    kfree(abs_path);
+    kfree(parent_path);
+    kfree(name);
+    return result;
+}
+
 int sys_readlink(const char* pathname, char* buf, size_t bufsiz)
 {
     char *kernel_path;
@@ -1108,6 +1293,35 @@ int sys_getpgrp(void)
         return -EINVAL;
 
     return current_task->process->pgid;
+}
+
+int sys_setsid(void)
+{
+    process_t* proc = current_task ? current_task->process : NULL;
+
+    if (!proc)
+        return -EINVAL;
+    if (proc->pgid == proc->pid)
+        return -EPERM;
+
+    proc->sid = proc->pid;
+    proc->pgid = proc->pid;
+    proc->controlling_tty = -1;
+    return proc->sid;
+}
+
+int sys_getsid(pid_t pid)
+{
+    task_t* target;
+
+    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+        return -EINVAL;
+
+    target = (pid == 0) ? current_task : find_process_by_pid(pid);
+    if (!target || target->type != TASK_TYPE_PROCESS || !target->process)
+        return -ESRCH;
+
+    return target->process->sid;
 }
 
 int sys_setpgid(pid_t pid, pid_t pgid)
@@ -1334,6 +1548,65 @@ int sys_chown(const char* pathname, uid_t owner, gid_t group)
         inode->gid = group;
 
     inode->ctime = get_current_time();
+    ret = ext2_update_inode_metadata(inode);
+
+    put_inode(inode);
+    vfs_end_mutation();
+    return ret;
+}
+
+int sys_utime(const char* pathname, const void* times)
+{
+    char* kernel_path;
+    char* full_path;
+    inode_t* inode;
+    struct utimbuf_kernel ktimes;
+    uint32_t now;
+    int ret = 0;
+
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path) return -EFAULT;
+
+    full_path = resolve_path(kernel_path);
+    kfree(kernel_path);
+    if (!full_path) return -ENOENT;
+
+    ret = vfs_check_search_permission(full_path, false);
+    if (ret < 0) {
+        kfree(full_path);
+        return ret;
+    }
+
+    if (times && copy_from_user(&ktimes, times, sizeof(ktimes)) < 0) {
+        kfree(full_path);
+        return -EFAULT;
+    }
+
+    vfs_begin_mutation();
+    inode = path_lookup(full_path);
+    kfree(full_path);
+    if (!inode) {
+        vfs_end_mutation();
+        return -ENOENT;
+    }
+
+    if (current_uid() != 0 && current_uid() != inode->uid &&
+        !(!times && inode_permission(inode, MAY_WRITE))) {
+        put_inode(inode);
+        vfs_end_mutation();
+        return -EPERM;
+    }
+
+    if (inode->i_op != &ext2_inode_ops) {
+        put_inode(inode);
+        vfs_end_mutation();
+        return -EROFS;
+    }
+
+    now = get_current_time();
+    inode->atime = times ? (uint32_t)ktimes.actime : now;
+    inode->mtime = times ? (uint32_t)ktimes.modtime : now;
+    inode->ctime = now;
     ret = ext2_update_inode_metadata(inode);
 
     put_inode(inode);
@@ -1959,4 +2232,90 @@ out:
 
     kfree(local);
     return ret;
+}
+
+void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
+{
+    task_t *task = current_task;
+    vm_space_t *vm;
+    uint32_t size;
+    uint32_t hint = (uint32_t)addr;
+    uint32_t vaddr;
+    uint32_t vma_flags = 0;
+    vma_t *vma;
+
+    if (!task || task->type != TASK_TYPE_PROCESS || !task->process || !task->process->vm)
+        return (void *)-EINVAL;
+
+    /*
+     * Level-1 mmap support: anonymous private mappings only.
+     * File-backed mappings require page-cache/VFS coherency, and MAP_FIXED
+     * needs stricter replacement semantics. Return ENOSYS for those rather
+     * than providing surprising half-behaviour.
+     */
+    if (!(flags & ARMOS_MAP_ANON) || fd != -1)
+        return (void *)-ENOSYS;
+    if ((flags & ARMOS_MAP_SHARED) || !(flags & ARMOS_MAP_PRIVATE))
+        return (void *)-ENOSYS;
+    if (flags & ARMOS_MAP_FIXED)
+        return (void *)-ENOSYS;
+    if (length == 0)
+        return (void *)-EINVAL;
+    if (prot & ~(ARMOS_PROT_READ | ARMOS_PROT_WRITE | ARMOS_PROT_EXEC))
+        return (void *)-EINVAL;
+    if (prot == 0)
+        return (void *)-EINVAL;
+
+    size = ALIGN_UP((uint32_t)length, PAGE_SIZE);
+    if (size == 0 || size > USER_MMAP_END - USER_MMAP_START)
+        return (void *)-ENOMEM;
+
+    if (prot & ARMOS_PROT_READ)
+        vma_flags |= VMA_READ;
+    if (prot & ARMOS_PROT_WRITE)
+        vma_flags |= VMA_WRITE;
+    if (prot & ARMOS_PROT_EXEC)
+        vma_flags |= VMA_EXEC;
+
+    vm = task->process->vm;
+    vaddr = vm_find_free_range(vm, hint, size, USER_MMAP_START, USER_MMAP_END);
+    if (!vaddr)
+        return (void *)-ENOMEM;
+
+    vma = create_vma(vm, vaddr, size, vma_flags);
+    if (!vma)
+        return (void *)-ENOMEM;
+
+    for (uint32_t page = vaddr; page < vaddr + size; page += PAGE_SIZE) {
+        void *phys = allocate_page();
+        if (!phys) {
+            vm_unmap_range(vm, vaddr, size);
+            return (void *)-ENOMEM;
+        }
+        if (map_user_page(vm->pgdir, page, (uint32_t)phys, vma->flags, vm->asid) < 0) {
+            free_page(phys);
+            vm_unmap_range(vm, vaddr, size);
+            return (void *)-ENOMEM;
+        }
+    }
+
+    return (void *)vaddr;
+}
+
+int sys_munmap(void* addr, size_t length)
+{
+    task_t *task = current_task;
+    uint32_t start = (uint32_t)addr;
+    uint32_t size;
+
+    if (!task || task->type != TASK_TYPE_PROCESS || !task->process || !task->process->vm)
+        return -EINVAL;
+    if (!addr || !IS_PAGE_ALIGNED(start) || length == 0)
+        return -EINVAL;
+
+    size = ALIGN_UP((uint32_t)length, PAGE_SIZE);
+    if (size == 0 || start + size <= start || start + size > get_split_boundary())
+        return -EINVAL;
+
+    return vm_unmap_range(task->process->vm, start, size);
 }

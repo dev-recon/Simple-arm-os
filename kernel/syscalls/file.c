@@ -200,6 +200,42 @@ int sys_ftruncate(int fd, off_t length)
     return result;
 }
 
+int sys_truncate(const char* pathname, off_t length)
+{
+    int fd;
+    int ret;
+
+    if (length < 0)
+        return -EINVAL;
+
+    fd = sys_open(pathname, O_WRONLY, 0);
+    if (fd < 0)
+        return fd;
+
+    ret = sys_ftruncate(fd, length);
+    sys_close(fd);
+    return ret;
+}
+
+int sys_fsync(int fd)
+{
+    file_t* file;
+
+    if (fd < 0 || fd >= MAX_FILES)
+        return -EBADF;
+
+    file = current_task->process->files[fd];
+    if (!file)
+        return -EBADF;
+
+    /*
+     * ArmOS does not yet expose per-file sync callbacks. A global VFS sync is
+     * conservative and correct for ext2/fat32 persistence, just less granular
+     * than Linux fsync(2).
+     */
+    return vfs_sync();
+}
+
 /**
  * Séparer un chemin en répertoire parent et nom de fichier
  */

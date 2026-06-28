@@ -1090,6 +1090,26 @@ int sys_bind(int sockfd, const void* addr, uint32_t addrlen)
     return 0;
 }
 
+int sys_connect(int sockfd, const void* addr, uint32_t addrlen)
+{
+    if (sockfd < 0 || sockfd >= MAX_FILES)
+        return -EBADF;
+    if (!addr || addrlen < sizeof(net_sockaddr_in_t))
+        return -EINVAL;
+
+    file_t *file = current_task->process->files[sockfd];
+    if (!file || file->type != FILE_TYPE_SOCKET)
+        return -ENOTCONN;
+
+    /*
+     * The current virtio-net stack implements passive TCP for netecho
+     * (bind/listen/accept). Active open needs an outgoing SYN state machine,
+     * peer ARP tracking and retransmission policy, so expose the syscall but
+     * fail clearly until that client path exists.
+     */
+    return -ENOSYS;
+}
+
 int sys_listen(int sockfd, int backlog)
 {
     (void)backlog;

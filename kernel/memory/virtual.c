@@ -21,6 +21,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/task.h>
 #include <kernel/process.h>
+#include <kernel/userspace.h>
 #include <kernel/shm.h>
 #include <asm/arm.h>
 #include <asm/mmu.h>
@@ -309,6 +310,166 @@ int remove_vma(vm_space_t *vm, uint32_t start, uint32_t end)
     }
 
     return -ENOENT;
+}
+
+static bool vm_range_overlaps(vma_t *vma, uint32_t start, uint32_t end)
+{
+    return vma && start < vma->end && end > vma->start;
+}
+
+uint32_t vm_find_free_range(vm_space_t *vm, uint32_t hint, uint32_t size,
+                            uint32_t base, uint32_t limit)
+{
+    uint32_t addr;
+    uint32_t end;
+    vma_t *vma;
+
+    if (!vm || size == 0 || (size & (PAGE_SIZE - 1)) ||
+        (base & (PAGE_SIZE - 1)) || (limit & (PAGE_SIZE - 1)) ||
+        base >= limit || size > limit - base) {
+        return 0;
+    }
+
+    if (hint >= base && hint < limit && IS_PAGE_ALIGNED(hint) &&
+        size <= limit - hint) {
+        bool overlaps = false;
+        end = hint + size;
+        for (vma = vm->vma_list; vma; vma = vma->next) {
+            if (vm_range_overlaps(vma, hint, end)) {
+                overlaps = true;
+                break;
+            }
+        }
+        if (!overlaps)
+            return hint;
+    }
+
+    addr = base;
+    for (vma = vm->vma_list; vma; vma = vma->next) {
+        if (vma->end <= addr || vma->end <= base)
+            continue;
+        if (vma->start >= limit)
+            break;
+        if (addr + size <= vma->start)
+            return addr;
+        if (vma->end > addr)
+            addr = ALIGN_UP(vma->end, PAGE_SIZE);
+        if (addr < base)
+            addr = base;
+        if (addr >= limit || size > limit - addr)
+            return 0;
+    }
+
+    if (addr < limit && size <= limit - addr)
+        return addr;
+    return 0;
+}
+
+int vm_unmap_range(vm_space_t *vm, uint32_t start, uint32_t size)
+{
+    uint32_t end;
+    vma_t *vma;
+    vma_t *prev;
+
+    if (!vm || size == 0 || !IS_PAGE_ALIGNED(start))
+        return -EINVAL;
+
+    size = ALIGN_UP(size, PAGE_SIZE);
+    end = start + size;
+    if (end <= start || end > get_split_boundary())
+        return -EINVAL;
+
+    /*
+     * SHM mappings carry one mapping reference per VMA. Until the SHM layer
+     * grows split-aware accounting, only allow munmap() to remove such VMAs
+     * exactly. Anonymous mmap VMAs can be split freely below.
+     */
+    for (vma = vm->vma_list; vma; vma = vma->next) {
+        uint32_t cut_start;
+        uint32_t cut_end;
+
+        if (!vm_range_overlaps(vma, start, end))
+            continue;
+        if (!(vma->flags & VMA_SHARED))
+            continue;
+
+        cut_start = (start > vma->start) ? start : vma->start;
+        cut_end = (end < vma->end) ? end : vma->end;
+        if (cut_start != vma->start || cut_end != vma->end)
+            return -EINVAL;
+    }
+
+    prev = NULL;
+    vma = vm->vma_list;
+    while (vma) {
+        vma_t *next = vma->next;
+        uint32_t cut_start;
+        uint32_t cut_end;
+
+        if (vma->end <= start) {
+            prev = vma;
+            vma = next;
+            continue;
+        }
+        if (vma->start >= end)
+            break;
+
+        cut_start = (start > vma->start) ? start : vma->start;
+        cut_end = (end < vma->end) ? end : vma->end;
+        if (cut_start >= cut_end) {
+            prev = vma;
+            vma = next;
+            continue;
+        }
+
+        if (cut_start > vma->start && cut_end < vma->end) {
+            vma_t *right = kmalloc(sizeof(vma_t));
+            if (!right)
+                return -ENOMEM;
+            *right = *vma;
+            right->start = cut_end;
+            right->next = vma->next;
+
+            for (uint32_t addr = cut_start; addr < cut_end; addr += PAGE_SIZE) {
+                uint32_t phys = get_physical_address(vm->pgdir, addr);
+                if (phys && unmap_user_page(vm->pgdir, addr, vm->asid) == 0)
+                    free_page((void *)phys);
+            }
+
+            vma->end = cut_start;
+            vma->next = right;
+            prev = right;
+            vma = right->next;
+            continue;
+        }
+
+        for (uint32_t addr = cut_start; addr < cut_end; addr += PAGE_SIZE) {
+            uint32_t phys = get_physical_address(vm->pgdir, addr);
+            if (phys && unmap_user_page(vm->pgdir, addr, vm->asid) == 0)
+                free_page((void *)phys);
+        }
+
+        if (cut_start == vma->start && cut_end == vma->end) {
+            if (prev)
+                prev->next = next;
+            else
+                vm->vma_list = next;
+            if (vma->flags & VMA_SHARED)
+                shm_release_mapping(vma->shm_id);
+            kfree(vma);
+            vma = next;
+        } else if (cut_start == vma->start) {
+            vma->start = cut_end;
+            prev = vma;
+            vma = next;
+        } else {
+            vma->end = cut_start;
+            prev = vma;
+            vma = next;
+        }
+    }
+
+    return 0;
 }
 
 vm_space_t *fork_vm_space(vm_space_t *parent_vm)

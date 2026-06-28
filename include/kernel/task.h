@@ -358,6 +358,8 @@ typedef struct {
     int stop_reported;
     uid_t uid, gid;
     mode_t umask;
+    uint32_t alarm_expire_tick;
+    uint32_t alarm_active;
 
     proc_state_t state;
 

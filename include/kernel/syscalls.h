@@ -86,10 +86,12 @@ struct process;
 #define __NR_umask               60
 #define __NR_dup2                63      /* dup2 */
 #define __NR_getpgrp             65
+#define __NR_setsid              66
 #define __NR_sigaction           67
 #define __NR_gettimeofday        78
 #define __NR_symlink             83
 #define __NR_readlink            85
+#define __NR_truncate            92
 #define __NR_ftruncate           93
 #define __NR_getpriority         96
 #define __NR_setpriority         97
@@ -97,9 +99,12 @@ struct process;
 #define __NR_stat               106
 #define __NR_lstat              107
 #define __NR_fstat              108
+#define __NR_fsync              118
 #define __NR_getppid            119  /* Moved to avoid conflicts */
 #define __NR_print              121
 #define __NR_getdents           141
+#define __NR_select             142
+#define __NR_getsid             147
 #define __NR_nanosleep          162
 #define __NR_rt_sigreturn       173
 #define __NR_getcwd             183     /* getcwd */
@@ -108,8 +113,11 @@ struct process;
 #define __NR_shm_map            192
 #define __NR_shm_unmap          193
 #define __NR_shutdown           194
+#define __NR_mmap               195
+#define __NR_munmap             196
 #define __NR_socket             281
 #define __NR_bind               282
+#define __NR_connect            283
 #define __NR_listen             284
 #define __NR_accept             285
 #define __NR_sysinfo            116     /* reused for getprocs — remplacer par /proc plus tard */
@@ -194,8 +202,11 @@ int sys_stat(const char* pathname, struct stat* statbuf);
 int sys_lstat(const char* pathname, struct stat* statbuf);
 int sys_fstat(int fd, struct stat* statbuf);
 int sys_ftruncate(int fd, off_t length);
+int sys_truncate(const char* pathname, off_t length);
+int sys_fsync(int fd);
 int sys_statfs(const char* path, struct statfs* buf);
 int sys_print(const char* msg);
+int sys_mknod(const char* pathname, mode_t mode, uint32_t dev);
 int sys_mount(const char* source, const char* target, const char* fstype,
               uint32_t flags, const void* data);
 int sys_umount(const char* target);
@@ -214,8 +225,10 @@ int sys_chmod(const char* pathname, mode_t mode);
 int sys_chown(const char* pathname, uid_t owner, gid_t group);
 int sys_socket(int domain, int type, int protocol);
 int sys_bind(int sockfd, const void* addr, uint32_t addrlen);
+int sys_connect(int sockfd, const void* addr, uint32_t addrlen);
 int sys_listen(int sockfd, int backlog);
 int sys_accept(int sockfd, void* addr, uint32_t* addrlen);
+int sys_select(int nfds, void* readfds, void* writefds, void* exceptfds, void* timeout);
 
 /* Process syscalls */
 #define WNOHANG    1
@@ -235,8 +248,10 @@ int sys_getpid(void);
 int sys_getppid(void);
 int sys_setuid(uid_t uid);
 int sys_getuid(void);
+int sys_geteuid(void);
 int sys_setgid(gid_t gid);
 int sys_getgid(void);
+int sys_getegid(void);
 int sys_nice(int inc);
 int sys_getpriority(int which, int who);
 int sys_setpriority(int which, int who, int prio);
@@ -244,6 +259,12 @@ int sys_time(time_t* tloc);
 int sys_gettimeofday(struct timeval* tv, struct timezone* tz);
 int sys_setpgid(pid_t pid, pid_t pgid);
 int sys_getpgrp(void);
+int sys_setsid(void);
+int sys_getsid(pid_t pid);
+int sys_times(void* buf);
+int sys_alarm(uint32_t seconds);
+int sys_pause(void);
+int sys_utime(const char* pathname, const void* times);
 
 /* Signal syscalls */
 int sys_kill(pid_t pid, int sig);
@@ -259,6 +280,8 @@ int sys_shm_unlink(const char *name);
 void *sys_shm_map(int id, void *addr, int flags);
 int sys_shm_unmap(void *addr, size_t size);
 int sys_shutdown(void);
+void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd);
+int sys_munmap(void* addr, size_t length);
 
 /* Additional process syscalls */
 int sys_dup(int oldfd);

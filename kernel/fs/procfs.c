@@ -886,11 +886,16 @@ static const char* proc_syscall_name(uint32_t nr)
         case __NR_open: return "open";
         case __NR_close: return "close";
         case __NR_waitpid: return "waitpid";
+        case __NR_mknod: return "mknod";
         case __NR_link: return "link";
         case __NR_unlink: return "unlink";
         case __NR_execve: return "execve";
         case __NR_chdir: return "chdir";
+        case __NR_alarm: return "alarm";
+        case __NR_pause: return "pause";
+        case __NR_utime: return "utime";
         case __NR_lseek: return "lseek";
+        case __NR_times: return "times";
         case __NR_mount: return "mount";
         case __NR_umount: return "umount";
         case __NR_access: return "access";
@@ -902,9 +907,16 @@ static const char* proc_syscall_name(uint32_t nr)
         case __NR_rmdir: return "rmdir";
         case __NR_dup: return "dup";
         case __NR_dup2: return "dup2";
+        case __NR_setsid: return "setsid";
         case __NR_brk: return "brk";
+        case __NR_geteuid: return "geteuid";
+        case __NR_getegid: return "getegid";
+        case __NR_truncate: return "truncate";
         case __NR_ioctl: return "ioctl";
+        case __NR_fsync: return "fsync";
         case __NR_fcntl: return "fcntl";
+        case __NR_select: return "select";
+        case __NR_getsid: return "getsid";
         case __NR_pipe: return "pipe";
         case __NR_symlink: return "symlink";
         case __NR_readlink: return "readlink";
@@ -915,6 +927,9 @@ static const char* proc_syscall_name(uint32_t nr)
         case __NR_fstat: return "fstat";
         case __NR_getdents: return "getdents";
         case __NR_nanosleep: return "nanosleep";
+        case __NR_mmap: return "mmap";
+        case __NR_munmap: return "munmap";
+        case __NR_connect: return "connect";
         default: return "?";
     }
 }

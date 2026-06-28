@@ -54,6 +54,16 @@ typedef struct vm_space {
     uint32_t padding;      /* 4 bytes pour aligner sur 8 */
 } __attribute__((aligned(8))) vm_space_t;
 
+/*
+ * Anonymous mmap area.
+ *
+ * The historical ArmOS layout leaves 0x34000000..0x37000000 unused between
+ * shared-memory mappings and the user stack. Keep mmap there so anonymous
+ * mappings cannot collide with brk(), SHM, or stack growth.
+ */
+#define USER_MMAP_START USER_SHM_END
+#define USER_MMAP_END   USER_STACK_BOTTOM
+
 /* VMA flags */
 #define VMA_READ    (1 << 0)
 #define VMA_WRITE   (1 << 1)
@@ -145,6 +155,9 @@ void destroy_vm_space(vm_space_t* vm);
 vm_space_t* fork_vm_space(vm_space_t* parent_vm);
 vma_t* create_vma(vm_space_t* vm, uint32_t start, uint32_t size, uint32_t flags);
 int remove_vma(vm_space_t* vm, uint32_t start, uint32_t end);
+uint32_t vm_find_free_range(vm_space_t* vm, uint32_t hint, uint32_t size,
+                            uint32_t base, uint32_t limit);
+int vm_unmap_range(vm_space_t* vm, uint32_t start, uint32_t size);
 vma_t* find_vma(vm_space_t* vm, uint32_t addr);
 int handle_cow_fault(uint32_t fault_addr);
 int handle_user_stack_fault(uint32_t fault_addr);

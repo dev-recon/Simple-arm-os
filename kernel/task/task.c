@@ -679,6 +679,8 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             child->process->uid = parent->process->uid;
             child->process->gid = parent->process->gid;
             child->process->umask = parent->process->umask;
+            child->process->alarm_expire_tick = 0;
+            child->process->alarm_active = 0;
             child->process->state = (proc_state_t)PROC_READY;
             strcpy(child->process->cwd, parent->process->cwd);    // Setting Current Working Directory
             strcpy(child->process->exe_path, parent->process->exe_path);
@@ -1200,6 +1202,8 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         task->process->uid = 0;
         task->process->gid = 0;
         task->process->umask = 022;
+        task->process->alarm_expire_tick = 0;
+        task->process->alarm_active = 0;
         task->process->state = (proc_state_t)PROC_READY;
         
         /* Creer l'espace memoire */
@@ -1617,6 +1621,14 @@ static void for_each_task(task_t* current)
                 task->process->state = (proc_state_t)PROC_READY;
             task->wakeup_time = 0;
             add_to_ready_queue(task);
+        }
+
+        if (task->type == TASK_TYPE_PROCESS && task->process &&
+            task->process->alarm_active &&
+            current_time >= task->process->alarm_expire_tick) {
+            task->process->alarm_active = 0;
+            task->process->alarm_expire_tick = 0;
+            send_signal(task, SIGALRM);
         }
 
         if (!task->next) {

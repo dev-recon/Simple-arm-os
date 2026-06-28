@@ -56,17 +56,25 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_execve] = (syscall_func_t)sys_execve,
     [__NR_lseek] = (syscall_func_t)sys_lseek,
     [__NR_time] = (syscall_func_t)sys_time,
+    [__NR_mknod] = (syscall_func_t)sys_mknod,
+    [__NR_alarm] = (syscall_func_t)sys_alarm,
+    [__NR_pause] = (syscall_func_t)sys_pause,
+    [__NR_utime] = (syscall_func_t)sys_utime,
     [__NR_getpid] = (syscall_func_t)sys_getpid,
     [__NR_getppid] = (syscall_func_t)sys_getppid,
     [__NR_setuid] = (syscall_func_t)sys_setuid,
     [__NR_getuid] = (syscall_func_t)sys_getuid,
+    [__NR_geteuid] = (syscall_func_t)sys_geteuid,
     [__NR_setgid] = (syscall_func_t)sys_setgid,
     [__NR_getgid] = (syscall_func_t)sys_getgid,
+    [__NR_getegid] = (syscall_func_t)sys_getegid,
     [__NR_nice] = (syscall_func_t)sys_nice,
+    [__NR_times] = (syscall_func_t)sys_times,
     [__NR_getpriority] = (syscall_func_t)sys_getpriority,
     [__NR_setpriority] = (syscall_func_t)sys_setpriority,
     [__NR_setpgid] = (syscall_func_t)sys_setpgid,
     [__NR_getpgrp] = (syscall_func_t)sys_getpgrp,
+    [__NR_setsid] = (syscall_func_t)sys_setsid,
     [__NR_kill] = (syscall_func_t)sys_kill,
     [__NR_signal] = (syscall_func_t)sys_signal,
     [__NR_sigaction] = (syscall_func_t)sys_sigaction,
@@ -80,7 +88,9 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_rmdir] = (syscall_func_t)sys_rmdir,
     [__NR_symlink] = (syscall_func_t)sys_symlink,
     [__NR_readlink] = (syscall_func_t)sys_readlink,
+    [__NR_truncate] = (syscall_func_t)sys_truncate,
     [__NR_ftruncate] = (syscall_func_t)sys_ftruncate,
+    [__NR_fsync] = (syscall_func_t)sys_fsync,
     [__NR_statfs] = (syscall_func_t)sys_statfs,
     [__NR_unlink] = (syscall_func_t)sys_unlink,
     [__NR_access] = (syscall_func_t)sys_access,
@@ -97,9 +107,11 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_lstat] = (syscall_func_t)sys_lstat,
     [__NR_fstat] = (syscall_func_t)sys_fstat,
     [__NR_getdents] = (syscall_func_t)sys_getdents,
+    [__NR_select] = (syscall_func_t)sys_select,
     [__NR_stty]     = (syscall_func_t)sys_stty,
     [__NR_gtty]     = (syscall_func_t)sys_gtty,
     [__NR_gettimeofday] = (syscall_func_t)sys_gettimeofday,
+    [__NR_getsid] = (syscall_func_t)sys_getsid,
     [__NR_nanosleep] = (syscall_func_t)sys_nanosleep,
     [__NR_sysinfo]   = (syscall_func_t)sys_sysinfo,
     [__NR_shm_open]  = (syscall_func_t)sys_shm_open,
@@ -107,8 +119,11 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_shm_map]   = (syscall_func_t)sys_shm_map,
     [__NR_shm_unmap] = (syscall_func_t)sys_shm_unmap,
     [__NR_shutdown]  = (syscall_func_t)sys_shutdown,
+    [__NR_mmap]      = (syscall_func_t)sys_mmap,
+    [__NR_munmap]    = (syscall_func_t)sys_munmap,
     [__NR_socket]    = (syscall_func_t)sys_socket,
     [__NR_bind]      = (syscall_func_t)sys_bind,
+    [__NR_connect]   = (syscall_func_t)sys_connect,
     [__NR_listen]    = (syscall_func_t)sys_listen,
     [__NR_accept]    = (syscall_func_t)sys_accept,
 
@@ -1209,6 +1224,11 @@ int sys_getuid(void)
     return 0;
 }
 
+int sys_geteuid(void)
+{
+    return sys_getuid();
+}
+
 int sys_setuid(uid_t uid)
 {
     task_t *proc = current_task;
@@ -1231,6 +1251,11 @@ int sys_getgid(void)
         return proc->process->gid;
     }
     return 0;
+}
+
+int sys_getegid(void)
+{
+    return sys_getgid();
 }
 
 int sys_setgid(gid_t gid)
