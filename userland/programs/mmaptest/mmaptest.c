@@ -18,15 +18,19 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#define COLOR_GREEN "\033[32m"
+#define COLOR_RED   "\033[31m"
+#define COLOR_RESET "\033[0m"
+
 static int fail(const char *msg)
 {
-    printf("[KO] %s errno=%d\n", msg, errno);
+    printf(COLOR_RED "[KO]" COLOR_RESET " %s errno=%d\n", msg, errno);
     return 1;
 }
 
 static void ok(const char *msg)
 {
-    printf("[OK] %s\n", msg);
+    printf(COLOR_GREEN "[OK]" COLOR_RESET " %s\n", msg);
 }
 
 int main(void)
