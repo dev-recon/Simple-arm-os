@@ -20,9 +20,12 @@
  */
 
 #include <errno.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <termios.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/times.h>
 #include <sys/types.h>
@@ -37,6 +40,8 @@ extern long sys_unlink(const char *pathname);
 extern long sys_lseek(int fd, long offset, int whence);
 extern long sys_stat(const char *pathname, void *st);
 extern long sys_fstat(int fd, void *st);
+extern long sys_ftruncate(int fd, long length);
+extern long sys_ioctl(int fd, unsigned long request, void *arg);
 extern long sys_brk(unsigned long brk);
 extern long sys_getpid(void);
 extern long sys_kill(int pid, int sig);
@@ -165,12 +170,50 @@ int _fstat(int fd, struct stat *st)
     return 0;
 }
 
+int ftruncate(int fd, off_t length)
+{
+    return ret_errno(sys_ftruncate(fd, (long)length));
+}
+
 int _isatty(int fd)
 {
     struct stat st;
     if (_fstat(fd, &st) < 0)
         return 0;
     return S_ISCHR(st.st_mode) ? 1 : 0;
+}
+
+int ioctl(int fd, unsigned long request, ...)
+{
+    va_list ap;
+    void *arg;
+
+    /*
+     * Keep TinyCC's runtime glue small: only the classic pointer-argument
+     * ioctl shape is needed by current TCC-built programs such as kilo.
+     */
+    va_start(ap, request);
+    arg = va_arg(ap, void *);
+    va_end(ap);
+
+    return ret_errno(sys_ioctl(fd, request, arg));
+}
+
+int tcgetattr(int fd, struct termios *termios_p)
+{
+    return ioctl(fd, TCGETS, termios_p);
+}
+
+int tcsetattr(int fd, int optional_actions, const struct termios *termios_p)
+{
+    unsigned long request = TCSETS;
+
+    if (optional_actions == TCSADRAIN)
+        request = TCSETSW;
+    else if (optional_actions == TCSAFLUSH)
+        request = TCSETSF;
+
+    return ioctl(fd, request, (void *)termios_p);
 }
 
 void *_sbrk(ptrdiff_t incr)

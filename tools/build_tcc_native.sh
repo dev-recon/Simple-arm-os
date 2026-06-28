@@ -116,6 +116,7 @@ make arm-eabi-tcc LIBS='' CFLAGS="$TCC_CFLAGS" LDFLAGS="$NATIVE_LDFLAGS"
 
 "$CC" $ARM_FLAGS -std=gnu99 -ffreestanding -nostdlib -fno-builtin \
     -fno-stack-protector -ffunction-sections -fdata-sections -Os \
+    -I"$ROOT_DIR/userland/include" \
     -I"$NEWLIB_SYSROOT/include" \
     -c "$ROOT_DIR/newlib-port/tcc/syscalls_min.c" \
     -o "$BUNDLE_DIR/lib/syscalls_min.o"
@@ -130,6 +131,9 @@ if [ -f "$BUILD_DIR/libtcc.a" ]; then
     cp "$BUILD_DIR/libtcc.a" "$BUNDLE_DIR/lib/libtcc.a"
 fi
 cp -R "$NEWLIB_SYSROOT/include"/. "$BUNDLE_DIR/include"/
+# ArmOS owns a few public ABI headers that complement or override newlib's
+# generic ones, notably termios.h and sys/ioctl.h for TTY-aware programs.
+cp -R "$ROOT_DIR/userland/include"/. "$BUNDLE_DIR/include"/
 cp -R "$PATCHED_SRC/include"/. "$BUNDLE_DIR/lib/tcc/include"/
 
 echo

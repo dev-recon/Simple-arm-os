@@ -35,7 +35,42 @@ tcc /home/user/tcc-src/hello.c -o /tmp/tcc_hello2
 /tmp/tcc_hello2 one-shot
 ```
 
+Kilo is also validated as the first non-trivial native TCC program:
+
+```sh
+tcc -c /home/user/tcc-src/kilo.c -o /tmp/kilo.o
+tcc -o /tmp/kilo-tcc /tmp/kilo.o
+/tmp/kilo-tcc /home/user/tcc-src/hello.c
+```
+
+The direct one-command path works too:
+
+```sh
+tcc /home/user/tcc-src/kilo.c -o /tmp/kilo-direct
+```
+
 ## Important Architecture Decision
+
+ArmOS uses a split compiler policy:
+
+```text
+kernel   -> arm-none-eabi-gcc
+userland -> TinyCC ARM/EABI, progressively
+```
+
+GCC remains the kernel compiler because the kernel depends on the strongest
+available ARMv7-A code generation, inline assembly handling, linker-script
+behavior, diagnostics, and ABI conservatism. TinyCC is intentionally scoped to
+userland first, where fast native compilation, small command-line tools, and
+short edit-build-run loops matter more than whole-kernel compiler maturity.
+
+The intended migration path is:
+
+1. Keep GCC as the official kernel compiler.
+2. Keep GCC/newlib as the host fallback for complex userland programs.
+3. Make `/usr/bin/tcc` the native ArmOS compiler for new small userland tools.
+4. Gradually compile simple coreutils and programs with TCC.
+5. Use kilo as the first serious interactive userland validation target.
 
 `/usr/bin/tcc` is not the real compiler. It is an ArmOS wrapper around:
 
@@ -70,6 +105,7 @@ tools/build_tcc_host.sh            Host-side TinyCC ARM/EABI validation helper
 tools/test_tcc_armos_hello.sh      Host-side linker/runtime smoke test
 tools/build_tcc_native.sh          Native ArmOS TinyCC bundle builder
 userfs/home/user/tcc-src/hello.c   In-ArmOS smoke test source
+userfs/home/user/tcc-src/kilo.c    In-ArmOS non-trivial native TCC test source
 ```
 
 Generated bundle output:
@@ -81,6 +117,11 @@ build/tcc-native/bundle/opt/tcc/
 The generated filesystem staging directory `userfs/opt/tcc/` is ignored. Rebuild
 and stage it from the script instead of committing generated binaries and copied
 headers.
+
+`tools/build_tcc_native.sh` copies newlib headers first, then overlays
+`userland/include`. This order is deliberate: ArmOS owns public ABI headers such
+as `termios.h` and `sys/ioctl.h`, and those must override newlib's generic or
+incomplete versions for TTY-aware programs like kilo.
 
 ## Build Recipe
 
@@ -135,6 +176,14 @@ tcc -o /tmp/tcc_hello /tmp/tcc_hello.o
 echo $?
 ```
 
+Kilo native compile smoke test:
+
+```sh
+tcc -c /home/user/tcc-src/kilo.c -o /tmp/kilo.o
+tcc -o /tmp/kilo-tcc /tmp/kilo.o
+/tmp/kilo-tcc /home/user/tcc-src/hello.c
+```
+
 ## Why syscalls_min.c Exists
 
 Normal ArmOS userland links against `newlib-port/syscalls.c`. TinyCC's linker is
@@ -147,6 +196,10 @@ This keeps the native compiler milestone small:
 - compile and link simple C programs;
 - use newlib for `stdio`, `malloc`, and normal C library code;
 - avoid dragging the full stable userland glue into TinyCC's linker path.
+
+Current extra wrappers carried by the TCC profile include `ioctl`,
+`tcgetattr`, `tcsetattr`, and `ftruncate`, because kilo needs TTY raw mode and
+file truncation when saving.
 
 ## libgcc Trap
 
