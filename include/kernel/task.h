@@ -35,6 +35,11 @@ struct file;
 #define PROC_CMDLINE_MAX        512
 #define PROC_ENVIRON_MAX        512
 #define TASK_PRIORITY_LEVELS    256
+#define TASK_DEFAULT_PRIORITY   10
+#define TASK_IDLE_PRIORITY      (TASK_PRIORITY_LEVELS - 1)
+#define TASK_NICE_MIN           (-20)
+#define TASK_NICE_MAX           19
+#define SCHED_POLICY_NAME       "priority-rr"
 
 #define QUANTUM_TICKS           10
 
@@ -98,6 +103,14 @@ void sched_trace_snapshot(sched_trace_event_t* out, uint32_t max,
 typedef struct scheduler_stats {
     uint32_t nr_running;
     uint32_t nonempty_queues;
+    uint32_t policy_levels;
+    uint32_t default_priority;
+    uint32_t idle_priority;
+    int32_t nice_min;
+    int32_t nice_max;
+    uint32_t quantum_ticks;
+    uint32_t highest_ready_priority;
+    uint32_t lowest_ready_priority;
     uint32_t current_tid;
     uint32_t current_pid;
     uint32_t current_priority;

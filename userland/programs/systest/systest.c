@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
@@ -1881,6 +1882,75 @@ static void test_process_session_info(void)
     expect(found, "sysinfo contains current process", self);
 }
 
+static void test_scheduler_priority_syscalls(void)
+{
+    int base;
+    int target;
+    int status = 0;
+    int waited;
+    int pid;
+
+    errno = 0;
+    base = getpriority(PRIO_PROCESS, 0);
+    expect(!(base == -1 && errno != 0), "getpriority current process", errno);
+    expect(base >= -20 && base <= 19, "getpriority reports nice range", base);
+
+    pid = fork();
+    if (expect(pid >= 0, "nice fork child", pid) < 0)
+        return;
+    if (pid == 0) {
+        int before = getpriority(PRIO_PROCESS, 0);
+        int expected = before + 3;
+        int after;
+        int rc;
+
+        if (expected > 19)
+            expected = 19;
+
+        rc = nice(3);
+        after = getpriority(PRIO_PROCESS, 0);
+        exit(rc == expected && after == expected ? 0 : 1);
+    }
+
+    waited = waitpid(pid, &status, 0);
+    expect(waited == pid && status_exited(status, 0),
+           "nice adjusts child priority", status);
+
+    pid = fork();
+    if (expect(pid >= 0, "setpriority fork child", pid) < 0)
+        return;
+    if (pid == 0) {
+        while (1)
+            sleep(1);
+    }
+
+    target = base + 4;
+    if (target > 19)
+        target = 19;
+
+    expect(setpriority(PRIO_PROCESS, pid, target) == 0,
+           "setpriority child lower priority", target);
+    expect(getpriority(PRIO_PROCESS, pid) == target,
+           "getpriority observes child priority", target);
+
+    if (getuid() == 0) {
+        int root_target = target > -20 ? target - 1 : target;
+        expect(setpriority(PRIO_PROCESS, pid, root_target) == 0,
+               "root can improve child priority", root_target);
+        expect(getpriority(PRIO_PROCESS, pid) == root_target,
+               "root priority change visible", root_target);
+    } else if (target > -20) {
+        errno = 0;
+        expect(setpriority(PRIO_PROCESS, pid, target - 1) < 0 && errno == EPERM,
+               "user cannot improve child priority", errno);
+    } else {
+        skip("user priority improvement test at minimum nice");
+    }
+
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+}
+
 static void usage(void)
 {
     printf("usage: systest [-q|-v]\n");
@@ -1916,6 +1986,7 @@ int main(int argc, char **argv)
     test_terminal_process_group();
     test_background_tty_read_stops();
     test_process_session_info();
+    test_scheduler_priority_syscalls();
     test_file_io();
     test_access_umask();
     test_open_permission_enforcement();

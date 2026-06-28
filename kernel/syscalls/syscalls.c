@@ -1251,29 +1251,29 @@ int sys_setgid(gid_t gid)
 
 static int scheduler_priority_to_nice(uint32_t priority)
 {
-    int nice = (int)priority - 10;
+    int nice = (int)priority - TASK_DEFAULT_PRIORITY;
 
-    if (nice < -20)
-        return -20;
-    if (nice > 19)
-        return 19;
+    if (nice < TASK_NICE_MIN)
+        return TASK_NICE_MIN;
+    if (nice > TASK_NICE_MAX)
+        return TASK_NICE_MAX;
     return nice;
 }
 
 static uint32_t nice_to_scheduler_priority(int nice)
 {
-    if (nice < -20)
-        nice = -20;
-    if (nice > 19)
-        nice = 19;
+    if (nice < TASK_NICE_MIN)
+        nice = TASK_NICE_MIN;
+    if (nice > TASK_NICE_MAX)
+        nice = TASK_NICE_MAX;
 
     /*
      * ArmOS priorities are scheduler priorities: lower values run first.
      * Unix nice values are user-facing weights: lower values mean "nicer to me,
-     * less nice to others". Mapping nice 0 to scheduler priority 10 preserves
-     * the historical default used by user processes.
+     * less nice to others". Mapping nice 0 to TASK_DEFAULT_PRIORITY preserves
+     * the default used by user processes.
      */
-    return (uint32_t)(nice + 10);
+    return (uint32_t)(nice + TASK_DEFAULT_PRIORITY);
 }
 
 static bool can_change_task_priority(task_t *caller, task_t *target, int new_nice)
@@ -1304,10 +1304,10 @@ int sys_nice(int inc)
 
     old_nice = scheduler_priority_to_nice(proc->priority);
     new_nice = old_nice + inc;
-    if (new_nice < -20)
-        new_nice = -20;
-    if (new_nice > 19)
-        new_nice = 19;
+    if (new_nice < TASK_NICE_MIN)
+        new_nice = TASK_NICE_MIN;
+    if (new_nice > TASK_NICE_MAX)
+        new_nice = TASK_NICE_MAX;
 
     if (!can_change_task_priority(proc, proc, new_nice))
         return -EPERM;
@@ -1346,7 +1346,7 @@ int sys_setpriority(int which, int who, int prio)
 
     if (which != PRIO_PROCESS)
         return -EINVAL;
-    if (prio < -20 || prio > 19)
+    if (prio < TASK_NICE_MIN || prio > TASK_NICE_MAX)
         return -EINVAL;
 
     if (who == 0) {

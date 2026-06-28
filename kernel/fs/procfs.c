@@ -961,9 +961,26 @@ static void proc_fill_sched(char* buf, size_t cap, size_t* len)
 
     scheduler_get_stats(&stats);
 
-    proc_append(buf, cap, len, "scheduler priority-round-robin\n");
+    proc_append(buf, cap, len, "policy %s\n", SCHED_POLICY_NAME);
+    proc_append(buf, cap, len, "class SCHED_OTHER\n");
+    proc_append(buf, cap, len, "description strict-priority round-robin within each priority\n");
+    proc_append(buf, cap, len, "priority_direction lower-is-higher\n");
+    proc_append(buf, cap, len, "priority_levels %u\n", stats.policy_levels);
+    proc_append(buf, cap, len, "default_priority %u\n", stats.default_priority);
+    proc_append(buf, cap, len, "idle_priority %u\n", stats.idle_priority);
+    proc_append(buf, cap, len, "nice_range %d %d\n", stats.nice_min, stats.nice_max);
+    proc_append(buf, cap, len, "nice_mapping scheduler_priority=nice+%u\n",
+                stats.default_priority);
+    proc_append(buf, cap, len, "quantum_ticks %u\n", stats.quantum_ticks);
     proc_append(buf, cap, len, "nr_running %u\n", stats.nr_running);
     proc_append(buf, cap, len, "nonempty_queues %u\n", stats.nonempty_queues);
+    if (stats.highest_ready_priority < TASK_PRIORITY_LEVELS) {
+        proc_append(buf, cap, len, "ready_priority_range %u %u\n",
+                    stats.highest_ready_priority,
+                    stats.lowest_ready_priority);
+    } else {
+        proc_append(buf, cap, len, "ready_priority_range none\n");
+    }
     proc_append(buf, cap, len, "current tid=%u pid=%u prio=%u name=%s\n",
                 stats.current_tid,
                 stats.current_pid,

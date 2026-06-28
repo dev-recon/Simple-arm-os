@@ -67,7 +67,8 @@ void init_process_system(void)
     init_task_system();
 
     /* Creer le processus init (PID 1) */
-    init_process = task_create_process("init", init_process_main, NULL, 10, TASK_TYPE_PROCESS);
+    init_process = task_create_process("init", init_process_main, NULL,
+                                       TASK_DEFAULT_PRIORITY, TASK_TYPE_PROCESS);
     //init_process = create_process("init");
     if (!init_process) {
         panic("Failed to create init process");
@@ -144,7 +145,8 @@ void init_process_main(void* arg)
           result);
     
     /* Fallback legacy path: create a kernel-launched shell process. */
-    task_t* shell_proc  = task_create_process("shell", simple_shell_task, NULL, 10, TASK_TYPE_PROCESS);
+    task_t* shell_proc  = task_create_process("shell", simple_shell_task, NULL,
+                                              TASK_DEFAULT_PRIORITY, TASK_TYPE_PROCESS);
     if (!shell_proc) {
         panic("Failed to create fallback shell process");
     }
@@ -205,7 +207,8 @@ task_t* create_process(const char* name)
     extern task_t* task_create_process(const char* name, void (*entry)(void* arg), 
                                   void* arg, uint32_t priority, task_type_t type);
 
-    process = task_create_process(name, NULL, NULL, 10, TASK_TYPE_PROCESS);
+    process = task_create_process(name, NULL, NULL,
+                                  TASK_DEFAULT_PRIORITY, TASK_TYPE_PROCESS);
     if (!process) {
         KERROR("create_process: NULL PROC\n");
         return NULL;

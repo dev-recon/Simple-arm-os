@@ -177,10 +177,23 @@ void scheduler_get_stats(scheduler_stats_t* stats)
     spin_lock_irqsave(&task_lock, &flags);
 
     stats->nr_running = ready_queue.nr_running;
+    stats->policy_levels = TASK_PRIORITY_LEVELS;
+    stats->default_priority = TASK_DEFAULT_PRIORITY;
+    stats->idle_priority = TASK_IDLE_PRIORITY;
+    stats->nice_min = TASK_NICE_MIN;
+    stats->nice_max = TASK_NICE_MAX;
+    stats->quantum_ticks = QUANTUM_TICKS;
+    stats->highest_ready_priority = TASK_PRIORITY_LEVELS;
+    stats->lowest_ready_priority = TASK_PRIORITY_LEVELS;
+
     for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
         stats->priority_counts[prio] = ready_queue.count[prio];
-        if (ready_queue.count[prio] > 0)
+        if (ready_queue.count[prio] > 0) {
             stats->nonempty_queues++;
+            if (stats->highest_ready_priority == TASK_PRIORITY_LEVELS)
+                stats->highest_ready_priority = prio;
+            stats->lowest_ready_priority = prio;
+        }
     }
 
     if (current_task) {
@@ -1809,7 +1822,12 @@ void sched_start(void)
 
 
 /**
- * Round-robin ameliore qui evite de re-selectionner la meme tache
+ * Strict priority round-robin scheduler.
+ *
+ * Lower numeric priorities run first. Tasks at the same priority are served in
+ * FIFO/RR order through the per-priority runqueue. There is intentionally no
+ * aging yet, so a permanently runnable high-priority task can starve lower
+ * priorities; that policy is now explicit in /proc/sched.
  */
 static task_t* schedule_next_task(void)
 {
