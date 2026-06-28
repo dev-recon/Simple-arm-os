@@ -45,6 +45,7 @@ typedef struct top_task {
     unsigned pf;
     unsigned rss_kb;
     char state;
+    char state_detail[16];
     char name[64];
 } top_task_t;
 
@@ -443,6 +444,21 @@ static void enrich_from_status(top_task_t *task)
     p = line_after_key(buf, "Priority:");
     if (p)
         parse_uint(p, &task->priority);
+
+    p = line_after_key(buf, "State:");
+    if (p) {
+        const char *open = strchr(p, '(');
+        const char *close = open ? strchr(open + 1, ')') : NULL;
+        int len;
+
+        if (open && close && close > open + 1) {
+            len = (int)(close - open - 1);
+            if (len >= (int)sizeof(task->state_detail))
+                len = (int)sizeof(task->state_detail) - 1;
+            memcpy(task->state_detail, open + 1, (size_t)len);
+            task->state_detail[len] = '\0';
+        }
+    }
 }
 
 static int load_tasks(top_task_t *tasks, int max_tasks)
@@ -577,10 +593,13 @@ static void format_count(unsigned value, char *buf, int size)
     }
 }
 
-static const char *state_name(char state)
+static const char *state_name(const top_task_t *task)
 {
-    switch (state) {
-    case 'R': return "run";
+    switch (task->state) {
+    case 'R':
+        if (strcmp(task->state_detail, "ready") == 0)
+            return "ready";
+        return "run";
     case 'Z': return "zombie";
     case 'T': return "term";
     case 't': return "stop";
@@ -589,10 +608,13 @@ static const char *state_name(char state)
     }
 }
 
-static const char *state_color(char state)
+static const char *state_color(const top_task_t *task)
 {
-    switch (state) {
-    case 'R': return C_GREEN;
+    switch (task->state) {
+    case 'R':
+        if (strcmp(task->state_detail, "ready") == 0)
+            return C_YELLOW;
+        return C_GREEN;
     case 'Z': return C_RED;
     case 'T':
     case 't': return C_YELLOW;
@@ -655,7 +677,7 @@ static void render_top(unsigned delay_sec, int iteration)
     for (int i = 0; i < count; i++) {
         char timebuf[16];
         char ctxbuf[16];
-        const char *color = state_color(top_tasks[i].state);
+        const char *color = state_color(&top_tasks[i]);
 
         format_runtime(top_tasks[i].runtime_ticks, timebuf, sizeof(timebuf));
         format_count(top_tasks[i].ctx, ctxbuf, sizeof(ctxbuf));
@@ -665,7 +687,7 @@ static void render_top(unsigned delay_sec, int iteration)
                        top_tasks[i].tty >= 0 ? 4 : 7,
                        "",
                        color,
-                       state_name(top_tasks[i].state),
+                       state_name(&top_tasks[i]),
                        top_tasks[i].priority,
                        top_tasks[i].cpu_pct_x10 / 10u,
                        top_tasks[i].cpu_pct_x10 % 10u,

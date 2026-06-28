@@ -570,6 +570,7 @@ static int jobs_reap(int notify)
             } else if (notify && job->state == JOB_DONE) {
                 printf("[%d]+ Done                   %s\n",
                        job->id, job->command);
+                job->state = JOB_EMPTY;
                 notified++;
             }
         } else if (notify) {
