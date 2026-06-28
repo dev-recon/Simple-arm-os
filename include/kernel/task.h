@@ -354,9 +354,13 @@ typedef struct task {
     void (*entry_point)(void* arg);         /* Point d'entree */
     void* entry_arg;                        /* Argument */
     
-    /* Liste chainee */
-    struct task* next;                      /* Tache suivante */
-    struct task* prev;                      /* Tache precedente */
+    /* Global task list: all live tasks, including sleeping/zombie tasks. */
+    struct task* next;
+    struct task* prev;
+
+    /* Scheduler runqueue: only TASK_READY tasks waiting for CPU time. */
+    struct task* rq_next;
+    struct task* rq_prev;
     
     /* Statistiques */
     uint64_t created_time;                  /* Timestamp de creation */

@@ -1755,12 +1755,10 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     start_time = get_system_ticks();
     //KDEBUG("sys_nanosleep: start_time=%u\n", start_time);
     
+    task_set_interruptible(current_task);
+
     unsigned long sleep_flags;
     spin_lock_irqsave(&task_lock, &sleep_flags);
-        /* Mettre le processus en sommeil */
-    current_task->state = TASK_INTERRUPTIBLE;
-    if (current_task->process)
-        current_task->process->state = (proc_state_t)PROC_INTERRUPTIBLE;
     current_task->wakeup_time = start_time + sleep_ticks;
     spin_unlock_irqrestore(&task_lock, sleep_flags);
     
