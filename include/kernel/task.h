@@ -39,7 +39,9 @@ struct file;
 #define TASK_IDLE_PRIORITY      (TASK_PRIORITY_LEVELS - 1)
 #define TASK_NICE_MIN           (-20)
 #define TASK_NICE_MAX           19
-#define SCHED_POLICY_NAME       "priority-rr"
+#define SCHED_POLICY_NAME       "priority-rr-aging"
+#define SCHED_AGING_STEP_TICKS  20
+#define SCHED_AGING_MAX_BONUS   8
 
 #define QUANTUM_TICKS           10
 
@@ -109,6 +111,9 @@ typedef struct scheduler_stats {
     int32_t nice_min;
     int32_t nice_max;
     uint32_t quantum_ticks;
+    uint32_t aging_step_ticks;
+    uint32_t aging_max_bonus;
+    uint32_t aging_selections;
     uint32_t highest_ready_priority;
     uint32_t lowest_ready_priority;
     uint32_t current_tid;
@@ -418,6 +423,7 @@ typedef struct task {
      */
     uint32_t current_syscall;               /* Syscall currently executing, or 0 */
     uint32_t last_syscall;                  /* Last syscall entered by this task */
+    uint32_t ready_since_tick;              /* Scheduler aging: tick when queued READY */
 
 } __attribute__((aligned(8))) task_t;
 

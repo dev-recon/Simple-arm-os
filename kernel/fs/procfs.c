@@ -963,7 +963,7 @@ static void proc_fill_sched(char* buf, size_t cap, size_t* len)
 
     proc_append(buf, cap, len, "policy %s\n", SCHED_POLICY_NAME);
     proc_append(buf, cap, len, "class SCHED_OTHER\n");
-    proc_append(buf, cap, len, "description strict-priority round-robin within each priority\n");
+    proc_append(buf, cap, len, "description priority round-robin with bounded ready-queue aging\n");
     proc_append(buf, cap, len, "priority_direction lower-is-higher\n");
     proc_append(buf, cap, len, "priority_levels %u\n", stats.policy_levels);
     proc_append(buf, cap, len, "default_priority %u\n", stats.default_priority);
@@ -972,6 +972,9 @@ static void proc_fill_sched(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "nice_mapping scheduler_priority=nice+%u\n",
                 stats.default_priority);
     proc_append(buf, cap, len, "quantum_ticks %u\n", stats.quantum_ticks);
+    proc_append(buf, cap, len, "aging_step_ticks %u\n", stats.aging_step_ticks);
+    proc_append(buf, cap, len, "aging_max_bonus %u\n", stats.aging_max_bonus);
+    proc_append(buf, cap, len, "aging_selections %u\n", stats.aging_selections);
     proc_append(buf, cap, len, "nr_running %u\n", stats.nr_running);
     proc_append(buf, cap, len, "nonempty_queues %u\n", stats.nonempty_queues);
     if (stats.highest_ready_priority < TASK_PRIORITY_LEVELS) {

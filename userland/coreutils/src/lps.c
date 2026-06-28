@@ -624,10 +624,10 @@ int main(void)
     print_event_table(&c);
     print_tty_table(&c);
 
-    printf("\033[1m%4s %4s %4s %4s %3s %-8s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %7s %7s %7s %7s %-6s %s\033[0m\n",
+    printf("\033[1m%6s %6s %6s %4s %3s %-8s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %7s %7s %7s %7s %-6s %s\033[0m\n",
            "PID", "TID", "PPID", "SID", "TTY", "USER", "GID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",
            "VM", "RSS", "L2", "CTX", "PF", "COW", "STK", "STATE", "NAME");
-    printf("------------------------------------------------------------------------------------------------------------------------------\n");
+    printf("------------------------------------------------------------------------------------------------------------------------------------\n");
 
     for (int i = 0; i < count; i++) {
         task_row_t *p = &rows[i];
@@ -645,7 +645,7 @@ int main(void)
         format_count(p->cow_faults, cowbuf, sizeof(cowbuf));
         format_count(p->stack_faults, stkbuf, sizeof(stkbuf));
 
-        printf("%4d %4d %4d %4d %3d %-8s %4u %s%-6s\033[0m %3u %3u.%u %4uK %4uK %4uK %4uK %2u %7s %s%7s\033[0m %7s %7s %s%-6s\033[0m %s\n",
+        printf("%6d %6d %6d %4d %3d %-8s %4u %s%-6s\033[0m %3u %3u.%u %4uK %4uK %4uK %4uK %2u %7s %s%7s\033[0m %7s %7s %s%-6s\033[0m %s\n",
                p->pid, p->tid, p->ppid, p->sid, p->tty,
                user, p->gid,
                kind_color(p->kind), kind_name(p->kind),

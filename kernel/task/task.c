@@ -65,6 +65,7 @@ volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
 static spinlock_t sched_trace_lock = SPINLOCK_INIT("sched_trace");
 static sched_trace_event_t sched_trace[SCHED_TRACE_SIZE];
 static uint32_t sched_trace_seq;
+static uint32_t sched_aging_selections;
 //static int yield_count = 0;
 
 /* === NOUVELLES VARIABLES POUR PROCESSUS === */
@@ -183,6 +184,9 @@ void scheduler_get_stats(scheduler_stats_t* stats)
     stats->nice_min = TASK_NICE_MIN;
     stats->nice_max = TASK_NICE_MAX;
     stats->quantum_ticks = QUANTUM_TICKS;
+    stats->aging_step_ticks = SCHED_AGING_STEP_TICKS;
+    stats->aging_max_bonus = SCHED_AGING_MAX_BONUS;
+    stats->aging_selections = sched_aging_selections;
     stats->highest_ready_priority = TASK_PRIORITY_LEVELS;
     stats->lowest_ready_priority = TASK_PRIORITY_LEVELS;
 
@@ -311,6 +315,7 @@ static void runqueue_enqueue_tail_locked(task_t* task)
         return;
 
     prio = task_runqueue_priority(task);
+    task->ready_since_tick = get_system_ticks();
     task->rq_next = NULL;
     task->rq_prev = ready_queue.tail[prio];
     task->rq_priority = prio;
@@ -353,6 +358,7 @@ static void runqueue_remove_locked(task_t* task)
     task->rq_next = NULL;
     task->rq_prev = NULL;
     task->rq_priority = TASK_PRIORITY_LEVELS;
+    task->ready_since_tick = 0;
     if (ready_queue.count[prio] > 0)
         ready_queue.count[prio]--;
     if (ready_queue.nr_running > 0)
@@ -1821,38 +1827,90 @@ void sched_start(void)
 }
 
 
+static uint32_t scheduler_effective_priority_locked(task_t* task, uint32_t now)
+{
+    uint32_t base;
+    uint32_t waited;
+    uint32_t bonus;
+
+    if (!task)
+        return TASK_PRIORITY_LEVELS - 1;
+
+    base = task_runqueue_priority(task);
+    if (base == 0 || base >= TASK_PRIORITY_LEVELS)
+        return base;
+
+    if (task->ready_since_tick == 0 || now < task->ready_since_tick)
+        return base;
+
+    waited = now - task->ready_since_tick;
+    bonus = waited / SCHED_AGING_STEP_TICKS;
+    if (bonus > SCHED_AGING_MAX_BONUS)
+        bonus = SCHED_AGING_MAX_BONUS;
+    if (bonus > base)
+        bonus = base;
+
+    return base - bonus;
+}
+
 /**
- * Strict priority round-robin scheduler.
+ * Priority round-robin scheduler with bounded aging.
  *
- * Lower numeric priorities run first. Tasks at the same priority are served in
- * FIFO/RR order through the per-priority runqueue. There is intentionally no
- * aging yet, so a permanently runnable high-priority task can starve lower
- * priorities; that policy is now explicit in /proc/sched.
+ * Lower numeric priorities still mean higher scheduling preference, and tasks
+ * at the same base priority are served FIFO/RR. To avoid starvation, the picker
+ * compares an effective priority derived from how long the head task of each
+ * priority queue has waited. The visible nice/priority does not change; only
+ * this scheduling decision receives a temporary aging bonus.
  */
 static task_t* schedule_next_task(void)
 {
     unsigned long flags;
     task_t* task;
+    task_t* best;
+    uint32_t best_prio;
+    uint32_t best_waited;
+    uint32_t now;
     uint32_t scanned = 0;
 
     spin_lock_irqsave(&task_lock, &flags);
 
     while (ready_queue.nr_running > 0 && scanned <= MAX_TASKS) {
-        task = NULL;
+        best = NULL;
+        best_prio = TASK_PRIORITY_LEVELS;
+        best_waited = 0;
+        now = get_system_ticks();
+
         for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
-            if (ready_queue.head[prio]) {
-                task = ready_queue.head[prio];
-                break;
+            task_t* candidate = ready_queue.head[prio];
+            uint32_t effective;
+            uint32_t waited;
+
+            if (!candidate)
+                continue;
+
+            effective = scheduler_effective_priority_locked(candidate, now);
+            waited = candidate->ready_since_tick && now >= candidate->ready_since_tick ?
+                     now - candidate->ready_since_tick : 0;
+
+            if (!best ||
+                effective < best_prio ||
+                (effective == best_prio && waited > best_waited)) {
+                best = candidate;
+                best_prio = effective;
+                best_waited = waited;
             }
         }
 
-        if (!task)
+        if (!best)
             break;
 
+        task = best;
         runqueue_remove_locked(task);
         scanned++;
 
         if (task_is_schedulable(task)) {
+            if (best_prio < task_runqueue_priority(task))
+                sched_aging_selections++;
             spin_unlock_irqrestore(&task_lock, flags);
             return task;
         }
