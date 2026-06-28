@@ -68,6 +68,91 @@ Counters to watch:
 Keep the 1 ms quantum while hardening the kernel. It exposes races and critical
 section mistakes that longer quanta can hide.
 
+## Notes From Scheduler Debt Fairness
+
+ArmOS currently reports this scheduler policy through `/proc/sched`:
+
+```text
+policy priority-rr-debt
+description priority round-robin with bounded aging and CPU debt fairness
+```
+
+Validation target:
+
+```sh
+cat /proc/sched
+memstress --cpu 20 &; memstress --cpu 20 &
+cat /proc/sched
+systest > /tmp/sched-debt-systest.out &
+tail -1 /tmp/sched-debt-systest.out
+```
+
+Expected result:
+
+- `debt_selections` increases when multiple CPU-bound tasks compete.
+- `aging_selections` may also increase under contention.
+- `systest` still reports `systest: all tests passed`.
+- Interactive commands remain responsive while CPU-bound background work runs.
+
+Observed baseline after two concurrent `memstress --cpu 20` jobs:
+
+```text
+aging_selections 19
+debt_selections 74
+```
+
+This confirms that the scheduler is no longer pure FIFO within a fixed priority
+queue. CPU-bound tasks accumulate debt, and waiting ready tasks can be selected
+ahead of them without changing their visible priority.
+
+Follow-up items:
+
+- Stress with mixed workloads: `kload`, `memstress`, parallel `systest`, `top`,
+  and normal shell commands.
+- Watch whether `debt_selections` grows under CPU contention but stays stable
+  when the system is idle.
+- If `MAX_TASKS` grows significantly, revisit the ready-queue scan cost.
+
+## Shutdown Baseline
+
+The expected shutdown path is now signal-based and logged:
+
+```sh
+sleep 300 &
+/sbin/shutdown
+```
+
+Expected log shape:
+
+```text
+System shutdown requested
+Shutdown: sending SIGTERM to user processes
+Shutdown: SIGTERM delivered to 1 process(es)
+Shutdown: SIGTERM grace complete
+Shutdown: VFS mounted filesystems
+Shutdown: VFS sync start
+Shutdown: VFS sync complete
+Shutdown: VFS unmount non-root filesystems
+Shutdown: flushing and stopping block device
+Shutdown: block device stopped
+Shutdown: interrupts disabled
+Shutdown: entering PSCI SYSTEM_OFF
+```
+
+Important invariant:
+
+- The shell/init ancestor chain that invoked shutdown must not be killed early.
+  If it is killed during the grace period, userland init may restart a shell
+  while the kernel is already powering off.
+
+Manual validation:
+
+1. Boot with `./boot.sh`.
+2. Start a long-running background process.
+3. Run `/sbin/shutdown`.
+4. Confirm QEMU exits by PSCI, not by `Ctrl+A, X`.
+5. Boot again and verify recent filesystem writes if the test touched storage.
+
 ## Notes From 2026-06-17 Procfs Stress
 
 Configuration change:

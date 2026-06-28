@@ -15,7 +15,14 @@ decisions.
   - kernel stack page balance;
   - physical page allocation/free balance;
   - ASID rollover;
-  - `sched-refuse`, `ready-refuse`, `tty-stale`, `unintr-timeout`.
+  - `sched-refuse`, `ready-refuse`, `tty-stale`, `unintr-timeout`;
+  - `/proc/sched` `aging_selections` and `debt_selections`.
+- Keep validating `priority-rr-debt` with mixed workloads. The current policy
+  provides starvation resistance and basic CPU debt fairness; the next step is
+  better instrumentation and workload-specific tuning, not a full CFS rewrite.
+- Keep shutdown validation in the persistence checklist. A clean shutdown should
+  signal user processes, sync filesystems, unmount non-root filesystems, stop
+  block devices, and exit through PSCI.
 
 ## Code Cleanup And Size Reduction
 

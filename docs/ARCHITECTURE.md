@@ -388,6 +388,50 @@ be careful about interrupt state and queue membership. A task should not be
 inserted twice into the ready queue, and a task that is no longer runnable must
 not remain schedulable.
 
+### Scheduling Policy
+
+The current policy is exposed as `priority-rr-debt` in `/proc/sched`.
+
+It is intentionally still simpler than Linux CFS, but it borrows the most useful
+idea for ArmOS today: runnable tasks should not be ordered only by FIFO position
+inside a priority queue. A CPU-bound task accumulates scheduling debt on timer
+ticks. A task that waits in the ready queue sees its effective debt decay. The
+picker then compares:
+
+1. effective priority, including bounded aging;
+2. lower CPU debt;
+3. longer ready-queue wait time.
+
+This keeps the existing fixed-priority model and `nice` mapping easy to reason
+about, while avoiding the worst behavior of pure priority round-robin: a small
+set of CPU-bound tasks can no longer indefinitely dominate equally prioritized
+interactive or I/O-heavy tasks.
+
+Important implementation details:
+
+- `task_t.sched_debt` is incremented by the timer while the task is running;
+- debt is decayed when the scheduler evaluates a ready task;
+- `ready_since_tick` remains the source for bounded aging and debt decay;
+- `/proc/sched` exposes `aging_selections` and `debt_selections` so stress tests
+  can show whether the non-FIFO parts of the policy are active.
+
+This is a pragmatic "mini-CFS" step, not a full virtual-runtime tree. The
+current implementation scans the ready queues and is acceptable for ArmOS'
+current `MAX_TASKS` scale. If task counts grow much further, the next scheduler
+optimization should be data-structure driven rather than policy driven.
+
+Contributor rules:
+
+1. Keep all fields referenced by assembly layout stable. New `task_t` fields
+   should be added away from the low-level context block unless the assembly
+   offsets are updated deliberately.
+2. Do not mutate visible priority to implement fairness. Use effective priority
+   and debt scoring at selection time.
+3. Test fairness with concurrent CPU-bound jobs plus sleeping or I/O-heavy jobs,
+   not only with a single busy process.
+4. Watch `/proc/sched`, `top`, and `lps` together: `debt_selections` should rise
+   under CPU contention, and sleeping/ready work should still make progress.
+
 ### Blocking In Kernel
 
 Many kernel paths may block before their syscall has completed:
@@ -758,6 +802,60 @@ cat /tmp/persist.txt
 If QEMU is killed with `Ctrl+A, X`, recent userland state such as shell history
 or filesystem writes may not have the same clean shutdown behavior. Prefer the
 ArmOS `shutdown` command when validating persistence.
+
+### Shutdown Sequence
+
+The ArmOS shutdown path is designed to be explicit and observable, closer to the
+Unix/Linux mental model than a direct emulator exit.
+
+Current order:
+
+```text
+userland shutdown command
+        |
+sys_poweroff
+        |
+mark shutdown in progress
+        |
+SIGTERM to non-essential user processes
+        |
+short grace period
+        |
+SIGKILL to remaining targets
+        |
+short grace period
+        |
+force-terminate any remaining shutdown targets
+        |
+sync mounted filesystems
+        |
+unmount non-root filesystems
+        |
+flush/stop block device
+        |
+disable interrupts
+        |
+PSCI SYSTEM_OFF
+```
+
+The process that requested shutdown, PID 1, and the login ancestor chain are not
+killed early. This avoids userland init seeing the shell disappear and starting a
+replacement shell while shutdown is already in progress.
+
+Shutdown is still not a full Linux init runlevel transition. It is a kernel-led
+poweroff sequence with Unix-like signal grace. That is sufficient for the
+current system and much safer than directly marking every process dead.
+
+Contributor rules:
+
+1. Keep shutdown logs concise but explicit: signal phase, sync phase, unmount
+   phase, block-device phase, final poweroff.
+2. Do not depend on graphical TTY state for shutdown. UART `tty0` must remain
+   the recovery path.
+3. If storage code changes, validate with `sync`, `shutdown`, and a fresh
+   `boot.sh`, not only with `Ctrl+A, X`.
+4. If process lifecycle changes, test shutdown while a long-running background
+   process is alive.
 
 ## Filesystem Layout
 
