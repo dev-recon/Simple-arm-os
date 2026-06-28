@@ -1387,8 +1387,8 @@ static void for_each_task(task_t* current)
             //KDEBUG("Waking up task %s from sleep\n", task->name);
             
             if (task->state == TASK_UNINTERRUPTIBLE) {
-                kernel_lifecycle_stats.uninterruptible_timeouts++;
-                sched_trace_record(SCHED_TRACE_UNINTR_TIMEOUT, task);
+                kernel_lifecycle_stats.fs_wait_timeouts++;
+                sched_trace_record(SCHED_TRACE_FS_WAIT_TIMEOUT, task);
             }
             task->state = TASK_READY;
             if (task->type == TASK_TYPE_PROCESS && task->process)

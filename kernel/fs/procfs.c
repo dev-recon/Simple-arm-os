@@ -860,7 +860,7 @@ static void proc_fill_fs_ext2_check(char* buf, size_t cap, size_t* len)
 static const char* proc_sched_event_name(uint32_t event)
 {
     switch (event) {
-        case SCHED_TRACE_UNINTR_TIMEOUT: return "unintr_timeout";
+        case SCHED_TRACE_FS_WAIT_TIMEOUT: return "fs_wait_timeout";
         case SCHED_TRACE_REFUSE_CRITICAL: return "refuse_critical";
         case SCHED_TRACE_REFUSE_BROKEN_LIST: return "refuse_broken_list";
         case SCHED_TRACE_REFUSE_NULL_NEXT: return "refuse_null_next";
@@ -883,18 +883,30 @@ static const char* proc_syscall_name(uint32_t nr)
         case __NR_open: return "open";
         case __NR_close: return "close";
         case __NR_waitpid: return "waitpid";
+        case __NR_link: return "link";
         case __NR_unlink: return "unlink";
         case __NR_execve: return "execve";
+        case __NR_chdir: return "chdir";
         case __NR_lseek: return "lseek";
         case __NR_mount: return "mount";
         case __NR_umount: return "umount";
+        case __NR_access: return "access";
         case __NR_sync: return "sync";
+        case __NR_chmod: return "chmod";
+        case __NR_chown: return "chown";
         case __NR_rename: return "rename";
         case __NR_mkdir: return "mkdir";
         case __NR_rmdir: return "rmdir";
+        case __NR_dup: return "dup";
+        case __NR_dup2: return "dup2";
         case __NR_brk: return "brk";
         case __NR_ioctl: return "ioctl";
+        case __NR_fcntl: return "fcntl";
         case __NR_pipe: return "pipe";
+        case __NR_symlink: return "symlink";
+        case __NR_readlink: return "readlink";
+        case __NR_ftruncate: return "ftruncate";
+        case __NR_statfs: return "statfs";
         case __NR_stat: return "stat";
         case __NR_lstat: return "lstat";
         case __NR_fstat: return "fstat";
@@ -1299,7 +1311,7 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "state_set %u\n", kernel_lifecycle_stats.state_sync_repairs);
     proc_append(buf, cap, len, "signal_wake %u\n", kernel_lifecycle_stats.blocked_signal_wakeups);
     proc_append(buf, cap, len, "tty_stale %u\n", kernel_lifecycle_stats.tty_stale_waiters);
-    proc_append(buf, cap, len, "unintr_timeout %u\n", kernel_lifecycle_stats.uninterruptible_timeouts);
+    proc_append(buf, cap, len, "fs_wait_timeout %u\n", kernel_lifecycle_stats.fs_wait_timeouts);
     proc_append(buf, cap, len, "tty_tx %u %u %u %u\n",
                 tty_tx_enqueued,
                 tty_tx_drained,

@@ -83,7 +83,7 @@ struct sysinfo_response {
     unsigned         state_sync_repairs;
     unsigned         blocked_signal_wakeups;
     unsigned         tty_stale_waiters;
-    unsigned         uninterruptible_timeouts;
+    unsigned         fs_wait_timeouts;
     struct proc_info procs[64];
 };
 

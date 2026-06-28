@@ -1891,7 +1891,7 @@ int sys_sysinfo(struct sysinfo_response *resp)
     local->state_sync_repairs = kernel_lifecycle_stats.state_sync_repairs;
     local->blocked_signal_wakeups = kernel_lifecycle_stats.blocked_signal_wakeups;
     local->tty_stale_waiters = kernel_lifecycle_stats.tty_stale_waiters;
-    local->uninterruptible_timeouts = kernel_lifecycle_stats.uninterruptible_timeouts;
+    local->fs_wait_timeouts = kernel_lifecycle_stats.fs_wait_timeouts;
 
     /* Uptime pour %CPU */
     uint32_t uptime = get_system_ticks();

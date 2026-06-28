@@ -161,7 +161,7 @@ struct sysinfo_response {
     uint32_t        state_sync_repairs;
     uint32_t        blocked_signal_wakeups;
     uint32_t        tty_stale_waiters;
-    uint32_t        uninterruptible_timeouts;
+    uint32_t        fs_wait_timeouts;
     struct proc_info procs[64];
 };
 

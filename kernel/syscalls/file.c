@@ -101,8 +101,6 @@ int sys_write(int fd, const void* buf, size_t count)
     ssize_t result = 0;
     void *kbuf = NULL;
     const void *write_buf = buf;
-    bool is_fifo = false;
-    bool is_char_device = false;
     
     if (count == 0) return 0;
     if (!buf) return -EFAULT;
@@ -113,9 +111,6 @@ int sys_write(int fd, const void* buf, size_t count)
     if (!file) return -EBADF;
     if (!can_write(file)) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
-    is_fifo = file->inode && S_ISFIFO(file->inode->mode);
-    is_char_device = (file->inode == NULL) ||
-                     (file->inode && S_ISCHR(file->inode->mode));
 
     if (IS_KERNEL_ADDR((uint32_t)buf)) {
         write_buf = buf;
@@ -131,17 +126,14 @@ int sys_write(int fd, const void* buf, size_t count)
         write_buf = kbuf;
     }
 
-    if (is_fifo || is_char_device) {
-        result = file->f_op->write(file, write_buf, count);
-    } else {
-        uint32_t irq_flags = disable_interrupts_save();
-        set_critical_section();
-
-        result = file->f_op->write(file, write_buf, count);
-
-        unset_critical_section();
-        restore_interrupts(irq_flags);
-    }
+    /*
+     * Filesystem writes may block on backend locks or VirtIO completion.
+     * Keep IRQs enabled here; each filesystem is responsible for protecting
+     * its own metadata and data paths. Holding the global critical-section
+     * flag across a write makes a legitimate ext2 wait look like a scheduler
+     * violation.
+     */
+    result = file->f_op->write(file, write_buf, count);
 
     if (kbuf) kfree(kbuf);
 
@@ -187,7 +179,6 @@ int sys_ftruncate(int fd, off_t length)
 {
     file_t* file;
     int result;
-    uint32_t irq_flags;
 
     if (length < 0) return -EINVAL;
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
@@ -199,13 +190,12 @@ int sys_ftruncate(int fd, off_t length)
     if (S_ISDIR(file->inode->mode)) return -EISDIR;
     if (!file->f_op || !file->f_op->truncate) return -ENOSYS;
 
-    irq_flags = disable_interrupts_save();
-    set_critical_section();
-
+    /*
+     * Truncate may update filesystem metadata and wait for disk completion.
+     * The filesystem backend owns its locking; the syscall layer must not
+     * wrap it in a global non-schedulable section.
+     */
     result = file->f_op->truncate(file, length);
-
-    unset_critical_section();
-    restore_interrupts(irq_flags);
 
     return result;
 }

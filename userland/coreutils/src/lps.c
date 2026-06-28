@@ -64,7 +64,7 @@ typedef struct proc_counters {
     unsigned state_set;
     unsigned signal_wake;
     unsigned tty_stale;
-    unsigned unintr_timeout;
+    unsigned fs_wait_timeout;
     unsigned tty_tx_enqueued;
     unsigned tty_tx_drained;
     unsigned tty_tx_full_waits;
@@ -242,8 +242,10 @@ static void parse_proc_stat(proc_counters_t *c)
     if (p) parse_uint(p, &c->signal_wake);
     p = line_after_key(buf, "tty_stale ");
     if (p) parse_uint(p, &c->tty_stale);
+    p = line_after_key(buf, "fs_wait_timeout ");
+    if (p) parse_uint(p, &c->fs_wait_timeout);
     p = line_after_key(buf, "unintr_timeout ");
-    if (p) parse_uint(p, &c->unintr_timeout);
+    if (p) parse_uint(p, &c->fs_wait_timeout);
 
     p = line_after_key(buf, "tty_tx ");
     if (p) {
@@ -551,7 +553,7 @@ static void print_event_table(const proc_counters_t *c)
            "signal-wake", c->signal_wake);
     printf("%-16s %8u   %-16s %8u\n",
            "tty-stale", c->tty_stale,
-           "unintr-timeout", c->unintr_timeout);
+           "fs-wait-timeout", c->fs_wait_timeout);
 }
 
 static void print_tty_table(const proc_counters_t *c)

@@ -51,7 +51,7 @@ typedef struct kernel_lifecycle_stats {
     uint32_t state_sync_repairs;
     uint32_t blocked_signal_wakeups;
     uint32_t tty_stale_waiters;
-    uint32_t uninterruptible_timeouts;
+    uint32_t fs_wait_timeouts;
 } kernel_lifecycle_stats_t;
 
 extern volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
@@ -59,7 +59,7 @@ extern volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
 #define SCHED_TRACE_SIZE 64
 
 typedef enum sched_trace_event_type {
-    SCHED_TRACE_UNINTR_TIMEOUT = 1,
+    SCHED_TRACE_FS_WAIT_TIMEOUT = 1,
     SCHED_TRACE_REFUSE_CRITICAL,
     SCHED_TRACE_REFUSE_BROKEN_LIST,
     SCHED_TRACE_REFUSE_NULL_NEXT,
