@@ -257,6 +257,8 @@ void timer_irq_handler(void)
         
         if (current_task && current_task->state == TASK_RUNNING) {
             current_task->total_runtime++;
+            if (current_task->sched_debt < 0xffffffffu)
+                current_task->sched_debt++;
         }
 
         if (current_task && !in_critical_section) {

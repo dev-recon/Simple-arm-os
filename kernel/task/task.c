@@ -66,6 +66,7 @@ static spinlock_t sched_trace_lock = SPINLOCK_INIT("sched_trace");
 static sched_trace_event_t sched_trace[SCHED_TRACE_SIZE];
 static uint32_t sched_trace_seq;
 static uint32_t sched_aging_selections;
+static uint32_t sched_debt_selections;
 //static int yield_count = 0;
 
 /* === NOUVELLES VARIABLES POUR PROCESSUS === */
@@ -187,6 +188,8 @@ void scheduler_get_stats(scheduler_stats_t* stats)
     stats->aging_step_ticks = SCHED_AGING_STEP_TICKS;
     stats->aging_max_bonus = SCHED_AGING_MAX_BONUS;
     stats->aging_selections = sched_aging_selections;
+    stats->debt_decay_ticks = SCHED_DEBT_DECAY_TICKS;
+    stats->debt_selections = sched_debt_selections;
     stats->highest_ready_priority = TASK_PRIORITY_LEVELS;
     stats->lowest_ready_priority = TASK_PRIORITY_LEVELS;
 
@@ -679,6 +682,8 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->context.r0 = 0;
     child->wakeup_time = 0;
     child->quantum_left = QUANTUM_TICKS;
+    child->ready_since_tick = 0;
+    child->sched_debt = 0;
 
     kernel_lifecycle_stats.tasks_created++;
     return child;
@@ -1072,6 +1077,8 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
 
     task->quantum_left = QUANTUM_TICKS;
     task->wakeup_time = 0;
+    task->ready_since_tick = 0;
+    task->sched_debt = 0;
     task->process = NULL;  /* Par defaut, pas de processus associe */
 
     //debug_context_registers(&task->context, "AFTER_setup_task_context");
@@ -1853,14 +1860,34 @@ static uint32_t scheduler_effective_priority_locked(task_t* task, uint32_t now)
     return base - bonus;
 }
 
+static uint32_t scheduler_debt_score_locked(task_t* task, uint32_t now)
+{
+    uint32_t waited;
+    uint32_t decay;
+
+    if (!task)
+        return 0xffffffffu;
+
+    if (task->ready_since_tick == 0 || now < task->ready_since_tick)
+        return task->sched_debt;
+
+    waited = now - task->ready_since_tick;
+    decay = waited / SCHED_DEBT_DECAY_TICKS;
+    if (decay >= task->sched_debt)
+        return 0;
+
+    return task->sched_debt - decay;
+}
+
 /**
- * Priority round-robin scheduler with bounded aging.
+ * Priority round-robin scheduler with bounded aging and CPU debt fairness.
  *
  * Lower numeric priorities still mean higher scheduling preference, and tasks
- * at the same base priority are served FIFO/RR. To avoid starvation, the picker
- * compares an effective priority derived from how long the head task of each
- * priority queue has waited. The visible nice/priority does not change; only
- * this scheduling decision receives a temporary aging bonus.
+ * at the same base priority remain in FIFO queues. Selection is Linux-like in
+ * spirit: we keep the fixed priority model, but also account for how much CPU
+ * each runnable task has recently consumed. CPU-bound tasks build debt on timer
+ * ticks; waiting tasks see that debt decay while queued, so they get a chance
+ * to run without permanently rewriting their visible priority.
  */
 static task_t* schedule_next_task(void)
 {
@@ -1868,36 +1895,48 @@ static task_t* schedule_next_task(void)
     task_t* task;
     task_t* best;
     uint32_t best_prio;
+    uint32_t best_debt;
     uint32_t best_waited;
     uint32_t now;
     uint32_t scanned = 0;
+    bool best_was_head;
 
     spin_lock_irqsave(&task_lock, &flags);
 
     while (ready_queue.nr_running > 0 && scanned <= MAX_TASKS) {
         best = NULL;
         best_prio = TASK_PRIORITY_LEVELS;
+        best_debt = 0xffffffffu;
         best_waited = 0;
+        best_was_head = true;
         now = get_system_ticks();
 
         for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
             task_t* candidate = ready_queue.head[prio];
-            uint32_t effective;
-            uint32_t waited;
 
-            if (!candidate)
-                continue;
+            while (candidate) {
+                task_t* next_candidate = candidate->rq_next;
+                uint32_t effective;
+                uint32_t debt;
+                uint32_t waited;
 
-            effective = scheduler_effective_priority_locked(candidate, now);
-            waited = candidate->ready_since_tick && now >= candidate->ready_since_tick ?
-                     now - candidate->ready_since_tick : 0;
+                effective = scheduler_effective_priority_locked(candidate, now);
+                debt = scheduler_debt_score_locked(candidate, now);
+                waited = candidate->ready_since_tick && now >= candidate->ready_since_tick ?
+                         now - candidate->ready_since_tick : 0;
 
-            if (!best ||
-                effective < best_prio ||
-                (effective == best_prio && waited > best_waited)) {
-                best = candidate;
-                best_prio = effective;
-                best_waited = waited;
+                if (!best ||
+                    effective < best_prio ||
+                    (effective == best_prio && debt < best_debt) ||
+                    (effective == best_prio && debt == best_debt && waited > best_waited)) {
+                    best = candidate;
+                    best_prio = effective;
+                    best_debt = debt;
+                    best_waited = waited;
+                    best_was_head = (candidate == ready_queue.head[prio]);
+                }
+
+                candidate = next_candidate;
             }
         }
 
@@ -1909,8 +1948,11 @@ static task_t* schedule_next_task(void)
         scanned++;
 
         if (task_is_schedulable(task)) {
+            task->sched_debt = best_debt;
             if (best_prio < task_runqueue_priority(task))
                 sched_aging_selections++;
+            if (!best_was_head)
+                sched_debt_selections++;
             spin_unlock_irqrestore(&task_lock, flags);
             return task;
         }

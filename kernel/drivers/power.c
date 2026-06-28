@@ -23,44 +23,182 @@
 #include <kernel/process.h>
 #include <kernel/virtio_block.h>
 #include <kernel/vfs.h>
+#include <kernel/signal.h>
+#include <kernel/timer.h>
 #include <asm/arm.h>
 
 #define PSCI_0_2_FN_SYSTEM_OFF 0x84000008u
+#define SHUTDOWN_TERM_GRACE_MS 200
+#define SHUTDOWN_KILL_GRACE_MS 100
 
 static volatile bool shutdown_in_progress = false;
 
-static void shutdown_processes(void)
+static bool shutdown_process_target(task_t *task)
+{
+    if (!task || task == current_task)
+        return false;
+    if (task->type != TASK_TYPE_PROCESS || !task->process)
+        return false;
+    if (task->process->pid == 1)
+        return false;
+    if (task->state == TASK_ZOMBIE || task->state == TASK_TERMINATED)
+        return false;
+
+    return true;
+}
+
+static bool shutdown_is_current_ancestor(task_t *task)
+{
+    task_t *parent;
+    unsigned depth = 0;
+
+    if (!task || !current_task ||
+        current_task->type != TASK_TYPE_PROCESS ||
+        !current_task->process)
+        return false;
+
+    parent = current_task->process->parent;
+    while (parent && depth++ < MAX_TASKS) {
+        if (parent == task)
+            return true;
+        if (parent->type != TASK_TYPE_PROCESS || !parent->process)
+            break;
+        parent = parent->process->parent;
+    }
+
+    return false;
+}
+
+static bool shutdown_signal_target(task_t *task)
+{
+    if (!shutdown_process_target(task))
+        return false;
+
+    /*
+     * Keep the login/init chain that launched shutdown alive until PSCI
+     * SYSTEM_OFF. Otherwise userland init observes the shell exit and starts a
+     * replacement shell during the shutdown grace period.
+     */
+    if (shutdown_is_current_ancestor(task))
+        return false;
+
+    return true;
+}
+
+static unsigned shutdown_count_live_targets(void)
+{
+    task_t *task = task_list_head;
+    unsigned count = 0;
+    unsigned live = 0;
+
+    if (!task)
+        return 0;
+
+    do {
+        if (shutdown_signal_target(task))
+            live++;
+        task = task->next;
+        count++;
+    } while (task && task != task_list_head && count < MAX_TASKS);
+
+    return live;
+}
+
+static unsigned shutdown_signal_targets(int sig)
+{
+    task_t *task = task_list_head;
+    unsigned count = 0;
+    unsigned delivered = 0;
+
+    if (!task)
+        return 0;
+
+    do {
+        task_t *next = task->next;
+
+        if (shutdown_signal_target(task) && send_signal(task, sig) == 0)
+            delivered++;
+        task = next;
+        count++;
+    } while (task && task != task_list_head && count < MAX_TASKS);
+
+    return delivered;
+}
+
+static void shutdown_wait_for_targets(const char *phase, uint32_t grace_ms)
+{
+    uint32_t deadline = get_system_ticks() + (grace_ms * TIMER_FREQ + 999) / 1000;
+    unsigned live;
+
+    do {
+        live = shutdown_count_live_targets();
+        if (live == 0) {
+            kprintf("Shutdown: %s complete\n", phase);
+            return;
+        }
+        task_sleep_ms(10);
+    } while (get_system_ticks() < deadline);
+
+    kprintf("Shutdown: %s timeout, %u process(es) still alive\n",
+            phase, live);
+}
+
+static unsigned shutdown_force_terminate_targets(void)
 {
     task_t *task = task_list_head;
     unsigned count = 0;
     unsigned stopped = 0;
 
     if (!task)
-        return;
-
-    kprintf("Shutdown: stopping user processes\n");
+        return 0;
 
     do {
         task_t *next = task->next;
 
-        if (task->type == TASK_TYPE_PROCESS && task->process) {
-            if (task != current_task) {
-                close_all_process_files(task);
-                task->state = TASK_TERMINATED;
-                task->process->state = (proc_state_t)PROC_DEAD;
-                stopped++;
-            }
+        if (shutdown_signal_target(task)) {
+            unsigned long flags;
+
+            close_all_process_files(task);
+            remove_from_ready_queue(task);
+
+            spin_lock_irqsave(&task_lock, &flags);
+            task->state = TASK_TERMINATED;
+            task->process->state = (proc_state_t)PROC_DEAD;
+            spin_unlock_irqrestore(&task_lock, flags);
+            stopped++;
         }
 
         task = next;
         count++;
     } while (task && task != task_list_head && count < MAX_TASKS);
 
+    return stopped;
+}
+
+static void shutdown_processes(void)
+{
+    unsigned delivered;
+    unsigned forced;
+
+    kprintf("Shutdown: sending SIGTERM to user processes\n");
+    delivered = shutdown_signal_targets(SIGTERM);
+    kprintf("Shutdown: SIGTERM delivered to %u process(es)\n", delivered);
+    shutdown_wait_for_targets("SIGTERM grace", SHUTDOWN_TERM_GRACE_MS);
+
+    if (shutdown_count_live_targets() > 0) {
+        kprintf("Shutdown: sending SIGKILL to remaining processes\n");
+        delivered = shutdown_signal_targets(SIGKILL);
+        kprintf("Shutdown: SIGKILL delivered to %u process(es)\n", delivered);
+        shutdown_wait_for_targets("SIGKILL grace", SHUTDOWN_KILL_GRACE_MS);
+    }
+
+    forced = shutdown_force_terminate_targets();
+    if (forced)
+        kprintf("Shutdown: force-terminated %u process(es)\n", forced);
+
     if (current_task && current_task->type == TASK_TYPE_PROCESS && current_task->process) {
         close_all_process_files(current_task);
     }
-
-    kprintf("Shutdown: stopped %u user process(es)\n", stopped);
 }
 
 static void shutdown_drivers(void)
