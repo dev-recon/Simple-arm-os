@@ -31,6 +31,8 @@
 #include <unistd.h>
 #include <arm_os_abi.h>
 
+extern char *realpath(const char *path, char *resolved_path);
+
 #define COLOR_GREEN "\033[32m"
 #define COLOR_RED   "\033[31m"
 #define COLOR_RESET "\033[0m"
@@ -607,6 +609,8 @@ static void test_proc_net_syscalls(void)
 static void test_posix_compat_syscalls(void)
 {
     const char *path = tmp_path("compat-syscalls.txt");
+    const char *rename_src = tmp_path("compat-rename-src.txt");
+    const char *rename_dst = tmp_path("compat-rename-dst.txt");
     struct stat st;
     struct timeval tv;
     struct timezone tz;
@@ -632,10 +636,17 @@ static void test_posix_compat_syscalls(void)
     sigset_t oldmask;
     sigset_t pending;
     char *map;
+    char fixed_realpath[128];
+    char cwd_before[128];
+    char fdopen_buf[16];
+    char *allocated_realpath;
+    FILE *compat_fp;
     pid_t child;
     int child_status;
 
     unlink(path);
+    unlink(rename_src);
+    unlink(rename_dst);
 
     fd = creat(path, 0644);
     if (expect(fd >= 0, "creat creates file", fd) >= 0) {
@@ -645,6 +656,42 @@ static void test_posix_compat_syscalls(void)
 
     expect(lstat(path, &st) == 0, "lstat existing file", 0);
     expect(S_ISREG(st.st_mode), "lstat reports regular file", st.st_mode);
+    expect(realpath(path, fixed_realpath) == fixed_realpath &&
+           fixed_realpath[0] == '/', "realpath resolves absolute file", errno);
+
+    if (expect(getcwd(cwd_before, sizeof(cwd_before)) != NULL,
+               "getcwd before relative realpath", errno) == 0 &&
+        expect(chdir(systest_tmp_root) == 0, "chdir for relative realpath", errno) == 0) {
+        allocated_realpath = realpath("compat-syscalls.txt", NULL);
+        expect(allocated_realpath != NULL &&
+               strcmp(allocated_realpath, fixed_realpath) == 0,
+               "realpath allocates relative canonical path", errno);
+        free(allocated_realpath);
+        expect(chdir(cwd_before) == 0, "chdir restores cwd after realpath", errno);
+    }
+
+    fd = open(path, O_RDONLY, 0);
+    if (expect(fd >= 0, "fdopen source open", fd) >= 0) {
+        compat_fp = fdopen(fd, "r");
+        if (expect(compat_fp != NULL, "fdopen wraps descriptor", errno) == 0) {
+            memset(fdopen_buf, 0, sizeof(fdopen_buf));
+            expect(fread(fdopen_buf, 1, 6, compat_fp) == 6,
+                   "fdopen fread reads data", ferror(compat_fp));
+            expect(strcmp(fdopen_buf, "compat") == 0,
+                   "fdopen preserves file contents", fdopen_buf[0]);
+            expect(fclose(compat_fp) == 0, "fdopen fclose succeeds", errno);
+        } else {
+            close(fd);
+        }
+    }
+
+    fd = creat(rename_src, 0644);
+    if (expect(fd >= 0, "rename source create", fd) >= 0) {
+        close(fd);
+        expect(rename(rename_src, rename_dst) == 0, "rename moves file", errno);
+        expect(access(rename_dst, F_OK) == 0, "rename destination exists", errno);
+        expect(remove(rename_dst) == 0, "remove unlinks renamed file", errno);
+    }
 
     fd = open(path, O_RDWR, 0);
     if (expect(fd >= 0, "fcntl test open", fd) >= 0) {

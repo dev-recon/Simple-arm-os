@@ -16,6 +16,8 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -34,6 +36,10 @@
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
+#endif
+
+#ifndef PATH_MAX
+#define PATH_MAX 1024
 #endif
 
 extern long sys_read(int fd, void *buf, unsigned long count);
@@ -257,6 +263,74 @@ static int ret_errno(long ret)
         return -1;
     }
     return (int)ret;
+}
+
+static int append_path_component(char *dst, size_t dst_size,
+                                 const char *component, size_t len)
+{
+    size_t cur;
+
+    if (len == 0 || (len == 1 && component[0] == '.'))
+        return 0;
+
+    if (len == 2 && component[0] == '.' && component[1] == '.') {
+        char *slash;
+        cur = strlen(dst);
+        if (cur <= 1) {
+            dst[0] = '/';
+            dst[1] = '\0';
+            return 0;
+        }
+        slash = strrchr(dst, '/');
+        if (!slash || slash == dst)
+            dst[1] = '\0';
+        else
+            *slash = '\0';
+        return 0;
+    }
+
+    cur = strlen(dst);
+    if (cur > 1) {
+        if (cur + 1 >= dst_size)
+            return -1;
+        dst[cur++] = '/';
+        dst[cur] = '\0';
+    }
+
+    if (cur + len >= dst_size)
+        return -1;
+
+    memcpy(dst + cur, component, len);
+    dst[cur + len] = '\0';
+    return 0;
+}
+
+static int normalize_absolute_path(const char *path, char *dst, size_t dst_size)
+{
+    const char *p = path;
+
+    if (!path || path[0] != '/' || dst_size < 2)
+        return -1;
+
+    dst[0] = '/';
+    dst[1] = '\0';
+
+    while (*p) {
+        const char *start;
+        size_t len;
+
+        while (*p == '/')
+            p++;
+        start = p;
+        while (*p && *p != '/')
+            p++;
+        len = (size_t)(p - start);
+
+        if (append_path_component(dst, dst_size, start, len) < 0)
+            return -1;
+    }
+
+    return 0;
 }
 
 static int signal_newlib_to_os(int sig)
@@ -641,6 +715,60 @@ char *getcwd(char *buf, size_t size)
         return NULL;
     }
     return buf;
+}
+
+char *realpath(const char *path, char *resolved_path)
+{
+    char input[PATH_MAX];
+    char normalized[PATH_MAX];
+    char cwd[PATH_MAX];
+    char *out = resolved_path;
+    struct stat st;
+
+    if (!path || path[0] == '\0') {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    if (path[0] == '/') {
+        if (strlen(path) >= sizeof(input)) {
+            errno = ENAMETOOLONG;
+            return NULL;
+        }
+        strcpy(input, path);
+    } else {
+        if (!getcwd(cwd, sizeof(cwd)))
+            return NULL;
+        if (snprintf(input, sizeof(input), "%s/%s", cwd, path) >= (int)sizeof(input)) {
+            errno = ENAMETOOLONG;
+            return NULL;
+        }
+    }
+
+    if (normalize_absolute_path(input, normalized, sizeof(normalized)) < 0) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+
+    /*
+     * Minimal POSIX realpath semantics for the ArmOS toolchain: the final path
+     * must exist, and "." / ".." are collapsed. Symlink expansion can be added
+     * later when a port needs it; TCC mostly uses this for #pragma once path
+     * identity and accepts already-canonical absolute paths.
+     */
+    if (stat(normalized, &st) < 0)
+        return NULL;
+
+    if (!out) {
+        out = malloc(PATH_MAX);
+        if (!out) {
+            errno = ENOMEM;
+            return NULL;
+        }
+    }
+
+    strcpy(out, normalized);
+    return out;
 }
 
 void *_sbrk(ptrdiff_t incr)

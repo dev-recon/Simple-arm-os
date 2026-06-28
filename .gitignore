@@ -26,6 +26,7 @@ userfs/sbin/
 userfs/usr/bin/
 userfs/legacy/bin-libc/
 userfs/opt/*/bin/*
+userfs/opt/tcc/
 userland/*/*.o
 userland/nl-*
 userland/legacy/homegrown-libc/**/*.o
@@ -41,6 +42,7 @@ userland/legacy/homegrown-libc/**/ansy_tty
 
 # Logs and local editor files
 *.log
+output/
 .DS_Store
 **/.DS_Store
 .idea/

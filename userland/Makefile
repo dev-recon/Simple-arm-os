@@ -46,9 +46,10 @@ PROGRAMS := $(patsubst programs/%/,%,$(PROGRAM_DIRS))
 EXTERNAL_DIRS := $(sort $(dir $(wildcard opt/*/src/*.c)))
 EXTERNALS := $(patsubst opt/%/src/,%,$(EXTERNAL_DIRS))
 
+EXTERNALS := $(filter-out tcc,$(EXTERNALS))
+
 ifneq ($(ENABLE_TCC),1)
 PROGRAMS := $(filter-out tcc,$(PROGRAMS))
-EXTERNALS := $(filter-out tcc,$(EXTERNALS))
 endif
 
 PROGRAM_TARGETS := $(PROGRAMS:%=nl-%)
