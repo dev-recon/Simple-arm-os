@@ -34,6 +34,7 @@ struct file;
 #define MAX_SIGNALS             32
 #define PROC_CMDLINE_MAX        512
 #define PROC_ENVIRON_MAX        512
+#define TASK_PRIORITY_LEVELS    256
 
 #define QUANTUM_TICKS           10
 
@@ -93,6 +94,18 @@ typedef struct task task_t;
 void sched_trace_record(sched_trace_event_type_t event, task_t* task);
 void sched_trace_snapshot(sched_trace_event_t* out, uint32_t max,
                           uint32_t* total, uint32_t* written);
+
+typedef struct scheduler_stats {
+    uint32_t nr_running;
+    uint32_t nonempty_queues;
+    uint32_t current_tid;
+    uint32_t current_pid;
+    uint32_t current_priority;
+    char current_name[TASK_NAME_MAX];
+    uint32_t priority_counts[TASK_PRIORITY_LEVELS];
+} scheduler_stats_t;
+
+void scheduler_get_stats(scheduler_stats_t* stats);
 
 /* Forward declarations for structures */
 typedef struct inode inode_t;
@@ -361,6 +374,7 @@ typedef struct task {
     /* Scheduler runqueue: only TASK_READY tasks waiting for CPU time. */
     struct task* rq_next;
     struct task* rq_prev;
+    uint32_t rq_priority;
     
     /* Statistiques */
     uint64_t created_time;                  /* Timestamp de creation */

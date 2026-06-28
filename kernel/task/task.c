@@ -41,8 +41,9 @@ _Static_assert(sizeof(task_context_t) == 168,
 task_t* current_task = NULL;
 task_t* task_list_head = NULL;
 typedef struct runqueue {
-    task_t* head;
-    task_t* tail;
+    task_t* head[TASK_PRIORITY_LEVELS];
+    task_t* tail[TASK_PRIORITY_LEVELS];
+    uint32_t count[TASK_PRIORITY_LEVELS];
     uint32_t nr_running;
 } runqueue_t;
 
@@ -78,6 +79,7 @@ static bool task_is_schedulable(task_t* task);
 static bool runqueue_contains_locked(task_t* task);
 static void runqueue_enqueue_tail_locked(task_t* task);
 static void runqueue_remove_locked(task_t* task);
+static void runqueue_clear_locked(void);
 static void task_make_ready_locked(task_t* task);
 void add_task_to_list(task_t* task);
 void remove_task_from_list(task_t* task);
@@ -162,6 +164,36 @@ void sched_trace_snapshot(sched_trace_event_t* out, uint32_t max,
         *written = count;
 }
 
+void scheduler_get_stats(scheduler_stats_t* stats)
+{
+    unsigned long flags;
+    process_t* proc;
+
+    if (!stats)
+        return;
+
+    memset(stats, 0, sizeof(*stats));
+
+    spin_lock_irqsave(&task_lock, &flags);
+
+    stats->nr_running = ready_queue.nr_running;
+    for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
+        stats->priority_counts[prio] = ready_queue.count[prio];
+        if (ready_queue.count[prio] > 0)
+            stats->nonempty_queues++;
+    }
+
+    if (current_task) {
+        proc = (current_task->type == TASK_TYPE_PROCESS) ? current_task->process : NULL;
+        stats->current_tid = current_task->task_id;
+        stats->current_pid = proc ? (uint32_t)proc->pid : 0;
+        stats->current_priority = current_task->priority;
+        strncpy(stats->current_name, current_task->name, TASK_NAME_MAX - 1);
+    }
+
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
 void debug_context_switch_entry(void);
 void debug_context_switch_middle(void);
 void debug_context_switch_first_exec(void);
@@ -244,48 +276,79 @@ static bool task_is_schedulable(task_t* task)
 
 static bool runqueue_contains_locked(task_t* task)
 {
-    if (!task)
-        return false;
+    return task && task->rq_priority < TASK_PRIORITY_LEVELS;
+}
 
-    return ready_queue.head == task || task->rq_next || task->rq_prev;
+static uint32_t task_runqueue_priority(task_t* task)
+{
+    if (!task)
+        return TASK_PRIORITY_LEVELS - 1;
+
+    if (task->priority >= TASK_PRIORITY_LEVELS)
+        return TASK_PRIORITY_LEVELS - 1;
+
+    return task->priority;
 }
 
 static void runqueue_enqueue_tail_locked(task_t* task)
 {
+    uint32_t prio;
+
     if (!task || task == idle_task || runqueue_contains_locked(task))
         return;
 
+    prio = task_runqueue_priority(task);
     task->rq_next = NULL;
-    task->rq_prev = ready_queue.tail;
+    task->rq_prev = ready_queue.tail[prio];
+    task->rq_priority = prio;
 
-    if (ready_queue.tail)
-        ready_queue.tail->rq_next = task;
+    if (ready_queue.tail[prio])
+        ready_queue.tail[prio]->rq_next = task;
     else
-        ready_queue.head = task;
+        ready_queue.head[prio] = task;
 
-    ready_queue.tail = task;
+    ready_queue.tail[prio] = task;
+    ready_queue.count[prio]++;
     ready_queue.nr_running++;
 }
 
 static void runqueue_remove_locked(task_t* task)
 {
+    uint32_t prio;
+
     if (!task || !runqueue_contains_locked(task))
         return;
+
+    prio = task->rq_priority;
+    if (prio >= TASK_PRIORITY_LEVELS) {
+        task->rq_next = NULL;
+        task->rq_prev = NULL;
+        task->rq_priority = TASK_PRIORITY_LEVELS;
+        return;
+    }
 
     if (task->rq_prev)
         task->rq_prev->rq_next = task->rq_next;
     else
-        ready_queue.head = task->rq_next;
+        ready_queue.head[prio] = task->rq_next;
 
     if (task->rq_next)
         task->rq_next->rq_prev = task->rq_prev;
     else
-        ready_queue.tail = task->rq_prev;
+        ready_queue.tail[prio] = task->rq_prev;
 
     task->rq_next = NULL;
     task->rq_prev = NULL;
+    task->rq_priority = TASK_PRIORITY_LEVELS;
+    if (ready_queue.count[prio] > 0)
+        ready_queue.count[prio]--;
     if (ready_queue.nr_running > 0)
         ready_queue.nr_running--;
+}
+
+static void runqueue_clear_locked(void)
+{
+    memset(&ready_queue, 0, sizeof(ready_queue));
 }
 
 static void task_make_ready_locked(task_t* task)
@@ -587,6 +650,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->prev = NULL;
     child->rq_next = NULL;
     child->rq_prev = NULL;
+    child->rq_priority = TASK_PRIORITY_LEVELS;
     
     /* Statistiques */
     child->created_time = get_current_time();
@@ -700,9 +764,7 @@ void init_task_system(void)
     /* Initialiser les variables globales */
     current_task = NULL;
     task_list_head = NULL;
-    ready_queue.head = NULL;
-    ready_queue.tail = NULL;
-    ready_queue.nr_running = 0;
+    runqueue_clear_locked();
     next_task_id = 1;
     task_count = 0;
     
@@ -743,9 +805,7 @@ void cleanup_task_system(void)
     /* Reinitialiser les variables */
     current_task = NULL;
     task_list_head = NULL;
-    ready_queue.head = NULL;
-    ready_queue.tail = NULL;
-    ready_queue.nr_running = 0;
+    runqueue_clear_locked();
     next_task_id = 1;
     task_count = 0;
     scheduler_initialized = false;
@@ -970,6 +1030,7 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     task->prev = NULL;
     task->rq_next = NULL;
     task->rq_prev = NULL;
+    task->rq_priority = TASK_PRIORITY_LEVELS;
     
     /* Statistiques */
     task->created_time = 0;
@@ -1207,25 +1268,28 @@ void verify_ready_queue_integrity(void)
 
     spin_lock_irqsave(&task_lock, &flags);
 
-    task = ready_queue.head;
-    if (!task) {
+    if (ready_queue.nr_running == 0) {
         KDEBUG("Ready queue is empty\n");
         spin_unlock_irqrestore(&task_lock, flags);
         return;
     }
 
-    while (task) {
-        count++;
-        KDEBUG("  [%d] %s (ID=%u): state=%d, rq_next=0x%08X, rq_prev=0x%08X\n",
-               count, task->name, task->task_id, task->state,
-               (uint32_t)task->rq_next, (uint32_t)task->rq_prev);
+    for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
+        task = ready_queue.head[prio];
+        while (task) {
+            count++;
+            KDEBUG("  [%d] p=%u %s (ID=%u): state=%d, rq_next=0x%08X, rq_prev=0x%08X\n",
+                   count, prio, task->name, task->task_id, task->state,
+                   (uint32_t)task->rq_next, (uint32_t)task->rq_prev);
 
-        if (count > MAX_TASKS) {
-            KERROR("Ready queue seems corrupted (too many tasks)\n");
-            break;
+            if (count > MAX_TASKS) {
+                KERROR("Ready queue seems corrupted (too many tasks)\n");
+                spin_unlock_irqrestore(&task_lock, flags);
+                return;
+            }
+
+            task = task->rq_next;
         }
-
-        task = task->rq_next;
     }
 
     KDEBUG("Total tasks in ready queue: %d (tracked=%u)\n",
@@ -1889,8 +1953,18 @@ static task_t* schedule_next_task(void)
 
     spin_lock_irqsave(&task_lock, &flags);
 
-    while (ready_queue.head && scanned <= MAX_TASKS) {
-        task = ready_queue.head;
+    while (ready_queue.nr_running > 0 && scanned <= MAX_TASKS) {
+        task = NULL;
+        for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
+            if (ready_queue.head[prio]) {
+                task = ready_queue.head[prio];
+                break;
+            }
+        }
+
+        if (!task)
+            break;
+
         runqueue_remove_locked(task);
         scanned++;
 
@@ -1911,7 +1985,7 @@ static task_t* schedule_next_task(void)
     if (scanned > MAX_TASKS) {
         KERROR("schedule_next_task: runqueue loop protection triggered\n");
         kernel_lifecycle_stats.scheduler_refused++;
-        sched_trace_record(SCHED_TRACE_REFUSE_LOOP, ready_queue.head);
+        sched_trace_record(SCHED_TRACE_REFUSE_LOOP, NULL);
     }
 
     spin_unlock_irqrestore(&task_lock, flags);
@@ -1934,6 +2008,7 @@ void add_task_to_list(task_t* task)
 
     task->rq_next = NULL;
     task->rq_prev = NULL;
+    task->rq_priority = TASK_PRIORITY_LEVELS;
 
     if (!task_list_head) {
         /* Premiere tache */
@@ -2083,11 +2158,20 @@ task_t* task_find_by_name(const char* name)
 void task_set_priority(task_t* task, uint32_t priority)
 {
     unsigned long flags;
+    bool queued;
 
     if (!task) return;
     
     spin_lock_irqsave(&task_lock, &flags);
+    queued = runqueue_contains_locked(task);
+    if (queued)
+        runqueue_remove_locked(task);
+
     task->priority = priority;
+
+    if (queued && task->state == TASK_READY)
+        runqueue_enqueue_tail_locked(task);
+
     spin_unlock_irqrestore(&task_lock, flags);
     
     /* Si on change la priorite de la tache courante, re-scheduler */

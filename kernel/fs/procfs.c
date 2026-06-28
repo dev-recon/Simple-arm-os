@@ -66,6 +66,7 @@ static file_operations_t procfs_dir_ops;
 #define PROC_INO_FS_EXT2_STATS 19u
 #define PROC_INO_FS_EXT2_CHECK 20u
 #define PROC_INO_SCHED_TRACE 21u
+#define PROC_INO_SCHED      22u
 #define PROC_PID_BASE       100000u
 #define PROC_PID_STRIDE     512u
 #define PROC_PID_DIR        0u
@@ -376,6 +377,8 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_NET_DIR, S_IFDIR | 0555, 0);
         if (strcmp(name, "fs") == 0)
             return proc_make_inode(PROC_INO_FS_DIR, S_IFDIR | 0555, 0);
+        if (strcmp(name, "sched") == 0)
+            return proc_make_inode(PROC_INO_SCHED, S_IFREG | 0444, 0);
         if (strcmp(name, "sched_trace") == 0)
             return proc_make_inode(PROC_INO_SCHED_TRACE, S_IFREG | 0444, 0);
         if (strcmp(name, "self") == 0)
@@ -950,6 +953,29 @@ static void proc_fill_sched_trace(char* buf, size_t cap, size_t* len)
                     e->current_name);
     }
     proc_append(buf, cap, len, "total %u shown %u\n", total, written);
+}
+
+static void proc_fill_sched(char* buf, size_t cap, size_t* len)
+{
+    scheduler_stats_t stats;
+
+    scheduler_get_stats(&stats);
+
+    proc_append(buf, cap, len, "scheduler priority-round-robin\n");
+    proc_append(buf, cap, len, "nr_running %u\n", stats.nr_running);
+    proc_append(buf, cap, len, "nonempty_queues %u\n", stats.nonempty_queues);
+    proc_append(buf, cap, len, "current tid=%u pid=%u prio=%u name=%s\n",
+                stats.current_tid,
+                stats.current_pid,
+                stats.current_priority,
+                stats.current_name[0] ? stats.current_name : "-");
+    proc_append(buf, cap, len, "priority count\n");
+
+    for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
+        if (stats.priority_counts[prio] == 0)
+            continue;
+        proc_append(buf, cap, len, "%u %u\n", prio, stats.priority_counts[prio]);
+    }
 }
 
 typedef struct proc_flag_name {
@@ -1540,6 +1566,7 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_NET_TCP: proc_fill_net_tcp(buf, cap, len); return 0;
         case PROC_INO_FS_EXT2_STATS: proc_fill_fs_ext2(buf, cap, len); return 0;
         case PROC_INO_FS_EXT2_CHECK: proc_fill_fs_ext2_check(buf, cap, len); return 0;
+        case PROC_INO_SCHED: proc_fill_sched(buf, cap, len); return 0;
         case PROC_INO_SCHED_TRACE: proc_fill_sched_trace(buf, cap, len); return 0;
         default: break;
     }
@@ -1687,6 +1714,7 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         { "tty",     PROC_INO_TTY,    DT_REG },
         { "net",     PROC_INO_NET_DIR, DT_DIR },
         { "fs",      PROC_INO_FS_DIR, DT_DIR },
+        { "sched",   PROC_INO_SCHED, DT_REG },
         { "sched_trace", PROC_INO_SCHED_TRACE, DT_REG },
         { "self",    PROC_INO_SELF,    DT_LNK },
     };
