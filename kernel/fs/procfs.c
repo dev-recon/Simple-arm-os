@@ -955,6 +955,17 @@ static void proc_fill_sched_trace(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "total %u shown %u\n", total, written);
 }
 
+static const char* proc_sched_pick_reason(uint32_t reason)
+{
+    switch (reason) {
+        case SCHED_PICK_PRIORITY: return "priority";
+        case SCHED_PICK_AGING:    return "aging";
+        case SCHED_PICK_DEBT:     return "debt";
+        case SCHED_PICK_WAIT:     return "wait";
+        default:                  return "none";
+    }
+}
+
 static void proc_fill_sched(char* buf, size_t cap, size_t* len)
 {
     scheduler_stats_t stats;
@@ -977,6 +988,18 @@ static void proc_fill_sched(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "aging_selections %u\n", stats.aging_selections);
     proc_append(buf, cap, len, "debt_decay_ticks %u\n", stats.debt_decay_ticks);
     proc_append(buf, cap, len, "debt_selections %u\n", stats.debt_selections);
+    proc_append(buf, cap, len, "last_pick reason=%s tid=%u pid=%u prio=%u effective=%u debt=%u waited=%u scanned=%u\n",
+                proc_sched_pick_reason(stats.last_pick_reason),
+                stats.last_pick_tid,
+                stats.last_pick_pid,
+                stats.last_pick_priority,
+                stats.last_pick_effective_priority,
+                stats.last_pick_debt,
+                stats.last_pick_waited_ticks,
+                stats.last_scan_tasks);
+    proc_append(buf, cap, len, "ready_debt max=%u avg=%u\n",
+                stats.max_ready_debt,
+                stats.avg_ready_debt);
     proc_append(buf, cap, len, "nr_running %u\n", stats.nr_running);
     proc_append(buf, cap, len, "nonempty_queues %u\n", stats.nonempty_queues);
     if (stats.highest_ready_priority < TASK_PRIORITY_LEVELS) {
@@ -1449,6 +1472,28 @@ static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
 
     proc = proc_task_process(task);
     vm = proc ? proc->vm : NULL;
+    uint32_t now = get_system_ticks();
+    uint32_t ready_wait = 0;
+    uint32_t effective_prio = task->priority;
+    uint32_t debt_score = task->sched_debt;
+
+    if (task->ready_since_tick && now >= task->ready_since_tick) {
+        uint32_t decay;
+
+        ready_wait = now - task->ready_since_tick;
+        decay = ready_wait / SCHED_DEBT_DECAY_TICKS;
+        debt_score = decay >= task->sched_debt ? 0 : task->sched_debt - decay;
+
+        if (task->priority < TASK_PRIORITY_LEVELS) {
+            uint32_t bonus = ready_wait / SCHED_AGING_STEP_TICKS;
+            if (bonus > SCHED_AGING_MAX_BONUS)
+                bonus = SCHED_AGING_MAX_BONUS;
+            if (bonus > effective_prio)
+                bonus = effective_prio;
+            effective_prio -= bonus;
+        }
+    }
+
     proc_append(buf, cap, len, "Name:\t%s\n", task->name);
     proc_append(buf, cap, len, "State:\t%c (%s)\n",
                 proc_task_state_char(task->state),
@@ -1463,6 +1508,10 @@ static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "Uid:\t%u\n", proc ? proc->uid : 0);
     proc_append(buf, cap, len, "Gid:\t%u\n", proc ? proc->gid : 0);
     proc_append(buf, cap, len, "Priority:\t%u\n", task->priority);
+    proc_append(buf, cap, len, "EffectivePriority:\t%u\n", effective_prio);
+    proc_append(buf, cap, len, "SchedDebt:\t%u\n", task->sched_debt);
+    proc_append(buf, cap, len, "DebtScore:\t%u\n", debt_score);
+    proc_append(buf, cap, len, "ReadyWaitTicks:\t%u\n", ready_wait);
     proc_append(buf, cap, len, "KStack:\t%u kB\n", KERNEL_TASK_STACK_SIZE / 1024);
     proc_append(buf, cap, len, "Heap:\t%u kB\n",
                 (vm && vm->brk >= vm->heap_start) ? ((vm->brk - vm->heap_start) / 1024u) : 0);

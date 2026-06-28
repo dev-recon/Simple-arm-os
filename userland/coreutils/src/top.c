@@ -41,6 +41,7 @@ typedef struct top_task {
     unsigned runtime_ticks;
     unsigned cpu_pct_x10;
     unsigned priority;
+    unsigned debt_score;
     unsigned ctx;
     unsigned pf;
     unsigned rss_kb;
@@ -445,6 +446,10 @@ static void enrich_from_status(top_task_t *task)
     if (p)
         parse_uint(p, &task->priority);
 
+    p = line_after_key(buf, "DebtScore:");
+    if (p)
+        parse_uint(p, &task->debt_score);
+
     p = line_after_key(buf, "State:");
     if (p) {
         const char *open = strchr(p, '(');
@@ -669,8 +674,8 @@ static void render_top(unsigned delay_sec, int iteration)
                    pct_x10 % 10u,
                    count);
 
-    top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %3s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
-                   "PID", "TTY", "STATE", "PRI", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
+    top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %3s %5s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
+                   "PID", "TTY", "STATE", "PRI", "DEBT", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
     top_buf_append(&frame, C_DIM "--------------------------------------------------------------------------" C_RESET "\033[0K\r\n",
                    (int)strlen(C_DIM "--------------------------------------------------------------------------" C_RESET "\033[0K\r\n"));
 
@@ -683,12 +688,13 @@ static void render_top(unsigned delay_sec, int iteration)
         format_count(top_tasks[i].ctx, ctxbuf, sizeof(ctxbuf));
         top_buf_printf(&frame, C_CYAN "%5d" C_RESET " ", top_tasks[i].pid);
         append_tty(&frame, top_tasks[i].tty);
-        top_buf_printf(&frame, "%*s %s%-8s" C_RESET " %3u %3u.%u %8s %8s %6u %5uK %s\033[0K\r\n",
+        top_buf_printf(&frame, "%*s %s%-8s" C_RESET " %3u %5u %3u.%u %8s %8s %6u %5uK %s\033[0K\r\n",
                        top_tasks[i].tty >= 0 ? 4 : 7,
                        "",
                        color,
                        state_name(&top_tasks[i]),
                        top_tasks[i].priority,
+                       top_tasks[i].debt_score,
                        top_tasks[i].cpu_pct_x10 / 10u,
                        top_tasks[i].cpu_pct_x10 % 10u,
                        timebuf,

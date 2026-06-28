@@ -42,6 +42,31 @@ static char *const root_envp[] = {
     NULL
 };
 
+static volatile sig_atomic_t init_shutting_down = 0;
+static volatile sig_atomic_t init_term_sent = 0;
+static int shell_pid = -1;
+static int root_shell_pid = -1;
+
+static void on_shutdown_signal(int sig)
+{
+    (void)sig;
+    init_shutting_down = 1;
+}
+
+static void request_shell_shutdown(void)
+{
+    if (init_term_sent)
+        return;
+
+    init_term_sent = 1;
+    fprintf(stderr, "init: shutdown requested, stopping login shells\n");
+
+    if (shell_pid > 0)
+        kill(shell_pid, SIGTERM);
+    if (root_shell_pid > 0)
+        kill(root_shell_pid, SIGTERM);
+}
+
 static int attach_stdio_fd(int fd)
 {
     if (fd < 0)
@@ -123,28 +148,29 @@ static int spawn_root_graphics_shell(void)
 
 int main(void)
 {
-    int shell_pid;
-    int root_shell_pid;
     int waited;
     int status;
 
+    signal(SIGTERM, on_shutdown_signal);
     signal(SIGINT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
     chdir("/");
 
-    shell_pid = -1;
     root_shell_pid = spawn_root_graphics_shell();
 
     while (1) {
-        if (shell_pid < 0) {
+        if (init_shutting_down)
+            request_shell_shutdown();
+
+        if (!init_shutting_down && shell_pid < 0) {
             shell_pid = spawn_shell();
             if (shell_pid > 0)
                 fprintf(stderr, "init: tty0 shell pid %d\n", shell_pid);
         }
 
-        if (root_shell_pid < 0)
+        if (!init_shutting_down && root_shell_pid < 0)
             root_shell_pid = spawn_root_graphics_shell();
 
         status = 0;
@@ -153,16 +179,26 @@ int main(void)
         if (waited < 0) {
             if (errno == EINTR)
                 continue;
+            if (init_shutting_down && errno == ECHILD) {
+                sleep(1);
+                continue;
+            }
             perror("init: waitpid");
             sleep(1);
             continue;
         }
 
         if (waited == shell_pid) {
-            fprintf(stderr, "init: tty0 shell exited, restarting\n");
+            if (init_shutting_down)
+                fprintf(stderr, "init: tty0 shell stopped for shutdown\n");
+            else
+                fprintf(stderr, "init: tty0 shell exited, restarting\n");
             shell_pid = -1;
         } else if (waited == root_shell_pid) {
-            fprintf(stderr, "init: tty1 shell exited, restarting\n");
+            if (init_shutting_down)
+                fprintf(stderr, "init: tty1 shell stopped for shutdown\n");
+            else
+                fprintf(stderr, "init: tty1 shell exited, restarting\n");
             root_shell_pid = -1;
         }
 

@@ -85,6 +85,22 @@ static bool signal_would_kill_or_stop_init(int sig)
            action == SIG_ACT_STOP;
 }
 
+static bool signal_would_kill_or_stop_init_effective(task_t* target, int sig)
+{
+    sig_handler_t handler;
+
+    if (!target || !target->process)
+        return false;
+
+    handler = target->process->signals.actions[sig].sa_handler;
+    if (handler == SIG_IGN)
+        return false;
+    if (handler != SIG_DFL)
+        return false;
+
+    return signal_would_kill_or_stop_init(sig);
+}
+
 extern void signal_return_trampoline(void);
 
 typedef struct {
@@ -304,7 +320,7 @@ int send_signal(task_t* target, int sig)
     if (sig <= 0 || sig >= MAX_SIGNALS) return -1;
     if (!target || target->type != TASK_TYPE_PROCESS || target->state == TASK_TERMINATED) return -1;
     if (target->process && target->process->pid == 1 &&
-        signal_would_kill_or_stop_init(sig)) {
+        signal_would_kill_or_stop_init_effective(target, sig)) {
         return -EPERM;
     }
     

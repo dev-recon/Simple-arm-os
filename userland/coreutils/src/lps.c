@@ -45,6 +45,10 @@ typedef struct task_row {
     unsigned page_faults;
     unsigned cow_faults;
     unsigned stack_faults;
+    unsigned effective_priority;
+    unsigned sched_debt;
+    unsigned debt_score;
+    unsigned ready_wait_ticks;
     char state;
     char kind;
     char name[64];
@@ -80,6 +84,18 @@ typedef struct proc_counters {
     unsigned tty_char_wakeups;
     unsigned tty_line_wakeups;
     unsigned tty_eof_wakeups;
+    unsigned sched_aging_selections;
+    unsigned sched_debt_selections;
+    unsigned sched_max_ready_debt;
+    unsigned sched_avg_ready_debt;
+    unsigned sched_last_tid;
+    unsigned sched_last_pid;
+    unsigned sched_last_prio;
+    unsigned sched_last_effective;
+    unsigned sched_last_debt;
+    unsigned sched_last_waited;
+    unsigned sched_last_scanned;
+    char sched_last_reason[16];
 } proc_counters_t;
 
 static int is_digit(char c)
@@ -275,6 +291,63 @@ static void parse_proc_stat(proc_counters_t *c)
     }
 }
 
+static void parse_sched(proc_counters_t *c)
+{
+    char buf[FILE_BUF_SIZE];
+    const char *p;
+
+    if (read_file("/proc/sched", buf, sizeof(buf)) < 0)
+        return;
+
+    p = line_after_key(buf, "aging_selections ");
+    if (p) parse_uint(p, &c->sched_aging_selections);
+    p = line_after_key(buf, "debt_selections ");
+    if (p) parse_uint(p, &c->sched_debt_selections);
+
+    p = line_after_key(buf, "last_pick ");
+    if (p) {
+        const char *reason = strstr(p, "reason=");
+        if (reason) {
+            int len = 0;
+            reason += 7;
+            while (reason[len] && reason[len] != ' ' && reason[len] != '\n')
+                len++;
+            if (len >= (int)sizeof(c->sched_last_reason))
+                len = (int)sizeof(c->sched_last_reason) - 1;
+            memcpy(c->sched_last_reason, reason, (size_t)len);
+            c->sched_last_reason[len] = '\0';
+        }
+        p = strstr(p, "tid=");
+        if (p) parse_uint(p + 4, &c->sched_last_tid);
+        p = strstr(buf, "last_pick ");
+        p = p ? strstr(p, "pid=") : NULL;
+        if (p) parse_uint(p + 4, &c->sched_last_pid);
+        p = strstr(buf, "last_pick ");
+        p = p ? strstr(p, "prio=") : NULL;
+        if (p) parse_uint(p + 5, &c->sched_last_prio);
+        p = strstr(buf, "last_pick ");
+        p = p ? strstr(p, "effective=") : NULL;
+        if (p) parse_uint(p + 10, &c->sched_last_effective);
+        p = strstr(buf, "last_pick ");
+        p = p ? strstr(p, "debt=") : NULL;
+        if (p) parse_uint(p + 5, &c->sched_last_debt);
+        p = strstr(buf, "last_pick ");
+        p = p ? strstr(p, "waited=") : NULL;
+        if (p) parse_uint(p + 7, &c->sched_last_waited);
+        p = strstr(buf, "last_pick ");
+        p = p ? strstr(p, "scanned=") : NULL;
+        if (p) parse_uint(p + 8, &c->sched_last_scanned);
+    }
+
+    p = line_after_key(buf, "ready_debt ");
+    if (p) {
+        const char *maxp = strstr(p, "max=");
+        const char *avgp = strstr(p, "avg=");
+        if (maxp) parse_uint(maxp + 4, &c->sched_max_ready_debt);
+        if (avgp) parse_uint(avgp + 4, &c->sched_avg_ready_debt);
+    }
+}
+
 static void parse_passwd(user_entry_t *users, int *count)
 {
     char buf[FILE_BUF_SIZE];
@@ -451,6 +524,10 @@ static void enrich_row_from_status(task_row_t *r)
     status_uint_value(buf, "Uid:", &r->uid);
     status_uint_value(buf, "Gid:", &r->gid);
     status_uint_value(buf, "Priority:", &r->priority);
+    status_uint_value(buf, "EffectivePriority:", &r->effective_priority);
+    status_uint_value(buf, "SchedDebt:", &r->sched_debt);
+    status_uint_value(buf, "DebtScore:", &r->debt_score);
+    status_uint_value(buf, "ReadyWaitTicks:", &r->ready_wait_ticks);
     status_uint_value(buf, "KStack:", &r->kstack_kb);
     status_uint_value(buf, "Heap:", &r->heap_kb);
     status_uint_value(buf, "VmSize:", &r->vm_kb);
@@ -556,6 +633,28 @@ static void print_event_table(const proc_counters_t *c)
            "fs-wait-timeout", c->fs_wait_timeout);
 }
 
+static void print_scheduler_table(const proc_counters_t *c)
+{
+    printf("\n\033[1mScheduler\033[0m  policy=priority-rr-debt\n");
+    printf("  \033[1m%-16s %8s   %-16s %8s   %-16s %8s\033[0m\n",
+           "metric", "value", "metric", "value", "metric", "value");
+    printf("  %-16s %8u   %-16s %8u   %-16s %8u\n",
+           "aging-picks", c->sched_aging_selections,
+           "debt-picks", c->sched_debt_selections,
+           "scan-last", c->sched_last_scanned);
+    printf("  %-16s %8u   %-16s %8u   %-16s %8s\n",
+           "ready-max-debt", c->sched_max_ready_debt,
+           "ready-avg-debt", c->sched_avg_ready_debt,
+           "last-reason", c->sched_last_reason[0] ? c->sched_last_reason : "-");
+    printf("  last-pick pid=%u tid=%u prio=%u effective=%u debt=%u waited=%u\n",
+           c->sched_last_pid,
+           c->sched_last_tid,
+           c->sched_last_prio,
+           c->sched_last_effective,
+           c->sched_last_debt,
+           c->sched_last_waited);
+}
+
 static void print_tty_table(const proc_counters_t *c)
 {
     printf("\n\033[1mTTY summary\033[0m  (per-tty details: /proc/tty)\n");
@@ -607,10 +706,13 @@ int main(void)
 
     parse_meminfo(&c);
     parse_proc_stat(&c);
+    parse_sched(&c);
     parse_passwd(users, &user_count);
     parse_tasks(rows, &count);
-    for (int i = 0; i < count; i++)
+    for (int i = 0; i < count; i++) {
+        rows[i].effective_priority = rows[i].priority;
         enrich_row_from_status(&rows[i]);
+    }
 
     used_kb = c.mem_total_kb >= c.mem_free_kb ? c.mem_total_kb - c.mem_free_kb : 0;
     pct_x10 = c.mem_total_kb ? (used_kb * 1000u / c.mem_total_kb) : 0;
@@ -622,12 +724,13 @@ int main(void)
 
     print_lifecycle_table(&c);
     print_event_table(&c);
+    print_scheduler_table(&c);
     print_tty_table(&c);
 
-    printf("\033[1m%6s %6s %6s %4s %3s %-8s %4s %-6s %3s %5s %5s %5s %5s %5s %2s %7s %7s %7s %7s %-6s %s\033[0m\n",
+    printf("\033[1m%6s %6s %6s %4s %3s %-8s %4s %-6s %3s %4s %6s %6s %5s %5s %5s %5s %2s %7s %7s %7s %7s %-6s %s\033[0m\n",
            "PID", "TID", "PPID", "SID", "TTY", "USER", "GID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",
-           "VM", "RSS", "L2", "CTX", "PF", "COW", "STK", "STATE", "NAME");
-    printf("------------------------------------------------------------------------------------------------------------------------------------\n");
+           "DEBT", "WAIT", "VM", "RSS", "L2", "CTX", "PF", "COW", "STK", "STATE", "NAME");
+    printf("-------------------------------------------------------------------------------------------------------------------------------------------------\n");
 
     for (int i = 0; i < count; i++) {
         task_row_t *p = &rows[i];
@@ -645,13 +748,15 @@ int main(void)
         format_count(p->cow_faults, cowbuf, sizeof(cowbuf));
         format_count(p->stack_faults, stkbuf, sizeof(stkbuf));
 
-        printf("%6d %6d %6d %4d %3d %-8s %4u %s%-6s\033[0m %3u %3u.%u %4uK %4uK %4uK %4uK %2u %7s %s%7s\033[0m %7s %7s %s%-6s\033[0m %s\n",
+        printf("%6d %6d %6d %4d %3d %-8s %4u %s%-6s\033[0m %3u %3u.%u %4uK %4uK %5u %5u %4uK %4uK %2u %7s %s%7s\033[0m %7s %7s %s%-6s\033[0m %s\n",
                p->pid, p->tid, p->ppid, p->sid, p->tty,
                user, p->gid,
                kind_color(p->kind), kind_name(p->kind),
                p->priority,
                0u, 0u,
-               p->kstack_kb, p->heap_kb, p->vm_kb, p->rss_kb,
+               p->kstack_kb, p->heap_kb,
+               p->debt_score, p->ready_wait_ticks,
+               p->vm_kb, p->rss_kb,
                p->l2_tables,
                ctxbuf,
                pfcolor, pfbuf,

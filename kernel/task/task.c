@@ -67,6 +67,14 @@ static sched_trace_event_t sched_trace[SCHED_TRACE_SIZE];
 static uint32_t sched_trace_seq;
 static uint32_t sched_aging_selections;
 static uint32_t sched_debt_selections;
+static uint32_t sched_last_pick_reason;
+static uint32_t sched_last_pick_tid;
+static uint32_t sched_last_pick_pid;
+static uint32_t sched_last_pick_priority;
+static uint32_t sched_last_pick_effective_priority;
+static uint32_t sched_last_pick_debt;
+static uint32_t sched_last_pick_waited_ticks;
+static uint32_t sched_last_scan_tasks;
 //static int yield_count = 0;
 
 /* === NOUVELLES VARIABLES POUR PROCESSUS === */
@@ -170,6 +178,9 @@ void scheduler_get_stats(scheduler_stats_t* stats)
 {
     unsigned long flags;
     process_t* proc;
+    uint32_t now;
+    uint32_t total_debt = 0;
+    uint32_t debt_count = 0;
 
     if (!stats)
         return;
@@ -190,10 +201,21 @@ void scheduler_get_stats(scheduler_stats_t* stats)
     stats->aging_selections = sched_aging_selections;
     stats->debt_decay_ticks = SCHED_DEBT_DECAY_TICKS;
     stats->debt_selections = sched_debt_selections;
+    stats->last_pick_reason = sched_last_pick_reason;
+    stats->last_pick_tid = sched_last_pick_tid;
+    stats->last_pick_pid = sched_last_pick_pid;
+    stats->last_pick_priority = sched_last_pick_priority;
+    stats->last_pick_effective_priority = sched_last_pick_effective_priority;
+    stats->last_pick_debt = sched_last_pick_debt;
+    stats->last_pick_waited_ticks = sched_last_pick_waited_ticks;
+    stats->last_scan_tasks = sched_last_scan_tasks;
     stats->highest_ready_priority = TASK_PRIORITY_LEVELS;
     stats->lowest_ready_priority = TASK_PRIORITY_LEVELS;
+    now = get_system_ticks();
 
     for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
+        task_t* task;
+
         stats->priority_counts[prio] = ready_queue.count[prio];
         if (ready_queue.count[prio] > 0) {
             stats->nonempty_queues++;
@@ -201,7 +223,30 @@ void scheduler_get_stats(scheduler_stats_t* stats)
                 stats->highest_ready_priority = prio;
             stats->lowest_ready_priority = prio;
         }
+
+        task = ready_queue.head[prio];
+        while (task) {
+            uint32_t debt = task->sched_debt;
+
+            if (task->ready_since_tick && now >= task->ready_since_tick) {
+                uint32_t waited = now - task->ready_since_tick;
+                uint32_t decay = waited / SCHED_DEBT_DECAY_TICKS;
+                debt = decay >= debt ? 0 : debt - decay;
+            }
+
+            if (debt > stats->max_ready_debt)
+                stats->max_ready_debt = debt;
+            if (0xffffffffu - total_debt < debt)
+                total_debt = 0xffffffffu;
+            else
+                total_debt += debt;
+            debt_count++;
+            task = task->rq_next;
+        }
     }
+
+    if (debt_count)
+        stats->avg_ready_debt = (uint32_t)(total_debt / debt_count);
 
     if (current_task) {
         proc = (current_task->type == TASK_TYPE_PROCESS) ? current_task->process : NULL;
@@ -1899,6 +1944,8 @@ static task_t* schedule_next_task(void)
     uint32_t best_waited;
     uint32_t now;
     uint32_t scanned = 0;
+    uint32_t candidate_scan_count;
+    uint32_t best_reason;
     bool best_was_head;
 
     spin_lock_irqsave(&task_lock, &flags);
@@ -1909,6 +1956,8 @@ static task_t* schedule_next_task(void)
         best_debt = 0xffffffffu;
         best_waited = 0;
         best_was_head = true;
+        best_reason = SCHED_PICK_NONE;
+        candidate_scan_count = 0;
         now = get_system_ticks();
 
         for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
@@ -1919,21 +1968,33 @@ static task_t* schedule_next_task(void)
                 uint32_t effective;
                 uint32_t debt;
                 uint32_t waited;
+                uint32_t reason = SCHED_PICK_NONE;
 
                 effective = scheduler_effective_priority_locked(candidate, now);
                 debt = scheduler_debt_score_locked(candidate, now);
                 waited = candidate->ready_since_tick && now >= candidate->ready_since_tick ?
                          now - candidate->ready_since_tick : 0;
+                candidate_scan_count++;
 
-                if (!best ||
-                    effective < best_prio ||
-                    (effective == best_prio && debt < best_debt) ||
-                    (effective == best_prio && debt == best_debt && waited > best_waited)) {
+                if (!best) {
+                    reason = SCHED_PICK_PRIORITY;
+                } else if (effective < best_prio) {
+                    reason = effective < task_runqueue_priority(candidate) ?
+                             SCHED_PICK_AGING : SCHED_PICK_PRIORITY;
+                } else if (effective == best_prio && debt < best_debt) {
+                    reason = SCHED_PICK_DEBT;
+                } else if (effective == best_prio && debt == best_debt &&
+                           waited > best_waited) {
+                    reason = SCHED_PICK_WAIT;
+                }
+
+                if (reason != SCHED_PICK_NONE) {
                     best = candidate;
                     best_prio = effective;
                     best_debt = debt;
                     best_waited = waited;
                     best_was_head = (candidate == ready_queue.head[prio]);
+                    best_reason = reason;
                 }
 
                 candidate = next_candidate;
@@ -1948,11 +2009,21 @@ static task_t* schedule_next_task(void)
         scanned++;
 
         if (task_is_schedulable(task)) {
+            process_t* proc = (task->type == TASK_TYPE_PROCESS) ? task->process : NULL;
+
             task->sched_debt = best_debt;
             if (best_prio < task_runqueue_priority(task))
                 sched_aging_selections++;
             if (!best_was_head)
                 sched_debt_selections++;
+            sched_last_pick_reason = best_reason;
+            sched_last_pick_tid = task->task_id;
+            sched_last_pick_pid = proc ? (uint32_t)proc->pid : 0;
+            sched_last_pick_priority = task_runqueue_priority(task);
+            sched_last_pick_effective_priority = best_prio;
+            sched_last_pick_debt = best_debt;
+            sched_last_pick_waited_ticks = best_waited;
+            sched_last_scan_tasks = candidate_scan_count;
             spin_unlock_irqrestore(&task_lock, flags);
             return task;
         }

@@ -44,6 +44,12 @@ struct file;
 #define SCHED_AGING_MAX_BONUS   8
 #define SCHED_DEBT_DECAY_TICKS  4
 
+#define SCHED_PICK_NONE         0
+#define SCHED_PICK_PRIORITY     1
+#define SCHED_PICK_AGING        2
+#define SCHED_PICK_DEBT         3
+#define SCHED_PICK_WAIT         4
+
 #define QUANTUM_TICKS           10
 
 typedef struct kernel_lifecycle_stats {
@@ -117,6 +123,16 @@ typedef struct scheduler_stats {
     uint32_t aging_selections;
     uint32_t debt_decay_ticks;
     uint32_t debt_selections;
+    uint32_t last_pick_reason;
+    uint32_t last_pick_tid;
+    uint32_t last_pick_pid;
+    uint32_t last_pick_priority;
+    uint32_t last_pick_effective_priority;
+    uint32_t last_pick_debt;
+    uint32_t last_pick_waited_ticks;
+    uint32_t last_scan_tasks;
+    uint32_t max_ready_debt;
+    uint32_t avg_ready_debt;
     uint32_t highest_ready_priority;
     uint32_t lowest_ready_priority;
     uint32_t current_tid;
