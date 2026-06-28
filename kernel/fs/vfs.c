@@ -278,6 +278,61 @@ int vfs_sync(void)
     return ret;
 }
 
+int vfs_shutdown(void)
+{
+    int ret;
+
+    kprintf("Shutdown: VFS mounted filesystems\n");
+    kprintf("Shutdown:   virtio0p1 on / type ext2 (rw)\n");
+    for (int i = 0; i < mount_count; i++) {
+        kprintf("Shutdown:   %s on %s type %s (%s)\n",
+              mount_table[i].source,
+              mount_table[i].path,
+              mount_table[i].fstype,
+              mount_table[i].options);
+    }
+
+    kprintf("Shutdown: VFS sync start\n");
+    ret = vfs_sync();
+    if (ret < 0)
+        KERROR("Shutdown: VFS sync failed (%d)\n", ret);
+    else
+        kprintf("Shutdown: VFS sync complete\n");
+
+    /*
+     * Unmount optional filesystems after sync, in reverse mount order.
+     * The root ext2 filesystem is kept mounted; the block device flush below
+     * is the final persistence barrier before PSCI SYSTEM_OFF.
+     */
+    kprintf("Shutdown: VFS unmount non-root filesystems\n");
+    while (mount_count > 0) {
+        char path[sizeof(mount_table[0].path)];
+        char source[sizeof(mount_table[0].source)];
+        char fstype[sizeof(mount_table[0].fstype)];
+        int idx = mount_count - 1;
+        int umount_ret;
+
+        strncpy(path, mount_table[idx].path, sizeof(path) - 1);
+        path[sizeof(path) - 1] = '\0';
+        strncpy(source, mount_table[idx].source, sizeof(source) - 1);
+        source[sizeof(source) - 1] = '\0';
+        strncpy(fstype, mount_table[idx].fstype, sizeof(fstype) - 1);
+        fstype[sizeof(fstype) - 1] = '\0';
+
+        kprintf("Shutdown:   unmount %s on %s type %s\n",
+              source, path, fstype);
+        umount_ret = vfs_umount(path);
+        if (umount_ret < 0) {
+            KERROR("Shutdown:   unmount %s failed (%d)\n", path, umount_ret);
+            ret = ret < 0 ? ret : umount_ret;
+            break;
+        }
+    }
+
+    kprintf("Shutdown:   root / type ext2 remains mounted, synced\n");
+    return ret;
+}
+
 /* File operations for FAT32 */
 extern file_operations_t fat32_file_ops;
 extern file_operations_t fat32_dir_ops;

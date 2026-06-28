@@ -2907,6 +2907,7 @@ void add_to_ready_queue(task_t* task)
         //KDEBUG("add_to_ready_queue: Ignoring zombie/terminated task %s\n", 
         //       task->name);
         kernel_lifecycle_stats.ready_queue_refused++;
+        sched_trace_record(SCHED_TRACE_READY_REFUSE_DEAD, task);
         return;
     }
     
@@ -3055,6 +3056,8 @@ bool is_in_ready_queue(task_t* task)
         if (count >= MAX_TASKS) {
             KERROR("is_in_ready_queue: List too long or corrupted (>%d tasks)\n", 
                    MAX_TASKS);
+            kernel_lifecycle_stats.ready_queue_refused++;
+            sched_trace_record(SCHED_TRACE_READY_REFUSE_CORRUPT, task);
             return false;
         }
         

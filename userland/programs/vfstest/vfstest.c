@@ -37,6 +37,7 @@
 static int failures = 0;
 static int verbose = 1;
 static int run_parallel_stress = 0;
+static int run_cross_fs = 0;
 static char root[64];
 
 static const char *tpath(const char *name)
@@ -83,6 +84,37 @@ static int write_text(const char *path, const char *text)
     ret = write(fd, text, strlen(text));
     close(fd);
     return ret == (int)strlen(text) ? 0 : -1;
+}
+
+static int write_pattern_file(const char *path, size_t bytes)
+{
+    char buf[512];
+    int fd;
+    size_t written = 0;
+
+    fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0)
+        return -1;
+
+    for (size_t i = 0; i < sizeof(buf); i++)
+        buf[i] = (char)('A' + (i % 26));
+
+    while (written < bytes) {
+        size_t chunk = bytes - written;
+        int n;
+
+        if (chunk > sizeof(buf))
+            chunk = sizeof(buf);
+        n = write(fd, buf, chunk);
+        if (n != (int)chunk) {
+            close(fd);
+            return -1;
+        }
+        written += chunk;
+    }
+
+    close(fd);
+    return 0;
 }
 
 static void remove_tree(const char *path)
@@ -182,13 +214,29 @@ static void test_mutation_guards(void)
     expect(rmdir(noexec_dir) == 0, "cleanup no-exec parent", 0);
 }
 
+static void test_sync_large_file(void)
+{
+    const char *file = tpath("large-sync.bin");
+    struct stat st;
+
+    expect(write_pattern_file(file, 64 * 1024) == 0,
+           "large multi-block file write", 0);
+    sync();
+    ok("sync after large write");
+    expect(stat(file, &st) == 0, "stat large file after sync", 0);
+    expect(st.st_size == 64 * 1024, "large file size after sync", (int)st.st_size);
+    expect(unlink(file) == 0, "unlink large file", 0);
+    sync();
+    ok("sync after large unlink");
+}
+
 static int child_stress(int worker)
 {
     char dir[160];
     char file[160];
     char renamed[160];
 
-    for (int i = 0; i < 32; i++) {
+    for (int i = 0; i < 64; i++) {
         snprintf(dir, sizeof(dir), "%s/w%d-%d", root, worker, i);
         snprintf(file, sizeof(file), "%s/file.txt", dir);
         snprintf(renamed, sizeof(renamed), "%s/renamed.txt", dir);
@@ -203,6 +251,8 @@ static int child_stress(int worker)
             return 13;
         if (rmdir(dir) < 0)
             return 14;
+        if ((i % 16) == 15)
+            sync();
     }
 
     return 0;
@@ -242,10 +292,53 @@ static void test_parallel_mutations(void)
     }
 }
 
+static void test_cross_fs(void)
+{
+    char mnt_dir[64];
+    char ext_file[160];
+    char fat_file[160];
+    char fat_renamed[160];
+    struct stat st;
+
+    if (stat("/mnt", &st) < 0 || !S_ISDIR(st.st_mode)) {
+        ok("cross-fs test skipped: /mnt is unavailable");
+        return;
+    }
+
+    if (mount("/dev/virtio0p2", "/mnt", "fat32", 0, NULL) < 0 && errno != EBUSY) {
+        ko("cross-fs mount fat32 /mnt", errno);
+        return;
+    }
+
+    snprintf(mnt_dir, sizeof(mnt_dir), "/mnt/vt%d", getpid());
+    snprintf(ext_file, sizeof(ext_file), "%s/cross.txt", root);
+    snprintf(fat_file, sizeof(fat_file), "%s/file.txt", mnt_dir);
+    snprintf(fat_renamed, sizeof(fat_renamed), "%s/renamed.txt", mnt_dir);
+
+    remove_tree(mnt_dir);
+    expect(mkdir(mnt_dir, 0755) == 0, "cross-fs mkdir on fat32", 0);
+    expect(write_text(fat_file, "fat32") == 0, "cross-fs write on fat32", 0);
+    if (rename(fat_file, fat_renamed) == 0) {
+        ok("cross-fs local fat32 rename");
+        strncpy(fat_file, fat_renamed, sizeof(fat_file) - 1);
+        fat_file[sizeof(fat_file) - 1] = '\0';
+    } else {
+        ok("cross-fs local fat32 rename unsupported, keeping original");
+    }
+
+    expect(write_text(ext_file, "ext2") == 0, "cross-fs source ext2 file", 0);
+    expect(rename(ext_file, fat_file) < 0, "cross-fs rename ext2 to fat32 refused", 0);
+    expect(unlink(ext_file) == 0, "cross-fs cleanup ext2 source", 0);
+    expect(unlink(fat_file) == 0, "cross-fs cleanup fat32 file", 0);
+    expect(rmdir(mnt_dir) == 0, "cross-fs cleanup fat32 dir", 0);
+    sync();
+}
+
 static void usage(void)
 {
-    printf("usage: vfstest [-q|-v] [--stress]\n");
+    printf("usage: vfstest [-q|-v] [--stress] [--cross-fs]\n");
     printf("  --stress   also run concurrent ext2 mutation workers\n");
+    printf("  --cross-fs also mount/test FAT32 on /mnt\n");
 }
 
 int main(int argc, char **argv)
@@ -257,6 +350,8 @@ int main(int argc, char **argv)
             verbose = 1;
         } else if (strcmp(argv[i], "--stress") == 0) {
             run_parallel_stress = 1;
+        } else if (strcmp(argv[i], "--cross-fs") == 0) {
+            run_cross_fs = 1;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage();
             exit(0);
@@ -277,9 +372,12 @@ int main(int argc, char **argv)
         printf("=== VFS hardening tests ===\n");
 
     test_mutation_guards();
+    test_sync_large_file();
     expect(child_stress(0) == 0, "serial VFS mutation stress", 0);
     if (run_parallel_stress)
         test_parallel_mutations();
+    if (run_cross_fs)
+        test_cross_fs();
 
     remove_tree(root);
 

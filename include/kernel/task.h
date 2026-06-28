@@ -65,6 +65,8 @@ typedef enum sched_trace_event_type {
     SCHED_TRACE_REFUSE_NULL_NEXT,
     SCHED_TRACE_REFUSE_INVALID_TASK,
     SCHED_TRACE_REFUSE_LOOP,
+    SCHED_TRACE_READY_REFUSE_DEAD,
+    SCHED_TRACE_READY_REFUSE_CORRUPT,
 } sched_trace_event_type_t;
 
 typedef struct sched_trace_event {

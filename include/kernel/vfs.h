@@ -102,6 +102,7 @@ uint32_t vfs_inode_open_count(inode_t* inode);
 void vfs_format_mounts(char* buf, size_t cap, size_t* len);
 int  vfs_statfs(const char* path, struct statfs* st);
 int  vfs_sync(void);
+int  vfs_shutdown(void);
 inode_t* create_inode(void);
 inode_t* get_inode(uint32_t ino);
 inode_t* get_root_inode(void);

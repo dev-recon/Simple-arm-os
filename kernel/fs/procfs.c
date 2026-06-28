@@ -866,6 +866,8 @@ static const char* proc_sched_event_name(uint32_t event)
         case SCHED_TRACE_REFUSE_NULL_NEXT: return "refuse_null_next";
         case SCHED_TRACE_REFUSE_INVALID_TASK: return "refuse_invalid_task";
         case SCHED_TRACE_REFUSE_LOOP: return "refuse_loop";
+        case SCHED_TRACE_READY_REFUSE_DEAD: return "ready_refuse_dead";
+        case SCHED_TRACE_READY_REFUSE_CORRUPT: return "ready_refuse_corrupt";
         default: return "unknown";
     }
 }
