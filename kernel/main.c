@@ -28,6 +28,7 @@
 #include <kernel/virtio_net.h>
 #include <kernel/vfs.h>
 #include <kernel/ata.h>
+#include <kernel/smp.h>
 
 /* Inclusion des fonctions inline ARM apres les prototypes */
 #include <asm/arm.h>
@@ -201,6 +202,7 @@ void kernel_main(void)
     __asm__ volatile ("cpsie aif");
 
     sctlr_set_smp();
+    smp_init_boot_cpu();
 
     timer_freq = boot_timer_frequency();
     bogo_x100 = boot_bogomips_x100(timer_freq);
