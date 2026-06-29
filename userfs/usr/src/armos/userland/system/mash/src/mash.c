@@ -636,6 +636,98 @@ static int build_exec_path_from_dir(const char* dir, int dir_len,
     return 0;
 }
 
+static int append_path_component(char* out, size_t out_size,
+                                 const char* component, size_t len) {
+    size_t pos;
+
+    if (len == 0 || (len == 1 && component[0] == '.'))
+        return 0;
+
+    if (len == 2 && component[0] == '.' && component[1] == '.') {
+        char* slash;
+
+        pos = strlen(out);
+        if (pos <= 1) {
+            out[0] = '/';
+            out[1] = '\0';
+            return 0;
+        }
+
+        slash = strrchr(out, '/');
+        if (!slash || slash == out)
+            out[1] = '\0';
+        else
+            *slash = '\0';
+        return 0;
+    }
+
+    pos = strlen(out);
+    if (pos > 1) {
+        if (pos + 1 >= out_size)
+            return -1;
+        out[pos++] = '/';
+        out[pos] = '\0';
+    }
+
+    if (pos + len >= out_size)
+        return -1;
+
+    memcpy(out + pos, component, len);
+    out[pos + len] = '\0';
+    return 0;
+}
+
+static int normalize_absolute_path(const char* path, char* out, size_t out_size) {
+    const char* p = path;
+
+    if (!path || path[0] != '/' || out_size < 2)
+        return -1;
+
+    out[0] = '/';
+    out[1] = '\0';
+
+    while (*p) {
+        const char* start;
+        size_t len;
+
+        while (*p == '/')
+            p++;
+        start = p;
+        while (*p && *p != '/')
+            p++;
+
+        len = (size_t)(p - start);
+        if (append_path_component(out, out_size, start, len) < 0)
+            return -1;
+    }
+
+    return 0;
+}
+
+static int resolve_explicit_exec_path(const char* name, char* out, size_t out_size) {
+    char combined[256];
+    char cwd[256];
+
+    if (!name || !out || out_size == 0)
+        return -1;
+
+    if (name[0] == '/')
+        return normalize_absolute_path(name, out, out_size);
+
+    if (!getcwd(cwd, sizeof(cwd)))
+        return -1;
+
+    if (strcmp(cwd, "/") == 0) {
+        if (snprintf(combined, sizeof(combined), "/%s", name) >= (int)sizeof(combined))
+            return -1;
+    } else {
+        if (snprintf(combined, sizeof(combined), "%s/%s", cwd, name) >= (int)sizeof(combined))
+            return -1;
+    }
+
+    return normalize_absolute_path(combined, out, out_size);
+}
+
 static int shell_file_looks_text(const char* path) {
     unsigned char buf[64];
     int fd;
@@ -828,7 +920,10 @@ static void exec_external_or_die(int argc, char* argv[]) {
     exec_argv[i] = NULL;
 
     if (token_has_slash(argv[0])) {
-        build_exec_path_from_dir(NULL, 0, argv[0], cmd, sizeof(cmd));
+        if (resolve_explicit_exec_path(argv[0], cmd, sizeof(cmd)) < 0) {
+            printf("mash: command path too long: %s\n", argv[0]);
+            exit(126);
+        }
         exec_argv[0] = cmd;
         execve(cmd, exec_argv, envp);
         exec_script_or_die_if_text(cmd, argc, argv);
@@ -864,7 +959,7 @@ static int external_command_exists(const char* name) {
     const char* entry;
 
     if (token_has_slash(name)) {
-        if (build_exec_path_from_dir(NULL, 0, name, cmd, sizeof(cmd)) < 0)
+        if (resolve_explicit_exec_path(name, cmd, sizeof(cmd)) < 0)
             return 0;
         return access(cmd, 0) == 0;
     }
