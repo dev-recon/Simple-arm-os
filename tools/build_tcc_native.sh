@@ -17,7 +17,7 @@ BUNDLE_DIR="$WORK_DIR/bundle/opt/tcc"
 ARCH="${ARCH:-arm-none-eabi-}"
 CC="${ARCH}gcc"
 AR="${ARCH}ar"
-HOST_CC="${HOST_CC:-clang}"
+HOST_CC="${HOST_CC:-cc}"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 

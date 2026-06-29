@@ -54,22 +54,24 @@ tcc /home/user/tcc-src/kilo.c -o /tmp/kilo-direct
 ArmOS uses a split compiler policy:
 
 ```text
-kernel   -> arm-none-eabi-gcc
-userland -> TinyCC ARM/EABI, progressively
+kernel and release builds -> host arm-none-eabi-gcc on macOS/Linux
+end-user programs        -> native TinyCC ARM/EABI inside ArmOS, progressively
 ```
 
-GCC remains the kernel compiler because the kernel depends on the strongest
-available ARMv7-A code generation, inline assembly handling, linker-script
-behavior, diagnostics, and ABI conservatism. TinyCC is intentionally scoped to
-userland first, where fast native compilation, small command-line tools, and
-short edit-build-run loops matter more than whole-kernel compiler maturity.
+GCC remains the kernel compiler and the contributor/release compiler because
+the kernel and stable userland build depend on the strongest available ARMv7-A
+code generation, inline assembly handling, linker-script behavior, diagnostics,
+and ABI conservatism. TinyCC is intentionally scoped to ArmOS end users first:
+fast native compilation, small command-line tools, and short edit-build-run
+loops inside the running system.
 
 The intended migration path is:
 
 1. Keep GCC as the official kernel compiler.
 2. Keep GCC/newlib as the host fallback for complex userland programs.
-3. Make `/usr/bin/tcc` the native ArmOS compiler for new small userland tools.
-4. Gradually compile simple coreutils and programs with TCC.
+3. Make `/usr/bin/tcc` the native ArmOS compiler for user-authored programs.
+4. Gradually validate simple coreutils and programs with TCC as compatibility
+   tests, without replacing the host cross build as the release path.
 5. Use kilo as the first serious interactive userland validation target.
 
 `/usr/bin/tcc` is not the real compiler. It is an ArmOS wrapper around:
@@ -106,6 +108,7 @@ tools/test_tcc_armos_hello.sh      Host-side linker/runtime smoke test
 tools/build_tcc_native.sh          Native ArmOS TinyCC bundle builder
 userfs/home/user/tcc-src/hello.c   In-ArmOS smoke test source
 userfs/home/user/tcc-src/kilo.c    In-ArmOS non-trivial native TCC test source
+userfs/usr/src/armos/              Userland source snapshot installed in /
 ```
 
 Generated bundle output:
@@ -117,6 +120,41 @@ build/tcc-native/bundle/opt/tcc/
 The generated filesystem staging directory `userfs/opt/tcc/` is ignored. Rebuild
 and stage it from the script instead of committing generated binaries and copied
 headers.
+
+## Sources Installed In ArmOS
+
+ArmOS v0.3 deliberately installs userland sources into the generated root
+filesystem:
+
+```text
+/usr/src/armos/userland
+```
+
+This is part of the native end-user programming story. A user booted into ArmOS
+should be able to inspect a command source, edit a small program with `kilo`,
+compile it with `/usr/bin/tcc`, and execute it without returning to the host
+machine. Contributors still build and validate the operating system from the
+host cross toolchain.
+
+The installed snapshot currently contains:
+
+```text
+/usr/src/armos/userland/include
+/usr/src/armos/userland/coreutils/src
+/usr/src/armos/userland/programs
+/usr/src/armos/userland/system
+```
+
+Example inside `mash`:
+
+```sh
+tcc /usr/src/armos/userland/coreutils/src/ls.c -o /tmp/ls-tcc
+/tmp/ls-tcc /proc
+```
+
+The installed sources are a snapshot, not a substitute for Git history. When a
+source file changes in the repository, keep the `/usr/src/armos` copy in
+`userfs` synchronized before building a release image.
 
 `tools/build_tcc_native.sh` copies newlib headers first, then overlays
 `userland/include`. This order is deliberate: ArmOS owns public ABI headers such

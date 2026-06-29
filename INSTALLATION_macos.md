@@ -4,7 +4,7 @@ This guide sets up ArmOS on macOS. The project is primarily developed on Apple
 Silicon, but Intel Homebrew paths are noted where they differ.
 
 ArmOS targets an ARMv7-A Cortex-A15 kernel running on QEMU `virt`.
-The supported v0.2 reference emulator is QEMU 10.0.2. QEMU 11.0.1 has been
+The supported v0.3 reference emulator is QEMU 10.0.2. QEMU 11.0.1 has been
 smoke-tested, but its macOS/Cocoa graphical window scaling differs from 10.0.2.
 
 ## Disk Layout
@@ -95,7 +95,7 @@ debugfs -V
 e2fsck -V
 ```
 
-For ArmOS v0.2, `qemu-system-arm --version` should ideally report QEMU 10.0.2.
+For ArmOS v0.3, `qemu-system-arm --version` should ideally report QEMU 10.0.2.
 The scripts also accept an explicit QEMU binary:
 
 ```sh
@@ -219,7 +219,42 @@ The root filesystem is ext2, so long filenames are supported there. FAT32 is
 still available under `/mnt`, but it is intentionally a smaller compatibility
 filesystem.
 
-## 9. Common Problems
+## 9. Native TinyCC And Shipped Sources
+
+ArmOS v0.3 can build small C programs from inside the running system. This is
+for end-user programming and experiments inside ArmOS; the project itself still
+uses the macOS/Linux cross toolchain for kernel work, stabilization, and release
+builds.
+
+The standard build scripts stage TinyCC under:
+
+```text
+/opt/tcc
+```
+
+and install the user-facing wrapper:
+
+```text
+/usr/bin/tcc
+```
+
+The root filesystem also contains a userland source snapshot:
+
+```text
+/usr/src/armos/userland
+```
+
+Inside `mash`, try:
+
+```sh
+tcc /usr/src/armos/userland/coreutils/src/ls.c -o /tmp/ls-tcc
+/tmp/ls-tcc /proc
+```
+
+Set `BUILD_TCC=0` when running `build.sh` or `run.sh` if you want to skip the
+native TinyCC bundle during local development.
+
+## 10. Common Problems
 
 ### `arm-none-eabi-gcc: command not found`
 

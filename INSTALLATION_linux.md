@@ -4,7 +4,7 @@ This guide sets up ArmOS on Linux. Debian and Ubuntu are the primary reference
 distributions for now.
 
 ArmOS targets an ARMv7-A Cortex-A15 kernel running on QEMU `virt`.
-The supported v0.2 reference emulator is QEMU 10.0.2. Other QEMU versions may
+The supported v0.3 reference emulator is QEMU 10.0.2. Other QEMU versions may
 work, but 10.0.2 is the version to use when reproducing release behavior.
 
 ## Disk Layout
@@ -156,7 +156,42 @@ You can also point the build at another sysroot:
 BUILD_NEWLIB=1 NEWLIB_SYSROOT=/path/to/arm-none-eabi ./run.sh
 ```
 
-## 6. Common Problems
+## 6. Native TinyCC And Shipped Sources
+
+ArmOS v0.3 can build small C programs from inside the running system. This is
+for end-user programming and experiments inside ArmOS; the project itself still
+uses the macOS/Linux cross toolchain for kernel work, stabilization, and release
+builds.
+
+The standard build scripts stage TinyCC under:
+
+```text
+/opt/tcc
+```
+
+and install the user-facing wrapper:
+
+```text
+/usr/bin/tcc
+```
+
+The root filesystem also contains a userland source snapshot:
+
+```text
+/usr/src/armos/userland
+```
+
+Inside `mash`, try:
+
+```sh
+tcc /usr/src/armos/userland/coreutils/src/ls.c -o /tmp/ls-tcc
+/tmp/ls-tcc /proc
+```
+
+Set `BUILD_TCC=0` when running `build.sh` or `run.sh` if you want to skip the
+native TinyCC bundle during local development.
+
+## 7. Common Problems
 
 ### `arm-none-eabi-gcc: command not found`
 

@@ -13,6 +13,30 @@ ArmOS is not Linux, and it is not production-ready. The goal is to keep the
 system small enough to understand while still implementing real operating
 system mechanisms.
 
+## ArmOS v0.3 Milestone
+
+ArmOS v0.3 is a major userland autonomy milestone.
+
+The development workflow for the operating system itself remains deliberately
+conservative: kernel, filesystem, drivers, release images, and stabilization
+work are still built from macOS or Linux with the host ARM cross toolchain
+(`arm-none-eabi-gcc`, newlib, Makefiles, and the project scripts). This is the
+supported path for contributors.
+
+What changes in v0.3 is what ArmOS can do for its own users once it is already
+running. The generated root filesystem now ships:
+
+- a native TinyCC toolchain exposed through `/usr/bin/tcc`
+- the TinyCC runtime bundle under `/opt/tcc`
+- a source snapshot under `/usr/src/armos/userland`
+- enough newlib syscall glue to compile and run small C user programs directly
+  from inside `mash`
+
+That means an ArmOS user can boot the system, open a source file with `kilo`,
+compile it with `tcc`, and run the resulting binary without returning to the
+host machine. It is not yet a replacement for the project build system, but it
+is the first step toward a self-hosted-feeling Unix environment.
+
 ## Current Status
 
 ArmOS currently provides:
@@ -37,6 +61,10 @@ ArmOS currently provides:
 - VirtIO input keyboard support for the graphical console
 - Shell: `mash`
 - Newlib-based userland
+- Native TinyCC bring-up for end users: users can compile simple C programs
+  directly inside ArmOS through the `/usr/bin/tcc` wrapper
+- Userland source snapshot installed under `/usr/src/armos`, so ArmOS users can
+  inspect, edit, and rebuild small programs from inside the running system
 - Core utilities such as `cat`, `echo`, `pwd`, `ls`, `cp`, `mv`, `rm`,
   `mkdir`, `rmdir`, `touch`, `sleep`, `kill`, `ps`, `stat`, `head`,
   `grep`, `sed`, `sort`, `uniq`, `wc`, and `which`
@@ -48,7 +76,7 @@ ArmOS currently provides:
 Current supported platform:
 
 - QEMU `virt`
-- QEMU 10.0.2 is the supported v0.2 reference emulator
+- QEMU 10.0.2 is the supported v0.3 reference emulator
 - QEMU 11.0.1 has been smoke-tested, but its macOS/Cocoa graphical window
   scaling differs from 10.0.2
 - ARM Cortex-A15
@@ -74,6 +102,8 @@ Typical layout:
 - `/dev` for device nodes
 - `/home/user` as the default user home directory
 - `/tmp` for temporary files
+- `/usr/src/armos` for the shipped userland source snapshot used by native TCC
+  experiments
 - `/bin` for core utilities, `/sbin` for system programs, `/usr/bin` for
   ArmOS user programs, and `/opt/<program>/bin` for imported external tools
 
@@ -91,6 +121,26 @@ work should use the newlib path.
 
 The shell, `mash`, supports interactive commands, external programs, pipes,
 redirections, background jobs, scripts, and basic job control.
+
+ArmOS v0.3 also ships a userland source snapshot in the root filesystem:
+
+```text
+/usr/src/armos/userland
+```
+
+This is intentional, but it does not replace the project development toolchain.
+Kernel work, stabilization, release builds, and normal contributor workflows
+still use the host cross toolchain on macOS or Linux (`arm-none-eabi-gcc`,
+newlib, Makefiles, and scripts). Native TinyCC is aimed at ArmOS users who want
+to open a source file with `kilo`, compile a small program, and run it without
+leaving ArmOS.
+
+Example inside `mash`:
+
+```sh
+tcc /usr/src/armos/userland/coreutils/src/ls.c -o /tmp/ls-tcc
+/tmp/ls-tcc /proc
+```
 
 ## Stability
 

@@ -1,5 +1,72 @@
 # Changelog
 
+## ArmOS v0.3 - 2026-06-29
+
+ArmOS v0.3 is the first public release that gives ArmOS end users a small
+native C programming environment, while keeping the project development and
+stabilization workflow on the existing macOS/Linux cross toolchain.
+
+### Highlights
+
+- Native TinyCC bring-up inside ArmOS through `/usr/bin/tcc`, intended for
+  end-user experiments and small programs.
+- TinyCC runtime bundle staged under `/opt/tcc`, rebuilt by the standard build
+  scripts when `BUILD_TCC=1`.
+- Expanded TCC/newlib syscall glue for native userland builds.
+- `/usr/src/armos` source tree installed directly in the root filesystem.
+  ArmOS users can inspect, edit, compile, and run small userland programs from
+  inside ArmOS itself.
+- Userland source snapshot includes public headers, coreutils, programs,
+  `mash`, init, and system tools.
+- `mash` now resolves explicit relative command paths such as `./hello` and
+  `../tool` before `execve`, matching normal shell expectations.
+- Native TCC validation includes:
+  - `hello.c` compile/link/run inside ArmOS;
+  - argument passing through `argv`;
+  - simple newlib `malloc`, `string`, and `stat` paths;
+  - direct execution of locally compiled programs with `./program`;
+  - non-trivial compile/link of the ArmOS `kilo` source.
+- Boot and `uname` version strings updated to `ArmOS 0.3 armv7l`.
+
+### Source-In-Userfs Model
+
+The release intentionally ships userland sources in:
+
+```text
+/usr/src/armos/userland
+```
+
+This is not just documentation. It is part of the product direction: ArmOS users
+should be able to edit code with `kilo`, compile it with native TinyCC, and run
+the result directly in ArmOS.
+
+This does not change the main engineering workflow. Kernel development,
+stabilization, release builds, and contributor work remain host cross-compiled
+from macOS or Linux with `arm-none-eabi-gcc` and the existing build scripts.
+The current native scope is small userland programs, not kernel self-hosting.
+
+Example:
+
+```sh
+tcc /usr/src/armos/userland/coreutils/src/ls.c -o /tmp/ls-tcc
+/tmp/ls-tcc /proc
+```
+
+### Supported Emulator
+
+ArmOS v0.3 keeps QEMU 10.0.2 as the reference emulator. QEMU 11.0.1 has been
+smoke-tested, but its macOS/Cocoa graphical window scaling differs from 10.0.2
+and remains compatible-but-not-reference.
+
+### Known Limitations
+
+- Native TCC support targets small end-user programs first.
+- The kernel still builds with `arm-none-eabi-gcc`; TinyCC is not a kernel
+  compiler target.
+- `/opt/tcc` is generated/staged by the build scripts and remains ignored by
+  Git.
+- Larger ports may still expose missing POSIX/newlib behavior.
+
 ## ArmOS v0.2 - 2026-06-22
 
 ArmOS v0.2 focuses on making the system feel like a small interactive Unix-like

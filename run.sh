@@ -15,6 +15,7 @@ fi
 USERFS_DIR="userfs"
 USERLAND_DIR="userland"
 BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
+BUILD_TCC="${BUILD_TCC:-1}"
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
@@ -68,7 +69,16 @@ fi
 
 echo "=== Rebuilding userland ==="
 make -C "$USERLAND_DIR" clean
-make -C "$USERLAND_DIR" install BUILD_NEWLIB="$BUILD_NEWLIB" NEWLIB_SYSROOT="$NEWLIB_SYSROOT"
+make -C "$USERLAND_DIR" install \
+    BUILD_NEWLIB="$BUILD_NEWLIB" \
+    ENABLE_TCC="$BUILD_TCC" \
+    NEWLIB_SYSROOT="$NEWLIB_SYSROOT"
+
+if [ "$BUILD_TCC" = "1" ]; then
+    echo "=== Building native TinyCC bundle ==="
+    NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_tcc_native.sh
+    rsync -a build/tcc-native/bundle/opt/tcc/ userfs/opt/tcc/
+fi
 
 echo "=== Rebuilding kernel ==="
 make kernel.bin

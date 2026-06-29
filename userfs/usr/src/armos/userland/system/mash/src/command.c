@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <signal.h>
+#include <errno.h>
 #include "arm_os_abi.h"
 #include "../include/mash.h"
 #include "../include/jobs.h"
@@ -166,8 +167,10 @@ static int cmd_cd(int argc, char* argv[]) {
     if (!getcwd(oldpwd, sizeof(oldpwd)))
         oldpwd[0] = '\0';
 
-    if (chdir(target) < 0)
+    if (chdir(target) < 0) {
+        printf("cd: %s: %s\n", target, strerror(errno));
         return 1;
+    }
 
     if (getcwd(newpwd, sizeof(newpwd))) {
         if (oldpwd[0])
