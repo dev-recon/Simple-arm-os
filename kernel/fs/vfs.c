@@ -726,7 +726,7 @@ int allocate_fd(task_t* process)
 {
     int i;
     
-    if (!process || process->type != TASK_TYPE_PROCESS) {
+    if (!process || !process->process) {
         KERROR("NULL PROC\n");
         return -EINVAL;
     }
@@ -744,7 +744,7 @@ int allocate_fd(task_t* process)
 
 void free_fd(task_t* proc, int fd)
 {
-    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
+    if (!proc || !proc->process) {
         KERROR("NULL PROC\n");
         return ;
     }
@@ -768,7 +768,7 @@ void close_cloexec_files(task_t* proc)
 {
     int i;
 
-    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
+    if (!proc || !proc->process) {
         KERROR("NULL PROC\n");
         return ;
     }

@@ -47,41 +47,16 @@ static bool shutdown_process_target(task_t *task)
     return true;
 }
 
-static bool shutdown_is_current_ancestor(task_t *task)
-{
-    task_t *parent;
-    unsigned depth = 0;
-
-    if (!task || !current_task ||
-        current_task->type != TASK_TYPE_PROCESS ||
-        !current_task->process)
-        return false;
-
-    parent = current_task->process->parent;
-    while (parent && depth++ < MAX_TASKS) {
-        if (parent == task)
-            return true;
-        if (parent->type != TASK_TYPE_PROCESS || !parent->process)
-            break;
-        parent = parent->process->parent;
-    }
-
-    return false;
-}
-
 static bool shutdown_signal_target(task_t *task)
 {
     if (!shutdown_process_target(task))
         return false;
 
     /*
-     * Keep the login/init chain that launched shutdown alive until PSCI
-     * SYSTEM_OFF. Otherwise userland init observes the shell exit and starts a
-     * replacement shell during the shutdown grace period.
+     * PID 1 is notified by /sbin/shutdown before entering the kernel poweroff
+     * path. Once init is in shutdown mode, login shells must receive SIGTERM so
+     * they can persist userland state such as command history before VFS sync.
      */
-    if (shutdown_is_current_ancestor(task))
-        return false;
-
     return true;
 }
 

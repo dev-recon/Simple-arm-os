@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <sys/wait.h>
 #include "../include/jobs.h"
+#include "../include/mash.h"
 
 #define JOBS_MAX 32
 #define JOBS_MAX_PIDS 8
@@ -350,7 +351,7 @@ static int jobs_wait_for_job(job_t* job)
         errno = 0;
         pid = waitpid(-job->pgid, &status, WUNTRACED);
         if (pid < 0) {
-            if (errno == EINTR)
+            if (errno == EINTR && !shell_termination_requested())
                 continue;
             return 127;
         }
@@ -378,7 +379,7 @@ static int jobs_wait_for_pid(int pid)
     do {
         errno = 0;
         waited = waitpid(pid, &status, WUNTRACED);
-    } while (waited < 0 && errno == EINTR);
+    } while (waited < 0 && errno == EINTR && !shell_termination_requested());
 
     if (waited != pid)
         return 127;
@@ -668,6 +669,8 @@ int jobs_fg_builtin(int argc, char* argv[])
     while (job->state == JOB_RUNNING) {
         int pid = waitpid(-job->pgid, &status, WUNTRACED);
 
+        if (pid < 0 && errno == EINTR && !shell_termination_requested())
+            continue;
         if (pid <= 0)
             break;
 

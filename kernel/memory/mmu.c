@@ -1040,11 +1040,14 @@ void map_user_stack(void)
 uint32_t allocate_l2_page(bool is_kernel) {
     // Allouer une nouvelle table L2
     void* l2_page = NULL ;
+    (void)is_kernel;
     
-    if(is_kernel)
-        l2_page = allocate_page();
-    else
-        l2_page = allocate_page();
+    //if(is_kernel)
+    //    l2_page = allocate_page();
+    //else
+    //    l2_page = allocate_page();
+
+    l2_page = allocate_page();
 
     if (!l2_page) {
         KERROR("map_user_page: Failed to allocate L2 table\n");

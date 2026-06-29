@@ -26,6 +26,9 @@
 #ifndef SA_RESTART
 #define SA_RESTART 0x01
 #endif
+#ifndef SIGHUP
+#define SIGHUP 1
+#endif
 #ifndef SIGTTIN
 #define SIGTTIN 21
 #endif
@@ -39,6 +42,7 @@ int shell_running = 0;
 
 static char token_buffer[SHELL_BUFFER_SIZE];
 static int shell_status = 0;
+static volatile sig_atomic_t shell_terminate_requested = 0;
 
 #define SHELL_SCRIPT_ARG_MAX 10
 #define SHELL_SCRIPT_STACK_MAX 4
@@ -53,6 +57,12 @@ static shell_script_frame_t script_frames[SHELL_SCRIPT_STACK_MAX];
 static int script_frame_depth = 1;
 
 static void shell_sigchld_handler(int sig);
+static void shell_term_handler(int sig);
+
+int shell_termination_requested(void)
+{
+    return shell_terminate_requested != 0;
+}
 
 static int shell_is_login_shell(void)
 {
@@ -102,11 +112,15 @@ static void shell_install_signal_handlers(void)
     }
 
     signal(SIGCHLD, shell_sigchld_handler);
+    signal(SIGHUP, shell_term_handler);
+    signal(SIGTERM, shell_term_handler);
 }
 
 static void shell_restore_child_signal_handlers(void)
 {
+    signal(SIGHUP, SIG_DFL);
     signal(SIGINT, SIG_DFL);
+    signal(SIGTERM, SIG_DFL);
     signal(SIGTSTP, SIG_DFL);
     signal(SIGTTIN, SIG_DFL);
     signal(SIGTTOU, SIG_DFL);
@@ -129,6 +143,12 @@ static int shell_pgid = 0;
 static void shell_sigchld_handler(int sig)
 {
     (void)sig;
+}
+
+static void shell_term_handler(int sig)
+{
+    (void)sig;
+    shell_terminate_requested = 1;
 }
 
 static int shell_trace_enabled(void)
@@ -228,7 +248,7 @@ static int shell_wait_foreground_child(int child_pid, int* status)
 
     do {
         waited = waitpid(child_pid, status, WUNTRACED);
-    } while (waited < 0 && errno == EINTR);
+    } while (waited < 0 && errno == EINTR && !shell_termination_requested());
 
     return waited;
 }
@@ -1217,7 +1237,7 @@ static int run_pipeline(int argc, char* argv[], int background) {
         int waited = waitpid(-pgid, &status, WUNTRACED);
         int idx;
 
-        if (waited < 0 && errno == EINTR)
+        if (waited < 0 && errno == EINTR && !shell_termination_requested())
             continue;
         if (waited <= 0)
             break;
@@ -2536,6 +2556,9 @@ void shell_run(void) {
     shell_running = 1;
     
     while (shell_running) {
+        if (shell_termination_requested())
+            break;
+
         jobs_reap_background();
         shell_restore_tty_mode();
         shell_print_prompt();
@@ -2543,6 +2566,8 @@ void shell_run(void) {
         SHELL_TRACE("read start");
         char* line = shell_read_line();
         SHELL_TRACE("read done line='%s'", line ? line : "(null)");
+        if (shell_termination_requested())
+            break;
         if (!line) {
             if (shell_line_was_eof()) {
                 if (shell_is_login_shell()) {

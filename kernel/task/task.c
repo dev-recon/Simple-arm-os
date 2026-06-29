@@ -90,6 +90,7 @@ static bool runqueue_contains_locked(task_t* task);
 static void runqueue_enqueue_tail_locked(task_t* task);
 static void runqueue_remove_locked(task_t* task);
 static void runqueue_clear_locked(void);
+static bool scheduler_has_ready_work(void);
 static void task_make_ready_locked(task_t* task);
 void add_task_to_list(task_t* task);
 void remove_task_from_list(task_t* task);
@@ -1644,6 +1645,18 @@ static void for_each_task(task_t* current)
     return ;  /* Pas d'autre tache de meme priorite */
 }
 
+static bool scheduler_has_ready_work(void)
+{
+    unsigned long flags;
+    bool has_work;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    has_work = ready_queue.nr_running > 0;
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    return has_work;
+}
+
 static bool scheduler_entry_allowed(const char* caller, task_t* requested)
 {
     if (!scheduler_initialized || !current_task) {
@@ -2165,14 +2178,16 @@ void idle_task_func(void* arg)
     
     while (1) {
         /*
-         * Before timer preemption existed, idle had to yield in a tight loop.
-         * With the periodic IRQ scheduler, that becomes artificial scheduler
-         * pressure during long idle runs. Sleep until an interrupt, then let
-         * the scheduler pick any task that became runnable.
+         * Before timer preemption existed, idle yielded in a tight loop. With
+         * periodic IRQs that causes idle->idle context-switch storms. We still
+         * scan sleepers after each interrupt, but only enter the scheduler when
+         * a real task became ready.
          */
         __asm__ volatile("cpsie i" ::: "memory");
         __asm__ volatile("wfi" ::: "memory");
-        schedule();
+        for_each_task((task_t*)current_task);
+        if (scheduler_has_ready_work())
+            schedule();
     }
 }
 

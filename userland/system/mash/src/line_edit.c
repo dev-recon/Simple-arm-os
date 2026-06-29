@@ -11,6 +11,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -21,7 +22,7 @@
 
 #define SHELL_HISTORY_SIZE  128
 #define SHELL_COMPLETION_MAX 64
-#define SHELL_HISTORY_FILE "/home/user/.mash_history"
+#define SHELL_HISTORY_BASENAME ".mash_history"
 #define SHELL_COMMAND_CACHE_MAX 128
 #define SHELL_COMMAND_CACHE_NAME_MAX 80
 
@@ -33,6 +34,18 @@ static int command_cache_count = 0;
 static int command_cache_valid = 0;
 static char command_cache_path[SHELL_BUFFER_SIZE];
 static int shell_line_eof = 0;
+
+static void shell_history_path(char* path, size_t path_size) {
+    const char* home = getenv("HOME");
+
+    if (!path || path_size == 0)
+        return;
+
+    if (!home || !*home)
+        home = "/home/user";
+
+    snprintf(path, path_size, "%s/%s", home, SHELL_HISTORY_BASENAME);
+}
 
 static int le_starts_with(const char* s, const char* prefix) {
     while (*prefix) {
@@ -112,10 +125,12 @@ static void shell_history_add(const char* line) {
 }
 
 static void shell_history_save(void) {
+    char path[160];
     int fd;
     int i;
 
-    fd = open(SHELL_HISTORY_FILE, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+    shell_history_path(path, sizeof(path));
+    fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0600);
     if (fd < 0)
         return;
 
@@ -135,6 +150,7 @@ static void shell_history_load_line(char* line) {
 }
 
 static void shell_history_load(void) {
+    char path[160];
     char read_buf[256];
     char line[SHELL_BUFFER_SIZE];
     int line_len = 0;
@@ -144,7 +160,8 @@ static void shell_history_load(void) {
 
     shell_history_count = 0;
 
-    fd = open(SHELL_HISTORY_FILE, O_RDONLY, 0);
+    shell_history_path(path, sizeof(path));
+    fd = open(path, O_RDONLY, 0);
     if (fd < 0)
         return;
 
@@ -716,6 +733,9 @@ char* shell_read_line(void) {
     shell_line_eof = 0;
 
     while (1) {
+        if (shell_termination_requested())
+            return NULL;
+
         c = getc_tty();
         if (c == -2) {
             shell_reap_jobs_during_edit(input_buffer, len, cursor);
@@ -723,6 +743,9 @@ char* shell_read_line(void) {
             continue;
         }
         if (c < 0) {
+            if (shell_termination_requested())
+                return NULL;
+
             if (len > 0)
                 printf("\r\n");
             else

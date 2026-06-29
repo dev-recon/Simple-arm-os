@@ -70,6 +70,7 @@ char* shell_read_line(void);
 int shell_line_was_eof(void);
 void shell_line_edit_init(void);
 void shell_line_edit_shutdown(void);
+int shell_termination_requested(void);
 
 #define SHELL_BUFFER_SIZE 256
 #define SHELL_MAX_ARGS      64

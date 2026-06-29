@@ -45,6 +45,7 @@
 #include <kernel/kernel_tasks.h>
 
 #include <kernel/tty.h>
+#include <kernel/exceptions.h>
 
 //extern void test_utoa_direct();
 //extern void simple_utoa(unsigned int val, char *str, int base);
@@ -316,6 +317,11 @@ void kernel_main(void)
     //trigger_timer_interrupt();
     /* Phase 5: Gestion des processus (APReS allocateurs) */
     init_process_system();
+
+    if (coredumpd_start() == 0)
+        KBOOT_OK("Core: coredump daemon");
+    else
+        KBOOT_WARN("Core: coredump daemon unavailable");
 
     if (tty1_graphics_ready) {
         if (display_start_daemon() == 0)
