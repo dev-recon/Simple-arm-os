@@ -231,12 +231,30 @@ halt_secondary_cpu:
     /* Obtenir l'ID du CPU */
     mrc p15, 0, r0, c0, c0, 5
     and r0, r0, #3
+
+    /*
+     * Give the parked CPU a private early stack. It must not use CPU0's boot
+     * stack: later SMP bring-up will need to call small assembly/C helpers from
+     * the holding pen before the scheduler owns the CPU.
+     *
+     * stack(cpu N) = __smp_stack_bottom + (N + 1) * 4096
+     */
+    ldr r1, =__smp_stack_bottom
+    add r2, r0, #1
+    lsl r2, r2, #12
+    add sp, r1, r2
+    and sp, sp, #~7
     
-    /* Pour debug: vous pourriez signaler quel CPU est arrete */
-    /* (necessiterait une fonction d'affichage) */
+    /* Install VBAR so unexpected synchronous exceptions at least vector to the
+     * normal table. IRQ/FIQ/async abort stay masked while parked.
+     */
+    ldr r1, =vectors
+    mcr p15, 0, r1, c12, c0, 0
+    dsb
+    isb
     
 secondary_wait_loop:
-    wfi                         /* Wait For Interrupt */
+    wfe                         /* Wait For Event; future release will use SEV */
     b secondary_wait_loop       /* Boucle infinie */
 
 /*
