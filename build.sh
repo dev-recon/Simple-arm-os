@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARCH="${ARCH:-arm-none-eabi-}"
 BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
+BUILD_TCC="${BUILD_TCC:-1}"
 DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
 NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$DEFAULT_NEWLIB_SYSROOT}"
 
@@ -47,9 +48,16 @@ echo "=== Rebuilding userland ==="
 make -C userland clean
 make -C userland install \
     BUILD_NEWLIB="$BUILD_NEWLIB" \
+    ENABLE_TCC="$BUILD_TCC" \
     ARCH="$ARCH" \
     NEWLIB_SYSROOT="$NEWLIB_SYSROOT" \
     NEWLIB_LIBC="$NEWLIB_SYSROOT/lib/libc.a"
+
+if [ "$BUILD_TCC" = "1" ]; then
+    echo "=== Building native TinyCC bundle ==="
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_tcc_native.sh
+    rsync -a build/tcc-native/bundle/opt/tcc/ userfs/opt/tcc/
+fi
 
 echo "=== Rebuilding kernel ==="
 make kernel.bin ARCH="$ARCH" CROSS_COMPILE="$ARCH"

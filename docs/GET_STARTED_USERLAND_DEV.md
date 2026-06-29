@@ -313,6 +313,30 @@ Example:
 
 This keeps imported tools separate from native ArmOS core utilities.
 
+## Native Programming Inside ArmOS
+
+ArmOS v0.3 installs a source snapshot into the root filesystem:
+
+```text
+/usr/src/armos/userland
+```
+
+This lets end users inspect and modify small userland programs from inside
+ArmOS itself. The intended in-system workflow is:
+
+```sh
+cd /tmp
+cp /usr/src/armos/userland/coreutils/src/ls.c ls.c
+kilo ls.c
+tcc ls.c -o ls-test
+./ls-test /proc
+```
+
+For contributors, the normal development and stabilization workflow still
+happens on the host with the cross toolchain. Native TinyCC is for small
+programs and compatibility experiments inside ArmOS, not for replacing the
+release build path.
+
 ## When A Userland Change Needs A Kernel Change
 
 Start in userland. If a normal POSIX/newlib API already exists, use it.

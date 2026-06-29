@@ -56,6 +56,8 @@ Status: active.
 
 Immediate goals:
 - Keep newlib as the reference libc.
+- Keep `arm-none-eabi-gcc` as the kernel compiler and move userland toward
+  native TinyCC incrementally.
 - Fill the syscalls needed by small Unix tools and TCC before attempting larger
   packages.
 - Keep syscall ABI glue documented and tested in `systest`.
@@ -67,6 +69,8 @@ First milestone:
   process-control syscalls as stable contracts.
 - Keep experimental TCC sources out of the default userland build unless
   `ENABLE_TCC=1` is set.
+- Native TCC can compile and run `hello.c`, and can compile/link the ArmOS kilo
+  source as a first non-trivial interactive program.
 
 ## 5. VFS And ext2 Hardening
 
