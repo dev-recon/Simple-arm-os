@@ -65,6 +65,8 @@
 #include <fcntl.h>
 #include <signal.h>
 
+#define KILO_TAB_WIDTH 3
+
 /* Syntax highlight types */
 #define HL_NORMAL 0
 #define HL_NONPRINT 1
@@ -75,6 +77,7 @@
 #define HL_STRING 6
 #define HL_NUMBER 7
 #define HL_MATCH 8      /* Search match. */
+#define HL_PREPROC 9    /* C preprocessor directive. */
 
 #define HL_HIGHLIGHT_STRINGS (1<<0)
 #define HL_HIGHLIGHT_NUMBERS (1<<1)
@@ -150,6 +153,40 @@ enum KEY_ACTION{
 };
 
 void editorSetStatusMessage(const char *fmt, ...);
+void editorAtExit(void);
+void editorMoveCursor(int key);
+void editorDelChar(void);
+
+static void editorDie(const char *msg) {
+    editorAtExit();
+    fprintf(stderr, "kilo: %s\n", msg);
+    exit(1);
+}
+
+static void *editorRealloc(void *ptr, size_t size) {
+    void *newptr;
+
+    if (size == 0) {
+        free(ptr);
+        return NULL;
+    }
+
+    newptr = realloc(ptr, size);
+    if (!newptr)
+        editorDie("out of memory");
+    return newptr;
+}
+
+static void *editorMalloc(size_t size) {
+    void *ptr;
+
+    if (size == 0)
+        size = 1;
+    ptr = malloc(size);
+    if (!ptr)
+        editorDie("out of memory");
+    return ptr;
+}
 
 /* =========================== Syntax highlights DB =========================
  *
@@ -409,7 +446,7 @@ int editorRowHasOpenComment(erow *row) {
 /* Set every byte of row->hl (that corresponds to every character in the line)
  * to the right syntax highlight type (HL_* defines). */
 void editorUpdateSyntax(erow *row) {
-    row->hl = realloc(row->hl,row->rsize);
+    row->hl = editorRealloc(row->hl,row->rsize ? (size_t)row->rsize : 1);
     memset(row->hl,HL_NORMAL,row->rsize);
 
     if (E.syntax == NULL) return; /* No syntax, everything is HL_NORMAL. */
@@ -438,10 +475,15 @@ void editorUpdateSyntax(erow *row) {
         in_comment = 1;
 
     while(*p) {
+        if (prev_sep && *p == '#') {
+            memset(row->hl+i,HL_PREPROC,row->rsize-i);
+            return;
+        }
+
         /* Handle // comments. */
         if (prev_sep && *p == scs[0] && *(p+1) == scs[1]) {
             /* From here to end is a comment */
-            memset(row->hl+i,HL_COMMENT,row->size-i);
+            memset(row->hl+i,HL_COMMENT,row->rsize-i);
             return;
         }
 
@@ -472,8 +514,12 @@ void editorUpdateSyntax(erow *row) {
         if (in_string) {
             row->hl[i] = HL_STRING;
             if (*p == '\\') {
-                row->hl[i+1] = HL_STRING;
-                p += 2; i += 2;
+                if (i + 1 < row->rsize) {
+                    row->hl[i+1] = HL_STRING;
+                    p += 2; i += 2;
+                } else {
+                    p++; i++;
+                }
                 prev_sep = 0;
                 continue;
             }
@@ -549,13 +595,14 @@ void editorUpdateSyntax(erow *row) {
 int editorSyntaxToColor(int hl) {
     switch(hl) {
     case HL_COMMENT:
-    case HL_MLCOMMENT: return 36;     /* cyan */
-    case HL_KEYWORD1: return 33;    /* yellow */
-    case HL_KEYWORD2: return 32;    /* green */
-    case HL_STRING: return 35;      /* magenta */
-    case HL_NUMBER: return 31;      /* red */
-    case HL_MATCH: return 34;      /* blu */
-    default: return 37;             /* white */
+    case HL_MLCOMMENT: return 90;   /* Dark+ gray comments. */
+    case HL_KEYWORD1: return 95;    /* Dark+ purple keywords. */
+    case HL_KEYWORD2: return 91;    /* Dark+ salmon/orange-ish types. */
+    case HL_STRING: return 96;      /* Dark+ light blue strings/includes. */
+    case HL_NUMBER: return 93;      /* Dark+ yellow-green approximation. */
+    case HL_MATCH: return 94;       /* Bright blue search matches. */
+    case HL_PREPROC: return 95;     /* Preprocessor directives are purple. */
+    default: return 37;             /* Foreground/default white. */
     }
 }
 
@@ -586,25 +633,25 @@ void editorUpdateRow(erow *row) {
     unsigned int tabs = 0, nonprint = 0;
     int j, idx;
 
-   /* Create a version of the row we can directly print on the screen,
+    /* Create a version of the row we can directly print on the screen,
      * respecting tabs, substituting non printable characters with '?'. */
     free(row->render);
     for (j = 0; j < row->size; j++)
         if (row->chars[j] == TAB) tabs++;
 
     unsigned long long allocsize =
-        (unsigned long long) row->size + tabs*8 + nonprint*9 + 1;
+        (unsigned long long) row->size + tabs*KILO_TAB_WIDTH + nonprint*9 + 1;
     if (allocsize > UINT32_MAX) {
         printf("Some line of the edited file is too long for kilo\n");
         exit(1);
     }
 
-    row->render = malloc(row->size + tabs*8 + nonprint*9 + 1);
+    row->render = editorMalloc((size_t)allocsize);
     idx = 0;
     for (j = 0; j < row->size; j++) {
         if (row->chars[j] == TAB) {
-            row->render[idx++] = ' ';
-            while((idx+1) % 8 != 0) row->render[idx++] = ' ';
+            for (int k = 0; k < KILO_TAB_WIDTH; k++)
+                row->render[idx++] = ' ';
         } else {
             row->render[idx++] = row->chars[j];
         }
@@ -620,13 +667,13 @@ void editorUpdateRow(erow *row) {
  * if required. */
 void editorInsertRow(int at, char *s, size_t len) {
     if (at > E.numrows) return;
-    E.row = realloc(E.row,sizeof(erow)*(E.numrows+1));
+    E.row = editorRealloc(E.row,sizeof(erow)*(E.numrows+1));
     if (at != E.numrows) {
         memmove(E.row+at+1,E.row+at,sizeof(E.row[0])*(E.numrows-at));
         for (int j = at+1; j <= E.numrows; j++) E.row[j].idx++;
     }
     E.row[at].size = len;
-    E.row[at].chars = malloc(len+1);
+    E.row[at].chars = editorMalloc(len+1);
     memcpy(E.row[at].chars,s,len+1);
     E.row[at].hl = NULL;
     E.row[at].hl_oc = 0;
@@ -674,7 +721,7 @@ char *editorRowsToString(int *buflen) {
     *buflen = totlen;
     totlen++; /* Also make space for nulterm */
 
-    p = buf = malloc(totlen);
+    p = buf = editorMalloc(totlen);
     for (j = 0; j < E.numrows; j++) {
         memcpy(p,E.row[j].chars,E.row[j].size);
         p += E.row[j].size;
@@ -693,14 +740,14 @@ void editorRowInsertChar(erow *row, int at, int c) {
          * current length by more than a single character. */
         int padlen = at-row->size;
         /* In the next line +2 means: new char and null term. */
-        row->chars = realloc(row->chars,row->size+padlen+2);
+        row->chars = editorRealloc(row->chars,row->size+padlen+2);
         memset(row->chars+row->size,' ',padlen);
         row->chars[row->size+padlen+1] = '\0';
         row->size += padlen+1;
     } else {
         /* If we are in the middle of the string just make space for 1 new
          * char plus the (already existing) null term. */
-        row->chars = realloc(row->chars,row->size+2);
+        row->chars = editorRealloc(row->chars,row->size+2);
         memmove(row->chars+at+1,row->chars+at,row->size-at+1);
         row->size++;
     }
@@ -711,7 +758,7 @@ void editorRowInsertChar(erow *row, int at, int c) {
 
 /* Append the string 's' at the end of a row */
 void editorRowAppendString(erow *row, char *s, size_t len) {
-    row->chars = realloc(row->chars,row->size+len+1);
+    row->chars = editorRealloc(row->chars,row->size+len+1);
     memcpy(row->chars+row->size,s,len);
     row->size += len;
     row->chars[row->size] = '\0';
@@ -723,8 +770,9 @@ void editorRowAppendString(erow *row, char *s, size_t len) {
 void editorRowDelChar(erow *row, int at) {
     if (row->size <= at) return;
     memmove(row->chars+at,row->chars+at+1,row->size-at);
-    editorUpdateRow(row);
     row->size--;
+    row->chars[row->size] = '\0';
+    editorUpdateRow(row);
     E.dirty++;
 }
 
@@ -749,12 +797,136 @@ void editorInsertChar(int c) {
     E.dirty++;
 }
 
+static int editorMatchingClose(int c) {
+    switch (c) {
+    case '(': return ')';
+    case '[': return ']';
+    case '{': return '}';
+    default: return 0;
+    }
+}
+
+static int editorCharAtCursor(void) {
+    int filerow = E.rowoff+E.cy;
+    int filecol = E.coloff+E.cx;
+    erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
+
+    if (!row || filecol < 0 || filecol >= row->size)
+        return 0;
+    return (unsigned char)row->chars[filecol];
+}
+
+static int editorRowLeadingIndent(erow *row) {
+    int indent = 0;
+
+    if (!row)
+        return 0;
+
+    while (indent < row->size && row->chars[indent] == ' ')
+        indent++;
+    return indent;
+}
+
+static int editorLinePrefixIsIndent(erow *row, int filecol) {
+    int i;
+
+    if (!row || filecol < 0 || filecol > row->size)
+        return 0;
+
+    for (i = 0; i < filecol; i++) {
+        if (row->chars[i] != ' ')
+            return 0;
+    }
+    return 1;
+}
+
+static void editorInsertSpaces(int count) {
+    while (count-- > 0)
+        editorInsertChar(' ');
+}
+
+void editorInsertAutoPair(int open) {
+    int close = editorMatchingClose(open);
+
+    if (!close) {
+        editorInsertChar(open);
+        return;
+    }
+
+    editorInsertChar(open);
+    if (editorCharAtCursor() != close) {
+        editorInsertChar(close);
+        editorMoveCursor(ARROW_LEFT);
+    }
+}
+
+static void editorOutdentBeforeCloseBrace(void) {
+    int filerow = E.rowoff+E.cy;
+    int filecol = E.coloff+E.cx;
+    erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
+    int remove;
+
+    if (!editorLinePrefixIsIndent(row, filecol))
+        return;
+
+    remove = filecol < KILO_TAB_WIDTH ? filecol : KILO_TAB_WIDTH;
+    while (remove-- > 0) {
+        editorRowDelChar(row, filecol - 1);
+        filecol--;
+        if (E.cx > 0)
+            E.cx--;
+        else if (E.coloff > 0)
+            E.coloff--;
+    }
+}
+
+static int editorLineEndsWith(erow *row, int filecol, const char *suffix) {
+    int len = strlen(suffix);
+
+    if (!row || filecol < len || filecol > row->size)
+        return 0;
+    return memcmp(row->chars + filecol - len, suffix, len) == 0;
+}
+
+static void editorDeleteBeforeCursor(int count) {
+    while (count-- > 0)
+        editorDelChar();
+}
+
+static void editorInsertString(const char *s) {
+    while (*s)
+        editorInsertChar((unsigned char)*s++);
+}
+
+static int editorTrySnippetCompletion(void) {
+    int filerow = E.rowoff+E.cy;
+    int filecol = E.coloff+E.cx;
+    erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
+
+    if (editorLineEndsWith(row, filecol, "#in")) {
+        editorDeleteBeforeCursor(3);
+        editorInsertString("#include <>");
+        editorMoveCursor(ARROW_LEFT);
+        return 1;
+    }
+
+    if (editorLineEndsWith(row, filecol, "#de")) {
+        editorDeleteBeforeCursor(3);
+        editorInsertString("#define ");
+        return 1;
+    }
+
+    return 0;
+}
+
 /* Inserting a newline is slightly complex as we have to handle inserting a
  * newline in the middle of a line, splitting the line as needed. */
 void editorInsertNewline(void) {
     int filerow = E.rowoff+E.cy;
     int filecol = E.coloff+E.cx;
     erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
+    int indent = 0;
+    int add_block_indent = 0;
 
     if (!row) {
         if (filerow == E.numrows) {
@@ -766,8 +938,12 @@ void editorInsertNewline(void) {
     /* If the cursor is over the current line size, we want to conceptually
      * think it's just over the last character. */
     if (filecol >= row->size) filecol = row->size;
+    indent = editorRowLeadingIndent(row);
+    add_block_indent = (filecol > 0 && row->chars[filecol-1] == '{');
     if (filecol == 0) {
         editorInsertRow(filerow,"",0);
+        indent = 0;
+        add_block_indent = 0;
     } else {
         /* We are in the middle of a line. Split it between two rows. */
         editorInsertRow(filerow+1,row->chars+filecol,row->size-filecol);
@@ -784,6 +960,7 @@ fixcursor:
     }
     E.cx = 0;
     E.coloff = 0;
+    editorInsertSpaces(indent + (add_block_indent ? KILO_TAB_WIDTH : 0));
 }
 
 /* Delete the char at the current prompt position. */
@@ -829,7 +1006,7 @@ int editorOpen(char *filename) {
     E.dirty = 0;
     free(E.filename);
     size_t fnlen = strlen(filename)+1;
-    E.filename = malloc(fnlen);
+    E.filename = editorMalloc(fnlen);
     memcpy(E.filename,filename,fnlen);
 
     fp = fopen(filename,"r");
@@ -892,9 +1069,7 @@ struct abuf {
 #define ABUF_INIT {NULL,0}
 
 void abAppend(struct abuf *ab, const char *s, int len) {
-    char *new = realloc(ab->b,ab->len+len);
-
-    if (new == NULL) return;
+    char *new = editorRealloc(ab->b,ab->len+len);
     memcpy(new+ab->len,s,len);
     ab->b = new;
     ab->len += len;
@@ -1016,8 +1191,10 @@ void editorRefreshScreen(void) {
     erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
     if (row) {
         for (j = E.coloff; j < (E.cx+E.coloff); j++) {
-            if (j < row->size && row->chars[j] == TAB) cx += 7-((cx)%8);
-            cx++;
+            if (j < row->size && row->chars[j] == TAB)
+                cx += KILO_TAB_WIDTH;
+            else
+                cx++;
         }
     }
     snprintf(buf,sizeof(buf),"\x1b[%d;%dH",E.cy+1,cx);
@@ -1117,9 +1294,10 @@ void editorFind(int fd) {
                 last_match = current;
                 if (row->hl) {
                     saved_hl_line = current;
-                    saved_hl = malloc(row->rsize);
+                    saved_hl = editorMalloc(row->rsize);
                     memcpy(saved_hl,row->hl,row->rsize);
-                    memset(row->hl+match_offset,HL_MATCH,qlen);
+                    if (match_offset + qlen <= row->rsize)
+                        memset(row->hl+match_offset,HL_MATCH,qlen);
                 }
                 E.cy = 0;
                 E.cx = match_offset;
@@ -1225,6 +1403,10 @@ void editorProcessKeypress(int fd) {
     case ENTER:         /* Enter */
         editorInsertNewline();
         break;
+    case TAB:
+        if (!editorTrySnippetCompletion())
+            editorInsertChar(TAB);
+        break;
     case CTRL_C:        /* Ctrl-c */
         if (E.dirty) {
             editorSetStatusMessage("Unsaved changes. Press Ctrl-Q to quit or Ctrl-S to save.");
@@ -1278,6 +1460,21 @@ void editorProcessKeypress(int fd) {
         break;
     case ESC:
         /* Nothing to do for ESC in this mode. */
+        break;
+    case '(':
+    case '[':
+    case '{':
+        editorInsertAutoPair(c);
+        break;
+    case ')':
+    case ']':
+    case '}':
+        if (c == '}')
+            editorOutdentBeforeCloseBrace();
+        if (editorCharAtCursor() == c)
+            editorMoveCursor(ARROW_RIGHT);
+        else
+            editorInsertChar(c);
         break;
     default:
         editorInsertChar(c);
