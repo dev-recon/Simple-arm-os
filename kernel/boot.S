@@ -34,6 +34,13 @@
  */
 _start:
     /* === PHASE 1: SAUVEGARDE ET VeRIFICATIONS === */
+
+    /*
+     * Mask exceptions before deciding whether this CPU is the boot CPU.
+     * Secondary CPUs do not have mode stacks or VBAR set yet; letting them take
+     * an IRQ while parked can corrupt early boot state or steal UART input.
+     */
+    cpsid aif                   /* Disable async aborts, IRQ and FIQ */
     
     /* Sauvegarder le DTB address immediatement */
     ldr r3, =dtb_address
@@ -46,9 +53,6 @@ _start:
     bne halt_secondary_cpu      /* Arreter les autres CPUs */
     
     /* === PHASE 2: CONFIGURATION SeCURITe === */
-    
-    /* Desactiver toutes les interruptions */
-    cpsid if                    /* Disable IRQ and FIQ */
     
     /* Configuration systeme de base */
     bl setup_cpu_state
@@ -220,7 +224,9 @@ enable_caches_and_optimizations:
  * Gestion des CPUs secondaires (multi-core)
  */
 halt_secondary_cpu:
-    /* CPU secondaire detecte - le mettre en attente */
+    /* CPU secondaire detecte - le mettre en attente.
+     * Interrupts are already masked by _start before reaching this point.
+     */
     
     /* Obtenir l'ID du CPU */
     mrc p15, 0, r0, c0, c0, 5
