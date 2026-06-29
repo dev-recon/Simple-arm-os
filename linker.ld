@@ -95,6 +95,20 @@ SECTIONS
         . += 8192;            /* 4KB pour SVC - mode principal du kernel */
         __svc_stack_top = .;
     } > RAM
+
+    /*
+     * Early per-CPU parking stacks for secondary CPUs.
+     *
+     * They are used before the normal task scheduler exists. CPU0 keeps the
+     * historical boot stack; CPU1..CPU3 can safely park here while waiting for
+     * the future SMP release path.
+     */
+    .smpstacks : {
+        . = ALIGN(4096);
+        __smp_stack_bottom = .;
+        . += 4096 * 4;
+        __smp_stack_top = .;
+    } > RAM
     
     /* === HEAP AUTOMATIQUE === */
     . = ALIGN(4096);
