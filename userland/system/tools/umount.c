@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include "arm_os_abi.h"
 
 static void usage(void)
 {

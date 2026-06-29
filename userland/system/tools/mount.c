@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include "arm_os_abi.h"
 
 static void usage(void)
 {

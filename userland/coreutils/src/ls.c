@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include "arm_os_abi.h"
 
 #define BUF_SIZE 4096
 #define LS_MAX_SIMPLE_ENTRIES 128
