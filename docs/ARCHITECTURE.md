@@ -288,6 +288,35 @@ Useful diagnostics:
 - crash dumps print `TTBR0`, `TTBR1`, `TTBCR`, and page-table walks;
 - procfs/task diagnostics should remain ASID-aware.
 
+## SMP Bring-Up Model
+
+ArmOS is currently a single-online-CPU kernel, but SMP bring-up has started by
+making low-level primitives CPU-aware before secondary CPUs are released.
+
+Current SMP contract:
+
+- only the boot CPU is online;
+- `smp_processor_id()` reads the ARM MPIDR CPU id;
+- `smp_init_boot_cpu()` records the boot CPU during early kernel startup;
+- spinlocks use ARMv7 `LDREX` / `STREX`, not compiler test-and-set helpers;
+- spinlocks record the owning CPU for diagnostics;
+- no secondary CPU executes scheduler, MMU, VFS, or userland code yet.
+
+The intended bring-up sequence is deliberately conservative:
+
+1. make atomics, spinlocks, and CPU identity correct while still running
+   `-smp 1`;
+2. start CPU1 into a private idle loop with its own stack and GIC CPU interface;
+3. keep one global scheduler lock and one global run queue initially;
+4. add TLB shootdown before allowing user address spaces to run on multiple CPUs;
+5. audit shared kernel structures: task lists, ready queues, ASIDs, physical
+   allocator, VFS mounts, file descriptors, TTY state, and signal queues;
+6. only then consider per-CPU run queues and load balancing.
+
+Do not let secondary CPUs run general kernel code until TLB shootdown and shared
+structure locking are explicit. A multi-core kernel that occasionally works is
+less useful than a single-core kernel with clear invariants.
+
 ## MMIO Mapping
 
 Drivers should use the private kernel MMIO aliases, not raw low physical device

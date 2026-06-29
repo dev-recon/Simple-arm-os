@@ -17,109 +17,117 @@
  */
 
 #include <kernel/spinlock.h>
+#include <kernel/smp.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
+#include <asm/arm.h>
 
-/**
- * Initialiser un spinlock
- */
+static inline int spin_atomic_try_acquire(volatile uint32_t* locked)
+{
+    uint32_t old;
+    uint32_t status;
+
+    /*
+     * ARMv7 exclusive monitor sequence:
+     * - LDREX observes the current lock word.
+     * - If it is zero, STREX tries to store one.
+     * - STREX succeeds only if no other CPU modified the word meanwhile.
+     *
+     * CLREX is used on the already-locked path so this CPU does not keep a
+     * stale exclusive reservation while it goes into WFE.
+     */
+    __asm__ volatile(
+        "ldrex  %0, [%2]\n"
+        "cmp    %0, #0\n"
+        "bne    1f\n"
+        "strex  %1, %3, [%2]\n"
+        "b      2f\n"
+        "1:\n"
+        "clrex\n"
+        "mov    %1, #1\n"
+        "2:\n"
+        : "=&r"(old), "=&r"(status)
+        : "r"(locked), "r"(1U)
+        : "cc", "memory");
+
+    return old == 0 && status == 0;
+}
+
 void init_spinlock(spinlock_t* lock)
 {
     if (!lock) return;
     
     lock->locked = 0;
-    lock->owner = 0;
+    lock->owner = SPINLOCK_NO_OWNER;
     lock->count = 0;
     lock->name = "unnamed";
 }
 
-/**
- * Initialiser un spinlock avec un nom
- */
 void init_spinlock_named(spinlock_t* lock, const char* name)
 {
     if (!lock) return;
     
     lock->locked = 0;
-    lock->owner = 0;
+    lock->owner = SPINLOCK_NO_OWNER;
     lock->count = 0;
     lock->name = name ? name : "unnamed";
 }
 
-/**
- * Acquerir un spinlock (attente active)
- * Utilise les instructions atomiques ARM
- */
 void spin_lock(spinlock_t* lock)
 {
     if (!lock) return;
-    
-    /* Boucle d'attente avec test-and-set atomique */
-    while (__sync_lock_test_and_set(&lock->locked, 1)) {
-        /* Attente active avec WFE (Wait For Event) pour economiser l'energie */
-        __asm__ volatile("wfe" ::: "memory");
-    }
-    
-    /* Barriere memoire pour empecher la reorganisation des acces */
-    __asm__ volatile("dmb" ::: "memory");
-    
-    /* Mettre a jour les infos de debug */
-    lock->owner = 0; /* Pour l'instant, mono-CPU */
-    lock->count++;
 
-    //spin_dump_info(lock);
+    for (;;) {
+        if (spin_atomic_try_acquire(&lock->locked))
+            break;
+
+        /*
+         * Do not burn the interconnect while another CPU owns the lock.
+         * spin_unlock() emits SEV after releasing the word.
+         */
+        wait_for_event();
+    }
+
+    data_memory_barrier();
+    lock->owner = smp_processor_id();
+    lock->count++;
 }
 
-/**
- * Liberer un spinlock
- */
 void spin_unlock(spinlock_t* lock)
 {
     if (!lock) return;
     
-    /* Verifier qu'on detient bien le lock */
     if (!lock->locked) {
         KERROR("spin_unlock: Lock '%s' not held!\n", lock->name);
         return;
     }
-    
-    /* Nettoyer les infos de debug */
-    lock->owner = 0;
-    
-    /* Barriere memoire avant liberation */
-    __asm__ volatile("dmb" ::: "memory");
-    
-    /* Liberation atomique */
-    __sync_lock_release(&lock->locked);
-    
-    /* Reveiller les autres CPU en attente */
-    __asm__ volatile("sev" ::: "memory");
+
+    if (lock->owner != smp_processor_id()) {
+        KERROR("spin_unlock: CPU%u releasing lock '%s' owned by CPU%u\n",
+               smp_processor_id(), lock->name, lock->owner);
+    }
+
+    lock->owner = SPINLOCK_NO_OWNER;
+    data_memory_barrier();
+    lock->locked = 0;
+    data_sync_barrier();
+    send_event();
 }
 
-/**
- * Essayer d'acquerir un spinlock sans attendre
- * Retourne 1 si acquis, 0 sinon
- */
 int spin_trylock(spinlock_t* lock)
 {
     if (!lock) return 0;
     
-    /* Tentative d'acquisition atomique */
-    if (__sync_lock_test_and_set(&lock->locked, 1) == 0) {
-        /* Lock acquis avec succes */
-        __asm__ volatile("dmb" ::: "memory");
-        lock->owner = 0;
+    if (spin_atomic_try_acquire(&lock->locked)) {
+        data_memory_barrier();
+        lock->owner = smp_processor_id();
         lock->count++;
         return 1;
     }
-    
-    /* Lock deja pris */
+
     return 0;
 }
 
-/**
- * Acquerir un spinlock en sauvegardant les interruptions
- */
 void spin_lock_irqsave(spinlock_t* lock, unsigned long* flags)
 {
     if (!lock || !flags) return;
@@ -127,47 +135,32 @@ void spin_lock_irqsave(spinlock_t* lock, unsigned long* flags)
     const unsigned long IF_MASK = 0xC0UL; /* bits 7 (I) et 6 (F) */
     unsigned long cpsr;
 
-    /* Sauvegarder l'etat des interruptions et les desactiver */
     __asm__ volatile(
-        "mrs %0, cpsr\n\t"          /* Lire CPSR */
-        "cpsid i"                   /* Desactiver IRQ */
+        "mrs %0, cpsr\n\t"
+        "cpsid i"
         : "=r" (cpsr)
         :
         : "memory"
     );
 
-    /* Conserver uniquement les bits I/F */
     *flags = cpsr & IF_MASK;
-    
-    /* Acquerir le lock */
     spin_lock(lock);
 }
 
-/**
- * Liberer un spinlock en restaurant les interruptions
- */
 void spin_unlock_irqrestore(spinlock_t* lock, unsigned long flags)
 {
     if (!lock) return;
     
-    /* Liberer le lock */
     spin_unlock(lock);
 
-    /* Restaurer uniquement les bits IRQ/FIQ du CPSR, laisser le reste tel quel */
     unsigned long cpsr_now, to_write;
 
-    /* lire CPSR courant */
     __asm__ volatile("mrs %0, cpsr" : "=r"(cpsr_now) );
 
-    /* Ne toucher qu'aux bits I(7) et F(6) :
-       - on garde tous les autres bits de cpsr_now,
-       - on remplace uniquement les bits I/F par ceux de flags */
     const unsigned long IF_MASK = 0xC0UL; /* bits 7 (I) et 6 (F) */
 
     to_write = (cpsr_now & ~IF_MASK) | (flags & IF_MASK);
 
-    
-    /* Restaurer l'etat des interruptions */
     __asm__ volatile(
         "msr cpsr_c, %0"
         :
@@ -176,9 +169,6 @@ void spin_unlock_irqrestore(spinlock_t* lock, unsigned long flags)
     );
 }
 
-/**
- * Verifier si un spinlock est acquis
- */
 int spin_is_locked(spinlock_t* lock)
 {
     if (!lock) return 0;
@@ -186,9 +176,6 @@ int spin_is_locked(spinlock_t* lock)
     return lock->locked != 0;
 }
 
-/**
- * Afficher les informations d'un spinlock (debug)
- */
 void spin_dump_info(spinlock_t* lock)
 {
     if (!lock) {
@@ -199,36 +186,29 @@ void spin_dump_info(spinlock_t* lock)
     KINFO("=== Spinlock Info ===\n");
     KINFO("  Name:     %s\n", lock->name);
     KINFO("  Locked:   %s\n", lock->locked ? "YES" : "NO");
-    KINFO("  Owner:    %u\n", lock->owner);
+    if (lock->owner == SPINLOCK_NO_OWNER)
+        KINFO("  Owner:    none\n");
+    else
+        KINFO("  Owner:    CPU%u\n", lock->owner);
     KINFO("  Count:    %u\n", lock->count);
     KINFO("  Address:  %p\n", lock);
     KINFO("====================\n");
 }
 
-/**
- * Obtenir le nom d'un spinlock
- */
 const char* spin_get_name(spinlock_t* lock)
 {
     return lock ? lock->name : "NULL";
 }
 
 #ifdef DEBUG_SPINLOCKS
-/**
- * Verifier l'usage recursif d'un spinlock (debug uniquement)
- */
 void spin_debug_check_recursive(spinlock_t* lock)
 {
     if (!lock) return;
     
-    if (lock->locked && lock->owner == 0) { /* Mono-CPU pour l'instant */
+    if (lock->locked && lock->owner == smp_processor_id()) {
         KERROR("DEADLOCK: Recursive lock attempt on '%s'!\n", lock->name);
-        
-        /* Afficher les informations du lock */
         spin_dump_info(lock);
-        
-        /* Arreter le systeme en cas de deadlock */
-        while (1) __asm__ volatile("wfe");
+        while (1) wait_for_event();
     }
 }
 #endif
