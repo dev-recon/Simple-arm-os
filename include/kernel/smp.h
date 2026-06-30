@@ -28,7 +28,11 @@
 void smp_init_boot_cpu(void);
 uint32_t smp_processor_id(void);
 uint32_t smp_boot_cpu_id(void);
+uint32_t smp_seen_cpu_mask(void);
 uint32_t smp_online_cpu_count(void);
+uint32_t smp_possible_cpu_count(void);
 bool smp_is_boot_cpu(void);
+bool smp_cpu_seen(uint32_t cpu_id);
+bool smp_cpu_online(uint32_t cpu_id);
 
 #endif /* _KERNEL_SMP_H */
