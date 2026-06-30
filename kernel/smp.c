@@ -9,13 +9,15 @@
  * Layer: Kernel / SMP coordination
  *
  * Responsibilities:
- * - Track the boot CPU and online CPU count.
+ * - Discover possible CPUs from the DTB.
+ * - Start secondary CPUs through PSCI and park them safely.
+ * - Track boot, seen, online and scheduler-enabled CPU masks.
  * - Provide common CPU-id helpers for locks and diagnostics.
  *
  * Notes:
- * - Secondary CPU startup is intentionally not implemented in this step.
- *   Keeping this module passive lets us make the kernel SMP-aware without
- *   changing runtime behaviour on QEMU -smp 1.
+ * - Secondary CPUs are brought into C, given private exception stacks, then
+ *   parked outside the scheduler.  This validates boot/interrupt plumbing while
+ *   preserving the historical single-scheduler-CPU runtime model.
  */
 
 #include <kernel/smp.h>
