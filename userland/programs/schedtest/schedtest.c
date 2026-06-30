@@ -25,6 +25,7 @@
 #define MAX_CHILDREN        32U
 #define PROBE_SLEEP_US      100000U
 #define PROBE_FAIL_US       2000000ULL
+#define CPU_TIME_CHECK_MASK 0x0fU
 
 static volatile sig_atomic_t running = 1;
 
@@ -72,7 +73,13 @@ static int cpu_worker(unsigned seconds, unsigned index)
     volatile unsigned acc = 0x12345678U ^ (index * 0x11111111U);
     unsigned long loops = 0;
 
-    while (running && now_us() < end) {
+    /*
+     * Check wall-clock time only periodically. ArmOS still performs effective
+     * userland preemption at kernel return points, so a rare gettimeofday()
+     * keeps this as a scheduler stress test without flooding the kernel with
+     * syscalls on every hot-loop iteration.
+     */
+    while (running) {
         for (unsigned batch = 0; batch < 64U; batch++) {
             for (unsigned i = 0; i < 1024U; i++) {
                 acc ^= (acc << 5) + (acc >> 2) + i + batch;
@@ -80,6 +87,10 @@ static int cpu_worker(unsigned seconds, unsigned index)
             }
         }
         loops++;
+        if ((loops & CPU_TIME_CHECK_MASK) != 0)
+            continue;
+        if (now_us() >= end)
+            break;
     }
 
     printf("schedtest: cpu worker %u done loops=%lu acc=0x%08x\n",
