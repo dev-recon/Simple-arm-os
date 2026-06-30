@@ -23,6 +23,7 @@
 
 .global swi_handler
 .global current_task
+.global current_tasks
 //.global TASK_CONTEXT_OFF
 .global save_user_bank
 .global signal_return_trampoline
@@ -37,6 +38,13 @@
 .equ CTX_USR_PC,      148
 .equ CTX_USR_CPSR,    152
 .equ CTX_SVC_SP_TOP,  156
+
+.macro load_current_task_local reg tmp
+    mrc     p15, 0, \tmp, c0, c0, 5
+    and     \tmp, \tmp, #3
+    ldr     \reg, =current_tasks
+    ldr     \reg, [\reg, \tmp, lsl #2]
+.endm
 
     /* General-purpose registers r0-r12. */
     // r0.         0,
@@ -123,8 +131,9 @@ swi_handler:
      * After this point the C calling convention and helper calls may clobber
      * r0-r3, so ctx->usr_r[] becomes the canonical user register image.
      */
-    ldr     r12, =current_task
-    ldr     r12, [r12]               /* r12 = current_task */
+    stmfd   sp!, {r0-r3}
+    load_current_task_local r12, r0  /* r12 = current task for this CPU */
+    ldmfd   sp!, {r0-r3}
     add     r12, r12, #48          /* r12 = &current->context */ // FIX IT !!!
 
     /* Copy user-visible registers into ctx->usr_r[]. */
@@ -238,8 +247,7 @@ syscall_return:
     movs pc, lr
 
 signal_user_return:
-    ldr     r12, =current_task
-    ldr     r12, [r12]
+    load_current_task_local r12, r2
     add     r12, r12, #48
 
     /* Abandon the current SVC frame; ctx->usr_* now describes the return. */
