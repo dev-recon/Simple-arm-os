@@ -525,10 +525,14 @@ extern task_t* task_list_head;
 extern uint32_t task_count;
 extern spinlock_t task_lock;
 extern task_t* idle_task;
+extern task_t* idle_tasks[];
 extern task_t* init_process;
 
 task_t* task_current_on_cpu(uint32_t cpu_id);
 task_t* task_current_local(void);
+task_t* task_idle_on_cpu(uint32_t cpu_id);
+bool task_is_idle_task(task_t* task);
+void task_register_idle_cpu(uint32_t cpu_id, task_t* task);
 void scheduler_request_resched_current_cpu(void);
 bool scheduler_take_resched_current_cpu(void);
 bool scheduler_resched_pending_on_cpu(uint32_t cpu_id);

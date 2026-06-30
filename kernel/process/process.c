@@ -28,6 +28,7 @@
 #include <kernel/task.h>
 #include <kernel/signal.h>
 #include <kernel/timer.h>
+#include <kernel/smp.h>
 
 
 
@@ -102,6 +103,7 @@ void init_process_system(void)
     if (!idle_task) {
         panic("Failed to create idle task");
     }
+    task_register_idle_cpu(smp_boot_cpu_id(), idle_task);
 
     idle_task->context.is_first_run = 1;                     /* Pas la premiere fois */
     idle_task->context.ttbr0 = (uint32_t)ttbr0_pgdir;
