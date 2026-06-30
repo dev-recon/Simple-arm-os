@@ -1661,10 +1661,11 @@ void save_task_context_safe(task_t* task, uint32_t current_sp)
 
 void switch_to_idle(void){
     unsigned long flags;
+    task_t *current = task_current_local();
     task_t *next_task = schedule_next_task();
 
     if (!next_task ||
-        next_task == (task_t *)current_task ||
+        next_task == current ||
         next_task->state == TASK_ZOMBIE ||
         next_task->state == TASK_TERMINATED) {
         next_task = idle_task;
@@ -1763,6 +1764,8 @@ static bool scheduler_has_ready_work(void)
 
 static bool scheduler_entry_allowed(const char* caller, task_t* requested)
 {
+    task_t* current = task_current_local();
+
     if (!smp_scheduler_can_run_on_current_cpu()) {
         KERROR("%s: refusing scheduler entry on CPU%u; SMP scheduler disabled\n",
                caller, smp_processor_id());
@@ -1770,7 +1773,7 @@ static bool scheduler_entry_allowed(const char* caller, task_t* requested)
         return false;
     }
 
-    if (!scheduler_initialized || !current_task) {
+    if (!scheduler_initialized || !current) {
         KERROR("%s: scheduler not initialized or no current task\n", caller);
         return false;
     }
@@ -1788,7 +1791,7 @@ static bool scheduler_entry_allowed(const char* caller, task_t* requested)
 
     if (get_critical_section()) {
         kernel_lifecycle_stats.scheduler_refused++;
-        sched_trace_record(SCHED_TRACE_REFUSE_CRITICAL, current_task);
+        sched_trace_record(SCHED_TRACE_REFUSE_CRITICAL, current);
         unset_critical_section();
     }
 
@@ -1842,23 +1845,23 @@ static void scheduler_finish_no_switch(uint32_t irq_flags)
     restore_interrupts(irq_flags);
 }
 
-static void scheduler_restore_current_if_needed(void)
+static void scheduler_restore_current_if_needed(task_t* current)
 {
     unsigned long flags;
 
     spin_lock_irqsave(&task_lock, &flags);
-    if (current_task && current_task->state == TASK_READY)
-        scheduler_mark_running_locked(current_task);
+    if (current && current->state == TASK_READY)
+        scheduler_mark_running_locked(current);
     spin_unlock_irqrestore(&task_lock, flags);
 }
 
-static void scheduler_prepare_current_for_switch(void)
+static void scheduler_prepare_current_for_switch(task_t* current)
 {
     unsigned long flags;
 
     spin_lock_irqsave(&task_lock, &flags);
-    if (current_task && current_task->state == TASK_RUNNING)
-        task_make_ready_locked(current_task);
+    if (current && current->state == TASK_RUNNING)
+        task_make_ready_locked(current);
     spin_unlock_irqrestore(&task_lock, flags);
 }
 
@@ -1873,12 +1876,13 @@ static void scheduler_prepare_next_for_switch(task_t* next_task)
 
 static void scheduler_switch_to(task_t* next_task,
                                 uint32_t irq_flags,
-                                bool save_current_context)
+                                bool save_current_context,
+                                task_t* current)
 {
     scheduler_prepare_next_for_switch(next_task);
     unset_critical_section();
 
-    __task_switch(save_current_context ? &current_task->context : NULL,
+    __task_switch(save_current_context ? &current->context : NULL,
                   &next_task->context);
 
     restore_interrupts(irq_flags);
@@ -1889,6 +1893,7 @@ void schedule(void)
     uint32_t irq_flags;
     uint32_t current_sp;
     bool save_current_context;
+    task_t* current;
     task_t* next_task;
     
     if (!scheduler_entry_allowed("schedule", NULL))
@@ -1897,33 +1902,34 @@ void schedule(void)
     irq_flags = disable_interrupts_save();
     set_critical_section();
 
-    for_each_task(current_task);
+    current = task_current_local();
+    for_each_task(current);
 
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
-    save_current_context = current_task->state != TASK_ZOMBIE &&
-                           current_task->state != TASK_TERMINATED;
+    save_current_context = current->state != TASK_ZOMBIE &&
+                           current->state != TASK_TERMINATED;
 
     if (save_current_context)
-        scheduler_prepare_current_for_switch();
+        scheduler_prepare_current_for_switch(current);
 
     next_task = schedule_next_task();
 
-    if (next_task == (task_t *)current_task) {
-        scheduler_restore_current_if_needed();
+    if (next_task == current) {
+        scheduler_restore_current_if_needed(current);
         scheduler_finish_no_switch(irq_flags);
         return;
     }
 
-    if (!scheduler_validate_switch(save_current_context ? current_task : NULL,
+    if (!scheduler_validate_switch(save_current_context ? current : NULL,
                                    next_task,
                                    current_sp)) {
         if (save_current_context)
-            scheduler_restore_current_if_needed();
+            scheduler_restore_current_if_needed(current);
         scheduler_finish_no_switch(irq_flags);
         return;
     }
 
-    scheduler_switch_to(next_task, irq_flags, save_current_context);
+    scheduler_switch_to(next_task, irq_flags, save_current_context, current);
 
 }
 
@@ -1932,6 +1938,7 @@ void schedule_to(task_t *next_task)
     uint32_t irq_flags;
     uint32_t current_sp;
     bool save_current_context;
+    task_t* current;
     
     if (!next_task || !scheduler_entry_allowed("schedule_to", next_task))
         return;
@@ -1939,31 +1946,32 @@ void schedule_to(task_t *next_task)
     irq_flags = disable_interrupts_save();
     set_critical_section();
 
-    for_each_task(current_task);
+    current = task_current_local();
+    for_each_task(current);
 
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
-    save_current_context = current_task->state != TASK_ZOMBIE &&
-                           current_task->state != TASK_TERMINATED;
+    save_current_context = current->state != TASK_ZOMBIE &&
+                           current->state != TASK_TERMINATED;
 
     if (save_current_context)
-        scheduler_prepare_current_for_switch();
+        scheduler_prepare_current_for_switch(current);
 
-    if (next_task == (task_t *)current_task) {
-        scheduler_restore_current_if_needed();
+    if (next_task == current) {
+        scheduler_restore_current_if_needed(current);
         scheduler_finish_no_switch(irq_flags);
         return;
     }
 
-    if (!scheduler_validate_switch(save_current_context ? current_task : NULL,
+    if (!scheduler_validate_switch(save_current_context ? current : NULL,
                                    next_task,
                                    current_sp)) {
         if (save_current_context)
-            scheduler_restore_current_if_needed();
+            scheduler_restore_current_if_needed(current);
         scheduler_finish_no_switch(irq_flags);
         return;
     }
 
-    scheduler_switch_to(next_task, irq_flags, save_current_context);
+    scheduler_switch_to(next_task, irq_flags, save_current_context, current);
 
 }
 
@@ -2296,7 +2304,7 @@ void idle_task_func(void* arg)
          */
         __asm__ volatile("cpsie i" ::: "memory");
         __asm__ volatile("wfi" ::: "memory");
-        for_each_task((task_t*)current_task);
+        for_each_task(task_current_local());
         if (scheduler_has_ready_work())
             schedule();
     }
@@ -2351,6 +2359,7 @@ task_t* task_find_by_name(const char* name)
 void task_set_priority(task_t* task, uint32_t priority)
 {
     unsigned long flags;
+    task_t* current = task_current_local();
     bool queued;
 
     if (!task) return;
@@ -2368,7 +2377,7 @@ void task_set_priority(task_t* task, uint32_t priority)
     spin_unlock_irqrestore(&task_lock, flags);
     
     /* Si on change la priorite de la tache courante, re-scheduler */
-    if (task == (task_t *)current_task) {
+    if (task == current) {
         schedule();
     }
 }
