@@ -288,8 +288,10 @@ static bool proc_pid_exists(pid_t pid)
 
 static pid_t proc_current_pid(void)
 {
-    if (current_task && current_task->process)
-        return current_task->process->pid;
+    task_t *task = task_current_local();
+
+    if (task && task->process)
+        return task->process->pid;
     return 0;
 }
 
@@ -1456,8 +1458,9 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
 
     proc_append(buf, cap, len, "cpu  0 0 0 %u 0 0 0 0 0 0\n", get_system_ticks());
     proc_append(buf, cap, len, "intr %u\n", gic_get_total_irq_count());
+    task_t *task = task_current_local();
     proc_append(buf, cap, len, "ctxt %u\n",
-                current_task ? current_task->switch_count : 0);
+                task ? task->switch_count : 0);
     proc_append(buf, cap, len, "processes %u\n", kernel_lifecycle_stats.tasks_created);
     proc_append(buf, cap, len, "procs_running %u\n", task_count);
     proc_append(buf, cap, len, "procs_blocked 0\n");
