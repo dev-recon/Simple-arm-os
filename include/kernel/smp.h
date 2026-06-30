@@ -26,11 +26,13 @@
 #define ARMOS_BOOT_CPU 0U
 
 void smp_init_boot_cpu(void);
+void smp_start_secondary_cpus(void);
 uint32_t smp_processor_id(void);
 uint32_t smp_boot_cpu_id(void);
 uint32_t smp_seen_cpu_mask(void);
 uint32_t smp_online_cpu_count(void);
 uint32_t smp_possible_cpu_count(void);
+int32_t smp_cpu_start_result(uint32_t cpu_id);
 bool smp_is_boot_cpu(void);
 bool smp_cpu_seen(uint32_t cpu_id);
 bool smp_cpu_online(uint32_t cpu_id);

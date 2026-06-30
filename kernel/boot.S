@@ -19,6 +19,7 @@
 .global _start
 .global vectors
 .global dtb_address
+.global smp_secondary_entry
 
 .extern data_abort_handler
 .extern undefined_instruction_handler
@@ -223,6 +224,11 @@ enable_caches_and_optimizations:
 /*
  * Gestion des CPUs secondaires (multi-core)
  */
+smp_secondary_entry:
+    cpsid aif                   /* Secondary CPUs must not take IRQs yet */
+    bl setup_cpu_state
+    b halt_secondary_cpu
+
 halt_secondary_cpu:
     /* CPU secondaire detecte - le mettre en attente.
      * Interrupts are already masked by _start before reaching this point.
