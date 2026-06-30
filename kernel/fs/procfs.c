@@ -697,6 +697,7 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "possible:    %u\n", possible);
     proc_append(buf, cap, len, "online:      %u\n", smp_online_cpu_count());
     proc_append(buf, cap, len, "seen_mask:   0x%08x\n", seen);
+    proc_append(buf, cap, len, "sched_mask:  0x%08x\n", smp_scheduler_cpu_mask());
     proc_append(buf, cap, len, "tlb_total:   %u\n", tlb_shootdown_total_count());
     proc_append(buf, cap, len, "tlb_remote:  %u\n", tlb_shootdown_remote_count());
     proc_append(buf, cap, len, "tlb_defer:   %u\n", tlb_shootdown_deferred_count());
@@ -1099,7 +1100,7 @@ static void proc_fill_sched(char* buf, size_t cap, size_t* len)
     for (uint32_t cpu = 0; cpu < smp_possible_cpu_count(); cpu++) {
         task_t* current = task_current_on_cpu(cpu);
         process_t* proc = current && current->type == TASK_TYPE_PROCESS ? current->process : NULL;
-        bool schedulable = smp_cpu_online(cpu) && cpu == smp_boot_cpu_id();
+        bool schedulable = smp_scheduler_cpu_enabled(cpu);
 
         proc_append(buf, cap, len, "%3u %-8s %5s %7u %6u %6u %4u %s\n",
                     cpu,

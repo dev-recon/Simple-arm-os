@@ -45,6 +45,7 @@ volatile smp_cpu_info_t smp_cpu_infos[ARMOS_MAX_CPUS] = {
 
 static uint32_t boot_cpu_id = ARMOS_BOOT_CPU;
 static uint32_t online_cpu_mask = 1u << ARMOS_BOOT_CPU;
+static volatile uint32_t scheduler_cpu_mask = 1u << ARMOS_BOOT_CPU;
 static uint32_t possible_cpu_count = 1;
 static volatile uint32_t online_cpu_count = 1;
 static volatile uint32_t scheduler_reject_count;
@@ -122,6 +123,7 @@ void smp_init_boot_cpu(void)
     boot_cpu_id = get_cpu_id();
     smp_seen_mask |= 1u << boot_cpu_id;
     online_cpu_mask = 1u << boot_cpu_id;
+    scheduler_cpu_mask = 1u << boot_cpu_id;
     online_cpu_count = 1;
     possible_cpu_count = smp_detect_possible_cpus_from_dtb();
     if (possible_cpu_count > ARMOS_MAX_CPUS)
@@ -279,9 +281,23 @@ bool smp_cpu_online(uint32_t cpu_id)
     return (online_cpu_mask & (1u << cpu_id)) != 0;
 }
 
+uint32_t smp_scheduler_cpu_mask(void)
+{
+    return scheduler_cpu_mask;
+}
+
+bool smp_scheduler_cpu_enabled(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return false;
+
+    return (scheduler_cpu_mask & (1u << cpu_id)) != 0 &&
+           smp_cpu_online(cpu_id);
+}
+
 bool smp_scheduler_can_run_on_current_cpu(void)
 {
-    if (smp_is_boot_cpu())
+    if (smp_scheduler_cpu_enabled(smp_processor_id()))
         return true;
 
     /*
