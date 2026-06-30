@@ -43,6 +43,7 @@ typedef struct smp_cpu_info {
 
 void smp_init_boot_cpu(void);
 void smp_start_secondary_cpus(void);
+void smp_secondary_main(uint32_t cpu_id) __attribute__((noreturn));
 uint32_t smp_processor_id(void);
 uint32_t smp_boot_cpu_id(void);
 uint32_t smp_seen_cpu_mask(void);
