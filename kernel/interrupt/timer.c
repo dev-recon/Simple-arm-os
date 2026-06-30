@@ -24,11 +24,13 @@
 #include <kernel/kprintf.h>
 #include <kernel/uart.h>
 #include <kernel/tty.h>
+#include <kernel/smp.h>
 
 
 /* Flag pour savoir si le systeme de processus est pret */
 static bool process_system_ready = false;
 static uint32_t system_ticks = 0;
+static volatile uint32_t timer_cpu_ticks[ARMOS_MAX_CPUS];
 
 static uint64_t last_timer_count = 0;
 static uint32_t software_system_ticks = 0;
@@ -216,6 +218,8 @@ void init_timer(void)
 
 void timer_irq_handler(void)
 {
+    uint32_t cpu_id = smp_processor_id();
+
     /* 1. Acquitter l'interruption ARM Generic Timer */
     uint32_t timer_ctrl;
     __asm__ volatile("mrc p15, 0, %0, c14, c2, 1" : "=r"(timer_ctrl));
@@ -237,6 +241,8 @@ void timer_irq_handler(void)
     
     /* 4. Incrément système */
     system_ticks++;
+    if (cpu_id < ARMOS_MAX_CPUS)
+        timer_cpu_ticks[cpu_id]++;
 
     /*
      * PL011 TX interrupts are edge/level sensitive enough to miss a wake-up in
@@ -321,6 +327,13 @@ uint32_t get_system_ticks(void)
     /* Mettre à jour avant de retourner */
     //update_timer_software();
     return system_ticks;
+}
+
+uint32_t timer_cpu_tick_count(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return 0;
+    return timer_cpu_ticks[cpu_id];
 }
 
 /* Fonction pour obtenir le temps en millisecondes */

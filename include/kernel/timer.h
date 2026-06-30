@@ -74,6 +74,7 @@ uint64_t get_timer_count(void);
 uint32_t get_timer_frequency(void);
 uint64_t get_timer_count(void);      /* <- Ajoutez cette ligne */
 uint32_t get_system_ticks(void);
+uint32_t timer_cpu_tick_count(uint32_t cpu_id);
 uint32_t get_time_ms(void);
 
 void set_critical_section(void);
