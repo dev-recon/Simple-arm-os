@@ -197,12 +197,14 @@ static int syscall_tty_id_from_fd(int fd)
 {
     file_t *file;
 
-    if (!current_task || !current_task->process)
+    task_t *task = task_current_local();
+
+    if (!task || !task->process)
         return -EINVAL;
     if (fd < 0 || fd >= MAX_FILES)
         return -EBADF;
 
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file)
         return -EBADF;
     if (!file_is_tty(file))
@@ -466,7 +468,7 @@ void dbg_dump_pte_0x8000(void){
  */
 int sys_execve(const char* filename, char* const argv[], char* const envp[])
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
     char* kernel_filename;
     char** kernel_argv;
     char** kernel_envp;
@@ -654,7 +656,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
  */
 int sys_fork(void)
 {
-    task_t* parent = current_task;
+    task_t* parent = task_current_local();
     task_t* child;
 
     uint32_t return_address;
@@ -757,7 +759,7 @@ int sys_fork(void)
 
 void sys_exit(int status)
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
 
     if (!proc) {
         KERROR("sys_exit: No current task\n");
@@ -981,7 +983,7 @@ int sys_waitpid(pid_t pid, int* status, int options)
     //KDEBUG("sys_waitpid: called for = %d - &status = 0x%08X\n", pid, (uint32_t)status);
 
 
-    task_t *parent = current_task;
+    task_t *parent = task_current_local();
     //debug_print_ctx(&parent->context, "PARENT CONTEXT BEFORE WAITPID");
 
     //parent->context.returns_to_user = 0;
@@ -1012,7 +1014,7 @@ int sys_waitpid(pid_t pid, int* status, int options)
 int sys_wait4(pid_t pid, int* status, int options, struct rusage_kernel* rusage)
 {
     struct rusage_kernel local;
-    task_t *parent = current_task;
+    task_t *parent = task_current_local();
     int exit_code;
     pid_t result;
 
@@ -1158,7 +1160,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
         return -ENOSYS;
     }
 
-    proc = current_task;
+    proc = task_current_local();
     if (proc) {
         proc->current_syscall = syscall_num;
         proc->last_syscall = syscall_num;
@@ -1181,7 +1183,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
     /* Call syscall */
     result = syscall_table[syscall_num](arg1, arg2, arg3, arg4, arg5);
 
-    proc = current_task;
+    proc = task_current_local();
 
     /*
      * Le contexte user canonique doit contenir la valeur de retour avant de
@@ -1193,7 +1195,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
 
     if (proc && syscall_num != __NR_rt_sigreturn) {
         sig_result = check_pending_signals();
-        proc = current_task;
+        proc = task_current_local();
     }
 
     if (!proc) {
@@ -1230,7 +1232,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
  */
 int sys_getpid(void)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
         return proc->process->pid;
@@ -1240,7 +1242,7 @@ int sys_getpid(void)
 
 int sys_getppid(void)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
         return proc->process->ppid;
@@ -1250,7 +1252,7 @@ int sys_getppid(void)
 
 int sys_getuid(void)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
         return proc->process->uid;
@@ -1266,7 +1268,7 @@ int sys_geteuid(void)
 
 int sys_setuid(uid_t uid)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
         return -EINVAL;
@@ -1280,7 +1282,7 @@ int sys_setuid(uid_t uid)
 
 int sys_getgid(void)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
         return proc->process->gid;
@@ -1295,7 +1297,7 @@ int sys_getegid(void)
 
 int sys_setgid(gid_t gid)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
         return -EINVAL;
@@ -1355,7 +1357,7 @@ static bool can_change_task_priority(task_t *caller, task_t *target, int new_nic
 
 int sys_nice(int inc)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
     int old_nice;
     int new_nice;
 
@@ -1384,7 +1386,7 @@ int sys_getpriority(int which, int who)
         return -EINVAL;
 
     if (who == 0) {
-        target = current_task;
+        target = task_current_local();
     } else {
         target = find_process_by_pid((pid_t)who);
     }
@@ -1401,7 +1403,7 @@ int sys_getpriority(int which, int who)
 
 int sys_setpriority(int which, int who, int prio)
 {
-    task_t *caller = current_task;
+    task_t *caller = task_current_local();
     task_t *target;
 
     if (which != PRIO_PROCESS)
@@ -1410,7 +1412,7 @@ int sys_setpriority(int which, int who, int prio)
         return -EINVAL;
 
     if (who == 0) {
-        target = current_task;
+        target = task_current_local();
     } else {
         target = find_process_by_pid((pid_t)who);
     }
