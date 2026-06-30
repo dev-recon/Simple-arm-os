@@ -22,6 +22,7 @@
 #include <kernel/types.h>
 
 /* IRQ numbers */
+#define IRQ_SGI_TLB_SHOOTDOWN 14
 #define IRQ_TIMER           30
 #define IRQ_KEYBOARD        33
 #define IRQ_ATA             34
@@ -44,6 +45,7 @@ void fiq_c_handler(void);
 uint32_t gic_get_irq_count(uint32_t irq);
 uint32_t gic_get_total_irq_count(void);
 uint32_t gic_get_last_irq_id(void);
+void gic_send_sgi(uint32_t target_cpu_mask, uint32_t sgi_id);
 
 void complete_gic_debug(void);
 
