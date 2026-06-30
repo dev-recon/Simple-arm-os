@@ -298,6 +298,10 @@ Current SMP contract:
 - only the boot CPU is online;
 - `smp_processor_id()` reads the ARM MPIDR CPU id;
 - `smp_init_boot_cpu()` records the boot CPU during early kernel startup;
+- secondary CPUs mark themselves as `seen`, receive a private early parking
+  stack, then wait in a `WFE` holding pen;
+- `/proc/smp` exposes the boot CPU, online count, seen CPU mask, and per-CPU
+  state (`online`, `parked`, or `offline`);
 - spinlocks use ARMv7 `LDREX` / `STREX`, not compiler test-and-set helpers;
 - spinlocks record the owning CPU for diagnostics;
 - no secondary CPU executes scheduler, MMU, VFS, or userland code yet.

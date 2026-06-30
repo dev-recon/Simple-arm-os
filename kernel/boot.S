@@ -233,6 +233,18 @@ halt_secondary_cpu:
     and r0, r0, #3
 
     /*
+     * Mark this CPU as observed before parking it. This is intentionally a
+     * simple early-boot store: all secondaries are still outside the scheduler,
+     * IRQs are masked, and the value is only diagnostic until CPU release exists.
+     */
+    mov r3, #1
+    lsl r3, r3, r0
+    ldr r1, =smp_seen_mask
+    ldr r2, [r1]
+    orr r2, r2, r3
+    str r2, [r1]
+
+    /*
      * Give the parked CPU a private early stack. It must not use CPU0's boot
      * stack: later SMP bring-up will need to call small assembly/C helpers from
      * the holding pen before the scheduler owns the CPU.

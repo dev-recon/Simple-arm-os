@@ -33,6 +33,7 @@
 #include <kernel/virtio_net.h>
 #include <kernel/ext2.h>
 #include <kernel/syscalls.h>
+#include <kernel/smp.h>
 #include <asm/arm.h>
 
 extern uint32_t task_count;
@@ -67,6 +68,7 @@ static file_operations_t procfs_dir_ops;
 #define PROC_INO_FS_EXT2_CHECK 20u
 #define PROC_INO_SCHED_TRACE 21u
 #define PROC_INO_SCHED      22u
+#define PROC_INO_SMP        23u
 #define PROC_PID_BASE       100000u
 #define PROC_PID_STRIDE     512u
 #define PROC_PID_DIR        0u
@@ -381,6 +383,8 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_SCHED, S_IFREG | 0444, 0);
         if (strcmp(name, "sched_trace") == 0)
             return proc_make_inode(PROC_INO_SCHED_TRACE, S_IFREG | 0444, 0);
+        if (strcmp(name, "smp") == 0)
+            return proc_make_inode(PROC_INO_SMP, S_IFREG | 0444, 0);
         if (strcmp(name, "self") == 0)
             return proc_make_inode(PROC_INO_SELF, S_IFLNK | 0777, 0);
         if (proc_parse_pid(name, &pid) && proc_pid_exists(pid))
@@ -675,6 +679,33 @@ static void proc_fill_cpuinfo(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "Hardware\t: ArmOS QEMU virt\n");
     proc_append(buf, cap, len, "Revision\t: 0000\n");
     proc_append(buf, cap, len, "MPIDR\t\t: 0x%08x\n", proc_read_mpidr());
+}
+
+static void proc_fill_smp(char* buf, size_t cap, size_t* len)
+{
+    uint32_t current = smp_processor_id();
+    uint32_t boot = smp_boot_cpu_id();
+    uint32_t possible = smp_possible_cpu_count();
+    uint32_t seen = smp_seen_cpu_mask();
+
+    proc_append(buf, cap, len, "current_cpu: %u\n", current);
+    proc_append(buf, cap, len, "boot_cpu:    %u\n", boot);
+    proc_append(buf, cap, len, "possible:    %u\n", possible);
+    proc_append(buf, cap, len, "online:      %u\n", smp_online_cpu_count());
+    proc_append(buf, cap, len, "seen_mask:   0x%08x\n", seen);
+    proc_append(buf, cap, len, "\n");
+    proc_append(buf, cap, len, "cpu state\n");
+
+    for (uint32_t cpu = 0; cpu < possible; cpu++) {
+        const char* state = "offline";
+
+        if (smp_cpu_online(cpu))
+            state = "online";
+        else if (smp_cpu_seen(cpu))
+            state = "parked";
+
+        proc_append(buf, cap, len, "%3u %s\n", cpu, state);
+    }
 }
 
 static void proc_fill_filesystems(char* buf, size_t cap, size_t* len)
@@ -1654,6 +1685,7 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_STAT:    proc_fill_stat(buf, cap, len);    return 0;
         case PROC_INO_TASKS:   proc_fill_tasks(buf, cap, len);   return 0;
         case PROC_INO_CPUINFO: proc_fill_cpuinfo(buf, cap, len); return 0;
+        case PROC_INO_SMP:     proc_fill_smp(buf, cap, len);     return 0;
         case PROC_INO_FILESYSTEMS: proc_fill_filesystems(buf, cap, len); return 0;
         case PROC_INO_PARTITIONS: proc_fill_partitions(buf, cap, len); return 0;
         case PROC_INO_DMESG:   proc_fill_dmesg(buf, cap, len); return 0;
@@ -1804,6 +1836,7 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         { "stat",    PROC_INO_STAT,    DT_REG },
         { "tasks",   PROC_INO_TASKS,   DT_REG },
         { "cpuinfo", PROC_INO_CPUINFO, DT_REG },
+        { "smp",     PROC_INO_SMP,     DT_REG },
         { "filesystems", PROC_INO_FILESYSTEMS, DT_REG },
         { "partitions", PROC_INO_PARTITIONS, DT_REG },
         { "dmesg",   PROC_INO_DMESG,  DT_REG },
