@@ -1095,18 +1095,20 @@ static void proc_fill_sched(char* buf, size_t cap, size_t* len)
                 stats.current_priority,
                 stats.current_name[0] ? stats.current_name : "-");
     proc_append(buf, cap, len, "\n");
-    proc_append(buf, cap, len, "cpu state    sched resched tid    pid    prio name\n");
+    proc_append(buf, cap, len, "cpu state    sched resched idle_tid tid    pid    prio name\n");
 
     for (uint32_t cpu = 0; cpu < smp_possible_cpu_count(); cpu++) {
         task_t* current = task_current_on_cpu(cpu);
+        task_t* idle = task_idle_on_cpu(cpu);
         process_t* proc = current && current->type == TASK_TYPE_PROCESS ? current->process : NULL;
         bool schedulable = smp_scheduler_cpu_enabled(cpu);
 
-        proc_append(buf, cap, len, "%3u %-8s %5s %7u %6u %6u %4u %s\n",
+        proc_append(buf, cap, len, "%3u %-8s %5s %7u %8u %6u %6u %4u %s\n",
                     cpu,
                     smp_cpu_state_name(cpu),
                     schedulable ? "yes" : "no",
                     scheduler_resched_pending_on_cpu(cpu) ? 1u : 0u,
+                    idle ? idle->task_id : 0u,
                     current ? current->task_id : 0u,
                     proc ? (uint32_t)proc->pid : 0u,
                     current ? current->priority : 0u,
