@@ -2546,8 +2546,15 @@ int sys_sysinfo(struct sysinfo_response *resp)
 
     /* Liste des tâches */
     int count = 0;
-    task_t *task = task_list_head;
-    if (!task) goto out;
+    task_t *task = NULL;
+    unsigned long task_flags;
+
+    spin_lock_irqsave(&task_lock, &task_flags);
+    task = task_list_head;
+    if (!task) {
+        spin_unlock_irqrestore(&task_lock, task_flags);
+        goto out;
+    }
 
     do {
         if (count >= 64) break;
@@ -2598,6 +2605,7 @@ int sys_sysinfo(struct sysinfo_response *resp)
         count++;
         task = task->next;
     } while (task && task != task_list_head);
+    spin_unlock_irqrestore(&task_lock, task_flags);
 
 out:
     local->proc_count = count;
