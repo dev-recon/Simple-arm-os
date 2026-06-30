@@ -35,7 +35,7 @@ static volatile bool shutdown_in_progress = false;
 
 static bool shutdown_process_target(task_t *task)
 {
-    if (!task || task == current_task)
+    if (!task || task == task_current_local())
         return false;
     if (task->type != TASK_TYPE_PROCESS || !task->process)
         return false;
@@ -171,8 +171,9 @@ static void shutdown_processes(void)
     if (forced)
         kprintf("Shutdown: force-terminated %u process(es)\n", forced);
 
-    if (current_task && current_task->type == TASK_TYPE_PROCESS && current_task->process) {
-        close_all_process_files(current_task);
+    task_t *task = task_current_local();
+    if (task && task->type == TASK_TYPE_PROCESS && task->process) {
+        close_all_process_files(task);
     }
 }
 
