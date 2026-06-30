@@ -212,12 +212,14 @@ void irq_c_handler(void)
     /* Lire l'IRQ ID */
     uint32_t irq_id = gicc[0x00C/4];  /* GICC_IAR */
     uint32_t int_id = irq_id & 0x3FF;
+    uint32_t cpu_id = smp_processor_id();
     
     /* Compteur global */
     irq_count++;
     last_irq_id = int_id;
     if (int_id < GIC_IRQ_COUNTERS)
         irq_counts[int_id]++;
+    smp_note_irq(cpu_id);
     
     /* Debug : afficher l'IRQ recue */
     //kprintf("[IRQ] DONE IRQ %u received! (count=%u)\n", int_id, irq_count);
@@ -228,6 +230,7 @@ void irq_c_handler(void)
          * currently diagnostic-only; future TLB shootdown code will hook the
          * actual remote invalidation acknowledgement here.
          */
+        smp_note_ipi(cpu_id);
         gicc[0x010/4] = irq_id;  /* GICC_EOIR */
         return;
     }

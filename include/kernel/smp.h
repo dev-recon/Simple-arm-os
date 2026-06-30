@@ -51,6 +51,8 @@ int32_t smp_cpu_start_result(uint32_t cpu_id);
 smp_cpu_state_t smp_cpu_state(uint32_t cpu_id);
 const char* smp_cpu_state_name(uint32_t cpu_id);
 const smp_cpu_info_t* smp_cpu_info(uint32_t cpu_id);
+void smp_note_irq(uint32_t cpu_id);
+void smp_note_ipi(uint32_t cpu_id);
 bool smp_is_boot_cpu(void);
 bool smp_cpu_seen(uint32_t cpu_id);
 bool smp_cpu_online(uint32_t cpu_id);

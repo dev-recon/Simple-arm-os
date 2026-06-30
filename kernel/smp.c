@@ -216,6 +216,20 @@ const smp_cpu_info_t* smp_cpu_info(uint32_t cpu_id)
     return (const smp_cpu_info_t*)&smp_cpu_infos[cpu_id];
 }
 
+void smp_note_irq(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return;
+    smp_cpu_infos[cpu_id].irq_count++;
+}
+
+void smp_note_ipi(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return;
+    smp_cpu_infos[cpu_id].ipi_count++;
+}
+
 bool smp_is_boot_cpu(void)
 {
     return smp_processor_id() == boot_cpu_id;
