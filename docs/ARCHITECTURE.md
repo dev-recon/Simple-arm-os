@@ -300,6 +300,7 @@ Current SMP contract:
 - `smp_init_boot_cpu()` records the boot CPU during early kernel startup;
 - secondary CPUs mark themselves as `seen`, receive a private early parking
   stack, then wait in a `WFE` holding pen;
+- SMP CPU state is explicit: `offline`, `booting`, `parked`, or `online`;
 - configured secondary CPUs are started through PSCI `CPU_ON` only far enough
   to enter that holding pen;
 - `/proc/smp` exposes the boot CPU, online count, seen CPU mask, and per-CPU

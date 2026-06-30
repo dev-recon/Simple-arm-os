@@ -27,6 +27,9 @@
 #define PSCI_0_2_FN_CPU_ON 0x84000003u
 
 volatile uint32_t smp_seen_mask = 1u << ARMOS_BOOT_CPU;
+volatile uint32_t smp_cpu_states[ARMOS_MAX_CPUS] = {
+    [ARMOS_BOOT_CPU] = SMP_CPU_ONLINE,
+};
 
 static uint32_t boot_cpu_id = ARMOS_BOOT_CPU;
 static uint32_t online_cpu_mask = 1u << ARMOS_BOOT_CPU;
@@ -113,8 +116,10 @@ void smp_init_boot_cpu(void)
     if (possible_cpu_count > ARMOS_MAX_CPUS)
         possible_cpu_count = ARMOS_MAX_CPUS;
 
-    for (uint32_t cpu = 0; cpu < ARMOS_MAX_CPUS; cpu++)
+    for (uint32_t cpu = 0; cpu < ARMOS_MAX_CPUS; cpu++) {
         cpu_start_result[cpu] = (cpu == boot_cpu_id) ? 0 : 1;
+        smp_cpu_states[cpu] = (cpu == boot_cpu_id) ? SMP_CPU_ONLINE : SMP_CPU_OFFLINE;
+    }
 }
 
 void smp_start_secondary_cpus(void)
@@ -130,7 +135,10 @@ void smp_start_secondary_cpus(void)
          * The secondary entry only parks the CPU; it must not join scheduler
          * state until TLB shootdown and per-CPU interrupt setup exist.
          */
+        smp_cpu_states[cpu] = SMP_CPU_BOOTING;
         cpu_start_result[cpu] = smp_psci_cpu_on(cpu, entry, cpu);
+        if (cpu_start_result[cpu] != 0)
+            smp_cpu_states[cpu] = SMP_CPU_OFFLINE;
     }
 
     __asm__ volatile("dsb; sev; isb" ::: "memory");
@@ -166,6 +174,28 @@ int32_t smp_cpu_start_result(uint32_t cpu_id)
     if (cpu_id >= ARMOS_MAX_CPUS)
         return -1;
     return cpu_start_result[cpu_id];
+}
+
+smp_cpu_state_t smp_cpu_state(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return SMP_CPU_OFFLINE;
+    return (smp_cpu_state_t)smp_cpu_states[cpu_id];
+}
+
+const char* smp_cpu_state_name(uint32_t cpu_id)
+{
+    switch (smp_cpu_state(cpu_id)) {
+        case SMP_CPU_ONLINE:
+            return "online";
+        case SMP_CPU_PARKED:
+            return "parked";
+        case SMP_CPU_BOOTING:
+            return "booting";
+        case SMP_CPU_OFFLINE:
+        default:
+            return "offline";
+    }
 }
 
 bool smp_is_boot_cpu(void)

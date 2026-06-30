@@ -699,18 +699,14 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "tlb_defer:   %u\n", tlb_shootdown_deferred_count());
     proc_append(buf, cap, len, "sched_guard: %u\n", smp_scheduler_reject_count());
     proc_append(buf, cap, len, "\n");
-    proc_append(buf, cap, len, "cpu state   psci\n");
+    proc_append(buf, cap, len, "cpu state   seen psci\n");
 
     for (uint32_t cpu = 0; cpu < possible; cpu++) {
-        const char* state = "offline";
-
-        if (smp_cpu_online(cpu))
-            state = "online";
-        else if (smp_cpu_seen(cpu))
-            state = "parked";
-
-        proc_append(buf, cap, len, "%3u %-7s %d\n",
-                    cpu, state, smp_cpu_start_result(cpu));
+        proc_append(buf, cap, len, "%3u %-7s %4s %d\n",
+                    cpu,
+                    smp_cpu_state_name(cpu),
+                    smp_cpu_seen(cpu) ? "yes" : "no",
+                    smp_cpu_start_result(cpu));
     }
 }
 

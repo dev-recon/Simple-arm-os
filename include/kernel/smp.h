@@ -25,6 +25,13 @@
 #define ARMOS_MAX_CPUS 4U
 #define ARMOS_BOOT_CPU 0U
 
+typedef enum {
+    SMP_CPU_OFFLINE = 0,
+    SMP_CPU_BOOTING = 1,
+    SMP_CPU_PARKED = 2,
+    SMP_CPU_ONLINE = 3,
+} smp_cpu_state_t;
+
 void smp_init_boot_cpu(void);
 void smp_start_secondary_cpus(void);
 uint32_t smp_processor_id(void);
@@ -33,6 +40,8 @@ uint32_t smp_seen_cpu_mask(void);
 uint32_t smp_online_cpu_count(void);
 uint32_t smp_possible_cpu_count(void);
 int32_t smp_cpu_start_result(uint32_t cpu_id);
+smp_cpu_state_t smp_cpu_state(uint32_t cpu_id);
+const char* smp_cpu_state_name(uint32_t cpu_id);
 bool smp_is_boot_cpu(void);
 bool smp_cpu_seen(uint32_t cpu_id);
 bool smp_cpu_online(uint32_t cpu_id);
