@@ -32,6 +32,7 @@ static uint32_t boot_cpu_id = ARMOS_BOOT_CPU;
 static uint32_t online_cpu_mask = 1u << ARMOS_BOOT_CPU;
 static uint32_t possible_cpu_count = 1;
 static volatile uint32_t online_cpu_count = 1;
+static volatile uint32_t scheduler_reject_count;
 static int32_t cpu_start_result[ARMOS_MAX_CPUS];
 
 extern void smp_secondary_entry(void);
@@ -184,4 +185,23 @@ bool smp_cpu_online(uint32_t cpu_id)
     if (cpu_id >= ARMOS_MAX_CPUS)
         return false;
     return (online_cpu_mask & (1u << cpu_id)) != 0;
+}
+
+bool smp_scheduler_can_run_on_current_cpu(void)
+{
+    if (smp_is_boot_cpu())
+        return true;
+
+    /*
+     * Secondary CPUs are intentionally parked during this bring-up phase.
+     * If this counter ever moves, some path released a CPU before per-CPU
+     * scheduler state and remote TLB shootdown are safe.
+     */
+    scheduler_reject_count++;
+    return false;
+}
+
+uint32_t smp_scheduler_reject_count(void)
+{
+    return scheduler_reject_count;
 }

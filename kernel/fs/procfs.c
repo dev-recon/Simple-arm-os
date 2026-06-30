@@ -697,6 +697,7 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "tlb_total:   %u\n", tlb_shootdown_total_count());
     proc_append(buf, cap, len, "tlb_remote:  %u\n", tlb_shootdown_remote_count());
     proc_append(buf, cap, len, "tlb_defer:   %u\n", tlb_shootdown_deferred_count());
+    proc_append(buf, cap, len, "sched_guard: %u\n", smp_scheduler_reject_count());
     proc_append(buf, cap, len, "\n");
     proc_append(buf, cap, len, "cpu state   psci\n");
 
