@@ -309,6 +309,8 @@ Current SMP contract:
 - TLB maintenance now has two layers: local ARM helpers in `asm/mmu.h`
   (`tlb_flush_*`) and SMP-aware kernel entry points in `kernel/tlb.h`
   (`tlb_shootdown_*`);
+- scheduler entry is explicitly guarded so any accidental attempt to schedule
+  on a non-boot CPU is rejected and counted in `/proc/smp`;
 - no secondary CPU executes scheduler, MMU, VFS, or userland code yet.
 
 The intended bring-up sequence is deliberately conservative:

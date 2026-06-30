@@ -27,6 +27,7 @@
 #include <kernel/signal.h>
 #include <kernel/timer.h>
 #include <kernel/process.h>
+#include <kernel/smp.h>
 #include <asm/arm.h>
 #include <kernel/file.h>
 
@@ -1659,6 +1660,13 @@ static bool scheduler_has_ready_work(void)
 
 static bool scheduler_entry_allowed(const char* caller, task_t* requested)
 {
+    if (!smp_scheduler_can_run_on_current_cpu()) {
+        KERROR("%s: refusing scheduler entry on CPU%u; SMP scheduler disabled\n",
+               caller, smp_processor_id());
+        kernel_lifecycle_stats.scheduler_refused++;
+        return false;
+    }
+
     if (!scheduler_initialized || !current_task) {
         KERROR("%s: scheduler not initialized or no current task\n", caller);
         return false;

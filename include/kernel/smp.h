@@ -36,5 +36,7 @@ int32_t smp_cpu_start_result(uint32_t cpu_id);
 bool smp_is_boot_cpu(void);
 bool smp_cpu_seen(uint32_t cpu_id);
 bool smp_cpu_online(uint32_t cpu_id);
+bool smp_scheduler_can_run_on_current_cpu(void);
+uint32_t smp_scheduler_reject_count(void);
 
 #endif /* _KERNEL_SMP_H */
