@@ -1690,24 +1690,39 @@ void switch_to_idle(void){
     __builtin_unreachable();
 }
 
-static void for_each_task(task_t* current)
+static void scheduler_scan_waiters(task_t* current)
 {
     task_t* task;
+    task_t* start;
+    task_t* alarm_tasks[MAX_TASKS];
     uint32_t current_time = get_system_ticks();
+    uint32_t alarm_count = 0;
+    unsigned long flags;
     int count = 0;
 
-    if (!current || !current->next)
-        return;
+    spin_lock_irqsave(&task_lock, &flags);
 
-    task = current->next;
+    if (!task_list_head) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return;
+    }
+
+    start = (current && current->next) ? current->next : task_list_head;
+    task = start;
     
-    /* Chercher la prochaine tache READY avec la meme priorite */
+    /*
+     * Walk the global task list while holding task_lock. This keeps wakeup
+     * state transitions and runqueue insertion atomic for the future
+     * multi-scheduler-CPU model. Signal delivery is collected and performed
+     * after dropping the lock, because it may itself wake tasks.
+     */
     do {
         if (!task) {
-            KERROR("for_each_task: broken task list near %s\n",
+            KERROR("scheduler_scan_waiters: broken task list near %s\n",
                    current ? current->name : "?");
             kernel_lifecycle_stats.scheduler_refused++;
             sched_trace_record(SCHED_TRACE_REFUSE_BROKEN_LIST, current);
+            spin_unlock_irqrestore(&task_lock, flags);
             return;
         }
 
@@ -1726,7 +1741,7 @@ static void for_each_task(task_t* current)
             if (task->type == TASK_TYPE_PROCESS && task->process)
                 task->process->state = (proc_state_t)PROC_READY;
             task->wakeup_time = 0;
-            add_to_ready_queue(task);
+            task_make_ready_locked(task);
         }
 
         if (task->type == TASK_TYPE_PROCESS && task->process &&
@@ -1734,20 +1749,27 @@ static void for_each_task(task_t* current)
             current_time >= task->process->alarm_expire_tick) {
             task->process->alarm_active = 0;
             task->process->alarm_expire_tick = 0;
-            send_signal(task, SIGALRM);
+            if (alarm_count < MAX_TASKS)
+                alarm_tasks[alarm_count++] = task;
         }
 
         if (!task->next) {
-            KERROR("for_each_task: task %s has NULL next\n", task->name);
+            KERROR("scheduler_scan_waiters: task %s has NULL next\n", task->name);
             kernel_lifecycle_stats.scheduler_refused++;
             sched_trace_record(SCHED_TRACE_REFUSE_NULL_NEXT, task);
+            spin_unlock_irqrestore(&task_lock, flags);
             return;
         }
         task = task->next;
         count++;
-    } while (task != current && count < MAX_TASKS);
-    
-    return ;  /* Pas d'autre tache de meme priorite */
+    } while (task != start && count < MAX_TASKS);
+
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    for (uint32_t i = 0; i < alarm_count; i++)
+        send_signal(alarm_tasks[i], SIGALRM);
+
+    return;
 }
 
 static bool scheduler_has_ready_work(void)
@@ -1903,7 +1925,7 @@ void schedule(void)
     set_critical_section();
 
     current = task_current_local();
-    for_each_task(current);
+    scheduler_scan_waiters(current);
 
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
     save_current_context = current->state != TASK_ZOMBIE &&
@@ -1947,7 +1969,7 @@ void schedule_to(task_t *next_task)
     set_critical_section();
 
     current = task_current_local();
-    for_each_task(current);
+    scheduler_scan_waiters(current);
 
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
     save_current_context = current->state != TASK_ZOMBIE &&
@@ -2304,7 +2326,7 @@ void idle_task_func(void* arg)
          */
         __asm__ volatile("cpsie i" ::: "memory");
         __asm__ volatile("wfi" ::: "memory");
-        for_each_task(task_current_local());
+        scheduler_scan_waiters(task_current_local());
         if (scheduler_has_ready_work())
             schedule();
     }
