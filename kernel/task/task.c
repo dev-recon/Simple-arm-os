@@ -40,6 +40,7 @@ _Static_assert(sizeof(task_context_t) == 168,
 
 /* Variables globales du scheduler */
 task_t* current_task = NULL;
+task_t* current_tasks[ARMOS_MAX_CPUS];
 task_t* task_list_head = NULL;
 typedef struct runqueue {
     task_t* head[TASK_PRIORITY_LEVELS];
@@ -58,6 +59,18 @@ DEFINE_SPINLOCK(task_lock);
 volatile int need_resched = 0;
 
 //static spinlock_t task_lock = {0};
+
+task_t* task_current_on_cpu(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return NULL;
+    return current_tasks[cpu_id];
+}
+
+task_t* task_current_local(void)
+{
+    return task_current_on_cpu(smp_processor_id());
+}
 
 /* Tache idle et processus init */
 task_t* idle_task = NULL;
@@ -836,6 +849,7 @@ void init_task_system(void)
     
     /* Initialiser les variables globales */
     current_task = NULL;
+    memset(current_tasks, 0, sizeof(current_tasks));
     task_list_head = NULL;
     runqueue_clear_locked();
     next_task_id = 1;
@@ -877,6 +891,7 @@ void cleanup_task_system(void)
     
     /* Reinitialiser les variables */
     current_task = NULL;
+    memset(current_tasks, 0, sizeof(current_tasks));
     task_list_head = NULL;
     runqueue_clear_locked();
     next_task_id = 1;
