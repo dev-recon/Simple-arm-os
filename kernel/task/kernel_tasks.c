@@ -304,7 +304,7 @@ void shell_process_command(const char* cmd)
 
 void print_system_stats(void)
 {
-    task_t* current = current_task;
+    task_t* current = task_current_local();
     
     KINFO("=== System Statistics ===\n");
     KINFO("Current task: %s\n", current ? current->name : "unknown");
@@ -406,7 +406,7 @@ void ultra_simple_test(void)
     //task_dump_stacks_detailed();
     
     /* Afficher l'etat actuel */
-    task_t* current = current_task;
+    task_t* current = task_current_local();
     KINFO("Current task: %s\n", current ? current->name : "NULL");
     KINFO("Current SP: 0x%08X\n", current ? current->context.sp : 0);
     //task_dump_stacks_detailed();
@@ -572,7 +572,8 @@ void working_child(int level, int dummy) {
         
         /* Attendre l'enfant */
         int wait_status;
-        pid_t waited_pid = kernel_waitpid(child_pid, &wait_status, 0, current_task);
+        task_t *parent = task_current_local();
+        pid_t waited_pid = kernel_waitpid(child_pid, &wait_status, 0, parent);
         
         KINFO("[PARENT %d] *** PARENT WOKE UP ***\n", level);
         KINFO("[PARENT %d] Child PID=%d exited with status=%d (hex 0x%08X)\n", level,
@@ -843,13 +844,14 @@ void simple_shell_task(void* arg) {
 void simple_shell_task4(void* arg)
 {
     (void)arg;
+    task_t *task = task_current_local();
     
     KINFO("=== SHELL STARTED ===\n");
     KINFO("Shell PID=%u, PPID=%u\n", 
-          (current_task && current_task->type == TASK_TYPE_PROCESS) ? 
-          current_task->process->pid : 0,
-          (current_task && current_task->type == TASK_TYPE_PROCESS) ? 
-          current_task->process->ppid : 0);
+          (task && task->type == TASK_TYPE_PROCESS) ?
+          task->process->pid : 0,
+          (task && task->type == TASK_TYPE_PROCESS) ?
+          task->process->ppid : 0);
     
     int iteration = 0;
     

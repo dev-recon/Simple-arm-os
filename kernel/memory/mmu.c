@@ -1360,6 +1360,7 @@ void debug_mmu_state(void)
 void debug_kernel_stack_integrity(const char* location)
 {
     extern uint32_t __stack_bottom, __stack_top;
+    task_t *task = task_current_local();
     
     uint32_t current_sp;
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
@@ -1368,18 +1369,18 @@ void debug_kernel_stack_integrity(const char* location)
     
     // Detecter si on est dans une pile de tache
     bool in_task_stack = false;
-    if (current_task && current_task->stack_base) {
-        uint32_t task_stack_bottom = (uint32_t)current_task->stack_base;
-        uint32_t task_stack_top = task_stack_bottom + current_task->stack_size;
+    if (task && task->stack_base) {
+        uint32_t task_stack_bottom = (uint32_t)task->stack_base;
+        uint32_t task_stack_top = task_stack_bottom + task->stack_size;
         
         if (current_sp >= task_stack_bottom && current_sp <= task_stack_top) {
             in_task_stack = true;
             
-            KDEBUG("CONTEXT: Task '%s' stack\n", current_task->name);
+            KDEBUG("CONTEXT: Task '%s' stack\n", task->name);
             KDEBUG("Task stack bottom: 0x%08X\n", task_stack_bottom);
             KDEBUG("Task stack top:    0x%08X\n", task_stack_top);
             KDEBUG("Task stack size:   %u bytes (%u KB)\n", 
-                   current_task->stack_size, current_task->stack_size / 1024);
+                   task->stack_size, task->stack_size / 1024);
             KDEBUG("Current SP:        0x%08X\n", current_sp);
             
             uint32_t used = task_stack_top - current_sp;
@@ -1388,10 +1389,10 @@ void debug_kernel_stack_integrity(const char* location)
             KDEBUG("   Stack used:  %u bytes\n", used);
             KDEBUG("   Stack free:  %u bytes\n", free);
             
-            if (used > (current_task->stack_size * 3/4)) {
+            if (used > (task->stack_size * 3/4)) {
                 KWARN("WARNING  Task stack usage high: %u/%u bytes (%u%%)\n", 
-                      used, current_task->stack_size, 
-                      used * 100 / current_task->stack_size);
+                      used, task->stack_size,
+                      used * 100 / task->stack_size);
             }
         }
     }
