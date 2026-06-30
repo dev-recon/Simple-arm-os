@@ -60,42 +60,55 @@ static bool shutdown_signal_target(task_t *task)
     return true;
 }
 
-static unsigned shutdown_count_live_targets(void)
+static unsigned shutdown_collect_targets(task_t **targets, unsigned max_targets)
 {
-    task_t *task = task_list_head;
-    unsigned count = 0;
-    unsigned live = 0;
+    task_t *task;
+    unsigned found = 0;
+    unsigned walked = 0;
+    unsigned long flags;
 
-    if (!task)
+    if (!targets || max_targets == 0)
         return 0;
 
-    do {
-        if (shutdown_signal_target(task))
-            live++;
-        task = task->next;
-        count++;
-    } while (task && task != task_list_head && count < MAX_TASKS);
+    spin_lock_irqsave(&task_lock, &flags);
+    task = task_list_head;
+    if (!task) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return 0;
+    }
 
-    return live;
+    do {
+        if (shutdown_signal_target(task) && found < max_targets)
+            targets[found++] = task;
+
+        task = task->next;
+        walked++;
+    } while (task && task != task_list_head && walked < MAX_TASKS);
+
+    spin_unlock_irqrestore(&task_lock, flags);
+    return found;
+}
+
+static unsigned shutdown_count_live_targets(void)
+{
+    task_t *targets[MAX_TASKS];
+
+    return shutdown_collect_targets(targets, MAX_TASKS);
 }
 
 static unsigned shutdown_signal_targets(int sig)
 {
-    task_t *task = task_list_head;
-    unsigned count = 0;
+    task_t *targets[MAX_TASKS];
+    unsigned target_count;
     unsigned delivered = 0;
+    unsigned i;
 
-    if (!task)
-        return 0;
+    target_count = shutdown_collect_targets(targets, MAX_TASKS);
 
-    do {
-        task_t *next = task->next;
-
-        if (shutdown_signal_target(task) && send_signal(task, sig) == 0)
+    for (i = 0; i < target_count; i++) {
+        if (send_signal(targets[i], sig) == 0)
             delivered++;
-        task = next;
-        count++;
-    } while (task && task != task_list_head && count < MAX_TASKS);
+    }
 
     return delivered;
 }
@@ -120,16 +133,15 @@ static void shutdown_wait_for_targets(const char *phase, uint32_t grace_ms)
 
 static unsigned shutdown_force_terminate_targets(void)
 {
-    task_t *task = task_list_head;
-    unsigned count = 0;
+    task_t *targets[MAX_TASKS];
+    unsigned target_count;
     unsigned stopped = 0;
+    unsigned i;
 
-    if (!task)
-        return 0;
+    target_count = shutdown_collect_targets(targets, MAX_TASKS);
 
-    do {
-        task_t *next = task->next;
-
+    for (i = 0; i < target_count; i++) {
+        task_t *task = targets[i];
         if (shutdown_signal_target(task)) {
             unsigned long flags;
 
@@ -142,10 +154,7 @@ static unsigned shutdown_force_terminate_targets(void)
             spin_unlock_irqrestore(&task_lock, flags);
             stopped++;
         }
-
-        task = next;
-        count++;
-    } while (task && task != task_list_head && count < MAX_TASKS);
+    }
 
     return stopped;
 }
