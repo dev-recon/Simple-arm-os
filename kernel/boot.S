@@ -24,13 +24,13 @@
 .equ SMP_CPU_STATE_PARKED, 2
 .equ SMP_CPU_INFO_SIZE, 24
 .equ SMP_CPU_INFO_STATE, 4
-.equ SMP_CPU_INFO_HEARTBEAT, 16
 
 .extern data_abort_handler
 .extern undefined_instruction_handler
 .extern prefetch_abort_handler
 .extern swi_handler
 .extern smp_cpu_infos
+.extern smp_secondary_main
 
 
 /*
@@ -261,7 +261,6 @@ halt_secondary_cpu:
     mov r4, #SMP_CPU_INFO_SIZE
     mul r3, r0, r4
     add r1, r1, r3
-    mov r5, r1
     mov r2, #SMP_CPU_STATE_PARKED
     str r2, [r1, #SMP_CPU_INFO_STATE]
 
@@ -285,18 +284,16 @@ halt_secondary_cpu:
     mcr p15, 0, r1, c12, c0, 0
     dsb
     isb
-    
-secondary_wait_loop:
+
     /*
-     * Park-loop heartbeat for bring-up diagnostics. This should remain very
-     * small: parked CPUs sleep with WFI and must not burn cycles while the boot
-     * CPU owns the scheduler.
+     * From this point the secondary has a private SVC stack and a valid VBAR,
+     * so it can run a tiny C holding pen. IRQs remain masked; it must not enter
+     * the scheduler until the SMP release path is implemented.
      */
-    ldr r2, [r5, #SMP_CPU_INFO_HEARTBEAT]
-    add r2, r2, #1
-    str r2, [r5, #SMP_CPU_INFO_HEARTBEAT]
-    dsb
-    wfi                         /* Sleep until a real interrupt wakes the CPU */
+    bl smp_secondary_main
+
+secondary_wait_loop:
+    wfi                         /* Defensive fallback: C entry must not return */
     b secondary_wait_loop       /* Boucle infinie */
 
 /*

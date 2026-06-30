@@ -158,6 +158,28 @@ void smp_start_secondary_cpus(void)
     __asm__ volatile("dsb; sev; isb" ::: "memory");
 }
 
+void smp_secondary_main(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        cpu_id = smp_processor_id();
+
+    if (cpu_id < ARMOS_MAX_CPUS)
+        smp_cpu_infos[cpu_id].state = SMP_CPU_PARKED;
+
+    while (1) {
+        if (cpu_id < ARMOS_MAX_CPUS)
+            smp_cpu_infos[cpu_id].park_heartbeat++;
+
+        /*
+         * The secondary CPU is alive in C, but still outside the scheduler.
+         * Keep IRQs masked and sleep hard until a later bring-up step installs
+         * per-CPU interrupt stacks and a real IPI rendezvous path.
+         */
+        data_sync_barrier();
+        wait_for_interrupt();
+    }
+}
+
 uint32_t smp_processor_id(void)
 {
     return get_cpu_id();
