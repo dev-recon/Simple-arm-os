@@ -250,17 +250,19 @@ void timer_irq_handler(void)
     /* 2. CORRECTION: Programmer le PROCHAIN timer (relatif) */
     timer_program_next_tick(get_timer_frequency());
     
-    /* 4. Incrément système */
-    system_ticks++;
+    /* 4. Per-CPU accounting, plus one global wall-clock on the boot CPU. */
     if (cpu_id < ARMOS_MAX_CPUS)
         timer_cpu_ticks[cpu_id]++;
+    if (smp_is_boot_cpu())
+        system_ticks++;
 
     /*
      * PL011 TX interrupts are edge/level sensitive enough to miss a wake-up in
      * QEMU under dense console bursts. Poll the TTY TX ring from the periodic
-     * timer as a safety net; the check keeps the idle path cheap.
+     * timer as a safety net. Keep this on the boot CPU so future local timers
+     * do not make several CPUs compete for the same character backend.
      */
-    if (tty_has_pending_output())
+    if (smp_is_boot_cpu() && tty_has_pending_output())
         tty_drain_output();
     
     /* 5. RÉDUIRE drastiquement les messages */
@@ -270,19 +272,19 @@ void timer_irq_handler(void)
     
     /* 6. Scheduling sans messages debug */
     if (process_system_ready) {
-        extern task_t* current_task;
+        task_t* current = task_current_on_cpu(cpu_id);
         
-        if (current_task && !task_is_idle_task(current_task) && current_task->state == TASK_RUNNING) {
-            current_task->total_runtime++;
-            if (current_task->sched_debt < 0xffffffffu)
-                current_task->sched_debt++;
+        if (current && !task_is_idle_task(current) && current->state == TASK_RUNNING) {
+            current->total_runtime++;
+            if (current->sched_debt < 0xffffffffu)
+                current->sched_debt++;
         }
 
-        if (current_task && !task_is_idle_task(current_task) && !in_critical_section) {
-            current_task->quantum_left--;
+        if (current && !task_is_idle_task(current) && !in_critical_section) {
+            current->quantum_left--;
 
-            if (current_task->quantum_left == 0) {
-                current_task->quantum_left = QUANTUM_TICKS;
+            if (current->quantum_left == 0) {
+                current->quantum_left = QUANTUM_TICKS;
                 //current_task->state = TASK_READY;
                 scheduler_request_resched_current_cpu();
                 //KDEBUG("YIELDING BECAUSE OF TIMER\n");
