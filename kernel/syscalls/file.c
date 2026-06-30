@@ -80,12 +80,14 @@ bool inode_permission(inode_t* inode, int mask) {
 
 int sys_read(int fd, void* buf, size_t count)
 {
+    task_t* task = task_current_local();
     file_t* file;
     ssize_t result;
     
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     if (!can_read(file)) return -EBADF;
     
@@ -97,6 +99,7 @@ int sys_read(int fd, void* buf, size_t count)
 
 int sys_write(int fd, const void* buf, size_t count)
 {
+    task_t* task = task_current_local();
     file_t* file;
     ssize_t result = 0;
     void *kbuf = NULL;
@@ -106,8 +109,9 @@ int sys_write(int fd, const void* buf, size_t count)
     if (!buf) return -EFAULT;
 
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     if (!can_write(file)) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
@@ -159,31 +163,35 @@ static int truncate_file_inode(inode_t *inode, const char *name)
 
 int sys_close(int fd)
 {
+    task_t* task = task_current_local();
     file_t* file;
 
     //KDEBUG("[CLOSE] fd=%d\n", fd);
 
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     
     close_file(file);
-    current_task->process->files[fd] = NULL;
-    current_task->process->fd_flags[fd] = 0;
+    task->process->files[fd] = NULL;
+    task->process->fd_flags[fd] = 0;
     
     return 0;
 }
 
 int sys_ftruncate(int fd, off_t length)
 {
+    task_t* task = task_current_local();
     file_t* file;
     int result;
 
     if (length < 0) return -EINVAL;
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
 
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     if (!can_write(file)) return -EBADF;
     if (!file->inode) return -EINVAL;
@@ -219,12 +227,15 @@ int sys_truncate(const char* pathname, off_t length)
 
 int sys_fsync(int fd)
 {
+    task_t* task = task_current_local();
     file_t* file;
 
     if (fd < 0 || fd >= MAX_FILES)
         return -EBADF;
+    if (!task || !task->process)
+        return -EBADF;
 
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file)
         return -EBADF;
 
@@ -279,6 +290,7 @@ int split_path(const char* full_path, char** parent_path, char** filename) {
 
 int kernel_open(char* kernel_path, int flags, mode_t mode)
 {
+    task_t* task = task_current_local();
     inode_t* inode;
     file_t* file;
     int fd;
@@ -394,8 +406,8 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
                 filename = NULL;
             } else {
                 /* Créer le nouveau fichier */
-                if (current_task && current_task->process)
-                    mode &= ~current_task->process->umask;
+                if (task && task->process)
+                    mode &= ~task->process->umask;
 
                 if (parent->i_op == &fat32_inode_ops) {
                     inode = fat32_create_file(parent_path, filename, mode);
@@ -466,7 +478,7 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     }
     
     /* Allocate file descriptor */
-    fd = allocate_fd(current_task);
+    fd = allocate_fd(task);
     if (fd < 0) {
         put_inode(inode);
         return -EMFILE;
@@ -512,14 +524,14 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
         }
     }
     
-    current_task->process->files[fd] = file;
-    current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
+    task->process->files[fd] = file;
+    task->process->fd_flags[fd] = flags & O_CLOEXEC;
     return fd;
 }
 
 char *get_current_working_directory(void){
 
-    task_t *task = current_task;
+    task_t *task = task_current_local();
     
     if(!task || !task->process) return NULL;
 
@@ -669,6 +681,7 @@ int vfs_check_search_permission(const char* path, bool include_final)
 
 int sys_open(const char* pathname, int flags, mode_t mode)
 {
+    task_t* task = task_current_local();
     char* kernel_path;
     char* full_path;
     file_t* tty_file;
@@ -679,6 +692,9 @@ int sys_open(const char* pathname, int flags, mode_t mode)
 
     /* Suppression du warning unused parameter */
     (void)mode;
+
+    if (!task || !task->process)
+        return -EINVAL;
 
     kernel_path = copy_string_from_user(pathname);
     if (!kernel_path) return -EFAULT;
@@ -710,7 +726,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
             return -ENODEV;
         }
 
-        fd = allocate_fd(current_task);
+        fd = allocate_fd(task);
         if (fd < 0) {
             kfree(full_path);
             return fd;
@@ -722,13 +738,13 @@ int sys_open(const char* pathname, int flags, mode_t mode)
             strcmp(full_path, "/dev/tty1") == 0 ? "tty1" : "tty0",
             flags & ~O_CLOEXEC);
         if (!tty_file) {
-            free_fd(current_task, fd);
+            free_fd(task, fd);
             kfree(full_path);
             return -ENOMEM;
         }
 
-        current_task->process->files[fd] = tty_file;
-        current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
+        task->process->files[fd] = tty_file;
+        task->process->fd_flags[fd] = flags & O_CLOEXEC;
         kfree(full_path);
         return fd;
     }
@@ -739,7 +755,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
             return -ENOTDIR;
         }
 
-        fd = allocate_fd(current_task);
+        fd = allocate_fd(task);
         if (fd < 0) {
             kfree(full_path);
             return fd;
@@ -747,13 +763,13 @@ int sys_open(const char* pathname, int flags, mode_t mode)
 
         null_file = create_null_device_file("null", flags & ~O_CLOEXEC);
         if (!null_file) {
-            free_fd(current_task, fd);
+            free_fd(task, fd);
             kfree(full_path);
             return -ENOMEM;
         }
 
-        current_task->process->files[fd] = null_file;
-        current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
+        task->process->files[fd] = null_file;
+        task->process->fd_flags[fd] = flags & O_CLOEXEC;
         kfree(full_path);
         return fd;
     }
@@ -764,7 +780,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
             return -ENOTDIR;
         }
 
-        fd = allocate_fd(current_task);
+        fd = allocate_fd(task);
         if (fd < 0) {
             kfree(full_path);
             return fd;
@@ -772,13 +788,13 @@ int sys_open(const char* pathname, int flags, mode_t mode)
 
         net_echo_file = create_net_echo_device_file("netecho", flags & ~O_CLOEXEC);
         if (!net_echo_file) {
-            free_fd(current_task, fd);
+            free_fd(task, fd);
             kfree(full_path);
             return -ENODEV;
         }
 
-        current_task->process->files[fd] = net_echo_file;
-        current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
+        task->process->files[fd] = net_echo_file;
+        task->process->fd_flags[fd] = flags & O_CLOEXEC;
         kfree(full_path);
         return fd;
     }
@@ -802,12 +818,14 @@ int sys_creat(const char* pathname, mode_t mode)
 
 off_t sys_lseek(int fd, off_t offset, int whence)
 {
+    task_t* task = task_current_local();
     file_t* file;
     off_t new_offset;
     
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     
     if (file->f_op && file->f_op->lseek) {
@@ -988,13 +1006,15 @@ int sys_lstat(const char* pathname, struct stat* statbuf)
 int sys_fstat(int fd, struct stat* statbuf)
 {
 
+    task_t* task = task_current_local();
     inode_t* inode;
     struct stat kstat;
     file_t* file;
 
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     
     inode = file->inode;
@@ -1108,6 +1128,7 @@ static bool check_file_permission(inode_t* inode, int flags)
 
 
 int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count) {
+    task_t *task = task_current_local();
     file_t *file;
     char *user_buf = (char *)dirp;
     char *buf_ptr = user_buf;
@@ -1116,13 +1137,13 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
     //KDEBUG("[GETDENTS] entry fd=%u dirp=%p count=%u\n", fd, dirp, count);
 
     /* Vérifier le fd */
-    if (fd >= MAX_FILES || !current_task->process->files[fd]) {
+    if (!task || !task->process || fd >= MAX_FILES || !task->process->files[fd]) {
         KERROR("[GETDENTS] EBADF fd=%u files[fd]=%p\n", fd,
-               fd < MAX_FILES ? (void*)current_task->process->files[fd] : NULL);
+               task && task->process && fd < MAX_FILES ? (void*)task->process->files[fd] : NULL);
         return -EBADF;
     }
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     
     /* Vérifier que c'est un répertoire */
     if (!file->inode || !S_ISDIR(file->inode->mode)) {
