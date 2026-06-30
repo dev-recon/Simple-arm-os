@@ -106,6 +106,14 @@ bool scheduler_take_resched_current_cpu(void)
     return requested;
 }
 
+bool scheduler_resched_pending_on_cpu(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return false;
+
+    return need_resched_cpu[cpu_id] != 0;
+}
+
 /* Tache idle et processus init */
 task_t* idle_task = NULL;
 task_t* init_process = NULL;
