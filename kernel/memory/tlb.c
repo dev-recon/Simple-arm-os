@@ -163,7 +163,7 @@ static void tlb_shootdown_common(tlb_request_kind_t kind, uint32_t vaddr, uint32
     data_sync_barrier();
 
     shootdown_remote_count++;
-    gic_send_sgi_others(IRQ_SGI_TLB_SHOOTDOWN);
+    gic_send_sgi(target_mask, IRQ_SGI_TLB_SHOOTDOWN);
     tlb_wait_remote_ack(target_mask, generation);
 }
 
