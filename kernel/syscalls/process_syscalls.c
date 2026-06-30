@@ -129,34 +129,50 @@ static bool vfs_inode_has_external_refs(inode_t* inode)
 {
     task_t* task;
     int checked = 0;
+    bool found = false;
+    unsigned long flags;
 
-    if (!inode || !task_list_head)
+    if (!inode)
         return false;
 
     if (vfs_inode_open_count(inode) > 0)
         return true;
 
+    spin_lock_irqsave(&task_lock, &flags);
     task = task_list_head;
+    if (!task) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return false;
+    }
+
     do {
         if (task->type == TASK_TYPE_PROCESS && task->process) {
             for (int fd = 0; fd < MAX_FILES; fd++) {
                 file_t* file = task->process->files[fd];
                 inode_t* open_inode = file ? file->inode : NULL;
 
-                if (open_inode == inode)
-                    return true;
+                if (open_inode == inode) {
+                    found = true;
+                    break;
+                }
                 if (open_inode &&
                     open_inode->i_op == inode->i_op &&
-                    open_inode->first_cluster == inode->first_cluster)
-                    return true;
+                    open_inode->first_cluster == inode->first_cluster) {
+                    found = true;
+                    break;
+                }
             }
         }
+
+        if (found)
+            break;
 
         task = task->next;
         checked++;
     } while (task && task != task_list_head && checked < MAX_TASKS);
+    spin_unlock_irqrestore(&task_lock, flags);
 
-    return false;
+    return found;
 }
 
 int sys_sync(void)
