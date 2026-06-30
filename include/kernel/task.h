@@ -520,11 +520,15 @@ void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 void switch_to_idle(void);
 
 extern task_t* current_task;
+extern task_t* current_tasks[];
 extern task_t* task_list_head;
 extern uint32_t task_count;
 extern spinlock_t task_lock;
 extern task_t* idle_task;
 extern task_t* init_process;
+
+task_t* task_current_on_cpu(uint32_t cpu_id);
+task_t* task_current_local(void);
 
 
 void add_task_to_list(task_t* task);

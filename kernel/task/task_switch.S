@@ -152,13 +152,21 @@ __load_new_context:
     dsb
     isb
 
-    /* Atomically publish the task pointer after the MMU context is selected. */
+    /*
+     * Publish the task pointer after the MMU context is selected.
+     *
+     * current_task is the legacy CPU0-visible alias used by most of the kernel
+     * today. current_tasks[cpu] is the SMP-safe storage that later scheduler
+     * work will use before CPU1 is allowed to run tasks.
+     */
     sub    r3, r12, #48    @ task_t.context is currently at offset 48
+    mrc    p15, 0, r4, c0, c0, 5
+    and    r4, r4, #3
+    ldr    r2, =current_tasks
+    str    r3, [r2, r4, lsl #2]
     ldr    r2, =current_task
     str    r3, [r2]
     dmb
-
-    /* End current_task update. */
 
     /* First run? */
     ldr     r2, [r12, #CTX_FIRST]
