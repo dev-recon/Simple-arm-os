@@ -305,7 +305,7 @@ pid_t tty_get_foreground_pgid(void)
 
 static bool tty_current_task_is_background_reader(struct tty_struct *tty, pid_t *pgid_out)
 {
-    task_t *task = current_task;
+    task_t *task = task_current_local();
     unsigned long flags;
     pid_t fg_pgid;
     pid_t pgid;
@@ -1026,7 +1026,9 @@ static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
                 }
             }
 
-            if (!current_task) {
+            task_t *task = task_current_local();
+
+            if (!task) {
                 spin_unlock_irqrestore(&tty->lock, flags);
                 break;
             }
@@ -1036,7 +1038,7 @@ static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
                 break;
             }
 
-            if (tty->read_wait && tty->read_wait != current_task) {
+            if (tty->read_wait && tty->read_wait != task) {
                 if (tty->read_wait->state != TASK_INTERRUPTIBLE) {
                     tty->read_wait = NULL;
                     kernel_lifecycle_stats.tty_stale_waiters++;
@@ -1047,8 +1049,8 @@ static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
                 }
             }
 
-            tty->read_wait = current_task;
-            task_set_interruptible(current_task);
+            tty->read_wait = task;
+            task_set_interruptible(task);
 
             if (!canon && timeout_ticks > 0) {
                 if (vmin == 0 && read == 0) {
@@ -1060,23 +1062,23 @@ static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
                     }
                     deadline = interbyte_deadline;
                 }
-                current_task->wakeup_time = deadline;
+                task->wakeup_time = deadline;
             }
             spin_unlock_irqrestore(&tty->lock, flags);
 
             schedule();
             spin_lock_irqsave(&tty->lock, &flags);
-            if (tty->read_wait == current_task)
+            if (tty->read_wait == task)
                 tty->read_wait = NULL;
             spin_unlock_irqrestore(&tty->lock, flags);
 
-            if (has_pending_signals(current_task))
+            if (has_pending_signals(task))
                 return read > 0 ? (ssize_t)read : (ssize_t)-EINTR;
             if (!canon && timeout_ticks > 0 && deadline && get_system_ticks() >= deadline) {
-                current_task->wakeup_time = 0;
+                task->wakeup_time = 0;
                 break;
             }
-            current_task->wakeup_time = 0;
+            task->wakeup_time = 0;
             continue;
         }
         
@@ -1146,9 +1148,10 @@ static ssize_t tty_write_to(struct tty_struct *tty, const char *buf, size_t coun
                 tty->output_full_waits++;
                 spin_unlock_irqrestore(&tty->lock, flags);
                 tty_drain_output_limited_to(tty, TTY_TX_DRAIN_BUDGET);
-                if (current_task && has_pending_signals(current_task))
+                task_t *task = task_current_local();
+                if (task && has_pending_signals(task))
                     return written > 0 ? (ssize_t)written : (ssize_t)-EINTR;
-                if (current_task)
+                if (task)
                     yield();
                 else {
                     tty_backend_putc_to(tty, '\r');
@@ -1170,9 +1173,10 @@ static ssize_t tty_write_to(struct tty_struct *tty, const char *buf, size_t coun
             tty->output_full_waits++;
             spin_unlock_irqrestore(&tty->lock, flags);
             tty_drain_output_limited_to(tty, TTY_TX_DRAIN_BUDGET);
-            if (current_task && has_pending_signals(current_task))
+            task_t *task = task_current_local();
+            if (task && has_pending_signals(task))
                 return written > 0 ? (ssize_t)written : (ssize_t)-EINTR;
-            if (current_task)
+            if (task)
                 yield();
             else {
                 tty_backend_putc_to(tty, buf[i]);
@@ -1281,12 +1285,13 @@ bool is_tty_device_path(const char* path)
 
 int tty_current_controlling_id(void)
 {
+    task_t *task = task_current_local();
     int tty_id;
 
-    if (!current_task || !current_task->process)
+    if (!task || !task->process)
         return -ENXIO;
 
-    tty_id = current_task->process->controlling_tty;
+    tty_id = task->process->controlling_tty;
     if (!tty_by_id(tty_id))
         return -ENXIO;
 
