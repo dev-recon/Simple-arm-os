@@ -25,6 +25,8 @@
 #include <kernel/memory.h>
 #include <kernel/string.h>
 #include <kernel/interrupt.h>
+#include <kernel/task.h>
+#include <kernel/timer.h>
 #include <asm/arm.h>
 
 #define PSCI_0_2_FN_CPU_ON 0x84000003u
@@ -48,6 +50,7 @@ volatile smp_cpu_info_t smp_cpu_infos[ARMOS_MAX_CPUS] = {
 static uint32_t boot_cpu_id = ARMOS_BOOT_CPU;
 static uint32_t online_cpu_mask = 1u << ARMOS_BOOT_CPU;
 static volatile uint32_t scheduler_cpu_mask = 1u << ARMOS_BOOT_CPU;
+static volatile uint32_t scheduler_banned_mask;
 static uint32_t possible_cpu_count = 1;
 static volatile uint32_t online_cpu_count = 1;
 static volatile uint32_t scheduler_reject_count;
@@ -172,11 +175,15 @@ void smp_secondary_main(uint32_t cpu_id)
         smp_cpu_infos[cpu_id].state = SMP_CPU_PARKED;
 
     gic_init_secondary_cpu_interface();
+    timer_init_local_cpu();
     enable_interrupts();
 
     while (1) {
         if (cpu_id < ARMOS_MAX_CPUS)
             smp_cpu_infos[cpu_id].park_heartbeat++;
+
+        if (cpu_id < ARMOS_MAX_CPUS && smp_scheduler_cpu_enabled(cpu_id))
+            task_start_secondary_scheduler(cpu_id);
 
         /*
          * The secondary CPU is alive in C, but still outside the scheduler.
@@ -286,6 +293,48 @@ bool smp_cpu_online(uint32_t cpu_id)
 uint32_t smp_scheduler_cpu_mask(void)
 {
     return scheduler_cpu_mask;
+}
+
+int smp_enable_scheduler_cpu(uint32_t cpu_id)
+{
+    uint32_t bit;
+
+    if (cpu_id >= ARMOS_MAX_CPUS || cpu_id == boot_cpu_id)
+        return -1;
+
+    if (scheduler_banned_mask & (1u << cpu_id))
+        return -1;
+
+    if (!smp_cpu_seen(cpu_id) || smp_cpu_state(cpu_id) != SMP_CPU_PARKED)
+        return -1;
+
+    if (!task_idle_on_cpu(cpu_id))
+        return -1;
+
+    bit = 1u << cpu_id;
+    if ((online_cpu_mask & bit) == 0) {
+        online_cpu_mask |= bit;
+        online_cpu_count++;
+    }
+
+    scheduler_cpu_mask |= bit;
+    smp_cpu_infos[cpu_id].state = SMP_CPU_ONLINE;
+    data_sync_barrier();
+    send_event();
+    return 0;
+}
+
+void smp_disable_scheduler_cpu(uint32_t cpu_id)
+{
+    uint32_t bit;
+
+    if (cpu_id >= ARMOS_MAX_CPUS || cpu_id == boot_cpu_id)
+        return;
+
+    bit = 1u << cpu_id;
+    scheduler_banned_mask |= bit;
+    scheduler_cpu_mask &= ~bit;
+    data_sync_barrier();
 }
 
 bool smp_scheduler_cpu_enabled(uint32_t cpu_id)

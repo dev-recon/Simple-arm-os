@@ -193,7 +193,8 @@ uint32_t map_user_to_kernel(uint32_t *pgdir, uint32_t vaddr){
 int copy_to_user(void* to, const void* from, size_t n)
 {
     task_t* task = get_current_task();
-    uint32_t* pgdir = (task && task->process && task->process->vm)
+    uint32_t* pgdir = (task && task->type == TASK_TYPE_PROCESS &&
+                       task->process && task->process->vm)
                     ? task->process->vm->pgdir
                     : NULL;
 
@@ -238,7 +239,10 @@ int copy_to_user(void* to, const void* from, size_t n)
 int copy_from_user(void* to, const void* from, size_t n)
 {
     task_t* task = get_current_task();
-    uint32_t* pgdir = task->process->vm->pgdir;
+    uint32_t* pgdir = (task && task->type == TASK_TYPE_PROCESS &&
+                       task->process && task->process->vm)
+                    ? task->process->vm->pgdir
+                    : NULL;
 
     //KDEBUG("copy_from_user: Starting to copy...\n");
 

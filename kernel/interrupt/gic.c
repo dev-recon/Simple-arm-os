@@ -207,8 +207,10 @@ void gic_init_secondary_cpu_interface(void)
     volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
     volatile uint32_t* gicc = (volatile uint32_t*)LOCAL_GICC_BASE;
     volatile uint8_t* ipriority = (volatile uint8_t*)(LOCAL_GICD_BASE + 0x400);
-    uint32_t reg = IRQ_SGI_TLB_SHOOTDOWN / 32;
-    uint32_t bit = IRQ_SGI_TLB_SHOOTDOWN % 32;
+    uint32_t sgi_reg = IRQ_SGI_TLB_SHOOTDOWN / 32;
+    uint32_t sgi_bit = IRQ_SGI_TLB_SHOOTDOWN % 32;
+    uint32_t timer_reg = VIRT_TIMER_NS_EL1_IRQ / 32;
+    uint32_t timer_bit = VIRT_TIMER_NS_EL1_IRQ % 32;
 
     /*
      * Secondary CPUs enter here with TTBR1 enabled but outside the scheduler.
@@ -219,7 +221,9 @@ void gic_init_secondary_cpu_interface(void)
     gicc[0x004 / 4] = 0xF0;  /* GICC_PMR */
     gicc[0x008 / 4] = 0x03;  /* GICC_BPR */
     ipriority[IRQ_SGI_TLB_SHOOTDOWN] = 0xA0;
-    gicd[0x100 / 4 + reg] |= (1u << bit);
+    ipriority[VIRT_TIMER_NS_EL1_IRQ] = 0xA0;
+    gicd[0x100 / 4 + sgi_reg] |= (1u << sgi_bit);
+    gicd[0x100 / 4 + timer_reg] |= (1u << timer_bit);
     gicc[0x000 / 4] = 0x01;
 
     data_sync_barrier();

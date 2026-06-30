@@ -30,6 +30,8 @@
 #include <kernel/file.h>
 #include <kernel/string.h>
 
+static DEFINE_SPINLOCK(exception_log_lock);
+
 // Implémentez ces handlers
 void undefined_instruction_handler(void) {
     /* Capturer AVANT tout appel : bl ecrase lr.
@@ -178,9 +180,13 @@ void prefetch_abort_handler(void) {
     /* Capturer les registres banqués AVANT tout appel (bl écrase lr).
      * MRS banked (lr_svc/sp_svc) dispo sur Cortex-A15 (virt extensions). */
     uint32_t lr_svc, sp_svc, spsr_svc;
+    unsigned long log_flags;
+
     __asm__ volatile("mrs %0, lr_svc" : "=r"(lr_svc));
     __asm__ volatile("mrs %0, sp_svc" : "=r"(sp_svc));
     __asm__ volatile("mrs %0, spsr" : "=r"(spsr_svc));
+
+    spin_lock_irqsave(&exception_log_lock, &log_flags);
 
     uart_puts("=== PREFETCH ABORT ===\n");
     uart_puts("SP_svc="); uart_put_hex(sp_svc);
@@ -238,7 +244,7 @@ void prefetch_abort_handler(void) {
         }
     }
 
-    while (1) { /* stop */ }
+    while (1) { /* stop with the diagnostic log lock held */ }
 }
 
 
@@ -956,6 +962,7 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
     bool is_write = (dfsr & (1u << 11)) != 0;
     uint32_t fault_pc;
     task_t* task = task_current_local();
+    unsigned long log_flags;
 
     if ((status == 0x05 || status == 0x07) && mode == 0x10) {
         if (handle_user_stack_fault(dfar) == 0) {
@@ -1006,6 +1013,8 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
         return -1;
     }
 
+    spin_lock_irqsave(&exception_log_lock, &log_flags);
+
     uart_puts("\n=== DATA ABORT ===\n");
     uart_puts("DFAR="); uart_put_hex(dfar);
     uart_puts(" DFSR="); uart_put_hex(dfsr);
@@ -1053,6 +1062,7 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
     uart_puts(task ? task->name : "?");
     uart_puts("\n");
 
+    spin_unlock_irqrestore(&exception_log_lock, log_flags);
     return -1;
 }
 
