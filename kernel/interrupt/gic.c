@@ -222,6 +222,16 @@ void irq_c_handler(void)
     /* Debug : afficher l'IRQ recue */
     //kprintf("[IRQ] DONE IRQ %u received! (count=%u)\n", int_id, irq_count);
 
+    if (int_id == IRQ_SGI_TLB_SHOOTDOWN) {
+        /*
+         * Reserved SMP IPI. Secondary CPUs are still parked, so this path is
+         * currently diagnostic-only; future TLB shootdown code will hook the
+         * actual remote invalidation acknowledgement here.
+         */
+        gicc[0x010/4] = irq_id;  /* GICC_EOIR */
+        return;
+    }
+
     if (int_id == virtio_blk_get_irq()) {
         virtio_block_irq_handler();
         gicc[0x010/4] = irq_id;  /* GICC_EOIR */
@@ -303,6 +313,22 @@ uint32_t gic_get_total_irq_count(void)
 uint32_t gic_get_last_irq_id(void)
 {
     return last_irq_id;
+}
+
+void gic_send_sgi(uint32_t target_cpu_mask, uint32_t sgi_id)
+{
+    if (sgi_id >= 16 || target_cpu_mask == 0)
+        return;
+
+    volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
+    uint32_t value = ((target_cpu_mask & 0xFFu) << 16) | (sgi_id & 0xFu);
+
+    /*
+     * GICD_SGIR TargetListFilter=0 sends the SGI to the explicit CPU target
+     * list in bits [23:16]. CPU numbering matches the GIC CPU interface ID on
+     * QEMU virt, which is exactly what we need for boot-time SMP experiments.
+     */
+    gicd[0xF00 / 4] = value;
 }
 
 static void enable_irq_with_type(uint32_t irq, bool edge_triggered)

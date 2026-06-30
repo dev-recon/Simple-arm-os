@@ -749,6 +749,9 @@ static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
     uint32_t virtio_net_irq = virtio_net_get_irq();
 
     proc_append(buf, cap, len, "           CPU0\n");
+    proc_append(buf, cap, len, "%3u: %10u GICv2  ipi-tlb\n",
+                IRQ_SGI_TLB_SHOOTDOWN,
+                gic_get_irq_count(IRQ_SGI_TLB_SHOOTDOWN));
     proc_append(buf, cap, len, "%3u: %10u GICv2  timer\n",
                 VIRT_TIMER_NS_EL1_IRQ,
                 gic_get_irq_count(VIRT_TIMER_NS_EL1_IRQ));

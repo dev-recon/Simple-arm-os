@@ -311,6 +311,8 @@ Current SMP contract:
   (`tlb_shootdown_*`);
 - scheduler entry is explicitly guarded so any accidental attempt to schedule
   on a non-boot CPU is rejected and counted in `/proc/smp`;
+- `IRQ_SGI_TLB_SHOOTDOWN` is reserved as the future TLB IPI and is visible in
+  `/proc/interrupts`, but no production path sends it yet;
 - no secondary CPU executes scheduler, MMU, VFS, or userland code yet.
 
 The intended bring-up sequence is deliberately conservative:
