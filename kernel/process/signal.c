@@ -628,12 +628,14 @@ int sys_kill(pid_t pid, int sig)
         return send_signal(target, sig);
         
     } else if (pid == 0) {
+        task_t* caller;
         pid_t pgid;
 
-        if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+        caller = task_current_local();
+        if (!caller || caller->type != TASK_TYPE_PROCESS || !caller->process)
             return -EINVAL;
 
-        pgid = current_task->process->pgid;
+        pgid = caller->process->pgid;
         target = task_list_head;
         if (!target) return -ESRCH;
 
@@ -676,17 +678,19 @@ int sys_kill(pid_t pid, int sig)
  */
 int sys_signal(int sig, sig_handler_t handler)
 {
+    task_t* proc;
     signal_state_t* sig_state;
     sig_handler_t old_handler;
     
     if (sig <= 0 || sig >= MAX_SIGNALS) return -EINVAL;
     if (sig == SIGKILL || sig == SIGSTOP) return -EINVAL;
     
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS) {
+    proc = task_current_local();
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         return -EINVAL;
     }
     
-    sig_state = &current_task->process->signals;
+    sig_state = &proc->process->signals;
     old_handler = sig_state->actions[sig].sa_handler;
     
     sig_state->actions[sig].sa_handler = handler;
@@ -704,17 +708,19 @@ int sys_signal(int sig, sig_handler_t handler)
  */
 int sys_sigaction(int sig, const sigaction_t* act, sigaction_t* oldact)
 {
+    task_t* proc;
     signal_state_t* sig_state;
     sigaction_t new_action;
     
     if (sig <= 0 || sig >= MAX_SIGNALS) return -EINVAL;
     if (sig == SIGKILL || sig == SIGSTOP) return -EINVAL;
     
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS) {
+    proc = task_current_local();
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         return -EINVAL;
     }
     
-    sig_state = &current_task->process->signals;
+    sig_state = &proc->process->signals;
     
     /* Sauvegarder l'ancienne action */
     if (oldact) {
@@ -740,13 +746,15 @@ int sys_sigaction(int sig, const sigaction_t* act, sigaction_t* oldact)
 
 int sys_sigprocmask(int how, const sigset_t* set, sigset_t* oldset)
 {
+    task_t* proc;
     signal_state_t* sig_state;
     uint32_t new_mask;
 
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+    proc = task_current_local();
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
         return -EINVAL;
 
-    sig_state = &current_task->process->signals;
+    sig_state = &proc->process->signals;
 
     if (oldset) {
         uint32_t old_mask = sig_state->blocked;
@@ -779,41 +787,46 @@ int sys_sigprocmask(int how, const sigset_t* set, sigset_t* oldset)
 
 int sys_sigpending(sigset_t* set)
 {
+    task_t* proc;
     uint32_t pending;
 
     if (!set)
         return -EFAULT;
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+    proc = task_current_local();
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
         return -EINVAL;
 
-    pending = current_task->process->signals.pending;
+    pending = proc->process->signals.pending;
     return copy_to_user(set, &pending, sizeof(pending)) < 0 ? -EFAULT : 0;
 }
 
 int sys_sigsuspend(const sigset_t* mask)
 {
+    task_t* proc;
     signal_state_t* sig_state;
     uint32_t new_mask;
     uint32_t old_mask;
 
     if (!mask)
         return -EFAULT;
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+    proc = task_current_local();
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
         return -EINVAL;
     if (copy_from_user(&new_mask, mask, sizeof(new_mask)) < 0)
         return -EFAULT;
 
-    sig_state = &current_task->process->signals;
+    sig_state = &proc->process->signals;
     old_mask = sig_state->blocked;
     sig_state->blocked = signal_sanitize_block_mask(new_mask);
 
-    while (!has_pending_signals(current_task)) {
+    while (!has_pending_signals(proc)) {
         task_sleep_ms(1);
-        if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+        proc = task_current_local();
+        if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
             return -EINVAL;
     }
 
-    sig_state = &current_task->process->signals;
+    sig_state = &proc->process->signals;
     sig_state->blocked = old_mask;
     return -EINTR;
 }
@@ -823,7 +836,7 @@ int sys_sigsuspend(const sigset_t* mask)
  */
 void sys_sigreturn(void)
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
     signal_state_t* sig_state;
     user_signal_frame_t frame;
     
@@ -856,7 +869,7 @@ void sys_sigreturn(void)
  */
 signal_check_result_t check_pending_signals(void)
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
     signal_state_t* sig;
     uint32_t deliverable;
     int signal_num;
@@ -899,7 +912,7 @@ signal_check_result_t check_pending_signals(void)
 
 int signal_consume_user_return_override(void)
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
 
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         return 0;
