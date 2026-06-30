@@ -62,6 +62,7 @@ typedef struct {
 
 /* Timer functions */
 void init_timer(void);
+void timer_init_local_cpu(void);
 void init_timer_software(void);
 void update_timer_software(void);
 void timer_irq_handler(void);

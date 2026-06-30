@@ -38,6 +38,19 @@ static bool timer_software_initialized = false;
 
 static bool in_critical_section = false;
 
+static uint32_t timer_interval_from_frequency(uint32_t timer_freq)
+{
+    return timer_freq / TIMER_FREQ;
+}
+
+static void timer_program_next_tick(uint32_t timer_freq)
+{
+    uint32_t next_interval = timer_interval_from_frequency(timer_freq);
+
+    __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(next_interval));
+    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(1u));
+}
+
 
 void set_critical_section(void){
     in_critical_section = true;
@@ -163,6 +176,20 @@ void timer_set_timeout(uint64_t timeout_ticks)
     __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(1));
 }
 
+void timer_init_local_cpu(void)
+{
+    uint32_t timer_ctrl = 0;
+    uint32_t timer_freq = get_timer_frequency();
+
+    /*
+     * The ARM generic timer is per-CPU. This helper only programs the local
+     * CP15 timer registers; the caller must enable the matching GIC PPI for
+     * that CPU before expecting IRQ delivery.
+     */
+    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
+    timer_program_next_tick(timer_freq);
+}
+
 /* ARM Generic Timer - utilise par machine virt */
 void init_timer(void)
 {
@@ -181,22 +208,12 @@ void init_timer(void)
     KINFO("[TIMER] Timer frequency: %u Hz\n", timer_freq);
     
     /* 2. Calculer l'interval pour TIMER_FREQ Hz */
-    uint32_t interval = timer_freq / TIMER_FREQ;
+    uint32_t interval = timer_interval_from_frequency(timer_freq);
     KINFO("[TIMER] Timer interval: %u counter ticks (%u us)\n",
             interval, 1000000 / TIMER_FREQ);
     
-    /* 3. Configurer le timer EL1 (non-secure) */
-    
-    /* Desactiver le timer pendant la configuration */
-    uint32_t timer_ctrl = 0;
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
-    
-    /* Programmer la valeur de comparaison */
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(interval));
-    
-    /* Activer le timer : Enable=1, Interrupt=0 (non masque) */
-    timer_ctrl = 0x1;  // Enable bit
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
+    /* 3. Configurer le timer EL1 (non-secure) du CPU courant. */
+    timer_init_local_cpu();
     
     KINFO("[TIMER] ARM Generic Timer configured\n");
     
@@ -231,13 +248,7 @@ void timer_irq_handler(void)
     gic_ack_irq_kernel(IRQ_TIMER);
     
     /* 2. CORRECTION: Programmer le PROCHAIN timer (relatif) */
-    uint32_t timer_freq = get_timer_frequency();
-    uint32_t next_interval = timer_freq / TIMER_FREQ;
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(next_interval));
-    
-    /* 3. Réactiver le timer */
-    timer_ctrl = 0x1;  /* Enable seulement */
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
+    timer_program_next_tick(get_timer_frequency());
     
     /* 4. Incrément système */
     system_ticks++;
