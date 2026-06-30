@@ -209,13 +209,18 @@ char keyboard_getchar(void)
     
     /* Wait for character */
     while (kbd_state.head == kbd_state.tail) {
-        kbd_state.waiters = current_task;
-        task_set_interruptible(current_task);
+        task_t *task = task_current_local();
+
+        if (!task)
+            return -1;
+
+        kbd_state.waiters = task;
+        task_set_interruptible(task);
         schedule();
         
         /* Check for signals */
-        if (has_pending_signals(current_task)) {
-            if (kbd_state.waiters == current_task)
+        if (has_pending_signals(task)) {
+            if (kbd_state.waiters == task)
                 kbd_state.waiters = NULL;
             return -1;
         }
