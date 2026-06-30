@@ -37,6 +37,7 @@ typedef struct smp_cpu_info {
     volatile uint32_t state;
     volatile uint32_t irq_count;
     volatile uint32_t ipi_count;
+    volatile uint32_t park_heartbeat;
     int32_t start_result;
 } smp_cpu_info_t;
 

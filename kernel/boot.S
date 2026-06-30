@@ -22,8 +22,9 @@
 .global smp_secondary_entry
 
 .equ SMP_CPU_STATE_PARKED, 2
-.equ SMP_CPU_INFO_SIZE, 20
+.equ SMP_CPU_INFO_SIZE, 24
 .equ SMP_CPU_INFO_STATE, 4
+.equ SMP_CPU_INFO_HEARTBEAT, 16
 
 .extern data_abort_handler
 .extern undefined_instruction_handler
@@ -260,6 +261,7 @@ halt_secondary_cpu:
     mov r4, #SMP_CPU_INFO_SIZE
     mul r3, r0, r4
     add r1, r1, r3
+    mov r5, r1
     mov r2, #SMP_CPU_STATE_PARKED
     str r2, [r1, #SMP_CPU_INFO_STATE]
 
@@ -285,7 +287,16 @@ halt_secondary_cpu:
     isb
     
 secondary_wait_loop:
-    wfe                         /* Wait For Event; future release will use SEV */
+    /*
+     * Park-loop heartbeat for bring-up diagnostics. This should remain very
+     * small: parked CPUs sleep with WFI and must not burn cycles while the boot
+     * CPU owns the scheduler.
+     */
+    ldr r2, [r5, #SMP_CPU_INFO_HEARTBEAT]
+    add r2, r2, #1
+    str r2, [r5, #SMP_CPU_INFO_HEARTBEAT]
+    dsb
+    wfi                         /* Sleep until a real interrupt wakes the CPU */
     b secondary_wait_loop       /* Boucle infinie */
 
 /*
