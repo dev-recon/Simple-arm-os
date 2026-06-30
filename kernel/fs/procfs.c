@@ -70,6 +70,7 @@ static file_operations_t procfs_dir_ops;
 #define PROC_INO_SCHED_TRACE 21u
 #define PROC_INO_SCHED      22u
 #define PROC_INO_SMP        23u
+#define PROC_INO_SMP_IPI    24u
 #define PROC_PID_BASE       100000u
 #define PROC_PID_STRIDE     512u
 #define PROC_PID_DIR        0u
@@ -386,6 +387,8 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_SCHED_TRACE, S_IFREG | 0444, 0);
         if (strcmp(name, "smp") == 0)
             return proc_make_inode(PROC_INO_SMP, S_IFREG | 0444, 0);
+        if (strcmp(name, "smp_ipi") == 0)
+            return proc_make_inode(PROC_INO_SMP_IPI, S_IFREG | 0666, 0);
         if (strcmp(name, "self") == 0)
             return proc_make_inode(PROC_INO_SELF, S_IFLNK | 0777, 0);
         if (proc_parse_pid(name, &pid) && proc_pid_exists(pid))
@@ -711,6 +714,14 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
                     info ? info->ipi_count : 0,
                     smp_cpu_start_result(cpu));
     }
+}
+
+static void proc_fill_smp_ipi(char* buf, size_t cap, size_t* len)
+{
+    proc_append(buf, cap, len,
+                "SMP IPI test endpoint\n"
+                "write \"self\" or \"0\" to send IRQ_SGI_TLB_SHOOTDOWN to CPU0\n"
+                "secondary CPUs are intentionally not targetable yet\n");
 }
 
 static void proc_fill_filesystems(char* buf, size_t cap, size_t* len)
@@ -1694,6 +1705,7 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_TASKS:   proc_fill_tasks(buf, cap, len);   return 0;
         case PROC_INO_CPUINFO: proc_fill_cpuinfo(buf, cap, len); return 0;
         case PROC_INO_SMP:     proc_fill_smp(buf, cap, len);     return 0;
+        case PROC_INO_SMP_IPI: proc_fill_smp_ipi(buf, cap, len); return 0;
         case PROC_INO_FILESYSTEMS: proc_fill_filesystems(buf, cap, len); return 0;
         case PROC_INO_PARTITIONS: proc_fill_partitions(buf, cap, len); return 0;
         case PROC_INO_DMESG:   proc_fill_dmesg(buf, cap, len); return 0;
@@ -1794,7 +1806,31 @@ static ssize_t procfs_read(file_t* file, void* buffer, size_t count)
 
 static ssize_t procfs_write(file_t* file, const void* buffer, size_t count)
 {
-    (void)file; (void)buffer; (void)count;
+    char cmd[16];
+    size_t n;
+
+    if (!file || !file->inode || !buffer)
+        return -EINVAL;
+
+    if (file->inode->first_cluster != PROC_INO_SMP_IPI)
+        return -EROFS;
+
+    n = count;
+    if (n >= sizeof(cmd))
+        n = sizeof(cmd) - 1;
+    memcpy(cmd, buffer, n);
+    cmd[n] = '\0';
+
+    while (n > 0 && (cmd[n - 1] == '\n' || cmd[n - 1] == '\r' ||
+                     cmd[n - 1] == ' ' || cmd[n - 1] == '\t')) {
+        cmd[--n] = '\0';
+    }
+
+    if (strcmp(cmd, "self") == 0 || strcmp(cmd, "0") == 0) {
+        gic_send_sgi(1u << smp_boot_cpu_id(), IRQ_SGI_TLB_SHOOTDOWN);
+        return (ssize_t)count;
+    }
+
     return -EROFS;
 }
 
@@ -1854,6 +1890,7 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         { "fs",      PROC_INO_FS_DIR, DT_DIR },
         { "sched",   PROC_INO_SCHED, DT_REG },
         { "sched_trace", PROC_INO_SCHED_TRACE, DT_REG },
+        { "smp_ipi", PROC_INO_SMP_IPI, DT_REG },
         { "self",    PROC_INO_SELF,    DT_LNK },
     };
     uint32_t offset = file->offset;
