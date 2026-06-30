@@ -22,12 +22,14 @@
 .global smp_secondary_entry
 
 .equ SMP_CPU_STATE_PARKED, 2
+.equ SMP_CPU_INFO_SIZE, 20
+.equ SMP_CPU_INFO_STATE, 4
 
 .extern data_abort_handler
 .extern undefined_instruction_handler
 .extern prefetch_abort_handler
 .extern swi_handler
-.extern smp_cpu_states
+.extern smp_cpu_infos
 
 
 /*
@@ -254,9 +256,12 @@ halt_secondary_cpu:
     str r2, [r1]
 
     /* Mark the CPU as parked in the explicit SMP state table. */
-    ldr r1, =smp_cpu_states
+    ldr r1, =smp_cpu_infos
+    mov r4, #SMP_CPU_INFO_SIZE
+    mul r3, r0, r4
+    add r1, r1, r3
     mov r2, #SMP_CPU_STATE_PARKED
-    str r2, [r1, r0, lsl #2]
+    str r2, [r1, #SMP_CPU_INFO_STATE]
 
     /*
      * Give the parked CPU a private early stack. It must not use CPU0's boot
