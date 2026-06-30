@@ -204,6 +204,7 @@ void sched_trace_record(sched_trace_event_type_t event, task_t* task)
 {
     unsigned long flags;
     sched_trace_event_t* dst;
+    task_t* current = task_current_local();
 
     spin_lock_irqsave(&sched_trace_lock, &flags);
     dst = &sched_trace[sched_trace_seq % SCHED_TRACE_SIZE];
@@ -216,16 +217,16 @@ void sched_trace_record(sched_trace_event_type_t event, task_t* task)
     dst->tid = task ? task->task_id : 0;
     dst->state = task ? (uint32_t)task->state : 0xffffffffu;
     dst->wakeup_time = task ? task->wakeup_time : 0;
-    dst->current_pid = task_trace_pid(current_task);
-    dst->current_tid = current_task ? current_task->task_id : 0;
-    dst->current_syscall = current_task ? current_task->current_syscall : 0;
+    dst->current_pid = task_trace_pid(current);
+    dst->current_tid = current ? current->task_id : 0;
+    dst->current_syscall = current ? current->current_syscall : 0;
     dst->task_ptr = (uintptr_t)task;
     dst->next_ptr = task ? (uintptr_t)task->next : 0;
     dst->prev_ptr = task ? (uintptr_t)task->prev : 0;
     if (task)
         strncpy(dst->name, task->name, TASK_NAME_MAX - 1);
-    if (current_task)
-        strncpy(dst->current_name, current_task->name, TASK_NAME_MAX - 1);
+    if (current)
+        strncpy(dst->current_name, current->name, TASK_NAME_MAX - 1);
     sched_trace_seq++;
     spin_unlock_irqrestore(&sched_trace_lock, flags);
 }
@@ -266,6 +267,7 @@ void sched_trace_snapshot(sched_trace_event_t* out, uint32_t max,
 void scheduler_get_stats(scheduler_stats_t* stats)
 {
     unsigned long flags;
+    task_t* current;
     process_t* proc;
     uint32_t now;
     uint32_t total_debt = 0;
@@ -277,6 +279,7 @@ void scheduler_get_stats(scheduler_stats_t* stats)
     memset(stats, 0, sizeof(*stats));
 
     spin_lock_irqsave(&task_lock, &flags);
+    current = task_current_local();
 
     stats->nr_running = ready_queue.nr_running;
     stats->policy_levels = TASK_PRIORITY_LEVELS;
@@ -337,12 +340,12 @@ void scheduler_get_stats(scheduler_stats_t* stats)
     if (debt_count)
         stats->avg_ready_debt = (uint32_t)(total_debt / debt_count);
 
-    if (current_task) {
-        proc = (current_task->type == TASK_TYPE_PROCESS) ? current_task->process : NULL;
-        stats->current_tid = current_task->task_id;
+    if (current) {
+        proc = (current->type == TASK_TYPE_PROCESS) ? current->process : NULL;
+        stats->current_tid = current->task_id;
         stats->current_pid = proc ? (uint32_t)proc->pid : 0;
-        stats->current_priority = current_task->priority;
-        strncpy(stats->current_name, current_task->name, TASK_NAME_MAX - 1);
+        stats->current_priority = current->priority;
+        strncpy(stats->current_name, current->name, TASK_NAME_MAX - 1);
     }
 
     spin_unlock_irqrestore(&task_lock, flags);
@@ -369,15 +372,17 @@ extern void print_system_stats(void);
 
 
 uid_t current_uid(void) {
-    if (current_task && current_task->process) {
-        return current_task->process->uid;
+    task_t* task = task_current_local();
+    if (task && task->process) {
+        return task->process->uid;
     }
     return 0;  /* Root par défaut */
 }
 
 uid_t current_gid(void) {
-    if (current_task && current_task->process) {
-        return current_task->process->gid;
+    task_t* task = task_current_local();
+    if (task && task->process) {
+        return task->process->gid;
     }
     return 0;  /* Root group par défaut */
 }
@@ -1261,6 +1266,7 @@ void init_standard_files(process_t* process) {
 task_t* task_create_process(const char* name, void (*entry)(void* arg), 
                                   void* arg, uint32_t priority, task_type_t type)
 {
+    task_t* parent = task_current_local();
     task_t* task = task_create(name, entry, arg, priority);
     if (!task) return NULL;
     
@@ -1278,13 +1284,13 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
 
         /* Initialiser les champs processus */
         task->process->pid = next_pid++;
-        task->process->ppid = (current_task && current_task->type == TASK_TYPE_PROCESS) ? 
-                             current_task->process->pid : 0;
+        task->process->ppid = (parent && parent->type == TASK_TYPE_PROCESS) ?
+                             parent->process->pid : 0;
         task->process->pgid = task->process->pid;
         task->process->sid = task->process->pid;
         task->process->controlling_tty = 0;
-        task->process->parent = (current_task && current_task->type == TASK_TYPE_PROCESS) ? 
-                               current_task : NULL;
+        task->process->parent = (parent && parent->type == TASK_TYPE_PROCESS) ?
+                               parent : NULL;
         task->process->children = NULL;
         task->process->sibling_next = NULL;
         task->process->exit_code = 0;
@@ -1381,10 +1387,14 @@ void setup_task_context(task_t* task)
 void task_destroy(task_t* task)
 {
     unsigned long flags;
+    task_t* current = task_current_local();
 
     if (!task) {
-        task = current_task;  /* Detruire la tache courante si NULL */
+        task = current;  /* Detruire la tache courante si NULL */
     }
+
+    if (!task)
+        return;
     
     if (task_is_idle_task(task)) {
         KERROR("Cannot destroy idle task\n");
@@ -1404,7 +1414,7 @@ void task_destroy(task_t* task)
     }
     
     /* Si c'est la tache courante, forcer une commutation */
-    if (task == (task_t*)current_task) {
+    if (task == current) {
         spin_unlock_irqrestore(&task_lock, flags);
         schedule();  /* Ne reviendra jamais ici */
         /* NOTREACHED */
@@ -1471,14 +1481,15 @@ void verify_ready_queue_integrity(void)
 void yield(void)
 {
     unsigned long flags;
+    task_t* task = task_current_local();
 
     if (!scheduler_initialized) {
         return;
     }
     
     spin_lock_irqsave(&task_lock, &flags);
-    if (current_task && current_task->state == TASK_RUNNING) {
-        task_make_ready_locked(current_task);
+    if (task && task->state == TASK_RUNNING) {
+        task_make_ready_locked(task);
     }
     spin_unlock_irqrestore(&task_lock, flags);
 
@@ -1511,6 +1522,8 @@ bool is_on_task_stack(task_t* task, uint32_t sp)
 
 void debug_idle_corruption_source(void)
 {
+    task_t* current = task_current_local();
+
     if (!idle_task) return;
     
     /* Obtenir la trace de la pile */
@@ -1519,7 +1532,7 @@ void debug_idle_corruption_source(void)
     
     KERROR("IDLE CORRUPTION DETECTED!\n");
     KERROR("  Called from: 0x%08X\n", lr);
-    KERROR("  Current task: %s\n", current_task ? current_task->name : "NULL");
+    KERROR("  Current task: %s\n", current ? current->name : "NULL");
     
     /* Dump de toutes les tâches pour voir qui a un stack_top bizarre */
     task_t* task = task_list_head;
@@ -2667,6 +2680,7 @@ void task_check_stack_integrity(void)
 
 void task_list_all(void)
 {
+    task_t* current = task_current_local();
     task_t* task;
     int count = 0;
     
@@ -2678,8 +2692,8 @@ void task_list_all(void)
     }
     
     KINFO("Current task: %s (ID=%u)\n", 
-          current_task ? current_task->name : "none",
-          current_task ? current_task->task_id : 0);
+          current ? current->name : "none",
+          current ? current->task_id : 0);
     
     spin_lock(&task_lock);
     
@@ -2701,9 +2715,10 @@ void task_list_all(void)
 void task_sleep_ms(uint32_t ms)
 {
     unsigned long flags;
+    task_t* task = task_current_local();
     uint32_t ticks;
 
-    if (!current_task || ms == 0) {
+    if (!task || ms == 0) {
         yield();
         return;
     }
@@ -2720,17 +2735,17 @@ void task_sleep_ms(uint32_t ms)
         ticks = 1;
 
     spin_lock_irqsave(&task_lock, &flags);
-    current_task->wakeup_time = get_system_ticks() + ticks;
-    runqueue_remove_locked(current_task);
-    current_task->state = TASK_INTERRUPTIBLE;
-    if (current_task->type == TASK_TYPE_PROCESS && current_task->process)
-        current_task->process->state = (proc_state_t)PROC_INTERRUPTIBLE;
+    task->wakeup_time = get_system_ticks() + ticks;
+    runqueue_remove_locked(task);
+    task->state = TASK_INTERRUPTIBLE;
+    if (task->type == TASK_TYPE_PROCESS && task->process)
+        task->process->state = (proc_state_t)PROC_INTERRUPTIBLE;
     spin_unlock_irqrestore(&task_lock, flags);
 
     schedule();
 
     spin_lock_irqsave(&task_lock, &flags);
-    current_task->wakeup_time = 0;
+    task->wakeup_time = 0;
     spin_unlock_irqrestore(&task_lock, flags);
 }
 
@@ -2747,10 +2762,12 @@ uint32_t task_get_count(void)
  */
 void task_print_stats(void)
 {
+    task_t* current = task_current_local();
+
     KINFO("=== Task Statistics ===\n");
     KINFO("Total tasks:     %u\n", task_count);
     KINFO("Max tasks:       %u\n", MAX_TASKS);
-    KINFO("Current task:    %s\n", current_task ? current_task->name : "none");
+    KINFO("Current task:    %s\n", current ? current->name : "none");
     KINFO("Scheduler:       %s\n", scheduler_initialized ? "running" : "stopped");
     KINFO("Next task ID:    %u\n", next_task_id);
 }
@@ -2858,31 +2875,33 @@ void debug_task_detailed(task_t *current_task)
 /* 1. DIAGNOSTIC: Ajouter debug detaille */
 void debug_current_task_detailed(const char* location)
 {
+    task_t* task = task_current_local();
+
     KDEBUG("[%s] === current_task DEBUG ===\n", location);
-    KDEBUG("  current_task pointer: %p\n", current_task);
+    KDEBUG("  current_task pointer: %p\n", task);
     
-    if (!current_task) {
+    if (!task) {
         KERROR("  KO current_task is NULL!\n");
         return;
     }
     
     /* Verifier que le pointeur est dans une zone valide */
-    if ((uint32_t)current_task < 0x40000000 || (uint32_t)current_task > 0x50000000) {
-        KERROR("  KO current_task pointer invalid: %p\n", current_task);
+    if ((uint32_t)task < 0x40000000 || (uint32_t)task > 0x50000000) {
+        KERROR("  KO current_task pointer invalid: %p\n", task);
         return;
     }
     
-    KDEBUG("  Task name: %s\n", current_task->name);
-    KDEBUG("  Task ID: %u\n", current_task->task_id);
-    KDEBUG("  Context SP: 0x%08X\n", current_task->context.sp);
-    KDEBUG("  Stack base: 0x%08X\n", (uint32_t)current_task->stack_base);
-    KDEBUG("  Stack top:  0x%08X\n", (uint32_t)current_task->stack_top);
-    KDEBUG("  is_first_run: %u\n", current_task->context.is_first_run);
+    KDEBUG("  Task name: %s\n", task->name);
+    KDEBUG("  Task ID: %u\n", task->task_id);
+    KDEBUG("  Context SP: 0x%08X\n", task->context.sp);
+    KDEBUG("  Stack base: 0x%08X\n", (uint32_t)task->stack_base);
+    KDEBUG("  Stack top:  0x%08X\n", (uint32_t)task->stack_top);
+    KDEBUG("  is_first_run: %u\n", task->context.is_first_run);
     
     /* Verification des limites de stack */
-    uint32_t sp = current_task->context.sp;
-    uint32_t base = (uint32_t)current_task->stack_base;
-    uint32_t top = (uint32_t)current_task->stack_top;
+    uint32_t sp = task->context.sp;
+    uint32_t base = (uint32_t)task->stack_base;
+    uint32_t top = (uint32_t)task->stack_top;
     
     if (sp >= base && sp < top) {
         KDEBUG("  OK SP in valid range\n");
