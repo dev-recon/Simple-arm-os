@@ -694,7 +694,7 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "online:      %u\n", smp_online_cpu_count());
     proc_append(buf, cap, len, "seen_mask:   0x%08x\n", seen);
     proc_append(buf, cap, len, "\n");
-    proc_append(buf, cap, len, "cpu state\n");
+    proc_append(buf, cap, len, "cpu state   psci\n");
 
     for (uint32_t cpu = 0; cpu < possible; cpu++) {
         const char* state = "offline";
@@ -704,7 +704,8 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
         else if (smp_cpu_seen(cpu))
             state = "parked";
 
-        proc_append(buf, cap, len, "%3u %s\n", cpu, state);
+        proc_append(buf, cap, len, "%3u %-7s %d\n",
+                    cpu, state, smp_cpu_start_result(cpu));
     }
 }
 
