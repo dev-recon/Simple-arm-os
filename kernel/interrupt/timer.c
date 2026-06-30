@@ -255,13 +255,13 @@ void timer_irq_handler(void)
     if (process_system_ready) {
         extern task_t* current_task;
         
-        if (current_task && current_task != idle_task && current_task->state == TASK_RUNNING) {
+        if (current_task && !task_is_idle_task(current_task) && current_task->state == TASK_RUNNING) {
             current_task->total_runtime++;
             if (current_task->sched_debt < 0xffffffffu)
                 current_task->sched_debt++;
         }
 
-        if (current_task && current_task != idle_task && !in_critical_section) {
+        if (current_task && !task_is_idle_task(current_task) && !in_critical_section) {
             current_task->quantum_left--;
 
             if (current_task->quantum_left == 0) {

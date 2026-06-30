@@ -116,7 +116,39 @@ bool scheduler_resched_pending_on_cpu(uint32_t cpu_id)
 
 /* Tache idle et processus init */
 task_t* idle_task = NULL;
+task_t* idle_tasks[ARMOS_MAX_CPUS] = { NULL };
 task_t* init_process = NULL;
+
+task_t* task_idle_on_cpu(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return NULL;
+
+    return idle_tasks[cpu_id];
+}
+
+bool task_is_idle_task(task_t* task)
+{
+    if (!task)
+        return false;
+
+    for (uint32_t cpu = 0; cpu < ARMOS_MAX_CPUS; cpu++) {
+        if (idle_tasks[cpu] == task)
+            return true;
+    }
+
+    return task == idle_task;
+}
+
+void task_register_idle_cpu(uint32_t cpu_id, task_t* task)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return;
+
+    idle_tasks[cpu_id] = task;
+    if (cpu_id == smp_boot_cpu_id())
+        idle_task = task;
+}
 volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
 static spinlock_t sched_trace_lock = SPINLOCK_INIT("sched_trace");
 static sched_trace_event_t sched_trace[SCHED_TRACE_SIZE];
@@ -416,7 +448,7 @@ static void runqueue_enqueue_tail_locked(task_t* task)
 {
     uint32_t prio;
 
-    if (!task || task == idle_task || runqueue_contains_locked(task))
+    if (!task || task_is_idle_task(task) || runqueue_contains_locked(task))
         return;
 
     prio = task_runqueue_priority(task);
@@ -919,7 +951,7 @@ void cleanup_task_system(void)
     
     while (task) {
         next = task->next;
-        if (task != idle_task) {
+        if (!task_is_idle_task(task)) {
             task_destroy(task);
         }
         task = (next == task_list_head) ? NULL : next;
@@ -930,6 +962,7 @@ void cleanup_task_system(void)
         task_destroy(idle_task);
         idle_task = NULL;
     }
+    memset(idle_tasks, 0, sizeof(idle_tasks));
     
     /* Reinitialiser les variables */
     current_task = NULL;
@@ -1353,7 +1386,7 @@ void task_destroy(task_t* task)
         task = current_task;  /* Detruire la tache courante si NULL */
     }
     
-    if (task == idle_task) {
+    if (task_is_idle_task(task)) {
         KERROR("Cannot destroy idle task\n");
         return;
     }
@@ -1559,7 +1592,7 @@ void save_task_context_safe(task_t* task, uint32_t current_sp)
     if (!task) return;
     
     /* Protéger idle avant toute manipulation */
-    if (task == idle_task) {
+    if (task_is_idle_task(task)) {
         protect_idle_task();
     }
 
@@ -1582,7 +1615,7 @@ void save_task_context_safe(task_t* task, uint32_t current_sp)
         //       current_sp, task->context.sp);
     } */
     
-    if (task == idle_task) {
+    if (task_is_idle_task(task)) {
         /* Vérification spéciale pour idle */
         if (is_on_task_stack(task, current_sp)) {
             /* SP valide dans la pile d'idle */
