@@ -29,6 +29,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/mmio.h>
 #include <kernel/smp.h>
+#include <kernel/tlb.h>
 #include <asm/arm.h>
 
 /* Compteur global pour verifier que les IRQ arrivent */
@@ -251,11 +252,11 @@ void irq_c_handler(void)
 
     if (int_id == IRQ_SGI_TLB_SHOOTDOWN) {
         /*
-         * Reserved SMP IPI. Secondary CPUs are still parked, so this path is
-         * currently diagnostic-only; future TLB shootdown code will hook the
-         * actual remote invalidation acknowledgement here.
+         * Reserved SMP IPI. Parked secondaries can acknowledge TLB maintenance
+         * without joining the scheduler or taking device interrupts.
          */
         smp_note_ipi(cpu_id);
+        tlb_handle_remote_ipi(cpu_id);
         gicc[0x010/4] = irq_id;  /* GICC_EOIR */
         return;
     }
