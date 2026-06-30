@@ -77,12 +77,13 @@ static virtio_blk_pending_t virtio_blk_pending = {0};
 static void virtio_blk_acquire(void)
 {
     while (1) {
+        task_t *task = task_current_local();
         unsigned long flags;
 
         spin_lock_irqsave(&virtio_blk_lock, &flags);
         if (!virtio_blk_busy) {
             virtio_blk_busy = true;
-            virtio_blk_owner = current_task;
+            virtio_blk_owner = task;
             spin_unlock_irqrestore(&virtio_blk_lock, flags);
             return;
         }
@@ -92,7 +93,7 @@ static void virtio_blk_acquire(void)
          * Block operations can sleep in wait_for_used(). Never hold a
          * spinlock while another request is in flight; wait cooperatively.
          */
-        if (!current_task) {
+        if (!task) {
             asm volatile("yield" ::: "memory");
             continue;
         }
@@ -103,12 +104,13 @@ static void virtio_blk_acquire(void)
 
 static void virtio_blk_release(void)
 {
+    task_t *task = task_current_local();
     unsigned long flags;
 
     spin_lock_irqsave(&virtio_blk_lock, &flags);
     if (!virtio_blk_busy) {
         KERROR("virtio_blk: release without owner\n");
-    } else if (virtio_blk_owner && current_task && virtio_blk_owner != current_task) {
+    } else if (virtio_blk_owner && task && virtio_blk_owner != task) {
         KERROR("virtio_blk: release by non-owner\n");
     }
     virtio_blk_busy = false;
@@ -610,7 +612,7 @@ static void virtio_blk_prepare_wait(vq_legacy_t *vq, uint16_t prev_idx)
     virtio_blk_pending.completed = false;
     virtio_blk_pending.prev_used_idx = prev_idx;
     virtio_blk_pending.vq = vq;
-    virtio_blk_pending.waiter = current_task;
+    virtio_blk_pending.waiter = task_current_local();
     asm volatile("dmb ish" ::: "memory");
 }
 
@@ -652,7 +654,8 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
         }
         spins = 0;
 
-        if (!current_task) {
+        task_t *task = task_current_local();
+        if (!task) {
             wait_for_interrupt();
             continue;
         }
@@ -668,8 +671,8 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
          * single-request virtqueue. Wait non-interruptibly until completion or
          * timeout; pending signals will be handled when the syscall returns.
          */
-        task_set_uninterruptible(current_task);
-        current_task->wakeup_time = wake_deadline;
+        task_set_uninterruptible(task);
+        task->wakeup_time = wake_deadline;
         restore_interrupts(irq_flags);
 
         schedule();
