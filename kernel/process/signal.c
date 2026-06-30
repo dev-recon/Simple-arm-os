@@ -45,6 +45,7 @@ static void stop_process(task_t* proc, int sig);
 static void continue_process(task_t* proc);
 static uint32_t signal_deliverable_mask(task_t* proc);
 static uint32_t signal_sanitize_block_mask(uint32_t mask);
+static uint32_t signal_collect_pgid_targets(pid_t pgid, task_t** targets, uint32_t max_targets);
 
 #define ARMOS_SIG_SETMASK 0
 #define ARMOS_SIG_BLOCK   1
@@ -116,6 +117,40 @@ static bool signal_would_kill_or_stop_init_effective(task_t* target, int sig)
         return false;
 
     return signal_would_kill_or_stop_init(sig);
+}
+
+static uint32_t signal_collect_pgid_targets(pid_t pgid, task_t** targets, uint32_t max_targets)
+{
+    task_t* task;
+    uint32_t count = 0;
+    uint32_t walked = 0;
+    unsigned long flags;
+
+    if (pgid <= 0 || !targets || max_targets == 0)
+        return 0;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task = task_list_head;
+    if (!task) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return 0;
+    }
+
+    do {
+        if (task->type == TASK_TYPE_PROCESS && task->process &&
+            task->process->pgid == pgid &&
+            task->state != TASK_ZOMBIE &&
+            task->state != TASK_TERMINATED) {
+            if (count < max_targets)
+                targets[count++] = task;
+        }
+
+        task = task->next;
+        walked++;
+    } while (task && task != task_list_head && walked < MAX_TASKS);
+
+    spin_unlock_irqrestore(&task_lock, flags);
+    return count;
 }
 
 extern void signal_return_trampoline(void);
@@ -612,6 +647,8 @@ static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
 int sys_kill(pid_t pid, int sig)
 {
     task_t* target;
+    task_t* targets[MAX_TASKS];
+    uint32_t target_count = 0;
     int delivered = 0;
     
     if (sig < 0 || sig >= MAX_SIGNALS) return -EINVAL;
@@ -630,44 +667,32 @@ int sys_kill(pid_t pid, int sig)
     } else if (pid == 0) {
         task_t* caller;
         pid_t pgid;
+        uint32_t i;
 
         caller = task_current_local();
         if (!caller || caller->type != TASK_TYPE_PROCESS || !caller->process)
             return -EINVAL;
 
         pgid = caller->process->pgid;
-        target = task_list_head;
-        if (!target) return -ESRCH;
+        target_count = signal_collect_pgid_targets(pgid, targets, MAX_TASKS);
 
-        do {
-            if (target->type == TASK_TYPE_PROCESS && target->process &&
-                target->process->pgid == pgid &&
-                target->state != TASK_ZOMBIE &&
-                target->state != TASK_TERMINATED) {
-                if (send_signal(target, sig) == 0)
-                    delivered++;
-            }
-            target = target->next;
-        } while (target && target != task_list_head);
+        for (i = 0; i < target_count; i++) {
+            if (send_signal(targets[i], sig) == 0)
+                delivered++;
+        }
 
         return delivered ? 0 : -ESRCH;
         
     } else {
         pid_t pgid = -pid;
+        uint32_t i;
 
-        target = task_list_head;
-        if (!target) return -ESRCH;
+        target_count = signal_collect_pgid_targets(pgid, targets, MAX_TASKS);
 
-        do {
-            if (target->type == TASK_TYPE_PROCESS && target->process &&
-                target->process->pgid == pgid &&
-                target->state != TASK_ZOMBIE &&
-                target->state != TASK_TERMINATED) {
-                if (send_signal(target, sig) == 0)
-                    delivered++;
-            }
-            target = target->next;
-        } while (target && target != task_list_head);
+        for (i = 0; i < target_count; i++) {
+            if (send_signal(targets[i], sig) == 0)
+                delivered++;
+        }
 
         return delivered ? 0 : -ESRCH;
     }
