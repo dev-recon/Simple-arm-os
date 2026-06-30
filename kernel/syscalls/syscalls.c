@@ -189,6 +189,7 @@ static void cleanup_failed_fork_child(task_t* parent, task_t* child)
 
     task_free_kernel_stack(child);
 
+    child->magic = TASK_MAGIC_DEAD;
     kfree(child);
     kernel_lifecycle_stats.tasks_destroyed++;
 }
@@ -795,6 +796,13 @@ void sys_exit(int status)
     if (proc->state != TASK_ZOMBIE) {
         proc->state = TASK_ZOMBIE;           /* Pas TASK_TERMINATED ! */
         proc->process->state = (proc_state_t)PROC_ZOMBIE;
+        /*
+         * SMP exit ordering:
+         * the parent must not reap/free this task while sys_exit() is still
+         * executing on the child's kernel stack. The scheduler will wake the
+         * parent after the child has switched away from that stack.
+         */
+        proc->wakeup_time = get_system_ticks() + 1;
         kernel_lifecycle_stats.zombies_created++;
     }
     spin_unlock_irqrestore(&task_lock, task_flags);
@@ -808,22 +816,11 @@ void sys_exit(int status)
     /* Orpheliner tous les enfants vers init (PID 1) - ACCeS CORRECT */
     orphan_children(proc);
 
-    task_t *parent = proc->process->parent;
-    bool parent_waiting = parent && parent->process &&
-        parent->state == TASK_BLOCKED &&
-        parent->process->state == (proc_state_t)PROC_BLOCKED;
-
-    /* Reveiller le parent seulement lorsque le nettoyage de sortie est termine. */
-    wakeup_parent(proc);
-    if (!parent_waiting && parent && parent->process) {
-        sig_handler_t handler = parent->process->signals.actions[SIGCHLD].sa_handler;
-        if (handler != SIG_DFL && handler != SIG_IGN)
-            send_signal(parent, SIGCHLD);
-    }
-
     /*
      * Ne pas reactiver les IRQ avant d'avoir quitte la pile du zombie: le
-     * parent reveille pourrait sinon liberer proc et sa pile kernel.
+     * parent reveille pourrait sinon liberer proc et sa pile kernel. En SMP,
+     * le reveil est differe par scheduler_scan_waiters() pour garantir cet
+     * ordre meme si le parent tourne sur un autre CPU.
      */
     (void)irq_flags;
     switch_to_idle();

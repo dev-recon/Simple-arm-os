@@ -942,6 +942,7 @@ static const char* proc_sched_event_name(uint32_t event)
         case SCHED_TRACE_REFUSE_LOOP: return "refuse_loop";
         case SCHED_TRACE_READY_REFUSE_DEAD: return "ready_refuse_dead";
         case SCHED_TRACE_READY_REFUSE_CORRUPT: return "ready_refuse_corrupt";
+        case SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING: return "ready_refuse_remote_running";
         default: return "unknown";
     }
 }
@@ -1632,6 +1633,9 @@ static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "SchedDebt:\t%u\n", task->sched_debt);
     proc_append(buf, cap, len, "DebtScore:\t%u\n", debt_score);
     proc_append(buf, cap, len, "ReadyWaitTicks:\t%u\n", ready_wait);
+    proc_append(buf, cap, len, "CPU:\t%d\n",
+                task->running_cpu != TASK_CPU_NONE ? (int)task->running_cpu :
+                task->last_cpu != TASK_CPU_NONE ? (int)task->last_cpu : -1);
     proc_append(buf, cap, len, "KStack:\t%u kB\n", KERNEL_TASK_STACK_SIZE / 1024);
     proc_append(buf, cap, len, "Heap:\t%u kB\n",
                 (vm && vm->brk >= vm->heap_start) ? ((vm->brk - vm->heap_start) / 1024u) : 0);

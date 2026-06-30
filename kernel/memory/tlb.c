@@ -24,6 +24,8 @@
 #include <kernel/kprintf.h>
 #include <kernel/interrupt.h>
 #include <kernel/memory.h>
+#include <kernel/spinlock.h>
+#include <kernel/task.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 
@@ -44,6 +46,7 @@ static volatile uint32_t shootdown_kind;
 static volatile uint32_t shootdown_vaddr;
 static volatile uint32_t shootdown_asid;
 static volatile uint32_t shootdown_cpu_ack[ARMOS_MAX_CPUS];
+static spinlock_t shootdown_lock = SPINLOCK_INIT("tlb_shootdown");
 
 static bool tlb_request_is_kernel_scope(tlb_request_kind_t kind, uint32_t asid)
 {
@@ -58,14 +61,14 @@ static bool tlb_request_is_kernel_scope(tlb_request_kind_t kind, uint32_t asid)
 static uint32_t tlb_remote_target_mask(tlb_request_kind_t kind, uint32_t asid)
 {
     uint32_t mask = 0;
-    uint32_t boot_cpu = smp_boot_cpu_id();
+    uint32_t current_cpu = smp_processor_id();
     uint32_t possible = smp_possible_cpu_count();
     bool kernel_scope = tlb_request_is_kernel_scope(kind, asid);
 
     for (uint32_t cpu = 0; cpu < possible && cpu < ARMOS_MAX_CPUS; cpu++) {
         smp_cpu_state_t state;
 
-        if (cpu == boot_cpu)
+        if (cpu == current_cpu)
             continue;
         if (!smp_cpu_seen(cpu))
             continue;
@@ -80,7 +83,16 @@ static uint32_t tlb_remote_target_mask(tlb_request_kind_t kind, uint32_t asid)
             if (state == SMP_CPU_PARKED || state == SMP_CPU_ONLINE)
                 mask |= 1u << cpu;
         } else if (smp_scheduler_cpu_enabled(cpu)) {
-            mask |= 1u << cpu;
+            task_t* task = task_current_on_cpu(cpu);
+
+            /*
+             * User-ASID invalidations only need a remote rendezvous when that
+             * CPU is currently executing the same address-space. Context switch
+             * still performs a local full TLB flush, so stale user entries left
+             * by an earlier run cannot survive task migration.
+             */
+            if (task && ((task->context.asid & ASID_MASK) == (asid & ASID_MASK)))
+                mask |= 1u << cpu;
         }
     }
 
@@ -116,7 +128,7 @@ static void tlb_wait_remote_ack(uint32_t target_mask, uint32_t generation)
      * This is intentionally bounded. During SMP bring-up, a missing IPI ack
      * should degrade to a diagnostic counter, not freeze the boot CPU.
      */
-    for (uint32_t spin = 0; spin < 100000 && pending; spin++) {
+    for (uint32_t spin = 0; spin < 5000000 && pending; spin++) {
         uint32_t acked = 0;
 
         for (uint32_t cpu = 0; cpu < ARMOS_MAX_CPUS; cpu++) {
@@ -132,6 +144,10 @@ static void tlb_wait_remote_ack(uint32_t target_mask, uint32_t generation)
         shootdown_deferred_count++;
         KWARN("TLB: remote shootdown generation %u missing ack mask=0x%08x\n",
               generation, pending);
+        for (uint32_t cpu = 0; cpu < ARMOS_MAX_CPUS; cpu++) {
+            if (pending & (1u << cpu))
+                smp_disable_scheduler_cpu(cpu);
+        }
     }
 }
 
@@ -140,13 +156,16 @@ static void tlb_shootdown_common(tlb_request_kind_t kind, uint32_t vaddr, uint32
     uint32_t target_mask;
     uint32_t generation;
 
+    spin_lock(&shootdown_lock);
     shootdown_total_count++;
 
     tlb_flush_local(kind, vaddr, asid);
 
     target_mask = tlb_remote_target_mask(kind, asid);
-    if (!target_mask)
+    if (!target_mask) {
+        spin_unlock(&shootdown_lock);
         return;
+    }
 
     /*
      * Publish the request before sending the SGI. The current parked-CPU path
@@ -165,6 +184,7 @@ static void tlb_shootdown_common(tlb_request_kind_t kind, uint32_t vaddr, uint32
     shootdown_remote_count++;
     gic_send_sgi(target_mask, IRQ_SGI_TLB_SHOOTDOWN);
     tlb_wait_remote_ack(target_mask, generation);
+    spin_unlock(&shootdown_lock);
 }
 
 void tlb_handle_remote_ipi(uint32_t cpu_id)

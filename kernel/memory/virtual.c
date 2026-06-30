@@ -184,8 +184,16 @@ void destroy_vm_space(vm_space_t *vm)
     {
         next = vma->next;
 
-        /* Free pages in this VMA */
-        for (vaddr = vma->start; vaddr < vma->end; vaddr += PAGE_SIZE)
+        /* Free pages in this VMA.
+         *
+         * VMAs may describe byte ranges, but the page tables map whole pages.
+         * Always walk the page-aligned backing range; otherwise a non-aligned
+         * VMA start would make get_physical_address() return phys+offset and
+         * free_page() would correctly reject it as an invalid page address.
+         */
+        uint32_t page_start = PAGE_ALIGN_DOWN(vma->start);
+        uint32_t page_end = PAGE_ALIGN_UP(vma->end);
+        for (vaddr = page_start; vaddr < page_end; vaddr += PAGE_SIZE)
         {
             phys_addr = get_physical_address(vm->pgdir, vaddr);
             if (vm_phys_page_is_freeable(phys_addr, "user"))

@@ -29,6 +29,7 @@
 #include <kernel/vfs.h>
 #include <kernel/ata.h>
 #include <kernel/smp.h>
+#include <kernel/tlb.h>
 
 /* Inclusion des fonctions inline ARM apres les prototypes */
 #include <asm/arm.h>
@@ -337,6 +338,17 @@ void kernel_main(void)
     }
 
     KBOOT_OK("Process: scheduler ready");
+
+    if (smp_possible_cpu_count() > 1) {
+        KBOOT_OK("SMP: TLB/IPI preflight");
+        tlb_shootdown_all();
+        for (uint32_t cpu = 1; cpu < smp_possible_cpu_count(); cpu++) {
+            if (smp_enable_scheduler_cpu(cpu) == 0)
+                KBOOT_OKF("SMP: scheduler enabled on CPU%u", cpu);
+            else
+                KBOOT_WARNF("SMP: CPU%u scheduler remains parked", cpu);
+        }
+    }
 
     /* Main scheduler loop */
     sched_start();

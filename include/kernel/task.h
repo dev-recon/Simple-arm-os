@@ -39,6 +39,7 @@ struct file;
 #define TASK_IDLE_PRIORITY      (TASK_PRIORITY_LEVELS - 1)
 #define TASK_NICE_MIN           (-20)
 #define TASK_NICE_MAX           19
+#define TASK_CPU_NONE           0xffffffffu
 #define SCHED_POLICY_NAME       "priority-rr-debt"
 #define SCHED_AGING_STEP_TICKS  20
 #define SCHED_AGING_MAX_BONUS   8
@@ -72,6 +73,8 @@ typedef struct kernel_lifecycle_stats {
 extern volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
 
 #define SCHED_TRACE_SIZE 64
+#define TASK_MAGIC_ALIVE 0x5441534bu  /* "TASK" */
+#define TASK_MAGIC_DEAD  0xdead7a5bu
 
 typedef enum sched_trace_event_type {
     SCHED_TRACE_FS_WAIT_TIMEOUT = 1,
@@ -82,6 +85,7 @@ typedef enum sched_trace_event_type {
     SCHED_TRACE_REFUSE_LOOP,
     SCHED_TRACE_READY_REFUSE_DEAD,
     SCHED_TRACE_READY_REFUSE_CORRUPT,
+    SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING,
 } sched_trace_event_type_t;
 
 typedef struct sched_trace_event {
@@ -446,6 +450,9 @@ typedef struct task {
     uint32_t last_syscall;                  /* Last syscall entered by this task */
     uint32_t ready_since_tick;              /* Scheduler aging: tick when queued READY */
     uint32_t sched_debt;                    /* CPU fairness debt, in timer ticks */
+    uint32_t running_cpu;                   /* CPU currently owning TASK_RUNNING */
+    uint32_t last_cpu;                      /* Last CPU that executed this task */
+    uint32_t magic;                         /* Object lifetime guard for SMP diagnostics */
 
 } __attribute__((aligned(8))) task_t;
 
@@ -517,6 +524,7 @@ void task_print_stats(void);                /* Statistiques globales */
 void __task_first_switch_v2(task_context_t* new_ctx);
 void __task_switch_asm(task_context_t* old_ctx, task_context_t* new_ctx);
 void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
+void task_context_save_complete(task_context_t* ctx);
 void switch_to_idle(void);
 
 extern task_t* current_task;
@@ -531,8 +539,10 @@ extern task_t* init_process;
 task_t* task_current_on_cpu(uint32_t cpu_id);
 task_t* task_current_local(void);
 task_t* task_idle_on_cpu(uint32_t cpu_id);
+bool task_is_valid(task_t* task);
 bool task_is_idle_task(task_t* task);
 void task_register_idle_cpu(uint32_t cpu_id, task_t* task);
+void task_start_secondary_scheduler(uint32_t cpu_id) __attribute__((noreturn));
 void scheduler_request_resched_current_cpu(void);
 bool scheduler_take_resched_current_cpu(void);
 bool scheduler_resched_pending_on_cpu(uint32_t cpu_id);

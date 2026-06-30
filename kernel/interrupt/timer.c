@@ -36,7 +36,7 @@ static uint64_t last_timer_count = 0;
 static uint32_t software_system_ticks = 0;
 static bool timer_software_initialized = false;
 
-static bool in_critical_section = false;
+static volatile bool in_critical_section_cpu[ARMOS_MAX_CPUS];
 
 static uint32_t timer_interval_from_frequency(uint32_t timer_freq)
 {
@@ -53,16 +53,21 @@ static void timer_program_next_tick(uint32_t timer_freq)
 
 
 void set_critical_section(void){
-    in_critical_section = true;
+    uint32_t cpu = smp_processor_id();
+    if (cpu < ARMOS_MAX_CPUS)
+        in_critical_section_cpu[cpu] = true;
 }
 
 void unset_critical_section(void){
-    in_critical_section = false;
+    uint32_t cpu = smp_processor_id();
+    if (cpu < ARMOS_MAX_CPUS)
+        in_critical_section_cpu[cpu] = false;
 }
 
 bool get_critical_section(void)
 {
-    return in_critical_section;
+    uint32_t cpu = smp_processor_id();
+    return cpu < ARMOS_MAX_CPUS ? in_critical_section_cpu[cpu] : false;
 }
 
 void init_timer_software(void)
@@ -130,7 +135,7 @@ void update_timer_software(void)
         last_timer_count += ticks_elapsed * tick_interval;
         
         /* Scheduling si nécessaire */
-        if (process_system_ready && ticks_elapsed > 0 && !in_critical_section) {
+        if (process_system_ready && ticks_elapsed > 0 && !get_critical_section()) {
             /* Faire du scheduling pour chaque tick écoulé */
             for (uint32_t i = 0; i < ticks_elapsed; i++) {
                 if (software_system_ticks % 10 == 0) {  /* Tous les 100ms */
@@ -280,7 +285,7 @@ void timer_irq_handler(void)
                 current->sched_debt++;
         }
 
-        if (current && !task_is_idle_task(current) && !in_critical_section) {
+        if (current && !task_is_idle_task(current) && !get_critical_section()) {
             current->quantum_left--;
 
             if (current->quantum_left == 0) {
