@@ -702,16 +702,17 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "tlb_defer:   %u\n", tlb_shootdown_deferred_count());
     proc_append(buf, cap, len, "sched_guard: %u\n", smp_scheduler_reject_count());
     proc_append(buf, cap, len, "\n");
-    proc_append(buf, cap, len, "cpu state   seen irq ipi psci\n");
+    proc_append(buf, cap, len, "cpu state   seen irq ipi heartbeat psci\n");
 
     for (uint32_t cpu = 0; cpu < possible; cpu++) {
         const smp_cpu_info_t* info = smp_cpu_info(cpu);
-        proc_append(buf, cap, len, "%3u %-7s %4s %3u %3u %d\n",
+        proc_append(buf, cap, len, "%3u %-7s %4s %3u %3u %9u %d\n",
                     cpu,
                     smp_cpu_state_name(cpu),
                     smp_cpu_seen(cpu) ? "yes" : "no",
                     info ? info->irq_count : 0,
                     info ? info->ipi_count : 0,
+                    info ? info->park_heartbeat : 0,
                     smp_cpu_start_result(cpu));
     }
 }

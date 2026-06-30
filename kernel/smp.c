@@ -26,10 +26,12 @@
 
 #define PSCI_0_2_FN_CPU_ON 0x84000003u
 
-_Static_assert(sizeof(smp_cpu_info_t) == 20,
+_Static_assert(sizeof(smp_cpu_info_t) == 24,
                "smp_cpu_info_t size must match boot.S");
 _Static_assert(offsetof(smp_cpu_info_t, state) == 4,
                "smp_cpu_info_t.state offset must match boot.S");
+_Static_assert(offsetof(smp_cpu_info_t, park_heartbeat) == 16,
+               "smp_cpu_info_t.park_heartbeat offset must match boot.S");
 
 volatile uint32_t smp_seen_mask = 1u << ARMOS_BOOT_CPU;
 volatile smp_cpu_info_t smp_cpu_infos[ARMOS_MAX_CPUS] = {
@@ -129,6 +131,7 @@ void smp_init_boot_cpu(void)
         smp_cpu_infos[cpu].state = (cpu == boot_cpu_id) ? SMP_CPU_ONLINE : SMP_CPU_OFFLINE;
         smp_cpu_infos[cpu].irq_count = 0;
         smp_cpu_infos[cpu].ipi_count = 0;
+        smp_cpu_infos[cpu].park_heartbeat = 0;
         smp_cpu_infos[cpu].start_result = (cpu == boot_cpu_id) ? 0 : 1;
     }
 }
