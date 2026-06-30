@@ -31,6 +31,9 @@
 .extern swi_handler
 .extern smp_cpu_infos
 .extern smp_secondary_main
+.extern __smp_irq_stack_bottom
+.extern __smp_abt_stack_bottom
+.extern __smp_und_stack_bottom
 
 
 /*
@@ -276,6 +279,37 @@ halt_secondary_cpu:
     lsl r2, r2, #12
     add sp, r1, r2
     and sp, sp, #~7
+
+    /*
+     * Initialize the secondary CPU's banked exception stacks before entering C.
+     * IRQs remain masked, but this makes the next IPI bring-up step possible
+     * without risking an exception on an uninitialized SP_irq/SP_abt/SP_und.
+     */
+    mov r6, r0
+
+    cps #0x12                    /* IRQ mode */
+    ldr r1, =__smp_irq_stack_bottom
+    add r2, r6, #1
+    lsl r2, r2, #12              /* 4096 bytes per CPU */
+    add sp, r1, r2
+    and sp, sp, #~7
+
+    cps #0x17                    /* ABT mode */
+    ldr r1, =__smp_abt_stack_bottom
+    add r2, r6, #1
+    lsl r2, r2, #10              /* 1024 bytes per CPU */
+    add sp, r1, r2
+    and sp, sp, #~7
+
+    cps #0x1B                    /* UND mode */
+    ldr r1, =__smp_und_stack_bottom
+    add r2, r6, #1
+    lsl r2, r2, #10              /* 1024 bytes per CPU */
+    add sp, r1, r2
+    and sp, sp, #~7
+
+    cps #0x13                    /* Back to SVC mode */
+    mov r0, r6
     
     /* Install VBAR so unexpected synchronous exceptions at least vector to the
      * normal table. IRQ/FIQ/async abort stay masked while parked.
