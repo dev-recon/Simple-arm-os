@@ -238,25 +238,42 @@ void tty_init(void) {
 static int tty_signal_process_group(pid_t pgid, int sig)
 {
     task_t* task;
+    task_t* targets[MAX_TASKS];
+    uint32_t target_count = 0;
+    uint32_t walked = 0;
+    unsigned long flags;
     int delivered = 0;
-    int count = 0;
+    uint32_t i;
 
-    if (pgid <= 0 || !task_list_head)
+    if (pgid <= 0)
         return 0;
 
+    spin_lock_irqsave(&task_lock, &flags);
     task = task_list_head;
+    if (!task) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return 0;
+    }
+
     do {
         if (task->type == TASK_TYPE_PROCESS && task->process &&
             task->process->pgid == pgid &&
             task->state != TASK_ZOMBIE &&
             task->state != TASK_TERMINATED) {
-            if (send_signal(task, sig) == 0)
-                delivered++;
+            if (target_count < MAX_TASKS)
+                targets[target_count++] = task;
         }
 
         task = task->next;
-        count++;
-    } while (task && task != task_list_head && count < MAX_TASKS);
+        walked++;
+    } while (task && task != task_list_head && walked < MAX_TASKS);
+
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    for (i = 0; i < target_count; i++) {
+        if (send_signal(targets[i], sig) == 0)
+            delivered++;
+    }
 
     return delivered;
 }
