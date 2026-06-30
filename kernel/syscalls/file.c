@@ -447,6 +447,14 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
             truncate_result = truncate_file_inode(inode, opened_name);
         } else if (inode->f_op == &ext2_file_ops) {
             truncate_result = ext2_truncate_inode(inode);
+        } else if (inode->f_op && inode->f_op->write) {
+            /*
+             * Pseudo files such as /proc control endpoints and character
+             * devices do not have persistent contents to truncate. Shell
+             * redirection still uses O_TRUNC, so treat it as a no-op when the
+             * target is writable but not backed by a disk filesystem.
+             */
+            truncate_result = 0;
         } else {
             truncate_result = -EROFS;
         }
