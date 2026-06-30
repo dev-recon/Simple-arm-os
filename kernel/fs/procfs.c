@@ -722,7 +722,7 @@ static void proc_fill_smp_ipi(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len,
                 "SMP IPI test endpoint\n"
                 "write \"self\" or \"0\" to send IRQ_SGI_TLB_SHOOTDOWN to CPU0\n"
-                "secondary CPUs are intentionally not targetable yet\n");
+                "write \"others\" to send it to all non-boot CPU interfaces\n");
 }
 
 static void proc_fill_filesystems(char* buf, size_t cap, size_t* len)
@@ -1829,6 +1829,11 @@ static ssize_t procfs_write(file_t* file, const void* buffer, size_t count)
 
     if (strcmp(cmd, "self") == 0 || strcmp(cmd, "0") == 0) {
         gic_send_sgi(1u << smp_boot_cpu_id(), IRQ_SGI_TLB_SHOOTDOWN);
+        return (ssize_t)count;
+    }
+
+    if (strcmp(cmd, "others") == 0) {
+        gic_send_sgi_others(IRQ_SGI_TLB_SHOOTDOWN);
         return (ssize_t)count;
     }
 

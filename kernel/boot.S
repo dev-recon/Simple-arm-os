@@ -34,6 +34,7 @@
 .extern __smp_irq_stack_bottom
 .extern __smp_abt_stack_bottom
 .extern __smp_und_stack_bottom
+.extern kernel_pgdir
 
 
 /*
@@ -236,7 +237,47 @@ enable_caches_and_optimizations:
 smp_secondary_entry:
     cpsid aif                   /* Secondary CPUs must not take IRQs yet */
     bl setup_cpu_state
+    bl setup_secondary_mmu_state
     b halt_secondary_cpu
+
+/*
+ * Minimal MMU setup for secondary CPUs.
+ *
+ * PSCI starts secondary CPUs with their own CP15 state. RAM accesses work while
+ * MMU is off because QEMU virt RAM is identity-addressed at 0x40000000, but
+ * kernel MMIO drivers use TTBR1 aliases such as 0xF0000000. A secondary must
+ * therefore install the boot CPU's kernel page directory before touching GIC,
+ * TTY, or any other MMIO-backed subsystem.
+ */
+setup_secondary_mmu_state:
+    mov r4, lr
+
+    mov r0, #0
+    mcr p15, 0, r0, c2, c0, 0   /* TTBR0 unused while parked */
+
+    ldr r1, =kernel_pgdir
+    ldr r1, [r1]                /* r1 = kernel_page_dir physical/identity VA */
+    mcr p15, 0, r1, c2, c0, 1   /* TTBR1 */
+
+    mov r0, #2                  /* N=2: split at 0x40000000 */
+    mcr p15, 0, r0, c2, c0, 2   /* TTBCR */
+
+    ldr r0, =0x55555555         /* All domains client */
+    mcr p15, 0, r0, c3, c0, 0   /* DACR */
+
+    mov r0, #0
+    mcr p15, 0, r0, c8, c7, 0   /* Invalidate unified TLB */
+    dsb
+    isb
+
+    mrc p15, 0, r0, c1, c0, 0   /* SCTLR */
+    orr r0, r0, #1              /* Enable MMU, keep caches as setup_cpu_state left them */
+    mcr p15, 0, r0, c1, c0, 0
+    dsb
+    isb
+
+    mov lr, r4
+    bx lr
 
 halt_secondary_cpu:
     /* CPU secondaire detecte - le mettre en attente.

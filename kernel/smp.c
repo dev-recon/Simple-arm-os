@@ -22,6 +22,7 @@
 #include <kernel/kernel.h>
 #include <kernel/memory.h>
 #include <kernel/string.h>
+#include <kernel/interrupt.h>
 #include <asm/arm.h>
 
 #define PSCI_0_2_FN_CPU_ON 0x84000003u
@@ -166,14 +167,18 @@ void smp_secondary_main(uint32_t cpu_id)
     if (cpu_id < ARMOS_MAX_CPUS)
         smp_cpu_infos[cpu_id].state = SMP_CPU_PARKED;
 
+    gic_init_secondary_cpu_interface();
+    enable_interrupts();
+
     while (1) {
         if (cpu_id < ARMOS_MAX_CPUS)
             smp_cpu_infos[cpu_id].park_heartbeat++;
 
         /*
          * The secondary CPU is alive in C, but still outside the scheduler.
-         * Keep IRQs masked until the per-CPU GIC interface and IPI rendezvous
-         * path are fully validated. WFI avoids the old busy WFE heartbeat storm.
+         * Only diagnostic SGIs are enabled here. It must not run tasks or handle
+         * device interrupts until the scheduler and per-CPU timer path are SMP
+         * aware. WFI avoids the old busy WFE heartbeat storm.
          */
         data_sync_barrier();
         wait_for_interrupt();

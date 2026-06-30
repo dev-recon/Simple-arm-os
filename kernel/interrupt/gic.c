@@ -29,6 +29,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/mmio.h>
 #include <kernel/smp.h>
+#include <asm/arm.h>
 
 /* Compteur global pour verifier que les IRQ arrivent */
 static volatile uint32_t irq_count = 0;
@@ -200,6 +201,30 @@ void init_gic(void)
     }
 }
 
+void gic_init_secondary_cpu_interface(void)
+{
+    volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
+    volatile uint32_t* gicc = (volatile uint32_t*)LOCAL_GICC_BASE;
+    volatile uint8_t* ipriority = (volatile uint8_t*)(LOCAL_GICD_BASE + 0x400);
+    uint32_t reg = IRQ_SGI_TLB_SHOOTDOWN / 32;
+    uint32_t bit = IRQ_SGI_TLB_SHOOTDOWN % 32;
+
+    /*
+     * Secondary CPUs enter here with TTBR1 enabled but outside the scheduler.
+     * Configure only their private GICC state and the diagnostic SGI/PPI bit.
+     * Device SPIs stay routed to the boot CPU until the drivers are SMP-safe.
+     */
+    gicc[0x000 / 4] = 0;
+    gicc[0x004 / 4] = 0xF0;  /* GICC_PMR */
+    gicc[0x008 / 4] = 0x03;  /* GICC_BPR */
+    ipriority[IRQ_SGI_TLB_SHOOTDOWN] = 0xA0;
+    gicd[0x100 / 4 + reg] |= (1u << bit);
+    gicc[0x000 / 4] = 0x01;
+
+    data_sync_barrier();
+    instruction_sync_barrier();
+}
+
 void fiq_c_handler(void)
 {
     irq_c_handler();
@@ -332,6 +357,21 @@ void gic_send_sgi(uint32_t target_cpu_mask, uint32_t sgi_id)
      * QEMU virt, which is exactly what we need for boot-time SMP experiments.
      */
     gicd[0xF00 / 4] = value;
+}
+
+void gic_send_sgi_others(uint32_t sgi_id)
+{
+    if (sgi_id >= 16)
+        return;
+
+    volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
+
+    /*
+     * TargetListFilter=1 means "all CPU interfaces except the requester".
+     * This is a useful SMP bring-up diagnostic because it avoids assuming that
+     * MPIDR affinity bits and GIC target-list bits are identical.
+     */
+    gicd[0xF00 / 4] = (1u << 24) | (sgi_id & 0xFu);
 }
 
 static void enable_irq_with_type(uint32_t irq, bool edge_triggered)
