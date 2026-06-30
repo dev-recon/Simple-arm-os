@@ -11,7 +11,7 @@
  * Responsibilities:
  * - Centralize TLB invalidation requests.
  * - Flush locally on the requesting CPU.
- * - Send bounded SGI rendezvous requests to parked secondary CPUs.
+ * - Send bounded SGI rendezvous requests to CPUs that may need the flush.
  *
  * Notes:
  * - CPU1 can be started into the holding pen, but only CPU0 runs the scheduler.
@@ -23,6 +23,7 @@
 #include <kernel/smp.h>
 #include <kernel/kprintf.h>
 #include <kernel/interrupt.h>
+#include <kernel/memory.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 
@@ -44,11 +45,22 @@ static volatile uint32_t shootdown_vaddr;
 static volatile uint32_t shootdown_asid;
 static volatile uint32_t shootdown_cpu_ack[ARMOS_MAX_CPUS];
 
-static uint32_t tlb_remote_target_mask(void)
+static bool tlb_request_is_kernel_scope(tlb_request_kind_t kind, uint32_t asid)
+{
+    if (kind == TLB_REQ_ALL)
+        return true;
+    if ((kind == TLB_REQ_ASID || kind == TLB_REQ_PAGE_ASID) &&
+        ((asid & ASID_MASK) == ASID_KERNEL))
+        return true;
+    return false;
+}
+
+static uint32_t tlb_remote_target_mask(tlb_request_kind_t kind, uint32_t asid)
 {
     uint32_t mask = 0;
     uint32_t boot_cpu = smp_boot_cpu_id();
     uint32_t possible = smp_possible_cpu_count();
+    bool kernel_scope = tlb_request_is_kernel_scope(kind, asid);
 
     for (uint32_t cpu = 0; cpu < possible && cpu < ARMOS_MAX_CPUS; cpu++) {
         smp_cpu_state_t state;
@@ -59,8 +71,17 @@ static uint32_t tlb_remote_target_mask(void)
             continue;
 
         state = smp_cpu_state(cpu);
-        if (state == SMP_CPU_PARKED || state == SMP_CPU_ONLINE)
+        /*
+         * Parked CPUs run only the holding-pen kernel context. They have never
+         * entered a user address space, so user-ASID invalidations do not need
+         * to wake them. Keep kernel/global requests conservative.
+         */
+        if (kernel_scope) {
+            if (state == SMP_CPU_PARKED || state == SMP_CPU_ONLINE)
+                mask |= 1u << cpu;
+        } else if (smp_scheduler_cpu_enabled(cpu)) {
             mask |= 1u << cpu;
+        }
     }
 
     return mask;
@@ -123,7 +144,7 @@ static void tlb_shootdown_common(tlb_request_kind_t kind, uint32_t vaddr, uint32
 
     tlb_flush_local(kind, vaddr, asid);
 
-    target_mask = tlb_remote_target_mask();
+    target_mask = tlb_remote_target_mask(kind, asid);
     if (!target_mask)
         return;
 
