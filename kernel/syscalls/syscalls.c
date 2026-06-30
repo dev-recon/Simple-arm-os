@@ -1217,8 +1217,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
         return result;
     }
 
-    if (need_resched /* && (syscall_num != __NR_waitpid) */) {
-        need_resched = 0;
+    if (scheduler_take_resched_current_cpu()) {
         yield();
     }
 

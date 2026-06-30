@@ -529,6 +529,8 @@ extern task_t* init_process;
 
 task_t* task_current_on_cpu(uint32_t cpu_id);
 task_t* task_current_local(void);
+void scheduler_request_resched_current_cpu(void);
+bool scheduler_take_resched_current_cpu(void);
 
 
 void add_task_to_list(task_t* task);
