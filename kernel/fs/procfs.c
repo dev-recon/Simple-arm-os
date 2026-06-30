@@ -706,19 +706,32 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "tlb_gen:     %u\n", tlb_shootdown_generation());
     proc_append(buf, cap, len, "sched_guard: %u\n", smp_scheduler_reject_count());
     proc_append(buf, cap, len, "\n");
-    proc_append(buf, cap, len, "cpu state   seen irq ipi timer heartbeat tlb_ack psci\n");
+    proc_append(buf, cap, len, "cpu state   seen sched rq      irq  ipi    timer    hb tlb idle  cur_tid cur_pid pri current      psci\n");
 
     for (uint32_t cpu = 0; cpu < possible; cpu++) {
         const smp_cpu_info_t* info = smp_cpu_info(cpu);
-        proc_append(buf, cap, len, "%3u %-7s %4s %3u %3u %5u %9u %7u %d\n",
+        task_t* current_task_on_cpu = task_current_on_cpu(cpu);
+        task_t* idle_task_on_cpu = task_idle_on_cpu(cpu);
+        process_t* current_proc = current_task_on_cpu && current_task_on_cpu->type == TASK_TYPE_PROCESS
+                                ? current_task_on_cpu->process
+                                : NULL;
+
+        proc_append(buf, cap, len, "%3u %-7s %4s %5s %2u %8u %4u %8u %5u %3u %4u %8u %7u %3u %-12s %d\n",
                     cpu,
                     smp_cpu_state_name(cpu),
                     smp_cpu_seen(cpu) ? "yes" : "no",
+                    smp_scheduler_cpu_enabled(cpu) ? "yes" : "no",
+                    scheduler_resched_pending_on_cpu(cpu) ? 1u : 0u,
                     info ? info->irq_count : 0,
                     info ? info->ipi_count : 0,
                     timer_cpu_tick_count(cpu),
                     info ? info->park_heartbeat : 0,
                     tlb_shootdown_cpu_ack(cpu),
+                    idle_task_on_cpu ? idle_task_on_cpu->task_id : 0u,
+                    current_task_on_cpu ? current_task_on_cpu->task_id : 0u,
+                    current_proc ? (uint32_t)current_proc->pid : 0u,
+                    current_task_on_cpu ? current_task_on_cpu->priority : 0u,
+                    current_task_on_cpu ? current_task_on_cpu->name : "-",
                     smp_cpu_start_result(cpu));
     }
 }
