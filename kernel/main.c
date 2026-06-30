@@ -231,14 +231,15 @@ void kernel_main(void)
     /* Phase 3: Controleurs materiels de base */
     init_gic();
     KBOOT_OKF("GIC: v2, 288 IRQs");
-    smp_start_secondary_cpus();
-    KBOOT_OKF("SMP: %u CPU(s) configured, %u online",
-              smp_possible_cpu_count(), smp_online_cpu_count());
 
     //init_timer_software();
     init_timer();
     KBOOT_OKF("Timer: ARM generic timer @ %u Hz, tick %u us",
                 timer_freq, 1000000 / TIMER_FREQ);
+
+    smp_start_secondary_cpus();
+    KBOOT_OKF("SMP: %u CPU(s) configured, %u online",
+              smp_possible_cpu_count(), smp_online_cpu_count());
 
     /* Phase 4: Peripheriques d'entree/sortie */
     init_keyboard();

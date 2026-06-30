@@ -172,8 +172,8 @@ void smp_secondary_main(uint32_t cpu_id)
 
         /*
          * The secondary CPU is alive in C, but still outside the scheduler.
-         * Keep IRQs masked and sleep hard until a later bring-up step installs
-         * per-CPU interrupt stacks and a real IPI rendezvous path.
+         * Keep IRQs masked until the per-CPU GIC interface and IPI rendezvous
+         * path are fully validated. WFI avoids the old busy WFE heartbeat storm.
          */
         data_sync_barrier();
         wait_for_interrupt();
