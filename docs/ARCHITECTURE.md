@@ -306,6 +306,9 @@ Current SMP contract:
   state (`online`, `parked`, or `offline`) plus the PSCI start result;
 - spinlocks use ARMv7 `LDREX` / `STREX`, not compiler test-and-set helpers;
 - spinlocks record the owning CPU for diagnostics;
+- TLB maintenance now has two layers: local ARM helpers in `asm/mmu.h`
+  (`tlb_flush_*`) and SMP-aware kernel entry points in `kernel/tlb.h`
+  (`tlb_shootdown_*`);
 - no secondary CPU executes scheduler, MMU, VFS, or userland code yet.
 
 The intended bring-up sequence is deliberately conservative:

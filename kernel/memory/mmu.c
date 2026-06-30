@@ -22,6 +22,7 @@
 #include <kernel/debug_print.h>
 #include <kernel/display.h>
 #include <kernel/task.h>
+#include <kernel/tlb.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 
@@ -165,7 +166,7 @@ static int update_user_pte(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr,
     *pte = (phys_addr & PTE_SMALL_BASE) | user_page_flags(vma_flags, writable);
     asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
     asm volatile("dsb ishst" ::: "memory");
-    invalidate_tlb_page_asid(vaddr, asid);
+    tlb_shootdown_page_asid(vaddr, asid);
     if (vma_flags & VMA_EXEC) {
         asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0));
         asm volatile("dsb ish; isb" ::: "memory");
@@ -937,7 +938,7 @@ void switch_address_space_with_asid(uint32_t* pgdir, uint32_t asid)
     data_sync_barrier();                 // dsb
     instruction_sync_barrier();          // isb
 
-    invalidate_tlb_asid(get_current_asid());
+    tlb_shootdown_asid(get_current_asid());
     //set_ttbr0((uint32_t)pgdir);
     data_sync_barrier();
     instruction_sync_barrier();
@@ -1033,7 +1034,7 @@ void map_user_stack(void)
     KINFO("MMU: User stack mapped (%u sections) in TTBR0\n", mapped_stack);
     
     /* Invalider le TLB pour les nouvelles mappings */
-    invalidate_tlb_all();
+    tlb_shootdown_all();
 }
 
 /* Fonctions inchangées du code original... */
@@ -1111,7 +1112,7 @@ int set_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
     *pte = (*pte & ~PTE_AP_MASK) | PTE_AP_RW_RO;
     asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
     asm volatile("dsb ishst" ::: "memory");
-    invalidate_tlb_page_asid(vaddr, asid);
+    tlb_shootdown_page_asid(vaddr, asid);
     return 0;
 }
 
@@ -1125,7 +1126,7 @@ int set_user_page_writable(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
     *pte = (*pte & ~PTE_AP_MASK) | PTE_AP_RW_RW;
     asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
     asm volatile("dsb ishst" ::: "memory");
-    invalidate_tlb_page_asid(vaddr, asid);
+    tlb_shootdown_page_asid(vaddr, asid);
     return 0;
 }
 
@@ -1169,7 +1170,7 @@ static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
         *l1_entry = (l2_page & 0xFFFFFC00) | 0x01;
         asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(l1_entry) : "memory"); // DCCMVAC
         asm volatile("dsb ishst" ::: "memory");
-        invalidate_tlb_page_asid(vaddr, asid);
+        tlb_shootdown_page_asid(vaddr, asid);
     } else if (l1_type == 0x2) {
         KERROR("map_user_page: refusing L1 section at user vaddr 0x%08X\n", vaddr);
         return -EEXIST;
@@ -1196,7 +1197,7 @@ static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
     l2_table[l2_index] = (phys_addr & 0xFFFFF000) | page_flags;
     asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(&l2_table[l2_index]) : "memory");
     asm volatile("dsb ishst" ::: "memory");
-    invalidate_tlb_page_asid(vaddr, asid);
+    tlb_shootdown_page_asid(vaddr, asid);
     if (vma_flags & VMA_EXEC) {
         asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0)); // ICIALLU
         asm volatile("dsb ish; isb" ::: "memory");
