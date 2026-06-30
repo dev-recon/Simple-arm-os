@@ -1216,94 +1216,22 @@ uint32_t get_physical_address(uint32_t* pgdir, uint32_t vaddr) {
 
 void invalidate_tlb_all(void)
 {
-    __asm__ volatile("mcr p15, 0, %0, c8, c7, 0" : : "r"(0));
-    __asm__ volatile("dsb");
-    __asm__ volatile("isb");
-}
-
-static inline void invalidate_tlb_page_global(uint32_t vaddr)
-{
-    vaddr &= ~0xFFFu;
-    asm volatile(
-        "dsb ishst         \n"
-        "mcr p15, 0, %0, c8, c7, 3 \n"  // TLBI MVA, ALL ASID (TLBIMVAA)
-        "dsb ish          \n"
-        "isb              \n"
-        :: "r"(vaddr) : "memory");
+    tlb_shootdown_all();
 }
 
 void invalidate_tlb_page(uint32_t vaddr)
 {
-    //vaddr &= ~(PAGE_SIZE - 1);
-    
-    //KDEBUG("invalidate_tlb_page: invalidating 0x%08X\n", vaddr);
-    //debug_mmu_state();
-
-    invalidate_tlb_page_global(vaddr);
-    
-/*     asm volatile(
-        "dsb                            \n"
-        "mcr p15, 0, %0, c8, c7, 1      \n"  // TLBIMVA
-        "dsb                            \n"
-        "isb                            \n"
-        :
-        : "r"(vaddr)
-        : "memory"
-    ); */
-    
-    //KDEBUG("invalidate_tlb_page: completed\n");
+    tlb_shootdown_page(vaddr);
 }
 
-/* Nouvelle fonction: Invalider TLB par adresse et ASID */
 void invalidate_tlb_page_asid(uint32_t vaddr, uint32_t asid)
 {
-    vaddr &= ~(PAGE_SIZE - 1);
-    (void)asid;
-    
-    /*
-     * c8,c7,3 est TLBIMVAA: invalidation par MVA pour tous les ASID.
-     * Les bits bas de l'operande sont reserves et doivent rester a zero.
-     */
-    asm volatile(
-        "dsb                            \n"
-        "mcr p15, 0, %0, c8, c7, 3      \n"  // TLBIMVAA - invalidate by VA and ASID
-        "dsb                            \n"
-        "isb                            \n"
-        :
-        : "r"(vaddr)
-        : "memory"
-    );
-    
-    //KDEBUG("invalidate_tlb_page_asid: completed\n");
+    tlb_shootdown_page_asid(vaddr, asid);
 }
 
-/* Nouvelle fonction: Invalider TLB par ASID seulement */
 void invalidate_tlb_asid(uint32_t asid)
 {
-    //KDEBUG("invalidate_tlb_asid: asid=%u / get_current_asid=%u\n", asid, get_current_asid());
-
-    tlb_flush_by_asid(asid);
-    
-/*     asm volatile(
-        "dsb                            \n"
-        "nop                            \n"  // Délai après TLB invalidation
-        "nop                            \n"
-        "nop                            \n"  // Cortex-A15 recommande 3+ cycles
-        "mcr p15, 0, %0, c8, c7, 2      \n"  // TLBIASID - invalidate by ASID
-        "nop                            \n"  // Délai après TLB invalidation
-        "nop                            \n"
-        "nop                            \n"  // Cortex-A15 recommande 3+ cycles
-        "dsb                            \n"
-        "nop                            \n"  // Délai après TLB invalidation
-        "nop                            \n"
-        "nop                            \n"  // Cortex-A15 recommande 3+ cycles
-        "isb                            \n"
-        :
-        : "r"(asid & ASID_MASK)
-        : "memory"
-    ); */
-    
-    //KDEBUG("invalidate_tlb_asid: completed\n");
+    tlb_shootdown_asid(asid);
 }
 
 uint32_t get_ttbr0(void)
