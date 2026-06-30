@@ -94,7 +94,7 @@ void close_all_process_files(task_t* proc) {
  */
 void return_to_caller_with_value(int return_value)
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
     
     if (!proc || proc->type != TASK_TYPE_PROCESS) {
         KERROR("[WAITPID] Invalid process\n");

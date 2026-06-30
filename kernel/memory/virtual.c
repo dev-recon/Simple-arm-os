@@ -592,12 +592,14 @@ static int cow_copy_vma(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma)
 
 int handle_cow_fault(uint32_t fault_addr)
 {
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS ||
-        !current_task->process || !current_task->process->vm) {
+    task_t *task = task_current_local();
+
+    if (!task || task->type != TASK_TYPE_PROCESS ||
+        !task->process || !task->process->vm) {
         return -EINVAL;
     }
 
-    vm_space_t* vm = current_task->process->vm;
+    vm_space_t* vm = task->process->vm;
     uint32_t vaddr = fault_addr & ~(PAGE_SIZE - 1);
     vma_t* vma = find_vma(vm, fault_addr);
     if (!vma || !(vma->flags & VMA_WRITE)) {
@@ -643,8 +645,10 @@ int handle_cow_fault(uint32_t fault_addr)
 
 int handle_user_stack_fault(uint32_t fault_addr)
 {
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS ||
-        !current_task->process || !current_task->process->vm) {
+    task_t *task = task_current_local();
+
+    if (!task || task->type != TASK_TYPE_PROCESS ||
+        !task->process || !task->process->vm) {
         return -EINVAL;
     }
 
@@ -652,7 +656,7 @@ int handle_user_stack_fault(uint32_t fault_addr)
         return -EINVAL;
     }
 
-    vm_space_t* vm = current_task->process->vm;
+    vm_space_t* vm = task->process->vm;
     uint32_t vaddr = fault_addr & ~(PAGE_SIZE - 1);
     vma_t* vma = find_vma(vm, fault_addr);
     if (!vma || !(vma->flags & VMA_WRITE)) {

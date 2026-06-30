@@ -314,8 +314,10 @@ task_t* find_process_by_pid(pid_t pid)
  */
 task_t* get_current_task(void)
 {
-    if (current_task) {
-        return current_task;
+    task_t *task = task_current_local();
+
+    if (task) {
+        return task;
     }
     KERROR("get_current_task: current task is NULL");
     return NULL;
@@ -326,8 +328,10 @@ task_t* get_current_task(void)
  */
 process_t* get_current_process(void)
 {
-    if (current_task && current_task->type == TASK_TYPE_PROCESS && current_task->process) {
-        return current_task->process;
+    task_t *task = task_current_local();
+
+    if (task && task->type == TASK_TYPE_PROCESS && task->process) {
+        return task->process;
     }
     return NULL;
 }

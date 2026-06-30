@@ -204,7 +204,7 @@ int sys_shm_unlink(const char *user_name)
 
 void *sys_shm_map(int id, void *addr, int flags)
 {
-    task_t *task = current_task;
+    task_t *task = task_current_local();
     shm_object_t *obj;
     vm_space_t *vm;
     uint32_t vaddr;
@@ -278,7 +278,7 @@ void *sys_shm_map(int id, void *addr, int flags)
 
 int sys_shm_unmap(void *addr, size_t size)
 {
-    task_t *task = current_task;
+    task_t *task = task_current_local();
     vm_space_t *vm;
     vma_t *vma;
     uint32_t start = (uint32_t)addr;
