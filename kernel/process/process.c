@@ -59,6 +59,18 @@ void init_main(void)
 /**
  * Initialiser le systeme unifie process/task
  */
+static void configure_idle_task_for_cpu(uint32_t cpu_id, task_t* task)
+{
+    if (!task)
+        return;
+
+    task_register_idle_cpu(cpu_id, task);
+    task->context.is_first_run = 1;
+    task->context.ttbr0 = (uint32_t)ttbr0_pgdir;
+    task->context.asid = ASID_KERNEL;
+    task->context.returns_to_user = 0;
+}
+
 void init_process_system(void)
 {
     /* Initialiser le gestionnaire de signal stacks */
@@ -103,12 +115,26 @@ void init_process_system(void)
     if (!idle_task) {
         panic("Failed to create idle task");
     }
-    task_register_idle_cpu(smp_boot_cpu_id(), idle_task);
+    configure_idle_task_for_cpu(smp_boot_cpu_id(), idle_task);
 
-    idle_task->context.is_first_run = 1;                     /* Pas la premiere fois */
-    idle_task->context.ttbr0 = (uint32_t)ttbr0_pgdir;
-    idle_task->context.asid = ASID_KERNEL;
-    idle_task->context.returns_to_user = 0;
+    for (uint32_t cpu = 0; cpu < smp_possible_cpu_count(); cpu++) {
+        char idle_name[TASK_NAME_MAX];
+        task_t* secondary_idle;
+
+        if (cpu == smp_boot_cpu_id())
+            continue;
+
+        snprintf(idle_name, sizeof(idle_name), "idle%u", cpu);
+        secondary_idle = task_create_process(idle_name, idle_task_func, NULL,
+                                             TASK_IDLE_PRIORITY, TASK_TYPE_KERNEL);
+        if (!secondary_idle) {
+            KWARN("SMP: failed to create idle task for CPU%u\n", cpu);
+            continue;
+        }
+
+        configure_idle_task_for_cpu(cpu, secondary_idle);
+        secondary_idle->state = TASK_BLOCKED;
+    }
 
 
     /* Mettre init dans la liste des taches pretes */
