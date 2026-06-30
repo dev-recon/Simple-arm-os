@@ -109,6 +109,32 @@ SECTIONS
         . += 4096 * 4;
         __smp_stack_top = .;
     } > RAM
+
+    /*
+     * Per-CPU exception stacks for secondary CPUs. They are initialized before
+     * a secondary enters the C holding pen, but IRQs stay masked until the real
+     * SMP interrupt path is enabled.
+     */
+    .smpirqstacks : {
+        . = ALIGN(4096);
+        __smp_irq_stack_bottom = .;
+        . += 4096 * 4;
+        __smp_irq_stack_top = .;
+    } > RAM
+
+    .smpabtstacks : {
+        . = ALIGN(1024);
+        __smp_abt_stack_bottom = .;
+        . += 1024 * 4;
+        __smp_abt_stack_top = .;
+    } > RAM
+
+    .smpundstacks : {
+        . = ALIGN(1024);
+        __smp_und_stack_bottom = .;
+        . += 1024 * 4;
+        __smp_und_stack_top = .;
+    } > RAM
     
     /* === HEAP AUTOMATIQUE === */
     . = ALIGN(4096);
