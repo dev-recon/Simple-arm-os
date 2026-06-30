@@ -58,6 +58,8 @@ void smp_note_ipi(uint32_t cpu_id);
 bool smp_is_boot_cpu(void);
 bool smp_cpu_seen(uint32_t cpu_id);
 bool smp_cpu_online(uint32_t cpu_id);
+uint32_t smp_scheduler_cpu_mask(void);
+bool smp_scheduler_cpu_enabled(uint32_t cpu_id);
 bool smp_scheduler_can_run_on_current_cpu(void);
 uint32_t smp_scheduler_reject_count(void);
 
