@@ -10,11 +10,13 @@
  *
  * Responsibilities:
  * - Expose CPU identity helpers to common kernel code.
- * - Keep SMP state explicit while ArmOS still boots a single CPU.
+ * - Expose the explicit CPU state machine used during SMP bring-up.
+ * - Keep scheduler participation separate from "CPU was seen/started".
  *
  * Notes:
- * - This is deliberately passive for the first SMP step: no secondary CPU is
- *   started here.  The goal is to make existing code CPU-aware before bring-up.
+ * - ArmOS can start secondary CPUs, but they remain parked until the scheduler,
+ *   TLB shootdowns and device interrupt routing are ready for real parallelism.
+ *   A CPU may therefore be "seen" without being "online" or schedulable.
  */
 
 #ifndef _KERNEL_SMP_H
