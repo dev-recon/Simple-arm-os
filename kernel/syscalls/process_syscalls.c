@@ -261,15 +261,17 @@ int sys_statfs(const char* path, struct statfs* buf)
 
 static int pipe_wait_interruptible(void)
 {
-    if (!current_task)
+    task_t *task = task_current_local();
+
+    if (!task)
         return -EINTR;
 
-    task_set_interruptible(current_task);
-    current_task->wakeup_time = get_system_ticks() + 1;
+    task_set_interruptible(task);
+    task->wakeup_time = get_system_ticks() + 1;
     yield();
-    current_task->wakeup_time = 0;
+    task->wakeup_time = 0;
 
-    if (has_pending_signals(current_task))
+    if (has_pending_signals(task))
         return -EINTR;
 
     return 0;
@@ -423,7 +425,7 @@ int sys_pipe(int pipefd[2])
     struct pipe_inode_info *read_pipe, *write_pipe;
     inode_t *inode;
     int fds[2];
-    task_t *task = current_task;
+    task_t *task = task_current_local();
     
     /* Vérifier le pointeur utilisateur */
     if (!pipefd || !task || !task->process) {
@@ -574,7 +576,7 @@ static void rollback_brk_growth(vm_space_t *vm, uint32_t start, uint32_t end)
 
 int sys_brk(void* addr)
 {
-    task_t* task = current_task ;
+    task_t* task = task_current_local();
 
     uint32_t new_brk = (uint32_t)addr;
     uint32_t old_brk;
@@ -673,43 +675,51 @@ int sys_brk(void* addr)
 
 int sys_dup(int oldfd)
 {
+    task_t *task = task_current_local();
     file_t* file;
     int newfd;
+
+    if (!task || !task->process)
+        return -EBADF;
     
     if (oldfd < 0 || oldfd >= MAX_FILES) return -EBADF;
     
-    file = current_task->process->files[oldfd];
+    file = task->process->files[oldfd];
     if (!file) return -EBADF;
     
-    newfd = allocate_fd(current_task);
+    newfd = allocate_fd(task);
     if (newfd < 0) return -EMFILE;
     
-    current_task->process->files[newfd] = get_file(file);
-    if (!current_task->process->files[newfd])
+    task->process->files[newfd] = get_file(file);
+    if (!task->process->files[newfd])
         return -EBADF;
-    current_task->process->fd_flags[newfd] = 0;
+    task->process->fd_flags[newfd] = 0;
     
     return newfd;
 }
 
 int sys_dup2(int oldfd, int newfd)
 {
+    task_t *task = task_current_local();
     file_t* file;
     file_t* new_file;
+
+    if (!task || !task->process)
+        return -EBADF;
     
     if (oldfd < 0 || oldfd >= MAX_FILES) return -EBADF;
     if (newfd < 0 || newfd >= MAX_FILES) return -EBADF;
     
     if (oldfd == newfd) return newfd;
     
-    file = current_task->process->files[oldfd];
+    file = task->process->files[oldfd];
     if (!file) return -EBADF;
     
     /* Close newfd if it's open */
-    if (current_task->process->files[newfd]) {
-        file_t* old_newfd = current_task->process->files[newfd];
-        current_task->process->files[newfd] = NULL;
-        current_task->process->fd_flags[newfd] = 0;
+    if (task->process->files[newfd]) {
+        file_t* old_newfd = task->process->files[newfd];
+        task->process->files[newfd] = NULL;
+        task->process->fd_flags[newfd] = 0;
         close_file(old_newfd);
     }
     
@@ -717,11 +727,11 @@ int sys_dup2(int oldfd, int newfd)
     if (!new_file)
         return -EBADF;
 
-    current_task->process->files[newfd] = new_file;
-    current_task->process->fd_flags[newfd] = 0;
+    task->process->files[newfd] = new_file;
+    task->process->fd_flags[newfd] = 0;
 
     if (newfd == STDIN_FILENO && file_is_tty(new_file))
-        current_task->process->controlling_tty = tty_id_from_file(new_file);
+        task->process->controlling_tty = tty_id_from_file(new_file);
     
     return newfd;
 }
@@ -765,16 +775,17 @@ static bool fd_write_ready(file_t *file)
 
 int sys_fcntl(int fd, int cmd, uint32_t arg)
 {
+    task_t *task = task_current_local();
     file_t* file;
     int newfd;
     struct flock_kernel fl;
 
-    if (!current_task || !current_task->process)
+    if (!task || !task->process)
         return -EINVAL;
     if (fd < 0 || fd >= MAX_FILES)
         return -EBADF;
 
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file)
         return -EBADF;
 
@@ -783,24 +794,24 @@ int sys_fcntl(int fd, int cmd, uint32_t arg)
         if ((int)arg < 0 || arg >= MAX_FILES)
             return -EINVAL;
         for (newfd = (int)arg; newfd < MAX_FILES; newfd++) {
-            if (!current_task->process->files[newfd]) {
-                current_task->process->files[newfd] = get_file(file);
-                if (!current_task->process->files[newfd])
+            if (!task->process->files[newfd]) {
+                task->process->files[newfd] = get_file(file);
+                if (!task->process->files[newfd])
                     return -EBADF;
-                current_task->process->fd_flags[newfd] = 0;
+                task->process->fd_flags[newfd] = 0;
                 return newfd;
             }
         }
         return -EMFILE;
 
     case F_GETFD:
-        return (current_task->process->fd_flags[fd] & O_CLOEXEC) ? FD_CLOEXEC : 0;
+        return (task->process->fd_flags[fd] & O_CLOEXEC) ? FD_CLOEXEC : 0;
 
     case F_SETFD:
         if (arg & FD_CLOEXEC)
-            current_task->process->fd_flags[fd] |= O_CLOEXEC;
+            task->process->fd_flags[fd] |= O_CLOEXEC;
         else
-            current_task->process->fd_flags[fd] &= ~O_CLOEXEC;
+            task->process->fd_flags[fd] &= ~O_CLOEXEC;
         return 0;
 
     case F_GETFL:
@@ -837,17 +848,18 @@ int sys_fcntl(int fd, int cmd, uint32_t arg)
 
 int sys_ioctl(int fd, uint32_t request, uint32_t arg)
 {
+    task_t *task = task_current_local();
     file_t* file;
     struct termios tio;
     struct winsize wsz;
     int tty_id;
 
-    if (!current_task || !current_task->process)
+    if (!task || !task->process)
         return -EINVAL;
     if (fd < 0 || fd >= MAX_FILES)
         return -EBADF;
 
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file)
         return -EBADF;
 
@@ -892,11 +904,10 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
         if (copy_from_user(&tio, (void*)arg, sizeof(tio)) < 0)
             return -EFAULT;
         while (tty_has_pending_output()) {
-            if (current_task && has_pending_signals(current_task))
+            if (has_pending_signals(task))
                 return -EINTR;
             tty_drain_output();
-            if (current_task)
-                yield();
+            yield();
         }
         return tty_set_termios_for_id(tty_id, &tio, 0);
 
@@ -979,13 +990,14 @@ int sys_uname(struct utsname_kernel *name)
 
 int sys_times(void* buf)
 {
+    task_t *task = task_current_local();
     struct tms_kernel ktms;
     uint32_t ticks = get_system_ticks();
 
     if (buf) {
         memset(&ktms, 0, sizeof(ktms));
-        if (current_task)
-            ktms.tms_utime = (int32_t)current_task->total_runtime;
+        if (task)
+            ktms.tms_utime = (int32_t)task->total_runtime;
         if (copy_to_user(buf, &ktms, sizeof(ktms)) < 0)
             return -EFAULT;
     }
@@ -1015,6 +1027,7 @@ static void fill_rusage_for_task(task_t *task, struct rusage_kernel *usage)
 
 int sys_getrusage(int who, struct rusage_kernel* usage)
 {
+    task_t *task = task_current_local();
     struct rusage_kernel local;
 
     if (!usage)
@@ -1026,7 +1039,7 @@ int sys_getrusage(int who, struct rusage_kernel* usage)
      * ArmOS currently tracks per-live-task counters. Child aggregate accounting
      * will need process-level lifetime accumulation before destroy_process().
      */
-    fill_rusage_for_task(who == ARMOS_RUSAGE_SELF ? current_task : NULL, &local);
+    fill_rusage_for_task(who == ARMOS_RUSAGE_SELF ? task : NULL, &local);
     return copy_to_user(usage, &local, sizeof(local)) < 0 ? -EFAULT : 0;
 }
 
@@ -1049,7 +1062,11 @@ static int select_scan(int nfds, uint32_t *in_read, uint32_t *in_write,
                        uint32_t *out_read, uint32_t *out_write,
                        uint32_t *out_except)
 {
+    task_t *task = task_current_local();
     int ready = 0;
+
+    if (!task || !task->process)
+        return -EINVAL;
 
     memset(out_read, 0, sizeof(uint32_t) * select_words_for_nfds(nfds));
     memset(out_write, 0, sizeof(uint32_t) * select_words_for_nfds(nfds));
@@ -1060,10 +1077,8 @@ static int select_scan(int nfds, uint32_t *in_read, uint32_t *in_write,
 
         if (fd >= MAX_FILES)
             break;
-        if (!current_task || !current_task->process)
-            return -EINVAL;
 
-        file = current_task->process->files[fd];
+        file = task->process->files[fd];
         if (!file)
             continue;
 
@@ -1082,6 +1097,7 @@ static int select_scan(int nfds, uint32_t *in_read, uint32_t *in_write,
 
 int sys_select(int nfds, void* readfds, void* writefds, void* exceptfds, void* timeout)
 {
+    task_t *task = task_current_local();
     struct timeval tv;
     uint32_t ms = 0;
     uint32_t deadline = 0;
@@ -1092,6 +1108,8 @@ int sys_select(int nfds, void* readfds, void* writefds, void* exceptfds, void* t
     int ready;
 
     if (nfds < 0 || nfds > MAX_FILES)
+        return -EINVAL;
+    if (!task || !task->process)
         return -EINVAL;
 
     words = select_words_for_nfds(nfds);
@@ -1129,7 +1147,7 @@ int sys_select(int nfds, void* readfds, void* writefds, void* exceptfds, void* t
             break;
         if (timeout && get_system_ticks() >= deadline)
             break;
-        if (has_pending_signals(current_task))
+        if (has_pending_signals(task))
             return -EINTR;
         task_sleep_ms(1);
     }
@@ -1146,10 +1164,13 @@ int sys_select(int nfds, void* readfds, void* writefds, void* exceptfds, void* t
 
 int sys_poll(struct pollfd_kernel* fds, uint32_t nfds, int timeout_ms)
 {
+    task_t *task = task_current_local();
     struct pollfd_kernel local[64];
     uint32_t deadline = 0;
     int ready;
 
+    if (!task || !task->process)
+        return -EINVAL;
     if (!fds && nfds)
         return -EFAULT;
     if (nfds > 64)
@@ -1168,8 +1189,8 @@ int sys_poll(struct pollfd_kernel* fds, uint32_t nfds, int timeout_ms)
             local[i].revents = 0;
             if (local[i].fd < 0)
                 continue;
-            if (local[i].fd >= MAX_FILES || !current_task || !current_task->process ||
-                !(file = current_task->process->files[local[i].fd])) {
+            if (local[i].fd >= MAX_FILES ||
+                !(file = task->process->files[local[i].fd])) {
                 local[i].revents = ARMOS_POLLNVAL;
                 ready++;
                 continue;
@@ -1186,7 +1207,7 @@ int sys_poll(struct pollfd_kernel* fds, uint32_t nfds, int timeout_ms)
             break;
         if (timeout_ms >= 0 && get_system_ticks() >= deadline)
             break;
-        if (has_pending_signals(current_task))
+        if (has_pending_signals(task))
             return -EINTR;
         task_sleep_ms(1);
     }
@@ -1264,7 +1285,8 @@ ssize_t sys_writev(int fd, const struct iovec_kernel* iov, int iovcnt)
 
 int sys_alarm(uint32_t seconds)
 {
-    process_t* proc = current_task ? current_task->process : NULL;
+    task_t *task = task_current_local();
+    process_t* proc = task ? task->process : NULL;
     uint32_t now = get_system_ticks();
     uint32_t old_remaining = 0;
 
@@ -1289,11 +1311,13 @@ int sys_alarm(uint32_t seconds)
 
 int sys_pause(void)
 {
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+    task_t *task = task_current_local();
+
+    if (!task || task->type != TASK_TYPE_PROCESS || !task->process)
         return -EINVAL;
 
-    while (!has_pending_signals(current_task)) {
-        task_set_interruptible(current_task);
+    while (!has_pending_signals(task)) {
+        task_set_interruptible(task);
         schedule();
     }
 
@@ -1449,6 +1473,7 @@ out_symlink:
 
 int sys_mknod(const char* pathname, mode_t mode, uint32_t dev)
 {
+    task_t *task = task_current_local();
     char* kernel_path;
     char* abs_path;
     char* parent_path;
@@ -1459,6 +1484,9 @@ int sys_mknod(const char* pathname, mode_t mode, uint32_t dev)
     int result;
 
     (void)dev; /* Major/minor dispatch is not implemented yet. */
+
+    if (!task || !task->process)
+        return -EINVAL;
 
     kernel_path = copy_string_from_user(pathname);
     if (!kernel_path) return -EFAULT;
@@ -1511,7 +1539,7 @@ int sys_mknod(const char* pathname, mode_t mode, uint32_t dev)
     } else if (parent->i_op != &ext2_inode_ops || !parent->i_op->create) {
         result = -EROFS;
     } else {
-        mode = type | ((mode & 07777) & ~(current_task->process ? current_task->process->umask : 0));
+        mode = type | ((mode & 07777) & ~task->process->umask);
         result = parent->i_op->create(parent, name, mode);
     }
 
@@ -1572,7 +1600,7 @@ int sys_chdir(const char* path)
     char* kernel_path;
     char* abs_path;
     inode_t* inode;
-    task_t *task = current_task;
+    task_t *task = task_current_local();
 
     if (!task || !task->process) return -EFAULT;
 
@@ -1614,15 +1642,18 @@ int sys_chdir(const char* path)
 
 int sys_getpgrp(void)
 {
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+    task_t *task = task_current_local();
+
+    if (!task || task->type != TASK_TYPE_PROCESS || !task->process)
         return -EINVAL;
 
-    return current_task->process->pgid;
+    return task->process->pgid;
 }
 
 int sys_setsid(void)
 {
-    process_t* proc = current_task ? current_task->process : NULL;
+    task_t *task = task_current_local();
+    process_t* proc = task ? task->process : NULL;
 
     if (!proc)
         return -EINVAL;
@@ -1637,12 +1668,13 @@ int sys_setsid(void)
 
 int sys_getsid(pid_t pid)
 {
+    task_t *caller = task_current_local();
     task_t* target;
 
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+    if (!caller || caller->type != TASK_TYPE_PROCESS || !caller->process)
         return -EINVAL;
 
-    target = (pid == 0) ? current_task : find_process_by_pid(pid);
+    target = (pid == 0) ? caller : find_process_by_pid(pid);
     if (!target || target->type != TASK_TYPE_PROCESS || !target->process)
         return -ESRCH;
 
@@ -1651,7 +1683,7 @@ int sys_getsid(pid_t pid)
 
 int sys_setpgid(pid_t pid, pid_t pgid)
 {
-    task_t *caller = current_task;
+    task_t *caller = task_current_local();
     task_t *target;
 
     if (!caller || caller->type != TASK_TYPE_PROCESS || !caller->process)
@@ -1684,7 +1716,7 @@ int sys_setpgid(pid_t pid, pid_t pgid)
 int sys_getcwd(char* buf, size_t size)
 {
     //const char* cwd = "/";
-    task_t *task = current_task;
+    task_t *task = task_current_local();
 
     if(!task || !task->process){
         return -EFAULT;
@@ -1751,7 +1783,8 @@ int sys_access(const char* pathname, int mode)
 
 int sys_umask(int mask)
 {
-    process_t* proc = current_task ? current_task->process : NULL;
+    task_t *task = task_current_local();
+    process_t* proc = task ? task->process : NULL;
     mode_t old_mask;
 
     if (!proc) return -EINVAL;
@@ -2319,11 +2352,13 @@ int sys_mkdir(const char* pathname, mode_t mode)
 
 
 int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
+    task_t *task = task_current_local();
     uint32_t sleep_ticks;
     uint32_t start_time, elapsed_time;
     uint32_t now;
     bool interrupted;
     
+    if (!task) return -EINVAL;
     if (!req) return -EFAULT;
     if (req->nsec >= 1000000000u) return -EINVAL;
 
@@ -2353,11 +2388,11 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     start_time = get_system_ticks();
     //KDEBUG("sys_nanosleep: start_time=%u\n", start_time);
     
-    task_set_interruptible(current_task);
+    task_set_interruptible(task);
 
     unsigned long sleep_flags;
     spin_lock_irqsave(&task_lock, &sleep_flags);
-    current_task->wakeup_time = start_time + sleep_ticks;
+    task->wakeup_time = start_time + sleep_ticks;
     spin_unlock_irqrestore(&task_lock, sleep_flags);
     
     yield();
@@ -2366,13 +2401,13 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
 
     /* Vérifier si réveillé par signal */
     now = get_system_ticks();
-    interrupted = has_pending_signals(current_task) ||
-        (current_task->state == TASK_RUNNING &&
-         current_task->wakeup_time > 0 &&
-         now < current_task->wakeup_time);
+    interrupted = has_pending_signals(task) ||
+        (task->state == TASK_RUNNING &&
+         task->wakeup_time > 0 &&
+         now < task->wakeup_time);
 
     spin_lock_irqsave(&task_lock, &sleep_flags);
-    current_task->wakeup_time = 0;
+    task->wakeup_time = 0;
     spin_unlock_irqrestore(&task_lock, sleep_flags);
 
     if (interrupted) {
@@ -2561,7 +2596,7 @@ out:
 
 void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
 {
-    task_t *task = current_task;
+    task_t *task = task_current_local();
     vm_space_t *vm;
     uint32_t size;
     uint32_t hint = (uint32_t)addr;
@@ -2667,7 +2702,7 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
 
 int sys_munmap(void* addr, size_t length)
 {
-    task_t *task = current_task;
+    task_t *task = task_current_local();
     uint32_t start = (uint32_t)addr;
     uint32_t size;
 
@@ -2685,7 +2720,7 @@ int sys_munmap(void* addr, size_t length)
 
 int sys_mprotect(void* addr, size_t length, int prot)
 {
-    task_t *task = current_task;
+    task_t *task = task_current_local();
     vm_space_t *vm;
     vma_t *vma;
     uint32_t start = (uint32_t)addr;
