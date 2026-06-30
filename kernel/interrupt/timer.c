@@ -267,7 +267,7 @@ void timer_irq_handler(void)
             if (current_task->quantum_left == 0) {
                 current_task->quantum_left = QUANTUM_TICKS;
                 //current_task->state = TASK_READY;
-                need_resched = 1;
+                scheduler_request_resched_current_cpu();
                 //KDEBUG("YIELDING BECAUSE OF TIMER\n");
                 //yield();
             }

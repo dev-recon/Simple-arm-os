@@ -57,6 +57,7 @@ static bool scheduler_initialized = false;
 DEFINE_SPINLOCK(task_lock);
 
 volatile int need_resched = 0;
+static volatile int need_resched_cpu[ARMOS_MAX_CPUS];
 
 //static spinlock_t task_lock = {0};
 
@@ -70,6 +71,39 @@ task_t* task_current_on_cpu(uint32_t cpu_id)
 task_t* task_current_local(void)
 {
     return task_current_on_cpu(smp_processor_id());
+}
+
+void scheduler_request_resched_current_cpu(void)
+{
+    uint32_t cpu = smp_processor_id();
+
+    if (cpu < ARMOS_MAX_CPUS)
+        need_resched_cpu[cpu] = 1;
+
+    /*
+     * Keep the legacy global mirror alive while the syscall path is being
+     * migrated. On today's single-scheduler-CPU kernel this preserves exact
+     * behaviour; later SMP scheduling can remove the mirror.
+     */
+    need_resched = 1;
+}
+
+bool scheduler_take_resched_current_cpu(void)
+{
+    uint32_t cpu = smp_processor_id();
+    bool requested = false;
+
+    if (cpu < ARMOS_MAX_CPUS && need_resched_cpu[cpu]) {
+        need_resched_cpu[cpu] = 0;
+        requested = true;
+    }
+
+    if (need_resched) {
+        need_resched = 0;
+        requested = true;
+    }
+
+    return requested;
 }
 
 /* Tache idle et processus init */
