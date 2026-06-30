@@ -174,7 +174,7 @@ int ls_read_directory(const char* path)
  */
 pid_t spawn_ls_process(void)
 {
-    task_t* init_proc = current_task;
+    task_t* init_proc = task_current_local();
     task_t* ls_proc;
     pid_t ls_pid;
     
@@ -355,15 +355,17 @@ pid_t execute_ls_command_async(void)
  */
 void test_process_system_with_ls(void)
 {
+    task_t* current = task_current_local();
+
     kprintf("\n=== Test du systeme de processus avec commande ls ===\n");
     
     /* Verifications preliminaires */
-    if (!current_task) {
+    if (!current) {
         kprintf("KO Aucun processus courant\n");
         return;
     }
     
-    kprintf("OK Processus courant: PID %u\n", current_task->process->pid);
+    kprintf("OK Processus courant: PID %u\n", current->process->pid);
     
     if (!is_fat32_mounted()) {
         kprintf("KO Systeme de fichiers non monte\n");

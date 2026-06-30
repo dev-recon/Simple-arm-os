@@ -36,6 +36,7 @@ static volatile uint32_t task_c_count = 0;
 
 void test_task_system(void)
 {
+    task_t* current = task_current_local();
     task_t* task_a;
     task_t* task_b;
     task_t* task_c;
@@ -45,12 +46,12 @@ void test_task_system(void)
     KINFO("=== TESTING TASK SYSTEM ===\n");
     
     /* Verifier que le systeme est initialise */
-    if (!current_task) {
+    if (!current) {
         KERROR("Task system not initialized!\n");
         return;
     }
     
-    KINFO("Current task: %s\n", ((task_t*)current_task)->name);
+    KINFO("Current task: %s\n", current->name);
     task_list_all();
     
     /* Test 1: Creer quelques taches simples */
@@ -101,7 +102,7 @@ void test_task_system(void)
     /* Test 4: Information detaillee sur les taches */
     KINFO("\n--- Test 4: Task details ---\n");
     task_dump_info(task_a);
-    task_dump_info(current_task);
+    task_dump_info(current);
     
     task_list_all();
     
@@ -242,7 +243,7 @@ void test_basic_task_functions(void)
     KINFO("=== BASIC TASK FUNCTION TESTS ===\n");
     
     /* Test 1: get_current_task */
-    current = current_task;
+    current = task_current_local();
     if (current) {
         KINFO("OK current_task: %s (ID=%u)\n", current->name, current->task_id);
     } else {

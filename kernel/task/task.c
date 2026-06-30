@@ -2518,6 +2518,7 @@ void task_dump_info(task_t* task)
 
 void task_dump_stacks(void)
 {
+    task_t* current = task_current_local();
     task_t* task;
     task_t* start_task;
     int count = 0;
@@ -2597,13 +2598,13 @@ void task_dump_stacks(void)
     KINFO("Average per task: %u bytes\n", count > 0 ? total_stack_memory / count : 0);
     
     /* Afficher la tache courante */
-    if (current_task) {
-        KINFO("Current task:     %s (ID=%u)\n", current_task->name, current_task->task_id);
-        KINFO("Current SP:       0x%08X\n", current_task->context.sp);
+    if (current) {
+        KINFO("Current task:     %s (ID=%u)\n", current->name, current->task_id);
+        KINFO("Current SP:       0x%08X\n", current->context.sp);
         
         /* Verifier la stack de la tache courante */
-        if (current_task->context.sp < (uint32_t)current_task->stack_base ||
-            current_task->context.sp >= (uint32_t)current_task->stack_top) {
+        if (current->context.sp < (uint32_t)current->stack_base ||
+            current->context.sp >= (uint32_t)current->stack_top) {
             KINFO("*** CURRENT TASK HAS INVALID SP! ***\n");
         }
     }
