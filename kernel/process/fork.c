@@ -377,56 +377,27 @@ void orphan_children(task_t* proc)
 }
 
 
-void wakeup_parent(task_t *proc){
+void wakeup_parent(task_t *proc)
+{
+    unsigned long flags;
+    task_t *parent;
 
-    if(!proc || !proc->process){
-        KERROR("Wake up : no proc or no process structure\n");
-        KERROR("NULL PROC\n");
+    if (!proc || !proc->process)
         return;
+
+    /*
+     * Parent wakeup is a single scheduler transaction.  The parent pointer,
+     * waitpid selector and child relationship are observed while task_lock is
+     * held, then the parent is made READY without recursively taking task_lock.
+     */
+    spin_lock_irqsave(&task_lock, &flags);
+    parent = proc->process->parent;
+    if (parent && parent->process &&
+        parent->state == TASK_BLOCKED &&
+        parent->process->state == (proc_state_t)PROC_BLOCKED) {
+        pid_t wait_pid = parent->process->waitpid_pid;
+        if (child_matches_waitpid(parent, proc, wait_pid))
+            task_make_ready_under_lock(parent);
     }
-
-        /* Reveiller le parent s'il attend - ACCeS CORRECT */
-    if (proc->process->parent) {
-        task_t* parent = proc->process->parent;
-        if(!parent || !parent->process)
-        {
-            KERROR("Wake up : no parent or no parent process structure\n");
-            KERROR("wakeup_parent: NULL Proc\n");
-            return;
-        }
-        
-/*          KINFO("[EXIT] *** WAKING UP PARENT ***\n");
-        KDEBUG("sys_exit: Parent PID=%d state=%s proc_state=%s\n", 
-               parent->process->pid, task_state_string(parent->state), proc_state_string(parent->process->state));
-        KDEBUG("sys_exit: Parent waiting for PID=%d\n", 
-               parent->process->waitpid_pid);
-        KDEBUG("sys_exit: Child exit code =%d\n", 
-               proc->process->exit_code);
-        KDEBUG("sys_exit: Child PID=%d state=%s proc_state=%s\n", 
-               proc->process->pid, task_state_string(proc->state), proc_state_string(proc->process->state));
-   */
-        
-        /* Verifier si le parent attend vraiment */
-        if (parent->state == TASK_BLOCKED && 
-            parent->process->state == (proc_state_t)PROC_BLOCKED) {
-            
-            /* Verifier si le parent attend ce processus specifiquement */
-            pid_t wait_pid = parent->process->waitpid_pid;
-            if (child_matches_waitpid(parent, proc, wait_pid)) {
-                //KINFO("sys_exit: Waking up parent PID=%u\n", parent->process->pid);
-                
-                task_set_ready(parent);
-                //KDEBUG("sys_exit: Parent %s PID=%u added to ready queue, son %s pid =%u, exit code =%d\n", 
-                //    parent->name, parent->process->pid, proc->name, proc->process->pid, *parent->process->waitpid_status);
-                //debug_print_ctx(&parent->context, "SYS_EXIT");
-
-            }
-        } else {
-            //KINFO("sys_exit: Parent not blocked (state=%s proc_state=%s)\n", 
-            //      task_state_string(parent->state), proc_state_string(parent->process->state));
-        }
-    } else {
-        KWARN("sys_exit: No parent found\n");
-    }
-
+    spin_unlock_irqrestore(&task_lock, flags);
 }

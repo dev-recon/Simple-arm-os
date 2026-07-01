@@ -424,6 +424,8 @@ void ultra_simple_test(void)
     KINFO("Ultra simple task created\n");
     KINFO("About to call schedule for the first time...\n");
 
+    add_to_ready_queue(simple);
+
     //task_dump_stacks_detailed();
     
     /* Premier appel critique */

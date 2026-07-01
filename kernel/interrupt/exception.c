@@ -526,10 +526,8 @@ static bool coredump_enqueue(uint32_t spsr_abt,
         out_path[out_path_size - 1] = '\0';
     }
 
-    if (coredumpd_task) {
-        coredumpd_task->wakeup_time = 0;
-        add_to_ready_queue(coredumpd_task);
-    }
+    if (coredumpd_task)
+        task_wake(coredumpd_task);
     return true;
 }
 

@@ -133,6 +133,12 @@ void init_process_system(void)
         }
 
         configure_idle_task_for_cpu(cpu, secondary_idle);
+        /*
+         * Secondary idle tasks are not runnable from the global runqueue, but
+         * they must be fully published before a secondary CPU can switch to its
+         * private idle context and before /proc walks the task list.
+         */
+        add_task_to_list(secondary_idle);
         task_set_blocked(secondary_idle);
     }
 

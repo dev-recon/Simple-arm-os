@@ -282,10 +282,9 @@ static int pipe_wait_interruptible(void)
     if (!task)
         return -EINTR;
 
-    task_set_interruptible(task);
-    task->wakeup_time = get_system_ticks() + 1;
+    task_set_interruptible_until(task, get_system_ticks() + 1);
     yield();
-    task->wakeup_time = 0;
+    task_set_wakeup_time(task, 0);
 
     if (has_pending_signals(task))
         return -EINTR;
@@ -2404,12 +2403,7 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     start_time = get_system_ticks();
     //KDEBUG("sys_nanosleep: start_time=%u\n", start_time);
     
-    task_set_interruptible(task);
-
-    unsigned long sleep_flags;
-    spin_lock_irqsave(&task_lock, &sleep_flags);
-    task->wakeup_time = start_time + sleep_ticks;
-    spin_unlock_irqrestore(&task_lock, sleep_flags);
+    task_set_interruptible_until(task, start_time + sleep_ticks);
     
     yield();
     
@@ -2422,9 +2416,7 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
          task->wakeup_time > 0 &&
          now < task->wakeup_time);
 
-    spin_lock_irqsave(&task_lock, &sleep_flags);
-    task->wakeup_time = 0;
-    spin_unlock_irqrestore(&task_lock, sleep_flags);
+    task_set_wakeup_time(task, 0);
 
     if (interrupted) {
         /* Réveillé prématurément par un signal */

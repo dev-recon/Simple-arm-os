@@ -419,22 +419,26 @@ int send_signal(task_t* target, int sig)
  */
 void wake_up_process_for_signal(task_t* proc)
 {
+    unsigned long flags;
+    bool wake = false;
+
     //KDEBUG("wake_up_process_for_signal: %s - PID %d\n", proc->name, proc->process->pid);
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         KERROR("wake_up_process_for_signal: NULL PROC\n");
         return;
     }
-    
-    if (proc->state == TASK_BLOCKED) {
-        KDEBUG("[SIGNAL] Waking up blocked process PID=%u for signal\n", proc->process->pid);
-        kernel_lifecycle_stats.blocked_signal_wakeups++;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    if (proc->state == TASK_BLOCKED || proc->state == TASK_INTERRUPTIBLE) {
+        wake = true;
         proc->wakeup_time = 0;
-        task_set_ready(proc);
-    } else if (proc->state == TASK_INTERRUPTIBLE) {
         kernel_lifecycle_stats.blocked_signal_wakeups++;
-        proc->wakeup_time = 0;
-        task_set_ready(proc);
+        task_make_ready_under_lock(proc);
     }
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    if (wake)
+        KDEBUG("[SIGNAL] Waking up blocked process PID=%u for signal\n", proc->process->pid);
     //KDEBUG("wake_up_process_for_signal: state %s\n", task_state_string(proc->state));
 }
 

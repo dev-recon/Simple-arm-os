@@ -33,6 +33,7 @@ struct tty_struct tty1;
 static int active_tty_id = TTY_CONSOLE_ID;
 
 static bool tty_output_empty_locked(struct tty_struct *tty);
+static void tty_wake_reader(task_t *reader);
 
 static struct tty_struct *tty_by_id(int tty_id)
 {
@@ -397,10 +398,7 @@ int tty_set_termios_for_id(int tty_id, const struct termios *tio, int flush_inpu
     }
     spin_unlock_irqrestore(&tty->lock, flags);
 
-    if (reader) {
-        reader->wakeup_time = 0;
-        task_set_ready(reader);
-    }
+    tty_wake_reader(reader);
 
     return 0;
 }
@@ -434,10 +432,7 @@ int tty_flush_for_id(int tty_id, int queue_selector)
         tty->read_wait = NULL;
         spin_unlock_irqrestore(&tty->lock, flags);
 
-        if (reader) {
-            reader->wakeup_time = 0;
-            task_set_ready(reader);
-        }
+        tty_wake_reader(reader);
     }
 
     if (queue_selector == TCOFLUSH || queue_selector == TCIOFLUSH) {
@@ -697,8 +692,7 @@ static void tty_wake_reader(task_t *reader)
     if (!reader)
         return;
 
-    reader->wakeup_time = 0;
-    task_set_ready(reader);
+    task_wake(reader);
 }
 
 static bool tty_normalize_input_char(const struct termios *tio, char *c)
@@ -1061,8 +1055,6 @@ static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
             }
 
             tty->read_wait = task;
-            task_set_interruptible(task);
-
             if (!canon && timeout_ticks > 0) {
                 if (vmin == 0 && read == 0) {
                     deadline = get_system_ticks() + timeout_ticks;
@@ -1073,7 +1065,24 @@ static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
                     }
                     deadline = interbyte_deadline;
                 }
-                task->wakeup_time = deadline;
+            }
+            spin_unlock_irqrestore(&tty->lock, flags);
+
+            task_set_interruptible_until(task, deadline);
+
+            /*
+             * A character may arrive between publishing read_wait and marking
+             * the task interruptible. Recheck before sleeping; if data is now
+             * available, cancel the wait and keep running in this syscall.
+             */
+            spin_lock_irqsave(&tty->lock, &flags);
+            if (tty->read_wait == task &&
+                (tty->input_head != tty->input_tail || tty->eof_pending)) {
+                tty->read_wait = NULL;
+                spin_unlock_irqrestore(&tty->lock, flags);
+                task_set_wakeup_time(task, 0);
+                task_set_state(task, TASK_RUNNING);
+                continue;
             }
             spin_unlock_irqrestore(&tty->lock, flags);
 
@@ -1086,10 +1095,10 @@ static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
             if (has_pending_signals(task))
                 return read > 0 ? (ssize_t)read : (ssize_t)-EINTR;
             if (!canon && timeout_ticks > 0 && deadline && get_system_ticks() >= deadline) {
-                task->wakeup_time = 0;
+                task_set_wakeup_time(task, 0);
                 break;
             }
-            task->wakeup_time = 0;
+            task_set_wakeup_time(task, 0);
             continue;
         }
         

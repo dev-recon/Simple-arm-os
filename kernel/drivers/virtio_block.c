@@ -591,8 +591,7 @@ void virtio_block_irq_handler(void)
             (virtio_blk_pending.waiter->state == TASK_BLOCKED ||
              virtio_blk_pending.waiter->state == TASK_INTERRUPTIBLE ||
              virtio_blk_pending.waiter->state == TASK_UNINTERRUPTIBLE)) {
-            virtio_blk_pending.waiter->wakeup_time = 0;
-            task_set_ready(virtio_blk_pending.waiter);
+            task_wake(virtio_blk_pending.waiter);
         }
     }
 }
@@ -671,8 +670,7 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
          * single-request virtqueue. Wait non-interruptibly until completion or
          * timeout; pending signals will be handled when the syscall returns.
          */
-        task_set_uninterruptible(task);
-        task->wakeup_time = wake_deadline;
+        task_set_uninterruptible_until(task, wake_deadline);
         restore_interrupts(irq_flags);
 
         schedule();

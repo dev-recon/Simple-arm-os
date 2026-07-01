@@ -141,23 +141,33 @@ static void ext2_mark_dirty(void)
 static bool ext2_wait_prepare(ext2_wait_queue_t* queue, task_t* task)
 {
     unsigned long flags;
+    bool enqueued = false;
 
     if (!queue || !task)
         return false;
 
+    task_set_interruptible_until(task, get_system_ticks() + TIMER_FREQ);
+
     spin_lock_irqsave(&queue->lock, &flags);
     for (uint32_t i = 0; i < MAX_TASKS; i++) {
-        if (queue->waiters[i] == task)
+        if (queue->waiters[i] == task) {
+            enqueued = true;
             break;
+        }
         if (!queue->waiters[i]) {
             queue->waiters[i] = task;
+            enqueued = true;
             break;
         }
     }
-    task->wakeup_time = get_system_ticks() + TIMER_FREQ;
-    task_set_interruptible(task);
     spin_unlock_irqrestore(&queue->lock, flags);
-    return true;
+
+    if (!enqueued) {
+        task_set_wakeup_time(task, 0);
+        task_set_state(task, TASK_RUNNING);
+    }
+
+    return enqueued;
 }
 
 static void ext2_wait_finish(ext2_wait_queue_t* queue, task_t* task)
@@ -174,13 +184,15 @@ static void ext2_wait_finish(ext2_wait_queue_t* queue, task_t* task)
             break;
         }
     }
-    task->wakeup_time = 0;
     spin_unlock_irqrestore(&queue->lock, flags);
+    task_set_wakeup_time(task, 0);
 }
 
 static void ext2_wait_wake_all(ext2_wait_queue_t* queue)
 {
     unsigned long flags;
+    task_t* wake[MAX_TASKS];
+    uint32_t wake_count = 0;
 
     if (!queue)
         return;
@@ -191,12 +203,17 @@ static void ext2_wait_wake_all(ext2_wait_queue_t* queue)
         if (!waiter)
             continue;
         queue->waiters[i] = NULL;
-        waiter->wakeup_time = 0;
         if (waiter->state == TASK_INTERRUPTIBLE ||
-            waiter->state == TASK_UNINTERRUPTIBLE)
-            task_set_ready(waiter);
+            waiter->state == TASK_UNINTERRUPTIBLE) {
+            if (wake_count < MAX_TASKS)
+                wake[wake_count++] = waiter;
+        }
     }
     spin_unlock_irqrestore(&queue->lock, flags);
+
+    for (uint32_t i = 0; i < wake_count; i++) {
+        task_wake(wake[i]);
+    }
 }
 
 static bool ext2_op_try_acquire(void)
