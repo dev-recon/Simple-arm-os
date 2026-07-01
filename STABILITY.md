@@ -19,6 +19,8 @@ MMU, VFS, block I/O or process lifecycle code.
 Configuration:
 
 - Platform: QEMU virt, ARM Cortex-A15
+- Stable public CPU profile: `SMP_CPUS=1`
+- Experimental SMP profile: `SMP_CPUS>1`
 - Timer quantum: 1 ms
 - Root filesystem: ext2
 - Compatibility mount: FAT32 on `/mnt`
@@ -67,6 +69,41 @@ Counters to watch:
 
 Keep the 1 ms quantum while hardening the kernel. It exposes races and critical
 section mistakes that longer quanta can hide.
+
+## SMP Stability Contract
+
+The public stable baseline is currently single CPU:
+
+```sh
+SMP_CPUS=1 ./boot.sh
+```
+
+This is the configuration to use for release notes, contributor onboarding, and
+normal user testing.
+
+`SMP_CPUS=2` and above are developer stress modes. They intentionally exercise
+new scheduler, TLB shootdown, task ownership, allocator, VFS, procfs, and TTY
+paths. They are valuable precisely because they expose races that the mono-CPU
+profile cannot reveal, but they should not be treated as the supported runtime
+profile yet.
+
+Before promoting SMP to stable, the minimum stress matrix should pass with no
+task-list corruption, runqueue corruption, kernel data abort, stale `RUNNING`
+task, or lost shell:
+
+```sh
+schedtest --smp
+kload &; kload &; kload &; kload &
+memstress 2048 5 &
+systest &; systest &; systest &
+vfstest &; vfstest &
+top
+lps
+/sbin/shutdown
+```
+
+Until that matrix is boring, the release statement remains: stable on
+`SMP_CPUS=1`, SMP bring-up experimental.
 
 ## Notes From Scheduler Debt Fairness
 

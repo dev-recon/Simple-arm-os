@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### SMP Bring-Up
+
+- Added active SMP hardening work around task ownership, scheduler state,
+  TLB shootdown diagnostics, procfs snapshots, and multi-CPU stress tooling.
+- Documented the current support contract: the stable public runtime profile is
+  still `SMP_CPUS=1`.
+- `SMP_CPUS>1` is available as an experimental developer mode for race hunting
+  and scheduler/MMU validation, but it is not yet the release-stable
+  configuration.
+
 ## ArmOS v0.3 - 2026-06-29
 
 ArmOS v0.3 is the first public release that gives ArmOS end users a small
