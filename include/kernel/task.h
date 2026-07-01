@@ -112,6 +112,14 @@ typedef struct task task_t;
 void sched_trace_record(sched_trace_event_type_t event, task_t* task);
 void sched_trace_snapshot(sched_trace_event_t* out, uint32_t max,
                           uint32_t* total, uint32_t* written);
+/*
+ * Internal scheduler primitive: caller must hold task_lock.  Use this when a
+ * higher-level subsystem already owns the scheduler critical section and needs
+ * to make a task runnable without recursively taking task_lock.
+ */
+void task_make_ready_under_lock(task_t* task);
+void task_set_wakeup_time(task_t* task, uint32_t wakeup_time);
+void task_wake(task_t* task);
 
 typedef struct scheduler_stats {
     uint32_t nr_running;
@@ -497,7 +505,9 @@ void task_set_state(task_t* task, task_state_t state);
 void task_set_ready(task_t* task);
 void task_set_blocked(task_t* task);
 void task_set_interruptible(task_t* task);
+void task_set_interruptible_until(task_t* task, uint32_t wakeup_time);
 void task_set_uninterruptible(task_t* task);
+void task_set_uninterruptible_until(task_t* task, uint32_t wakeup_time);
 void task_set_stopped(task_t* task);
 void task_set_zombie(task_t* task);
 void task_set_terminated(task_t* task);

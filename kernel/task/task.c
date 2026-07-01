@@ -259,7 +259,7 @@ static void runqueue_clear_locked(void);
 static void runqueue_rebuild_locked(task_t* exclude);
 static bool runqueue_validate_locked(const char* caller);
 static bool scheduler_has_ready_work(void);
-static void task_make_ready_locked(task_t* task);
+void task_make_ready_under_lock(task_t* task);
 static void scheduler_mark_running_locked(task_t* task);
 static void add_task_to_list_locked(task_t* task);
 void add_task_to_list(task_t* task);
@@ -843,11 +843,17 @@ static bool runqueue_validate_locked(const char* caller)
     return true;
 }
 
-static void task_make_ready_locked(task_t* task)
+void task_make_ready_under_lock(task_t* task)
 {
     uint32_t cpu = smp_processor_id();
 
-    if (!task || task->state == TASK_ZOMBIE || task->state == TASK_TERMINATED)
+    if (!task_header_plausible(task)) {
+        kernel_lifecycle_stats.ready_queue_refused++;
+        sched_trace_record(SCHED_TRACE_READY_REFUSE_CORRUPT, task);
+        return;
+    }
+
+    if (task->state == TASK_ZOMBIE || task->state == TASK_TERMINATED)
         return;
 
     /*
@@ -1178,8 +1184,11 @@ task_t* task_create_copy(task_t* parent, bool from_user)
         child->type = parent->type;
     }
     
-    /* etat initial */
-    child->state = TASK_READY;
+    /*
+     * Fork completes VM, parent/child links and file-table setup in sys_fork()
+     * before publishing the child to the runqueue.
+     */
+    child->state = TASK_BLOCKED;
     child->next = NULL;
     child->prev = NULL;
     child->rq_next = NULL;
@@ -1564,7 +1573,13 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     strncpy(task->name, name ? name : "unnamed", TASK_NAME_MAX - 1);
     task->name[TASK_NAME_MAX - 1] = '\0';
     
-    task->state = TASK_READY;
+    /*
+     * A freshly allocated task is private to its creator.  It must not enter
+     * task_list_head or the runqueue until the caller has finished all process,
+     * VM, FD and signal metadata.  SMP schedulers scan task_list_head from
+     * several CPUs, so publishing a half-built task is observable state.
+     */
+    task->state = TASK_BLOCKED;
     task->priority = priority;
     
     task->entry_point = entry;
@@ -1615,8 +1630,6 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
         return NULL;
     }
     
-    /* Ajouter a la liste des taches */
-    add_task_to_list(task);
     kernel_lifecycle_stats.tasks_created++;
     
     KINFO("OK Created task '%s' (ID=%u, priority=%u) - Stack validated\n", 
@@ -1872,7 +1885,7 @@ void yield(void)
     
     spin_lock_irqsave(&task_lock, &flags);
     if (task && task->state == TASK_RUNNING) {
-        task_make_ready_locked(task);
+        task_make_ready_under_lock(task);
     }
     spin_unlock_irqrestore(&task_lock, flags);
 
@@ -2156,7 +2169,7 @@ static void scheduler_scan_waiters(task_t* current)
                 sched_trace_record(SCHED_TRACE_FS_WAIT_TIMEOUT, task);
             }
             task->wakeup_time = 0;
-            task_make_ready_locked(task);
+            task_make_ready_under_lock(task);
         }
 
         if (task->type == TASK_TYPE_PROCESS && task->process &&
@@ -2342,7 +2355,7 @@ static void scheduler_prepare_current_for_switch(task_t* current)
 
     spin_lock_irqsave(&task_lock, &flags);
     if (current && current->state == TASK_RUNNING)
-        task_make_ready_locked(current);
+        task_make_ready_under_lock(current);
     spin_unlock_irqrestore(&task_lock, flags);
 }
 
@@ -2946,7 +2959,17 @@ void task_set_state(task_t* task, task_state_t state)
     
     spin_lock_irqsave(&task_lock, &flags);
     if (state == TASK_READY) {
-        task_make_ready_locked(task);
+        task_make_ready_under_lock(task);
+        spin_unlock_irqrestore(&task_lock, flags);
+        return;
+    }
+
+    if (task->state == TASK_RUNNING &&
+        task->running_cpu != TASK_CPU_NONE &&
+        task->running_cpu != smp_processor_id() &&
+        state != TASK_RUNNING) {
+        kernel_lifecycle_stats.ready_queue_refused++;
+        sched_trace_record(SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING, task);
         spin_unlock_irqrestore(&task_lock, flags);
         return;
     }
@@ -2973,6 +2996,61 @@ void task_set_state(task_t* task, task_state_t state)
     spin_unlock_irqrestore(&task_lock, flags);
 }
 
+static void task_set_sleep_state_until(task_t* task, task_state_t state,
+                                       uint32_t wakeup_time)
+{
+    unsigned long flags;
+
+    if (!task)
+        return;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    if (task->state == TASK_RUNNING &&
+        task->running_cpu != TASK_CPU_NONE &&
+        task->running_cpu != smp_processor_id()) {
+        kernel_lifecycle_stats.ready_queue_refused++;
+        sched_trace_record(SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING, task);
+        spin_unlock_irqrestore(&task_lock, flags);
+        return;
+    }
+
+    runqueue_remove_locked(task);
+    task->state = state;
+    task->wakeup_time = wakeup_time;
+    if (task->type == TASK_TYPE_PROCESS && task->process) {
+        proc_state_t proc_state = task_state_to_proc_state(state);
+        if (task->process->state != proc_state)
+            kernel_lifecycle_stats.state_sync_repairs++;
+        task->process->state = proc_state;
+    }
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
+void task_set_wakeup_time(task_t* task, uint32_t wakeup_time)
+{
+    unsigned long flags;
+
+    if (!task)
+        return;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task->wakeup_time = wakeup_time;
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
+void task_wake(task_t* task)
+{
+    unsigned long flags;
+
+    if (!task)
+        return;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task->wakeup_time = 0;
+    task_make_ready_under_lock(task);
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
 void task_set_ready(task_t* task)
 {
     task_set_state(task, TASK_READY);
@@ -2988,9 +3066,19 @@ void task_set_interruptible(task_t* task)
     task_set_state(task, TASK_INTERRUPTIBLE);
 }
 
+void task_set_interruptible_until(task_t* task, uint32_t wakeup_time)
+{
+    task_set_sleep_state_until(task, TASK_INTERRUPTIBLE, wakeup_time);
+}
+
 void task_set_uninterruptible(task_t* task)
 {
     task_set_state(task, TASK_UNINTERRUPTIBLE);
+}
+
+void task_set_uninterruptible_until(task_t* task, uint32_t wakeup_time)
+{
+    task_set_sleep_state_until(task, TASK_UNINTERRUPTIBLE, wakeup_time);
 }
 
 void task_set_stopped(task_t* task)
@@ -3270,7 +3358,6 @@ void task_list_all(void)
 
 void task_sleep_ms(uint32_t ms)
 {
-    unsigned long flags;
     task_t* task = task_current_local();
     uint32_t ticks;
 
@@ -3290,19 +3377,11 @@ void task_sleep_ms(uint32_t ms)
     if (ticks == 0)
         ticks = 1;
 
-    spin_lock_irqsave(&task_lock, &flags);
-    task->wakeup_time = get_system_ticks() + ticks;
-    runqueue_remove_locked(task);
-    task->state = TASK_INTERRUPTIBLE;
-    if (task->type == TASK_TYPE_PROCESS && task->process)
-        task->process->state = (proc_state_t)PROC_INTERRUPTIBLE;
-    spin_unlock_irqrestore(&task_lock, flags);
+    task_set_interruptible_until(task, get_system_ticks() + ticks);
 
     schedule();
 
-    spin_lock_irqsave(&task_lock, &flags);
-    task->wakeup_time = 0;
-    spin_unlock_irqrestore(&task_lock, flags);
+    task_set_wakeup_time(task, 0);
 }
 
 /**
@@ -3835,7 +3914,7 @@ void add_to_ready_queue(task_t* task)
      * same node twice into the circular task list.
      */
     add_task_to_list_locked(task);
-    task_make_ready_locked(task);
+    task_make_ready_under_lock(task);
 
     spin_unlock_irqrestore(&task_lock, flags);
 

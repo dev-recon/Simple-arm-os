@@ -194,7 +194,6 @@ pid_t spawn_ls_process(void)
     
     /* Configuration du processus ls */
     ls_proc->process->ppid = init_proc->process->pid;
-    task_set_ready(ls_proc);
     ls_pid = ls_proc->process->pid;
     
     /* Copier l'espace memoire virtuel (simplifie - pas de COW ici) */
@@ -218,9 +217,15 @@ pid_t spawn_ls_process(void)
     setup_ls_process_context(ls_proc);
     
     /* Ajouter a la liste des enfants du processus parent */
-    ls_proc->process->sibling_next = init_proc->process->children;
-    init_proc->process->children = ls_proc;
-    ls_proc->process->parent = init_proc;
+    {
+        unsigned long flags;
+
+        spin_lock_irqsave(&task_lock, &flags);
+        ls_proc->process->sibling_next = init_proc->process->children;
+        init_proc->process->children = ls_proc;
+        ls_proc->process->parent = init_proc;
+        spin_unlock_irqrestore(&task_lock, flags);
+    }
     
     /* Ajouter a la queue des processus prets */
     add_to_ready_queue(ls_proc);

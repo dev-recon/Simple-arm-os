@@ -53,6 +53,7 @@ static char scancode_to_ascii_option_mac_fr[55] = {
 };
 
 static keyboard_state_t kbd_state = {0};
+static spinlock_t kbd_lock = SPINLOCK_INIT("keyboard");
 
 void init_keyboard(void)
 {
@@ -185,21 +186,31 @@ char convert_to_ascii_mac_fr(uint8_t scancode)
 
 void add_to_keyboard_buffer(char c)
 {
-    uint32_t next_head = (kbd_state.head + 1) % 256;
+    uint32_t next_head;
+    task_t *waiter = NULL;
+    unsigned long flags;
+
+    spin_lock_irqsave(&kbd_lock, &flags);
+    next_head = (kbd_state.head + 1) % 256;
     
     if (next_head != kbd_state.tail) {
         kbd_state.buffer[kbd_state.head] = c;
         kbd_state.head = next_head;
         
-        /* Wake up the console reader without touching task->next. */
-        if (kbd_state.waiters &&
-            (kbd_state.waiters->state == TASK_BLOCKED ||
-             kbd_state.waiters->state == TASK_INTERRUPTIBLE)) {
-            task_t *waiter = kbd_state.waiters;
+        if (kbd_state.waiters && kbd_state.waiters->state == TASK_INTERRUPTIBLE) {
+            waiter = kbd_state.waiters;
             kbd_state.waiters = NULL;
-            task_set_ready(waiter);
+        } else if (kbd_state.waiters &&
+                   (kbd_state.waiters->state == TASK_READY ||
+                    kbd_state.waiters->state == TASK_RUNNING ||
+                    kbd_state.waiters->state == TASK_ZOMBIE ||
+                    kbd_state.waiters->state == TASK_TERMINATED)) {
+            kbd_state.waiters = NULL;
         }
     }
+    spin_unlock_irqrestore(&kbd_lock, flags);
+
+    task_wake(waiter);
 }
 
 char keyboard_getchar(void)
@@ -207,27 +218,48 @@ char keyboard_getchar(void)
     char c;
     
     /* Wait for character */
-    while (kbd_state.head == kbd_state.tail) {
+    while (1) {
         task_t *task = task_current_local();
+        unsigned long flags;
 
-        if (!task)
+        spin_lock_irqsave(&kbd_lock, &flags);
+        if (kbd_state.head != kbd_state.tail) {
+            c = kbd_state.buffer[kbd_state.tail];
+            kbd_state.tail = (kbd_state.tail + 1) % 256;
+            spin_unlock_irqrestore(&kbd_lock, flags);
+            return c;
+        }
+        if (!task) {
+            spin_unlock_irqrestore(&kbd_lock, flags);
             return -1;
+        }
 
         kbd_state.waiters = task;
+        spin_unlock_irqrestore(&kbd_lock, flags);
+
         task_set_interruptible(task);
+
+        spin_lock_irqsave(&kbd_lock, &flags);
+        if (kbd_state.head != kbd_state.tail) {
+            if (kbd_state.waiters == task)
+                kbd_state.waiters = NULL;
+            c = kbd_state.buffer[kbd_state.tail];
+            kbd_state.tail = (kbd_state.tail + 1) % 256;
+            spin_unlock_irqrestore(&kbd_lock, flags);
+            task_set_state(task, TASK_RUNNING);
+            return c;
+        }
+        spin_unlock_irqrestore(&kbd_lock, flags);
+
         schedule();
         
         /* Check for signals */
         if (has_pending_signals(task)) {
+            spin_lock_irqsave(&kbd_lock, &flags);
             if (kbd_state.waiters == task)
                 kbd_state.waiters = NULL;
+            spin_unlock_irqrestore(&kbd_lock, flags);
             return -1;
         }
     }
-    
-    /* Get character */
-    c = kbd_state.buffer[kbd_state.tail];
-    kbd_state.tail = (kbd_state.tail + 1) % 256;
-    
-    return c;
 }

@@ -35,6 +35,8 @@
 #include <kernel/spinlock.h>
 #include <asm/mmu.h>
 
+#define SYSCALL_IO_BOUNCE_SIZE 16384u
+
 
 /* Forward declarations de toutes les fonctions statiques */
 static bool check_file_permission(inode_t* inode, int flags);
@@ -83,7 +85,11 @@ int sys_read(int fd, void* buf, size_t count)
     task_t* task = task_current_local();
     file_t* file;
     ssize_t result;
+    void *kbuf = NULL;
+    size_t read_count;
     
+    if (count == 0) return 0;
+    if (!buf) return -EFAULT;
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
     if (!task || !task->process) return -EBADF;
     
@@ -92,8 +98,32 @@ int sys_read(int fd, void* buf, size_t count)
     if (!can_read(file)) return -EBADF;
     
     if (!file->f_op || !file->f_op->read) return -ENOSYS;
-    
-    result = file->f_op->read(file, buf, count);
+
+    /*
+     * VFS read methods operate on kernel buffers.  User reads are bounced
+     * through kernel memory and copied out with page-aware validation; this
+     * prevents a partially unmapped user buffer from aborting the kernel
+     * inside a filesystem or driver memcpy().
+     */
+    if (IS_KERNEL_ADDR((uint32_t)buf)) {
+        result = file->f_op->read(file, buf, count);
+        return (int)result;
+    }
+
+    read_count = count;
+    if (read_count > SYSCALL_IO_BOUNCE_SIZE)
+        read_count = SYSCALL_IO_BOUNCE_SIZE;
+
+    kbuf = kmalloc(read_count);
+    if (!kbuf) return -ENOMEM;
+
+    result = file->f_op->read(file, kbuf, read_count);
+    if (result > 0) {
+        if (copy_to_user(buf, kbuf, (size_t)result) < 0)
+            result = -EFAULT;
+    }
+
+    kfree(kbuf);
     return (int)result;
 }
 
@@ -1130,9 +1160,10 @@ static bool check_file_permission(inode_t* inode, int flags)
 int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count) {
     task_t *task = task_current_local();
     file_t *file;
-    char *user_buf = (char *)dirp;
-    char *buf_ptr = user_buf;
+    char *kbuf = NULL;
+    char *buf_ptr;
     size_t bytes_written = 0;
+    unsigned int kernel_count = count;
 
     //KDEBUG("[GETDENTS] entry fd=%u dirp=%p count=%u\n", fd, dirp, count);
 
@@ -1151,9 +1182,12 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
     }
     
     /* Vérifier que le buffer est valide */
-    if (!user_buf || count < sizeof(struct linux_dirent)) {
+    if (!dirp || count < sizeof(struct linux_dirent)) {
         return -EINVAL;
     }
+
+    if (!IS_KERNEL_ADDR((uint32_t)dirp) && kernel_count > SYSCALL_IO_BOUNCE_SIZE)
+        kernel_count = SYSCALL_IO_BOUNCE_SIZE;
     
     //KDEBUG("Reading entries from %s fd=%d\n", file->name, fd);
 
@@ -1165,11 +1199,20 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         return -ENOSYS;
     }
 
+    if (IS_KERNEL_ADDR((uint32_t)dirp)) {
+        buf_ptr = (char *)dirp;
+    } else {
+        kbuf = kmalloc(kernel_count);
+        if (!kbuf)
+            return -ENOMEM;
+        buf_ptr = kbuf;
+    }
+
     //KDEBUG("[GETDENTS] fd=%u file=%p inode=%p f_op=%p readdir=%p\n",
     //       fd, file, file->inode, file->f_op, file->f_op->readdir);
 
     /* Lire les entrées du répertoire */
-    while (bytes_written < count) {
+    while (bytes_written < kernel_count) {
         struct dirent entry;
         struct linux_dirent *dirent;
         size_t name_len;
@@ -1191,7 +1234,7 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         rec_len = (rec_len + 7) & ~7;  /* Aligner sur 4 bytes */
 
         /* Vérifier qu'il reste assez de place */
-        if (bytes_written + rec_len > count) {
+        if (bytes_written + rec_len > kernel_count) {
             /* Reculer la position de lecture pour cette entrée */
             file->offset = saved_offset;
             break;
@@ -1210,6 +1253,15 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         
         buf_ptr += rec_len;
         bytes_written += rec_len;
+    }
+
+    if (kbuf) {
+        int ret = 0;
+        if (bytes_written > 0 && copy_to_user(dirp, kbuf, bytes_written) < 0)
+            ret = -EFAULT;
+        kfree(kbuf);
+        if (ret < 0)
+            return ret;
     }
     
     return bytes_written;

@@ -271,6 +271,14 @@ setup_secondary_mmu_state:
     isb
 
     mrc p15, 0, r0, c1, c0, 0   /* SCTLR */
+    /*
+     * Keep the secondary CPUs aligned with the boot CPU policy. ArmOS allows
+     * userland unaligned data accesses because newlib/TinyCC code may emit
+     * halfword/word stores to packed or byte-shifted heap addresses. Leaving
+     * SCTLR.A set on secondaries makes the same process randomly SIGSEGV
+     * depending on the CPU that runs it.
+     */
+    bic r0, r0, #(1 << 1)       /* Disable strict alignment checks */
     orr r0, r0, #1              /* Enable MMU, keep caches as setup_cpu_state left them */
     mcr p15, 0, r0, c1, c0, 0
     dsb

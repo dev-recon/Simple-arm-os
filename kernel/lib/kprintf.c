@@ -42,6 +42,15 @@ static void kmsg_putc(char c)
     unsigned long flags;
 
     spin_lock_irqsave(&kmsg_lock, &flags);
+    /*
+     * kmsg is used precisely when the kernel is reporting faults.  If prior
+     * corruption or an SMP race damages the indices, never let diagnostics
+     * turn into a second kernel abort while writing the ring buffer.
+     */
+    if (kmsg_head >= KMSG_BUF_SIZE || kmsg_count > KMSG_BUF_SIZE) {
+        kmsg_head = 0;
+        kmsg_count = 0;
+    }
     kmsg_buf[kmsg_head] = c;
     kmsg_head = (kmsg_head + 1) % KMSG_BUF_SIZE;
     if (kmsg_count < KMSG_BUF_SIZE)
@@ -59,6 +68,10 @@ size_t kmsg_read(char* out, size_t max)
         return 0;
 
     spin_lock_irqsave(&kmsg_lock, &flags);
+    if (kmsg_head >= KMSG_BUF_SIZE || kmsg_count > KMSG_BUF_SIZE) {
+        kmsg_head = 0;
+        kmsg_count = 0;
+    }
     n = kmsg_count;
     if (n > max)
         n = max;
