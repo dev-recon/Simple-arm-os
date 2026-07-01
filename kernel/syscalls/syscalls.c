@@ -590,9 +590,20 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
      */
     cleanup_process_signals(proc);
 
-    /* Remplacer l'espace memoire - ACCeS CORRECT */
-    destroy_vm_space(old_vm);
-    proc->process->vm = new_vm;
+    /*
+     * Publish the new VM under task_lock before freeing the old one. /proc and
+     * sysinfo readers hold task_lock while taking VM snapshots; this prevents
+     * them from walking a VMA list that execve() is about to destroy.  The
+     * actual free happens after switching TTBR0 away from old_vm.
+     */
+    {
+        unsigned long vm_flags;
+
+        spin_lock_irqsave(&task_lock, &vm_flags);
+        old_vm = proc->process->vm;
+        proc->process->vm = new_vm;
+        spin_unlock_irqrestore(&task_lock, vm_flags);
+    }
     init_process_signals(proc);
 
     /* Reinitialiser le contexte CPU - ADAPTe a VOTRE STRUCTURE */
@@ -628,6 +639,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     close_cloexec_files(proc);
 
     switch_to_vm_space(new_vm);
+    destroy_vm_space(old_vm);
 
     //tlb_flush_all_debug();
     data_memory_barrier();

@@ -278,10 +278,22 @@ void destroy_process(task_t* process)
      /* Nettoyer les signaux */
     cleanup_process_signals(process);
     
-    /* Liberer l'espace memoire virtuel - ACCeS CORRECT */
-    if (process->process->vm) {
-        destroy_vm_space(process->process->vm);
+    /*
+     * Detach the VM pointer while holding task_lock before freeing it.
+     * /proc readers walk task/process state under task_lock; without this
+     * ordering they can observe a vm_space whose VMA list is being freed.
+     */
+    {
+        vm_space_t* old_vm = NULL;
+        unsigned long flags;
+
+        spin_lock_irqsave(&task_lock, &flags);
+        old_vm = process->process->vm;
         process->process->vm = NULL;
+        spin_unlock_irqrestore(&task_lock, flags);
+
+        if (old_vm)
+            destroy_vm_space(old_vm);
     }
     
     /* Utiliser votre fonction de destruction de tache existante */
