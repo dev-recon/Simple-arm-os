@@ -246,6 +246,13 @@ static void ext2_op_acquire(void)
             continue;
         if (ext2_op_try_acquire()) {
             ext2_wait_finish(&ext2_op_waitq, task);
+            /*
+             * We never actually switched away in this fast recheck path.
+             * Restore the visible task state before returning with the ext2
+             * lock held, otherwise the caller keeps running kernel code while
+             * still reported as TASK_INTERRUPTIBLE.
+             */
+            task_set_state(task, TASK_RUNNING);
             return;
         }
         schedule();
@@ -310,6 +317,12 @@ static void ext2_cache_acquire(void)
             continue;
         if (ext2_cache_try_acquire()) {
             ext2_wait_finish(&ext2_cache_waitq, task);
+            /*
+             * Same invariant as ext2_op_acquire(): if the lock became
+             * available before schedule(), the task did not sleep and must not
+             * leak an interruptible state into the protected section.
+             */
+            task_set_state(task, TASK_RUNNING);
             return;
         }
         schedule();

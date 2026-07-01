@@ -706,7 +706,7 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "tlb_gen:     %u\n", tlb_shootdown_generation());
     proc_append(buf, cap, len, "sched_guard: %u\n", smp_scheduler_reject_count());
     proc_append(buf, cap, len, "\n");
-    proc_append(buf, cap, len, "cpu state   seen sched rq      irq  ipi    timer    hb tlb idle  cur_tid cur_pid pri current      psci\n");
+    proc_append(buf, cap, len, "cpu state   seen sched rq      irq  ipi    timer    hb tlb idle  cur_tid cur_pid pri current      psci idle-work idle-sched idle-fb\n");
 
     for (uint32_t cpu = 0; cpu < possible; cpu++) {
         const smp_cpu_info_t* info = smp_cpu_info(cpu);
@@ -716,7 +716,7 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
                                 ? current_task_on_cpu->process
                                 : NULL;
 
-        proc_append(buf, cap, len, "%3u %-7s %4s %5s %2u %8u %4u %8u %5u %3u %4u %8u %7u %3u %-12s %d\n",
+        proc_append(buf, cap, len, "%3u %-7s %4s %5s %2u %8u %4u %8u %5u %3u %4u %8u %7u %3u %-12s %d %9u %10u %7u\n",
                     cpu,
                     smp_cpu_state_name(cpu),
                     smp_cpu_seen(cpu) ? "yes" : "no",
@@ -732,7 +732,10 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
                     current_proc ? (uint32_t)current_proc->pid : 0u,
                     current_task_on_cpu ? current_task_on_cpu->priority : 0u,
                     current_task_on_cpu ? current_task_on_cpu->name : "-",
-                    smp_cpu_start_result(cpu));
+                    smp_cpu_start_result(cpu),
+                    scheduler_idle_work_seen_count(cpu),
+                    scheduler_idle_schedule_count(cpu),
+                    scheduler_idle_fallback_count(cpu));
     }
 }
 

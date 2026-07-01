@@ -546,6 +546,9 @@ void task_start_secondary_scheduler(uint32_t cpu_id) __attribute__((noreturn));
 void scheduler_request_resched_current_cpu(void);
 bool scheduler_take_resched_current_cpu(void);
 bool scheduler_resched_pending_on_cpu(uint32_t cpu_id);
+uint32_t scheduler_idle_work_seen_count(uint32_t cpu_id);
+uint32_t scheduler_idle_schedule_count(uint32_t cpu_id);
+uint32_t scheduler_idle_fallback_count(uint32_t cpu_id);
 
 
 void add_task_to_list(task_t* task);

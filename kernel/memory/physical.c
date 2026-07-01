@@ -19,6 +19,7 @@
 #include <kernel/memory.h>
 #include <kernel/kernel.h>
 #include <kernel/kprintf.h>
+#include <kernel/spinlock.h>
 
 
 physical_allocator_t phys_alloc;
@@ -26,6 +27,7 @@ physical_allocator_t phys_alloc;
 static buddy_block_t* free_lists[MAX_ORDER + 1];
 uint32_t buddy_base = 0;
 struct page_info *page_infos;
+static spinlock_t buddy_lock = SPINLOCK_INIT("buddy");
 
 /* Forward declarations des fonctions statiques */
 static int set_page_used(uint32_t page_index);
@@ -36,6 +38,7 @@ static void reserve_bitmap_pages(void);
 static void reserve_heap_pages(void);
 static void reserve_dtb_pages(void);
 static struct page_info* buddy_page_info(void* ptr);
+static void buddy_free_locked(void* ptr);
 static void account_buddy_alloc(size_t pages);
 static void account_buddy_free(size_t pages);
 //static void reserve_mmu_pages(void);
@@ -108,6 +111,7 @@ void* buddy_alloc(size_t num_block) {
 
     uint32_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
+    unsigned long flags;
 
     //kprintf("\n***********************************************************************\n");
     //kprintf("\n***********************************************************************\n");
@@ -116,6 +120,8 @@ void* buddy_alloc(size_t num_block) {
     if (num_block == 0 || num_block > max_pages) {
         return NULL;
     }
+
+    spin_lock_irqsave(&buddy_lock, &flags);
 
     size_t run_start = 0;
     size_t run_length = 0;
@@ -149,6 +155,8 @@ void* buddy_alloc(size_t num_block) {
 
             account_buddy_alloc(num_block);
 
+            spin_unlock_irqrestore(&buddy_lock, flags);
+
             memset((void *)addr, 0, num_block * PAGE_SIZE);
             //kprintf("Found block at 0x%08X\n", addr);
             //kprintf("page_infos[%d].used = %u\n", run_start, page_infos[run_start].used);
@@ -159,10 +167,11 @@ void* buddy_alloc(size_t num_block) {
         }
     }
 
+    spin_unlock_irqrestore(&buddy_lock, flags);
     return NULL; // Aucun bloc disponible
 }
 
-void buddy_free(void* ptr) {
+static void buddy_free_locked(void* ptr) {
 
     uint32_t caller;
     __asm__ volatile("mov %0, lr" : "=r"(caller));
@@ -209,6 +218,14 @@ void buddy_free(void* ptr) {
     account_buddy_free(block_size);
 }
 
+void buddy_free(void* ptr) {
+    unsigned long flags;
+
+    spin_lock_irqsave(&buddy_lock, &flags);
+    buddy_free_locked(ptr);
+    spin_unlock_irqrestore(&buddy_lock, flags);
+}
+
 static struct page_info* buddy_page_info(void* ptr)
 {
     uint32_t addr = (uint32_t)ptr;
@@ -235,30 +252,47 @@ bool page_is_buddy_page(void* page_addr)
 
 uint16_t page_ref_count(void* page_addr)
 {
+    unsigned long flags;
+    uint16_t refs;
+
+    spin_lock_irqsave(&buddy_lock, &flags);
     struct page_info* info = buddy_page_info(page_addr);
-    return info ? info->refcount : 0;
+    refs = info ? info->refcount : 0;
+    spin_unlock_irqrestore(&buddy_lock, flags);
+    return refs;
 }
 
 int page_ref_inc(void* page_addr)
 {
+    unsigned long flags;
+    int ret = 0;
+
+    spin_lock_irqsave(&buddy_lock, &flags);
     struct page_info* info = buddy_page_info(page_addr);
     if (!info || info->refcount == 0xFFFFu) {
-        return -1;
+        ret = -1;
+    } else {
+        info->refcount++;
     }
 
-    info->refcount++;
-    return 0;
+    spin_unlock_irqrestore(&buddy_lock, flags);
+    return ret;
 }
 
 uint16_t page_ref_dec(void* page_addr)
 {
+    unsigned long flags;
+    uint16_t refs = 0;
+
+    spin_lock_irqsave(&buddy_lock, &flags);
     struct page_info* info = buddy_page_info(page_addr);
-    if (!info || info->refcount == 0) {
-        return 0;
+    if (info && info->refcount > 0) {
+        info->refcount--;
+        refs = info->refcount;
     }
 
-    info->refcount--;
-    return info->refcount;
+    spin_unlock_irqrestore(&buddy_lock, flags);
+    return refs;
 }
 
 
@@ -640,6 +674,8 @@ void* allocate_page(void)
 void free_page(void* page_addr)
 {
     uint32_t caller;
+    unsigned long flags;
+    struct page_info* info;
     __asm__ volatile("mov %0, lr" : "=r"(caller));
 
     //KDEBUG("free_page: caller &=0x%08X\n", caller);
@@ -647,15 +683,22 @@ void free_page(void* page_addr)
         return;
     }
 
-    if (!page_is_buddy_page(page_addr)) {
+    spin_lock_irqsave(&buddy_lock, &flags);
+    info = buddy_page_info(page_addr);
+    if (!info) {
         //KERROR("free_page: invalid page 0x%08X caller=0x%08X\n", (uint32_t)page_addr, caller);
         (void)caller;
+        spin_unlock_irqrestore(&buddy_lock, flags);
         return;
     }
 
-    if (page_ref_dec(page_addr) == 0) {
-        buddy_free(page_addr);
+    if (info->refcount > 0)
+        info->refcount--;
+
+    if (info->refcount == 0) {
+        buddy_free_locked(page_addr);
     }
+    spin_unlock_irqrestore(&buddy_lock, flags);
 }
 
 /*
