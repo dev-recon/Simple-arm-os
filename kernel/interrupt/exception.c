@@ -30,6 +30,8 @@
 #include <kernel/file.h>
 #include <kernel/string.h>
 
+static DEFINE_SPINLOCK(exception_log_lock);
+
 // Implémentez ces handlers
 void undefined_instruction_handler(void) {
     /* Capturer AVANT tout appel : bl ecrase lr.
@@ -43,9 +45,10 @@ void undefined_instruction_handler(void) {
 
     kprintf("=== UNDEFINED INSTRUCTION ===\n");
     kprintf("UND LR: 0x%08X (PC fautif=0x%08X), SPSR: 0x%08X\n", lr, lr - 4, spsr);
+    task_t* task = task_current_local();
     kprintf("LR_svc: 0x%08X SP_svc: 0x%08X current_task=%p (%s)\n",
-            lr_svc, sp_svc, (void*)current_task,
-            current_task ? current_task->name : "?");
+            lr_svc, sp_svc, (void*)task,
+            task ? task->name : "?");
     while(1);
 }
 
@@ -177,13 +180,17 @@ void prefetch_abort_handler(void) {
     /* Capturer les registres banqués AVANT tout appel (bl écrase lr).
      * MRS banked (lr_svc/sp_svc) dispo sur Cortex-A15 (virt extensions). */
     uint32_t lr_svc, sp_svc, spsr_svc;
+    unsigned long log_flags;
+
     __asm__ volatile("mrs %0, lr_svc" : "=r"(lr_svc));
     __asm__ volatile("mrs %0, sp_svc" : "=r"(sp_svc));
     __asm__ volatile("mrs %0, spsr" : "=r"(spsr_svc));
 
+    spin_lock_irqsave(&exception_log_lock, &log_flags);
+
     uart_puts("=== PREFETCH ABORT ===\n");
     uart_puts("SP_svc="); uart_put_hex(sp_svc);
-    uart_puts(" current_task="); uart_put_hex((uint32_t)current_task);
+    uart_puts(" current_task="); uart_put_hex((uint32_t)task_current_local());
     uart_puts("\n");
 
     uint32_t ifsr = get_ifsr();
@@ -237,7 +244,7 @@ void prefetch_abort_handler(void) {
         }
     }
 
-    while (1) { /* stop */ }
+    while (1) { /* stop with the diagnostic log lock held */ }
 }
 
 
@@ -454,7 +461,7 @@ static void coredump_capture_event(coredump_event_t* event,
                                    uint32_t lr_abt,
                                    uint32_t* saved)
 {
-    task_t* task = current_task;
+    task_t* task = task_current_local();
     process_t* proc = (task && task->type == TASK_TYPE_PROCESS) ? task->process : NULL;
 
     memset(event, 0, sizeof(*event));
@@ -519,10 +526,8 @@ static bool coredump_enqueue(uint32_t spsr_abt,
         out_path[out_path_size - 1] = '\0';
     }
 
-    if (coredumpd_task) {
-        coredumpd_task->wakeup_time = 0;
-        add_to_ready_queue(coredumpd_task);
-    }
+    if (coredumpd_task)
+        task_wake(coredumpd_task);
     return true;
 }
 
@@ -648,7 +653,8 @@ static void coredump_write_event_to_file(const coredump_event_t* event)
 {
     char* open_path;
     int fd;
-    process_t* proc = current_task ? current_task->process : NULL;
+    task_t* task = task_current_local();
+    process_t* proc = task ? task->process : NULL;
     mode_t old_umask = proc ? proc->umask : 0;
 
     if (!coredump_path_is_tmp_file(event->path)) {
@@ -828,7 +834,7 @@ static user_fault_snapshot_t* user_fault_build_snapshot_on_svc_stack(task_t* tas
 __attribute__((noreturn))
 static void handle_user_fault_on_svc_stack(user_fault_snapshot_t* snap)
 {
-    task_t* task = current_task;
+    task_t* task = task_current_local();
 
     uart_puts("Segmentation Fault (");
     uart_put_hex(snap->dfar);
@@ -953,12 +959,14 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
     uint32_t mode = spsr_abt & 0x1F;
     bool is_write = (dfsr & (1u << 11)) != 0;
     uint32_t fault_pc;
+    task_t* task = task_current_local();
+    unsigned long log_flags;
 
     if ((status == 0x05 || status == 0x07) && mode == 0x10) {
         if (handle_user_stack_fault(dfar) == 0) {
-            if (current_task) {
-                current_task->page_faults++;
-                current_task->stack_faults++;
+            if (task) {
+                task->page_faults++;
+                task->stack_faults++;
             }
             return 0;
         }
@@ -966,9 +974,9 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
 
     if (status == 0x0F && is_write && mode == 0x10) {
         if (handle_cow_fault(dfar) == 0) {
-            if (current_task) {
-                current_task->page_faults++;
-                current_task->cow_faults++;
+            if (task) {
+                task->page_faults++;
+                task->cow_faults++;
             }
             return 0;
         }
@@ -987,7 +995,7 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
         coredump_queued = coredump_enqueue(spsr_abt, dfar, dfsr, fault_pc,
                                            lr_abt, saved, dump_path,
                                            sizeof(dump_path));
-        snap = user_fault_build_snapshot_on_svc_stack(current_task, spsr_abt,
+        snap = user_fault_build_snapshot_on_svc_stack(task, spsr_abt,
                                                       dfar, dfsr, fault_pc,
                                                       lr_abt, saved,
                                                       coredump_queued,
@@ -1002,6 +1010,8 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
         uart_puts(") -> no valid SVC stack\n");
         return -1;
     }
+
+    spin_lock_irqsave(&exception_log_lock, &log_flags);
 
     uart_puts("\n=== DATA ABORT ===\n");
     uart_puts("DFAR="); uart_put_hex(dfar);
@@ -1047,9 +1057,10 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
     /* Ici: tu peux aussi dumper TTBR0/1, CONTEXTIDR/ASID, current->pgdir, etc. */
 
     uart_puts("TACHE COURANTE = ");
-    uart_puts(current_task ? current_task->name : "?");
+    uart_puts(task ? task->name : "?");
     uart_puts("\n");
 
+    spin_unlock_irqrestore(&exception_log_lock, log_flags);
     return -1;
 }
 

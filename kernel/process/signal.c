@@ -45,6 +45,7 @@ static void stop_process(task_t* proc, int sig);
 static void continue_process(task_t* proc);
 static uint32_t signal_deliverable_mask(task_t* proc);
 static uint32_t signal_sanitize_block_mask(uint32_t mask);
+static uint32_t signal_collect_pgid_targets(pid_t pgid, task_t** targets, uint32_t max_targets);
 
 #define ARMOS_SIG_SETMASK 0
 #define ARMOS_SIG_BLOCK   1
@@ -116,6 +117,40 @@ static bool signal_would_kill_or_stop_init_effective(task_t* target, int sig)
         return false;
 
     return signal_would_kill_or_stop_init(sig);
+}
+
+static uint32_t signal_collect_pgid_targets(pid_t pgid, task_t** targets, uint32_t max_targets)
+{
+    task_t* task;
+    uint32_t count = 0;
+    uint32_t walked = 0;
+    unsigned long flags;
+
+    if (pgid <= 0 || !targets || max_targets == 0)
+        return 0;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task = task_list_head;
+    if (!task) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return 0;
+    }
+
+    do {
+        if (task->type == TASK_TYPE_PROCESS && task->process &&
+            task->process->pgid == pgid &&
+            task->state != TASK_ZOMBIE &&
+            task->state != TASK_TERMINATED) {
+            if (count < max_targets)
+                targets[count++] = task;
+        }
+
+        task = task->next;
+        walked++;
+    } while (task && task != task_list_head && walked < MAX_TASKS);
+
+    spin_unlock_irqrestore(&task_lock, flags);
+    return count;
 }
 
 extern void signal_return_trampoline(void);
@@ -350,7 +385,6 @@ int send_signal(task_t* target, int sig)
             task_set_ready(target);
             target->process->stop_signal = 0;
             target->process->stop_reported = 0;
-            add_to_ready_queue(target);
         }
         wake_up_process_for_signal(target);
         return 0;
@@ -385,23 +419,26 @@ int send_signal(task_t* target, int sig)
  */
 void wake_up_process_for_signal(task_t* proc)
 {
+    unsigned long flags;
+    bool wake = false;
+
     //KDEBUG("wake_up_process_for_signal: %s - PID %d\n", proc->name, proc->process->pid);
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         KERROR("wake_up_process_for_signal: NULL PROC\n");
         return;
     }
-    
-    if (proc->state == TASK_BLOCKED) {
-        KDEBUG("[SIGNAL] Waking up blocked process PID=%u for signal\n", proc->process->pid);
-        kernel_lifecycle_stats.blocked_signal_wakeups++;
-        task_set_ready(proc);
-        add_to_ready_queue(proc);
-    } else if (proc->state == TASK_INTERRUPTIBLE) {
-        kernel_lifecycle_stats.blocked_signal_wakeups++;
-        task_set_ready(proc);
+
+    spin_lock_irqsave(&task_lock, &flags);
+    if (proc->state == TASK_BLOCKED || proc->state == TASK_INTERRUPTIBLE) {
+        wake = true;
         proc->wakeup_time = 0;
-        add_to_ready_queue(proc);
+        kernel_lifecycle_stats.blocked_signal_wakeups++;
+        task_make_ready_under_lock(proc);
     }
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    if (wake)
+        KDEBUG("[SIGNAL] Waking up blocked process PID=%u for signal\n", proc->process->pid);
     //KDEBUG("wake_up_process_for_signal: state %s\n", task_state_string(proc->state));
 }
 
@@ -612,6 +649,8 @@ static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
 int sys_kill(pid_t pid, int sig)
 {
     task_t* target;
+    task_t* targets[MAX_TASKS];
+    uint32_t target_count = 0;
     int delivered = 0;
     
     if (sig < 0 || sig >= MAX_SIGNALS) return -EINVAL;
@@ -628,44 +667,34 @@ int sys_kill(pid_t pid, int sig)
         return send_signal(target, sig);
         
     } else if (pid == 0) {
+        task_t* caller;
         pid_t pgid;
+        uint32_t i;
 
-        if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+        caller = task_current_local();
+        if (!caller || caller->type != TASK_TYPE_PROCESS || !caller->process)
             return -EINVAL;
 
-        pgid = current_task->process->pgid;
-        target = task_list_head;
-        if (!target) return -ESRCH;
+        pgid = caller->process->pgid;
+        target_count = signal_collect_pgid_targets(pgid, targets, MAX_TASKS);
 
-        do {
-            if (target->type == TASK_TYPE_PROCESS && target->process &&
-                target->process->pgid == pgid &&
-                target->state != TASK_ZOMBIE &&
-                target->state != TASK_TERMINATED) {
-                if (send_signal(target, sig) == 0)
-                    delivered++;
-            }
-            target = target->next;
-        } while (target && target != task_list_head);
+        for (i = 0; i < target_count; i++) {
+            if (send_signal(targets[i], sig) == 0)
+                delivered++;
+        }
 
         return delivered ? 0 : -ESRCH;
         
     } else {
         pid_t pgid = -pid;
+        uint32_t i;
 
-        target = task_list_head;
-        if (!target) return -ESRCH;
+        target_count = signal_collect_pgid_targets(pgid, targets, MAX_TASKS);
 
-        do {
-            if (target->type == TASK_TYPE_PROCESS && target->process &&
-                target->process->pgid == pgid &&
-                target->state != TASK_ZOMBIE &&
-                target->state != TASK_TERMINATED) {
-                if (send_signal(target, sig) == 0)
-                    delivered++;
-            }
-            target = target->next;
-        } while (target && target != task_list_head);
+        for (i = 0; i < target_count; i++) {
+            if (send_signal(targets[i], sig) == 0)
+                delivered++;
+        }
 
         return delivered ? 0 : -ESRCH;
     }
@@ -676,17 +705,19 @@ int sys_kill(pid_t pid, int sig)
  */
 int sys_signal(int sig, sig_handler_t handler)
 {
+    task_t* proc;
     signal_state_t* sig_state;
     sig_handler_t old_handler;
     
     if (sig <= 0 || sig >= MAX_SIGNALS) return -EINVAL;
     if (sig == SIGKILL || sig == SIGSTOP) return -EINVAL;
     
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS) {
+    proc = task_current_local();
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         return -EINVAL;
     }
     
-    sig_state = &current_task->process->signals;
+    sig_state = &proc->process->signals;
     old_handler = sig_state->actions[sig].sa_handler;
     
     sig_state->actions[sig].sa_handler = handler;
@@ -704,17 +735,19 @@ int sys_signal(int sig, sig_handler_t handler)
  */
 int sys_sigaction(int sig, const sigaction_t* act, sigaction_t* oldact)
 {
+    task_t* proc;
     signal_state_t* sig_state;
     sigaction_t new_action;
     
     if (sig <= 0 || sig >= MAX_SIGNALS) return -EINVAL;
     if (sig == SIGKILL || sig == SIGSTOP) return -EINVAL;
     
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS) {
+    proc = task_current_local();
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         return -EINVAL;
     }
     
-    sig_state = &current_task->process->signals;
+    sig_state = &proc->process->signals;
     
     /* Sauvegarder l'ancienne action */
     if (oldact) {
@@ -740,13 +773,15 @@ int sys_sigaction(int sig, const sigaction_t* act, sigaction_t* oldact)
 
 int sys_sigprocmask(int how, const sigset_t* set, sigset_t* oldset)
 {
+    task_t* proc;
     signal_state_t* sig_state;
     uint32_t new_mask;
 
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+    proc = task_current_local();
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
         return -EINVAL;
 
-    sig_state = &current_task->process->signals;
+    sig_state = &proc->process->signals;
 
     if (oldset) {
         uint32_t old_mask = sig_state->blocked;
@@ -779,41 +814,46 @@ int sys_sigprocmask(int how, const sigset_t* set, sigset_t* oldset)
 
 int sys_sigpending(sigset_t* set)
 {
+    task_t* proc;
     uint32_t pending;
 
     if (!set)
         return -EFAULT;
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+    proc = task_current_local();
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
         return -EINVAL;
 
-    pending = current_task->process->signals.pending;
+    pending = proc->process->signals.pending;
     return copy_to_user(set, &pending, sizeof(pending)) < 0 ? -EFAULT : 0;
 }
 
 int sys_sigsuspend(const sigset_t* mask)
 {
+    task_t* proc;
     signal_state_t* sig_state;
     uint32_t new_mask;
     uint32_t old_mask;
 
     if (!mask)
         return -EFAULT;
-    if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+    proc = task_current_local();
+    if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
         return -EINVAL;
     if (copy_from_user(&new_mask, mask, sizeof(new_mask)) < 0)
         return -EFAULT;
 
-    sig_state = &current_task->process->signals;
+    sig_state = &proc->process->signals;
     old_mask = sig_state->blocked;
     sig_state->blocked = signal_sanitize_block_mask(new_mask);
 
-    while (!has_pending_signals(current_task)) {
+    while (!has_pending_signals(proc)) {
         task_sleep_ms(1);
-        if (!current_task || current_task->type != TASK_TYPE_PROCESS || !current_task->process)
+        proc = task_current_local();
+        if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
             return -EINVAL;
     }
 
-    sig_state = &current_task->process->signals;
+    sig_state = &proc->process->signals;
     sig_state->blocked = old_mask;
     return -EINTR;
 }
@@ -823,7 +863,7 @@ int sys_sigsuspend(const sigset_t* mask)
  */
 void sys_sigreturn(void)
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
     signal_state_t* sig_state;
     user_signal_frame_t frame;
     
@@ -856,7 +896,7 @@ void sys_sigreturn(void)
  */
 signal_check_result_t check_pending_signals(void)
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
     signal_state_t* sig;
     uint32_t deliverable;
     int signal_num;
@@ -899,7 +939,7 @@ signal_check_result_t check_pending_signals(void)
 
 int signal_consume_user_return_override(void)
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
 
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         return 0;
@@ -986,6 +1026,5 @@ static void continue_process(task_t* proc)
         task_set_ready(proc);
         proc->process->stop_signal = 0;
         proc->process->stop_reported = 0;
-        add_to_ready_queue(proc);
     }
 }

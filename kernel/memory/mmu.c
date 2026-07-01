@@ -22,6 +22,7 @@
 #include <kernel/debug_print.h>
 #include <kernel/display.h>
 #include <kernel/task.h>
+#include <kernel/tlb.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 
@@ -165,7 +166,7 @@ static int update_user_pte(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr,
     *pte = (phys_addr & PTE_SMALL_BASE) | user_page_flags(vma_flags, writable);
     asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
     asm volatile("dsb ishst" ::: "memory");
-    invalidate_tlb_page_asid(vaddr, asid);
+    tlb_shootdown_page_asid(vaddr, asid);
     if (vma_flags & VMA_EXEC) {
         asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0));
         asm volatile("dsb ish; isb" ::: "memory");
@@ -937,7 +938,7 @@ void switch_address_space_with_asid(uint32_t* pgdir, uint32_t asid)
     data_sync_barrier();                 // dsb
     instruction_sync_barrier();          // isb
 
-    invalidate_tlb_asid(get_current_asid());
+    tlb_shootdown_asid(get_current_asid());
     //set_ttbr0((uint32_t)pgdir);
     data_sync_barrier();
     instruction_sync_barrier();
@@ -1033,7 +1034,7 @@ void map_user_stack(void)
     KINFO("MMU: User stack mapped (%u sections) in TTBR0\n", mapped_stack);
     
     /* Invalider le TLB pour les nouvelles mappings */
-    invalidate_tlb_all();
+    tlb_shootdown_all();
 }
 
 /* Fonctions inchangées du code original... */
@@ -1111,7 +1112,7 @@ int set_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
     *pte = (*pte & ~PTE_AP_MASK) | PTE_AP_RW_RO;
     asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
     asm volatile("dsb ishst" ::: "memory");
-    invalidate_tlb_page_asid(vaddr, asid);
+    tlb_shootdown_page_asid(vaddr, asid);
     return 0;
 }
 
@@ -1125,7 +1126,7 @@ int set_user_page_writable(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
     *pte = (*pte & ~PTE_AP_MASK) | PTE_AP_RW_RW;
     asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
     asm volatile("dsb ishst" ::: "memory");
-    invalidate_tlb_page_asid(vaddr, asid);
+    tlb_shootdown_page_asid(vaddr, asid);
     return 0;
 }
 
@@ -1169,7 +1170,7 @@ static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
         *l1_entry = (l2_page & 0xFFFFFC00) | 0x01;
         asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(l1_entry) : "memory"); // DCCMVAC
         asm volatile("dsb ishst" ::: "memory");
-        invalidate_tlb_page_asid(vaddr, asid);
+        tlb_shootdown_page_asid(vaddr, asid);
     } else if (l1_type == 0x2) {
         KERROR("map_user_page: refusing L1 section at user vaddr 0x%08X\n", vaddr);
         return -EEXIST;
@@ -1196,7 +1197,7 @@ static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
     l2_table[l2_index] = (phys_addr & 0xFFFFF000) | page_flags;
     asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(&l2_table[l2_index]) : "memory");
     asm volatile("dsb ishst" ::: "memory");
-    invalidate_tlb_page_asid(vaddr, asid);
+    tlb_shootdown_page_asid(vaddr, asid);
     if (vma_flags & VMA_EXEC) {
         asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0)); // ICIALLU
         asm volatile("dsb ish; isb" ::: "memory");
@@ -1215,94 +1216,22 @@ uint32_t get_physical_address(uint32_t* pgdir, uint32_t vaddr) {
 
 void invalidate_tlb_all(void)
 {
-    __asm__ volatile("mcr p15, 0, %0, c8, c7, 0" : : "r"(0));
-    __asm__ volatile("dsb");
-    __asm__ volatile("isb");
-}
-
-static inline void invalidate_tlb_page_global(uint32_t vaddr)
-{
-    vaddr &= ~0xFFFu;
-    asm volatile(
-        "dsb ishst         \n"
-        "mcr p15, 0, %0, c8, c7, 3 \n"  // TLBI MVA, ALL ASID (TLBIMVAA)
-        "dsb ish          \n"
-        "isb              \n"
-        :: "r"(vaddr) : "memory");
+    tlb_shootdown_all();
 }
 
 void invalidate_tlb_page(uint32_t vaddr)
 {
-    //vaddr &= ~(PAGE_SIZE - 1);
-    
-    //KDEBUG("invalidate_tlb_page: invalidating 0x%08X\n", vaddr);
-    //debug_mmu_state();
-
-    invalidate_tlb_page_global(vaddr);
-    
-/*     asm volatile(
-        "dsb                            \n"
-        "mcr p15, 0, %0, c8, c7, 1      \n"  // TLBIMVA
-        "dsb                            \n"
-        "isb                            \n"
-        :
-        : "r"(vaddr)
-        : "memory"
-    ); */
-    
-    //KDEBUG("invalidate_tlb_page: completed\n");
+    tlb_shootdown_page(vaddr);
 }
 
-/* Nouvelle fonction: Invalider TLB par adresse et ASID */
 void invalidate_tlb_page_asid(uint32_t vaddr, uint32_t asid)
 {
-    vaddr &= ~(PAGE_SIZE - 1);
-    (void)asid;
-    
-    /*
-     * c8,c7,3 est TLBIMVAA: invalidation par MVA pour tous les ASID.
-     * Les bits bas de l'operande sont reserves et doivent rester a zero.
-     */
-    asm volatile(
-        "dsb                            \n"
-        "mcr p15, 0, %0, c8, c7, 3      \n"  // TLBIMVAA - invalidate by VA and ASID
-        "dsb                            \n"
-        "isb                            \n"
-        :
-        : "r"(vaddr)
-        : "memory"
-    );
-    
-    //KDEBUG("invalidate_tlb_page_asid: completed\n");
+    tlb_shootdown_page_asid(vaddr, asid);
 }
 
-/* Nouvelle fonction: Invalider TLB par ASID seulement */
 void invalidate_tlb_asid(uint32_t asid)
 {
-    //KDEBUG("invalidate_tlb_asid: asid=%u / get_current_asid=%u\n", asid, get_current_asid());
-
-    tlb_flush_by_asid(asid);
-    
-/*     asm volatile(
-        "dsb                            \n"
-        "nop                            \n"  // Délai après TLB invalidation
-        "nop                            \n"
-        "nop                            \n"  // Cortex-A15 recommande 3+ cycles
-        "mcr p15, 0, %0, c8, c7, 2      \n"  // TLBIASID - invalidate by ASID
-        "nop                            \n"  // Délai après TLB invalidation
-        "nop                            \n"
-        "nop                            \n"  // Cortex-A15 recommande 3+ cycles
-        "dsb                            \n"
-        "nop                            \n"  // Délai après TLB invalidation
-        "nop                            \n"
-        "nop                            \n"  // Cortex-A15 recommande 3+ cycles
-        "isb                            \n"
-        :
-        : "r"(asid & ASID_MASK)
-        : "memory"
-    ); */
-    
-    //KDEBUG("invalidate_tlb_asid: completed\n");
+    tlb_shootdown_asid(asid);
 }
 
 uint32_t get_ttbr0(void)
@@ -1431,6 +1360,7 @@ void debug_mmu_state(void)
 void debug_kernel_stack_integrity(const char* location)
 {
     extern uint32_t __stack_bottom, __stack_top;
+    task_t *task = task_current_local();
     
     uint32_t current_sp;
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
@@ -1439,18 +1369,18 @@ void debug_kernel_stack_integrity(const char* location)
     
     // Detecter si on est dans une pile de tache
     bool in_task_stack = false;
-    if (current_task && current_task->stack_base) {
-        uint32_t task_stack_bottom = (uint32_t)current_task->stack_base;
-        uint32_t task_stack_top = task_stack_bottom + current_task->stack_size;
+    if (task && task->stack_base) {
+        uint32_t task_stack_bottom = (uint32_t)task->stack_base;
+        uint32_t task_stack_top = task_stack_bottom + task->stack_size;
         
         if (current_sp >= task_stack_bottom && current_sp <= task_stack_top) {
             in_task_stack = true;
             
-            KDEBUG("CONTEXT: Task '%s' stack\n", current_task->name);
+            KDEBUG("CONTEXT: Task '%s' stack\n", task->name);
             KDEBUG("Task stack bottom: 0x%08X\n", task_stack_bottom);
             KDEBUG("Task stack top:    0x%08X\n", task_stack_top);
             KDEBUG("Task stack size:   %u bytes (%u KB)\n", 
-                   current_task->stack_size, current_task->stack_size / 1024);
+                   task->stack_size, task->stack_size / 1024);
             KDEBUG("Current SP:        0x%08X\n", current_sp);
             
             uint32_t used = task_stack_top - current_sp;
@@ -1459,10 +1389,10 @@ void debug_kernel_stack_integrity(const char* location)
             KDEBUG("   Stack used:  %u bytes\n", used);
             KDEBUG("   Stack free:  %u bytes\n", free);
             
-            if (used > (current_task->stack_size * 3/4)) {
+            if (used > (task->stack_size * 3/4)) {
                 KWARN("WARNING  Task stack usage high: %u/%u bytes (%u%%)\n", 
-                      used, current_task->stack_size, 
-                      used * 100 / current_task->stack_size);
+                      used, task->stack_size,
+                      used * 100 / task->stack_size);
             }
         }
     }

@@ -174,7 +174,7 @@ int ls_read_directory(const char* path)
  */
 pid_t spawn_ls_process(void)
 {
-    task_t* init_proc = current_task;
+    task_t* init_proc = task_current_local();
     task_t* ls_proc;
     pid_t ls_pid;
     
@@ -194,7 +194,6 @@ pid_t spawn_ls_process(void)
     
     /* Configuration du processus ls */
     ls_proc->process->ppid = init_proc->process->pid;
-    ls_proc->state = TASK_READY;
     ls_pid = ls_proc->process->pid;
     
     /* Copier l'espace memoire virtuel (simplifie - pas de COW ici) */
@@ -218,9 +217,15 @@ pid_t spawn_ls_process(void)
     setup_ls_process_context(ls_proc);
     
     /* Ajouter a la liste des enfants du processus parent */
-    ls_proc->process->sibling_next = init_proc->process->children;
-    init_proc->process->children = ls_proc;
-    ls_proc->process->parent = init_proc;
+    {
+        unsigned long flags;
+
+        spin_lock_irqsave(&task_lock, &flags);
+        ls_proc->process->sibling_next = init_proc->process->children;
+        init_proc->process->children = ls_proc;
+        ls_proc->process->parent = init_proc;
+        spin_unlock_irqrestore(&task_lock, flags);
+    }
     
     /* Ajouter a la queue des processus prets */
     add_to_ready_queue(ls_proc);
@@ -355,15 +360,17 @@ pid_t execute_ls_command_async(void)
  */
 void test_process_system_with_ls(void)
 {
+    task_t* current = task_current_local();
+
     kprintf("\n=== Test du systeme de processus avec commande ls ===\n");
     
     /* Verifications preliminaires */
-    if (!current_task) {
+    if (!current) {
         kprintf("KO Aucun processus courant\n");
         return;
     }
     
-    kprintf("OK Processus courant: PID %u\n", current_task->process->pid);
+    kprintf("OK Processus courant: PID %u\n", current->process->pid);
     
     if (!is_fat32_mounted()) {
         kprintf("KO Systeme de fichiers non monte\n");

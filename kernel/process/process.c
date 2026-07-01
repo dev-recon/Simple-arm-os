@@ -28,6 +28,7 @@
 #include <kernel/task.h>
 #include <kernel/signal.h>
 #include <kernel/timer.h>
+#include <kernel/smp.h>
 
 
 
@@ -58,6 +59,18 @@ void init_main(void)
 /**
  * Initialiser le systeme unifie process/task
  */
+static void configure_idle_task_for_cpu(uint32_t cpu_id, task_t* task)
+{
+    if (!task)
+        return;
+
+    task_register_idle_cpu(cpu_id, task);
+    task->context.is_first_run = 1;
+    task->context.ttbr0 = (uint32_t)ttbr0_pgdir;
+    task->context.asid = ASID_KERNEL;
+    task->context.returns_to_user = 0;
+}
+
 void init_process_system(void)
 {
     /* Initialiser le gestionnaire de signal stacks */
@@ -102,11 +115,32 @@ void init_process_system(void)
     if (!idle_task) {
         panic("Failed to create idle task");
     }
+    configure_idle_task_for_cpu(smp_boot_cpu_id(), idle_task);
 
-    idle_task->context.is_first_run = 1;                     /* Pas la premiere fois */
-    idle_task->context.ttbr0 = (uint32_t)ttbr0_pgdir;
-    idle_task->context.asid = ASID_KERNEL;
-    idle_task->context.returns_to_user = 0;
+    for (uint32_t cpu = 0; cpu < smp_possible_cpu_count(); cpu++) {
+        char idle_name[TASK_NAME_MAX];
+        task_t* secondary_idle;
+
+        if (cpu == smp_boot_cpu_id())
+            continue;
+
+        snprintf(idle_name, sizeof(idle_name), "idle%u", cpu);
+        secondary_idle = task_create_process(idle_name, idle_task_func, NULL,
+                                             TASK_IDLE_PRIORITY, TASK_TYPE_KERNEL);
+        if (!secondary_idle) {
+            KWARN("SMP: failed to create idle task for CPU%u\n", cpu);
+            continue;
+        }
+
+        configure_idle_task_for_cpu(cpu, secondary_idle);
+        /*
+         * Secondary idle tasks are not runnable from the global runqueue, but
+         * they must be fully published before a secondary CPU can switch to its
+         * private idle context and before /proc walks the task list.
+         */
+        add_task_to_list(secondary_idle);
+        task_set_blocked(secondary_idle);
+    }
 
 
     /* Mettre init dans la liste des taches pretes */
@@ -244,10 +278,22 @@ void destroy_process(task_t* process)
      /* Nettoyer les signaux */
     cleanup_process_signals(process);
     
-    /* Liberer l'espace memoire virtuel - ACCeS CORRECT */
-    if (process->process->vm) {
-        destroy_vm_space(process->process->vm);
+    /*
+     * Detach the VM pointer while holding task_lock before freeing it.
+     * /proc readers walk task/process state under task_lock; without this
+     * ordering they can observe a vm_space whose VMA list is being freed.
+     */
+    {
+        vm_space_t* old_vm = NULL;
+        unsigned long flags;
+
+        spin_lock_irqsave(&task_lock, &flags);
+        old_vm = process->process->vm;
         process->process->vm = NULL;
+        spin_unlock_irqrestore(&task_lock, flags);
+
+        if (old_vm)
+            destroy_vm_space(old_vm);
     }
     
     /* Utiliser votre fonction de destruction de tache existante */
@@ -286,8 +332,10 @@ task_t* find_process_by_pid(pid_t pid)
  */
 task_t* get_current_task(void)
 {
-    if (current_task) {
-        return current_task;
+    task_t *task = task_current_local();
+
+    if (task) {
+        return task;
     }
     KERROR("get_current_task: current task is NULL");
     return NULL;
@@ -298,8 +346,10 @@ task_t* get_current_task(void)
  */
 process_t* get_current_process(void)
 {
-    if (current_task && current_task->type == TASK_TYPE_PROCESS && current_task->process) {
-        return current_task->process;
+    task_t *task = task_current_local();
+
+    if (task && task->type == TASK_TYPE_PROCESS && task->process) {
+        return task->process;
     }
     return NULL;
 }

@@ -94,7 +94,7 @@ void close_all_process_files(task_t* proc) {
  */
 void return_to_caller_with_value(int return_value)
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
     
     if (!proc || proc->type != TASK_TYPE_PROCESS) {
         KERROR("[WAITPID] Invalid process\n");
@@ -192,6 +192,10 @@ static bool child_matches_waitpid(task_t* parent, task_t* child, pid_t pid)
 
 task_t* find_zombie_child(task_t* parent, pid_t pid)
 {
+    unsigned long flags;
+    task_t* child;
+    task_t* zombie = NULL;
+
     if (!parent) {
         KERROR("find_zombie_child: NULL Parent\n");
         return NULL;
@@ -208,11 +212,10 @@ task_t* find_zombie_child(task_t* parent, pid_t pid)
         return NULL;
     }
 
-
     /* Chercher un processus zombie - ACCeS CORRECT */
-    task_t* child = parent->process->children;
+    spin_lock_irqsave(&task_lock, &flags);
+    child = parent->process->children;
     //task_t* prev = NULL;
-    task_t* zombie = NULL;
 
             //KINFO("find_zombie_child: checking childs of PID %u for zombie PID %d \n", 
             //      parent->process->pid, pid);
@@ -228,13 +231,18 @@ task_t* find_zombie_child(task_t* parent, pid_t pid)
         //prev = child;
         child = child->process->sibling_next;
     }
-    
+    spin_unlock_irqrestore(&task_lock, flags);
+
     return zombie;
 }
 
 
 bool has_children(task_t* parent, pid_t pid)
 {
+    unsigned long flags;
+    bool found = false;
+    task_t* child;
+
     if (!parent) {
         KERROR("has_children: NULL Parent\n");
         return false;
@@ -250,18 +258,19 @@ bool has_children(task_t* parent, pid_t pid)
         return false;
     }
 
-    bool has_children = false;
-    task_t* child = parent->process->children;
+    spin_lock_irqsave(&task_lock, &flags);
+    child = parent->process->children;
 
     while (child) {
         if (child_matches_waitpid(parent, child, pid)) {
-            has_children = true;
+            found = true;
             break;
         }
         child = child->process->sibling_next;
     }
-    
-    return has_children;
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    return found;
 }
 
 
@@ -270,6 +279,8 @@ bool has_children(task_t* parent, pid_t pid)
  */
 void remove_child_from_parent(task_t* parent, task_t* child_to_remove)
 {
+    unsigned long flags;
+
     if (!parent || !child_to_remove || 
         parent->type != TASK_TYPE_PROCESS || 
         child_to_remove->type != TASK_TYPE_PROCESS || !parent->process || !child_to_remove->process) {
@@ -281,6 +292,7 @@ void remove_child_from_parent(task_t* parent, task_t* child_to_remove)
     /* ACCeS CORRECT */
     //KDEBUG("[REMOVE_CHILD] Retrait PID %u du parent PID %u\n", 
     //       child_to_remove->process->pid, parent->process->pid);
+    spin_lock_irqsave(&task_lock, &flags);
     
     if (parent->process->children == child_to_remove) {
         parent->process->children = child_to_remove->process->sibling_next;
@@ -302,6 +314,7 @@ void remove_child_from_parent(task_t* parent, task_t* child_to_remove)
         } else {
             KERROR("[REMOVE_CHILD] Child PID %u not found under parent PID %u\n",
                    child_to_remove->process->pid, parent->process->pid);
+            spin_unlock_irqrestore(&task_lock, flags);
             return;
         }
     }
@@ -309,6 +322,7 @@ void remove_child_from_parent(task_t* parent, task_t* child_to_remove)
     /* Nettoyer les references de l'enfant - ACCeS CORRECT */
     child_to_remove->process->sibling_next = NULL;
     child_to_remove->process->parent = NULL;
+    spin_unlock_irqrestore(&task_lock, flags);
     
     //KDEBUG("[REMOVE_CHILD] Retrait termine\n");
 }
@@ -318,9 +332,11 @@ void remove_child_from_parent(task_t* parent, task_t* child_to_remove)
  */
 void orphan_children(task_t* proc)
 {
+    unsigned long flags;
     task_t* init_proc;
     task_t* child;
     task_t* next;
+    bool wake_init = false;
     
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
         KERROR("NULL PROC\n");
@@ -334,6 +350,7 @@ void orphan_children(task_t* proc)
     }
     
     /* ACCeS CORRECT */
+    spin_lock_irqsave(&task_lock, &flags);
     child = proc->process->children;
     
     while (child) {
@@ -346,79 +363,41 @@ void orphan_children(task_t* proc)
         init_proc->process->children = child;
         
         /* Reveiller init si l'enfant est zombie */
-        if (child->state == TASK_ZOMBIE && init_proc->state == TASK_BLOCKED) {
-            unsigned long flags;
-            spin_lock_irqsave(&task_lock, &flags);
-            init_proc->state = TASK_READY;
-            init_proc->process->state = (proc_state_t)PROC_READY;
-            spin_unlock_irqrestore(&task_lock, flags);
-            add_to_ready_queue(init_proc);
-        }
+        if (child->state == TASK_ZOMBIE && init_proc->state == TASK_BLOCKED)
+            wake_init = true;
         
         child = next;
     }
     
     proc->process->children = NULL;
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    if (wake_init)
+        task_set_ready(init_proc);
 }
 
 
-void wakeup_parent(task_t *proc){
+void wakeup_parent(task_t *proc)
+{
+    unsigned long flags;
+    task_t *parent;
 
-    if(!proc || !proc->process){
-        KERROR("Wake up : no proc or no process structure\n");
-        KERROR("NULL PROC\n");
+    if (!proc || !proc->process)
         return;
+
+    /*
+     * Parent wakeup is a single scheduler transaction.  The parent pointer,
+     * waitpid selector and child relationship are observed while task_lock is
+     * held, then the parent is made READY without recursively taking task_lock.
+     */
+    spin_lock_irqsave(&task_lock, &flags);
+    parent = proc->process->parent;
+    if (parent && parent->process &&
+        parent->state == TASK_BLOCKED &&
+        parent->process->state == (proc_state_t)PROC_BLOCKED) {
+        pid_t wait_pid = parent->process->waitpid_pid;
+        if (child_matches_waitpid(parent, proc, wait_pid))
+            task_make_ready_under_lock(parent);
     }
-
-        /* Reveiller le parent s'il attend - ACCeS CORRECT */
-    if (proc->process->parent) {
-        task_t* parent = proc->process->parent;
-        if(!parent || !parent->process)
-        {
-            KERROR("Wake up : no parent or no parent process structure\n");
-            KERROR("wakeup_parent: NULL Proc\n");
-            return;
-        }
-        
-/*          KINFO("[EXIT] *** WAKING UP PARENT ***\n");
-        KDEBUG("sys_exit: Parent PID=%d state=%s proc_state=%s\n", 
-               parent->process->pid, task_state_string(parent->state), proc_state_string(parent->process->state));
-        KDEBUG("sys_exit: Parent waiting for PID=%d\n", 
-               parent->process->waitpid_pid);
-        KDEBUG("sys_exit: Child exit code =%d\n", 
-               proc->process->exit_code);
-        KDEBUG("sys_exit: Child PID=%d state=%s proc_state=%s\n", 
-               proc->process->pid, task_state_string(proc->state), proc_state_string(proc->process->state));
-   */
-        
-        /* Verifier si le parent attend vraiment */
-        if (parent->state == TASK_BLOCKED && 
-            parent->process->state == (proc_state_t)PROC_BLOCKED) {
-            
-            /* Verifier si le parent attend ce processus specifiquement */
-            pid_t wait_pid = parent->process->waitpid_pid;
-            if (child_matches_waitpid(parent, proc, wait_pid)) {
-                //KINFO("sys_exit: Waking up parent PID=%u\n", parent->process->pid);
-                
-                unsigned long flags;
-                spin_lock_irqsave(&task_lock, &flags);
-                parent->state = TASK_READY;
-                parent->process->state = (proc_state_t)PROC_READY;
-                spin_unlock_irqrestore(&task_lock, flags);
-                
-                /* Ajouter le parent a la ready queue */
-                add_to_ready_queue(parent);
-                //KDEBUG("sys_exit: Parent %s PID=%u added to ready queue, son %s pid =%u, exit code =%d\n", 
-                //    parent->name, parent->process->pid, proc->name, proc->process->pid, *parent->process->waitpid_status);
-                //debug_print_ctx(&parent->context, "SYS_EXIT");
-
-            }
-        } else {
-            //KINFO("sys_exit: Parent not blocked (state=%s proc_state=%s)\n", 
-            //      task_state_string(parent->state), proc_state_string(parent->process->state));
-        }
-    } else {
-        KWARN("sys_exit: No parent found\n");
-    }
-
+    spin_unlock_irqrestore(&task_lock, flags);
 }

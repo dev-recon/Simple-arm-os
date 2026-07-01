@@ -29,6 +29,7 @@
 #include <kernel/file.h>
 #include <kernel/vfs.h>
 #include <kernel/timer.h>
+#include <kernel/task.h>
 
 #define VIRTIO_NET_F_MAC      (1u << 5)
 
@@ -1029,6 +1030,10 @@ static file_t *net_socket_create_file(net_socket_t *sock)
 
 int sys_socket(int domain, int type, int protocol)
 {
+    task_t *task = task_current_local();
+
+    if (!task || !task->process)
+        return -ENODEV;
     if (domain != AF_INET || type != SOCK_STREAM || protocol != 0)
         return -EINVAL;
     if (!net.initialized)
@@ -1047,25 +1052,29 @@ int sys_socket(int domain, int type, int protocol)
         return -ENOMEM;
     }
 
-    int fd = allocate_fd(current_task);
+    int fd = allocate_fd(task);
     if (fd < 0) {
         close_file(file);
         return fd;
     }
 
-    current_task->process->files[fd] = file;
-    current_task->process->fd_flags[fd] = 0;
+    task->process->files[fd] = file;
+    task->process->fd_flags[fd] = 0;
     return fd;
 }
 
 int sys_bind(int sockfd, const void* addr, uint32_t addrlen)
 {
+    task_t *task = task_current_local();
+
+    if (!task || !task->process)
+        return -ENODEV;
     if (sockfd < 0 || sockfd >= MAX_FILES || !addr)
         return -EINVAL;
     if (addrlen < sizeof(net_sockaddr_in_t))
         return -EINVAL;
 
-    file_t *file = current_task->process->files[sockfd];
+    file_t *file = task->process->files[sockfd];
     if (!file || file->type != FILE_TYPE_SOCKET)
         return -ENOTCONN;
 
@@ -1092,12 +1101,16 @@ int sys_bind(int sockfd, const void* addr, uint32_t addrlen)
 
 int sys_connect(int sockfd, const void* addr, uint32_t addrlen)
 {
+    task_t *task = task_current_local();
+
+    if (!task || !task->process)
+        return -ENODEV;
     if (sockfd < 0 || sockfd >= MAX_FILES)
         return -EBADF;
     if (!addr || addrlen < sizeof(net_sockaddr_in_t))
         return -EINVAL;
 
-    file_t *file = current_task->process->files[sockfd];
+    file_t *file = task->process->files[sockfd];
     if (!file || file->type != FILE_TYPE_SOCKET)
         return -ENOTCONN;
 
@@ -1112,11 +1125,15 @@ int sys_connect(int sockfd, const void* addr, uint32_t addrlen)
 
 int sys_listen(int sockfd, int backlog)
 {
+    task_t *task = task_current_local();
+
     (void)backlog;
 
+    if (!task || !task->process)
+        return -ENODEV;
     if (sockfd < 0 || sockfd >= MAX_FILES)
         return -EBADF;
-    file_t *file = current_task->process->files[sockfd];
+    file_t *file = task->process->files[sockfd];
     if (!file || file->type != FILE_TYPE_SOCKET)
         return -ENOTCONN;
 
@@ -1134,9 +1151,13 @@ int sys_listen(int sockfd, int backlog)
 
 int sys_accept(int sockfd, void* addr, uint32_t* addrlen)
 {
+    task_t *task = task_current_local();
+
+    if (!task || !task->process)
+        return -ENODEV;
     if (sockfd < 0 || sockfd >= MAX_FILES)
         return -EBADF;
-    file_t *listen_file = current_task->process->files[sockfd];
+    file_t *listen_file = task->process->files[sockfd];
     if (!listen_file || listen_file->type != FILE_TYPE_SOCKET)
         return -ENOTCONN;
 
@@ -1170,7 +1191,7 @@ int sys_accept(int sockfd, void* addr, uint32_t* addrlen)
         return -ENOMEM;
     }
 
-    int fd = allocate_fd(current_task);
+    int fd = allocate_fd(task);
     if (fd < 0) {
         close_file(conn_file);
         return fd;
@@ -1180,7 +1201,7 @@ int sys_accept(int sockfd, void* addr, uint32_t* addrlen)
         uint32_t user_len = 0;
         if (copy_from_user(&user_len, addrlen, sizeof(user_len)) < 0) {
             close_file(conn_file);
-            free_fd(current_task, fd);
+            free_fd(task, fd);
             return -EFAULT;
         }
         if (user_len >= sizeof(net_sockaddr_in_t)) {
@@ -1193,7 +1214,7 @@ int sys_accept(int sockfd, void* addr, uint32_t* addrlen)
             if (copy_to_user(addr, &sin, sizeof(sin)) < 0 ||
                 copy_to_user(addrlen, &out_len, sizeof(out_len)) < 0) {
                 close_file(conn_file);
-                free_fd(current_task, fd);
+                free_fd(task, fd);
                 return -EFAULT;
             }
         }
@@ -1203,8 +1224,8 @@ int sys_accept(int sockfd, void* addr, uint32_t* addrlen)
     net.pending_accept = false;
     net.pending_rx_len = 0;
     net.pending_peer_closed = false;
-    current_task->process->files[fd] = conn_file;
-    current_task->process->fd_flags[fd] = 0;
+    task->process->files[fd] = conn_file;
+    task->process->fd_flags[fd] = 0;
     return fd;
 }
 

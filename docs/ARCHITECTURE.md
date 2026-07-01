@@ -288,6 +288,64 @@ Useful diagnostics:
 - crash dumps print `TTBR0`, `TTBR1`, `TTBCR`, and page-table walks;
 - procfs/task diagnostics should remain ASID-aware.
 
+## SMP Bring-Up Model
+
+ArmOS now contains active SMP bring-up code, but the stable public runtime
+profile remains `SMP_CPUS=1`. Multi-CPU boots are intentionally available for
+kernel development and race hunting, but they are not yet the supported release
+configuration.
+
+Stable profile:
+
+```sh
+SMP_CPUS=1 ./boot.sh
+```
+
+Experimental developer profile:
+
+```sh
+SMP_CPUS=4 ./boot.sh
+```
+
+When documenting, testing, or publishing a release, treat `SMP_CPUS=1` as the
+baseline unless the test explicitly says it is exercising experimental SMP.
+
+Current SMP contract:
+
+- `smp_processor_id()` reads the ARM MPIDR CPU id;
+- `smp_init_boot_cpu()` records the boot CPU during early kernel startup;
+- SMP CPU state is explicit: `offline`, `booting`, `parked`, or `online`;
+- `/proc/smp` exposes the boot CPU, online count, seen CPU mask, and per-CPU
+  state, scheduler participation, timer/IPI counters, TLB counters, and the
+  currently running task on each CPU;
+- spinlocks use ARMv7 `LDREX` / `STREX`, not compiler test-and-set helpers;
+- spinlocks record the owning CPU for diagnostics;
+- TLB maintenance now has two layers: local ARM helpers in `asm/mmu.h`
+  (`tlb_flush_*`) and SMP-aware kernel entry points in `kernel/tlb.h`
+  (`tlb_shootdown_*`);
+- `IRQ_SGI_TLB_SHOOTDOWN` is the TLB IPI and is visible in `/proc/interrupts`;
+  `/proc/smp_ipi` can trigger a full shootdown rendezvous for diagnostics;
+- the scheduler has SMP-aware task ownership and runqueue protection, but this
+  path is still under hardening.
+
+The intended bring-up sequence is deliberately conservative:
+
+1. keep the public release profile on `SMP_CPUS=1`;
+2. make atomics, spinlocks, CPU identity, and per-CPU current-task ownership
+   correct;
+3. keep one global scheduler lock and one global run queue initially;
+4. use SMP stress runs to expose races without promoting them to release
+   support;
+5. harden TLB shootdown before relying on user address spaces across CPUs;
+6. audit shared kernel structures: task lists, ready queues, ASIDs, physical
+   allocator, VFS mounts, file descriptors, TTY state, and signal queues;
+7. only then consider per-CPU run queues and load balancing.
+
+Do not describe `SMP_CPUS>1` as stable until the stress baseline includes mixed
+`kload`, `memstress`, `systest`, `vfstest`, `top`, TTY, procfs, and shutdown
+runs without corruption. A multi-core kernel that occasionally works is less
+useful than a single-core kernel with clear invariants.
+
 ## MMIO Mapping
 
 Drivers should use the private kernel MMIO aliases, not raw low physical device
@@ -454,9 +512,12 @@ This is one of the most important invariants in the kernel.
 
 The ARM generic timer drives periodic scheduling.
 
-The timer interrupt updates kernel time and may request rescheduling. ArmOS is
-designed to tolerate timer-driven preemption around syscall boundaries and
-inside carefully controlled kernel wait paths.
+The timer interrupt updates kernel time and may request rescheduling. The
+current safe-preemption model is deliberately conservative: the IRQ marks the
+current CPU as needing reschedule, and the actual context switch happens at
+kernel-safe points such as syscall return, explicit `yield()`, sleep/wait paths,
+or other scheduler entries. ArmOS does not yet switch directly from IRQ mode
+back into a different user task after interrupting a pure userland hot loop.
 
 Practical model:
 
@@ -466,6 +527,13 @@ Practical model:
 - sleeping tasks are woken when their deadline expires;
 - long critical sections should avoid keeping interrupts disabled longer than
   necessary.
+
+This distinction matters during scheduler testing. A CPU-bound user process
+that never enters the kernel is not yet preempted solely by the timer IRQ. Full
+IRQ-return preemption will require a dedicated ARM exception-return path that
+saves the interrupted user register frame, switches on a scheduler-safe SVC
+stack, and later restores the user banked registers without corrupting the SVC
+stack invariants.
 
 The scheduler quantum is a tuning parameter, but it is also a stress tool. A
 short quantum exposes missing critical sections and context-save bugs quickly.

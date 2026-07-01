@@ -49,6 +49,7 @@ typedef struct task_row {
     unsigned sched_debt;
     unsigned debt_score;
     unsigned ready_wait_ticks;
+    int last_cpu;
     char state;
     char kind;
     char name[64];
@@ -430,6 +431,7 @@ static void parse_tasks(task_row_t *rows, int *count)
 
         memset(r, 0, sizeof(*r));
         r->tty = -1;
+        r->last_cpu = -1;
         r->priority = 10;
         r->kstack_kb = 16;
 
@@ -528,6 +530,7 @@ static void enrich_row_from_status(task_row_t *r)
     status_uint_value(buf, "SchedDebt:", &r->sched_debt);
     status_uint_value(buf, "DebtScore:", &r->debt_score);
     status_uint_value(buf, "ReadyWaitTicks:", &r->ready_wait_ticks);
+    status_int_value(buf, "CPU:", &r->last_cpu);
     status_uint_value(buf, "KStack:", &r->kstack_kb);
     status_uint_value(buf, "Heap:", &r->heap_kb);
     status_uint_value(buf, "VmSize:", &r->vm_kb);
@@ -727,10 +730,10 @@ int main(void)
     print_scheduler_table(&c);
     print_tty_table(&c);
 
-    printf("\033[1m%6s %6s %6s %4s %3s %-8s %4s %-6s %3s %4s %6s %6s %5s %5s %5s %5s %2s %7s %7s %7s %7s %-6s %s\033[0m\n",
+    printf("\033[1m%6s %6s %6s %4s %3s %-8s %4s %-6s %3s %4s %6s %6s %5s %5s %5s %5s %2s %7s %7s %7s %7s %-6s %4s %s\033[0m\n",
            "PID", "TID", "PPID", "SID", "TTY", "USER", "GID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",
-           "DEBT", "WAIT", "VM", "RSS", "L2", "CTX", "PF", "COW", "STK", "STATE", "NAME");
-    printf("-------------------------------------------------------------------------------------------------------------------------------------------------\n");
+           "DEBT", "WAIT", "VM", "RSS", "L2", "CTX", "PF", "COW", "STK", "STATE", "LAST", "NAME");
+    printf("--------------------------------------------------------------------------------------------------------------------------------------------------------\n");
 
     for (int i = 0; i < count; i++) {
         task_row_t *p = &rows[i];
@@ -748,7 +751,7 @@ int main(void)
         format_count(p->cow_faults, cowbuf, sizeof(cowbuf));
         format_count(p->stack_faults, stkbuf, sizeof(stkbuf));
 
-        printf("%6d %6d %6d %4d %3d %-8s %4u %s%-6s\033[0m %3u %3u.%u %4uK %4uK %5u %5u %4uK %4uK %2u %7s %s%7s\033[0m %7s %7s %s%-6s\033[0m %s\n",
+        printf("%6d %6d %6d %4d %3d %-8s %4u %s%-6s\033[0m %3u %3u.%u %4uK %4uK %5u %5u %4uK %4uK %2u %7s %s%7s\033[0m %7s %7s %s%-6s\033[0m %4d %s\n",
                p->pid, p->tid, p->ppid, p->sid, p->tty,
                user, p->gid,
                kind_color(p->kind), kind_name(p->kind),
@@ -762,6 +765,7 @@ int main(void)
                pfcolor, pfbuf,
                cowbuf, stkbuf,
                state_color(p->state), state_name(p->state),
+               p->last_cpu,
                p->name);
     }
 

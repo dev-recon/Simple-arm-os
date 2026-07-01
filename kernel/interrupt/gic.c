@@ -28,6 +28,9 @@
 #include <kernel/ide.h>
 #include <kernel/kprintf.h>
 #include <kernel/mmio.h>
+#include <kernel/smp.h>
+#include <kernel/tlb.h>
+#include <asm/arm.h>
 
 /* Compteur global pour verifier que les IRQ arrivent */
 static volatile uint32_t irq_count = 0;
@@ -39,6 +42,33 @@ static volatile uint32_t irq_counts[GIC_IRQ_COUNTERS];
 #define LOCAL_GICD_BASE     KERNEL_MMIO_GIC_DIST_BASE
 #define LOCAL_GICC_BASE     KERNEL_MMIO_GIC_CPU_BASE
 #define LOCAL_VIRTIO_BASE   KERNEL_MMIO_VIRTIO_BASE
+
+static uint8_t gic_boot_cpu_mask(void)
+{
+    uint32_t cpu = smp_boot_cpu_id();
+
+    if (cpu >= 8)
+        cpu = 0;
+    return (uint8_t)(1U << cpu);
+}
+
+static uint8_t gic_route_spi_to_boot_cpu(uint32_t irq)
+{
+    volatile uint8_t* itargetsr = (volatile uint8_t*)(LOCAL_GICD_BASE + 0x800);
+    uint8_t mask;
+
+    /*
+     * GICv2 ITARGETSR is meaningful for SPIs only. SGIs/PPIs are private to a
+     * CPU interface and must not be programmed here. QEMU virt with more than
+     * one vCPU may otherwise route UART/VirtIO interrupts to a parked CPU.
+     */
+    if (irq < 32)
+        return itargetsr[irq];
+
+    mask = gic_boot_cpu_mask();
+    itargetsr[irq] = mask;
+    return itargetsr[irq];
+}
 
 void init_gic(void)
 {
@@ -118,6 +148,7 @@ void init_gic(void)
     
     for (int i = 0; i < (int)(sizeof(important_irqs) / sizeof(important_irqs[0])); i++) {
         uint32_t irq = important_irqs[i];
+        uint8_t target;
         
         /* 1. Configurer comme edge-triggered si IRQ >= 16 */
         if (irq >= 16) {
@@ -129,14 +160,18 @@ void init_gic(void)
             icfgr[irq / 16] = cfg;
         }
         
-        /* 2. Activer l'IRQ */
+        /* 2. Route SPI interrupts to the boot CPU before enabling them. */
+        if (irq >= 32)
+            target = gic_route_spi_to_boot_cpu(irq);
+
+        /* 3. Activer l'IRQ */
         uint32_t reg = irq / 32;
         uint32_t bit = irq % 32;
         gicd[0x100/4 + reg] |= (1 << bit);
         
-        /* 3. Verifier l'etat */
+        /* 4. Verifier l'etat */
         uint32_t enabled = gicd[0x100/4 + reg] & (1 << bit);
-        uint8_t target = itargetsr[irq];
+        target = itargetsr[irq];
         
         if (is_qemu_virt && target == 0) {
             KDEBUG("[GIC] IRQ %u: %s, target=AUTO OK\n", 
@@ -167,6 +202,34 @@ void init_gic(void)
     }
 }
 
+void gic_init_secondary_cpu_interface(void)
+{
+    volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
+    volatile uint32_t* gicc = (volatile uint32_t*)LOCAL_GICC_BASE;
+    volatile uint8_t* ipriority = (volatile uint8_t*)(LOCAL_GICD_BASE + 0x400);
+    uint32_t sgi_reg = IRQ_SGI_TLB_SHOOTDOWN / 32;
+    uint32_t sgi_bit = IRQ_SGI_TLB_SHOOTDOWN % 32;
+    uint32_t timer_reg = VIRT_TIMER_NS_EL1_IRQ / 32;
+    uint32_t timer_bit = VIRT_TIMER_NS_EL1_IRQ % 32;
+
+    /*
+     * Secondary CPUs enter here with TTBR1 enabled but outside the scheduler.
+     * Configure only their private GICC state and the diagnostic SGI/PPI bit.
+     * Device SPIs stay routed to the boot CPU until the drivers are SMP-safe.
+     */
+    gicc[0x000 / 4] = 0;
+    gicc[0x004 / 4] = 0xF0;  /* GICC_PMR */
+    gicc[0x008 / 4] = 0x03;  /* GICC_BPR */
+    ipriority[IRQ_SGI_TLB_SHOOTDOWN] = 0xA0;
+    ipriority[VIRT_TIMER_NS_EL1_IRQ] = 0xA0;
+    gicd[0x100 / 4 + sgi_reg] |= (1u << sgi_bit);
+    gicd[0x100 / 4 + timer_reg] |= (1u << timer_bit);
+    gicc[0x000 / 4] = 0x01;
+
+    data_sync_barrier();
+    instruction_sync_barrier();
+}
+
 void fiq_c_handler(void)
 {
     irq_c_handler();
@@ -179,15 +242,28 @@ void irq_c_handler(void)
     /* Lire l'IRQ ID */
     uint32_t irq_id = gicc[0x00C/4];  /* GICC_IAR */
     uint32_t int_id = irq_id & 0x3FF;
+    uint32_t cpu_id = smp_processor_id();
     
     /* Compteur global */
     irq_count++;
     last_irq_id = int_id;
     if (int_id < GIC_IRQ_COUNTERS)
         irq_counts[int_id]++;
+    smp_note_irq(cpu_id);
     
     /* Debug : afficher l'IRQ recue */
     //kprintf("[IRQ] DONE IRQ %u received! (count=%u)\n", int_id, irq_count);
+
+    if (int_id == IRQ_SGI_TLB_SHOOTDOWN) {
+        /*
+         * Reserved SMP IPI. Parked secondaries can acknowledge TLB maintenance
+         * without joining the scheduler or taking device interrupts.
+         */
+        smp_note_ipi(cpu_id);
+        tlb_handle_remote_ipi(cpu_id);
+        gicc[0x010/4] = irq_id;  /* GICC_EOIR */
+        return;
+    }
 
     if (int_id == virtio_blk_get_irq()) {
         virtio_block_irq_handler();
@@ -272,18 +348,48 @@ uint32_t gic_get_last_irq_id(void)
     return last_irq_id;
 }
 
+void gic_send_sgi(uint32_t target_cpu_mask, uint32_t sgi_id)
+{
+    if (sgi_id >= 16 || target_cpu_mask == 0)
+        return;
+
+    volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
+    uint32_t value = ((target_cpu_mask & 0xFFu) << 16) | (sgi_id & 0xFu);
+
+    /*
+     * GICD_SGIR TargetListFilter=0 sends the SGI to the explicit CPU target
+     * list in bits [23:16]. CPU numbering matches the GIC CPU interface ID on
+     * QEMU virt, which is exactly what we need for boot-time SMP experiments.
+     */
+    gicd[0xF00 / 4] = value;
+}
+
+void gic_send_sgi_others(uint32_t sgi_id)
+{
+    if (sgi_id >= 16)
+        return;
+
+    volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
+
+    /*
+     * TargetListFilter=1 means "all CPU interfaces except the requester".
+     * This is a useful SMP bring-up diagnostic because it avoids assuming that
+     * MPIDR affinity bits and GIC target-list bits are identical.
+     */
+    gicd[0xF00 / 4] = (1u << 24) | (sgi_id & 0xFu);
+}
+
 static void enable_irq_with_type(uint32_t irq, bool edge_triggered)
 {
     KDEBUG("[IRQ] Enabling IRQ %u (machine virt mode, %s)...\n",
            irq, edge_triggered ? "edge" : "level");
     
     volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
-    volatile uint8_t* itargetsr = (volatile uint8_t*)(LOCAL_GICD_BASE + 0x800);
     
-    /* 1. Verifier ITARGETSR (informatif seulement) */
-    uint8_t target = itargetsr[irq];
+    /* 1. Route SPIs to the boot CPU before enabling them. */
+    uint8_t target = gic_route_spi_to_boot_cpu(irq);
     if (target == 0) {
-        KDEBUG("[IRQ]   Target: AUTO (QEMU managed)\n");
+        KDEBUG("[IRQ]   Target: AUTO/QEMU managed\n");
     } else {
         KDEBUG("[IRQ]   Target: 0x%02X \n", target);
     }

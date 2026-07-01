@@ -20,8 +20,10 @@
 .align 4
 
 .global current_task
+.global task_context_save_complete
 
 /* ---------------- task_context_t offsets ---------------- */
+    .equ TASK_CONTEXT_OFF,    48      /* offsetof(task_t, context), guarded in task.c */
     .equ CTX_R0,              0      /* r0 */
     .equ CTX_R1,              4
     .equ CTX_R2,              8
@@ -129,6 +131,16 @@ __user_ctx:
     str     r2, [r0, #CTX_FIRST]           // is_first_run = 0
     str     r2, [r0, #CTX_RET_TO_USER]     // force __restore_to_kernel on resume
 
+    /*
+     * The old task may already be present in the runqueue as READY, but it
+     * must remain owned by this CPU until the SVC frame above is saved. Release
+     * that ownership only now, otherwise another CPU can run the same task on
+     * the same kernel stack while this switch is still in progress.
+     */
+    push    {r1}
+    bl      task_context_save_complete
+    pop     {r1}
+
     /* usr_r[] is owned by SVC entry; do not refresh it from kernel registers. */
     //add     r3, r0, #CTX_USR_R0
     //stmia   r3, {r0-r12}                   // usr_r[0..12] = r0..r12
@@ -152,13 +164,24 @@ __load_new_context:
     dsb
     isb
 
-    /* Atomically publish the task pointer after the MMU context is selected. */
-    sub    r3, r12, #48    @ task_t.context is currently at offset 48
-    ldr    r2, =current_task
-    str    r3, [r2]
+    /*
+     * Publish the task pointer after the MMU context is selected.
+     *
+     * current_task is a legacy CPU0-visible alias. In SMP mode, publishing a
+     * secondary CPU task there would make old diagnostics observe the wrong
+     * task, so only CPU0 updates it. The authoritative storage is
+     * current_tasks[cpu].
+     */
+    sub    r3, r12, #TASK_CONTEXT_OFF
+    mrc    p15, 0, r4, c0, c0, 5
+    and    r4, r4, #3
+    ldr    r2, =current_tasks
+    str    r3, [r2, r4, lsl #2]
+    mcr    p15, 0, r3, c13, c0, 4        @ TPIDRPRW = current task for this CPU
+    cmp    r4, #0
+    ldreq  r2, =current_task
+    streq  r3, [r2]
     dmb
-
-    /* End current_task update. */
 
     /* First run? */
     ldr     r2, [r12, #CTX_FIRST]

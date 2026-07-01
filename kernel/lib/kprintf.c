@@ -20,6 +20,7 @@
 #include <kernel/uart.h>
 #include <kernel/stdarg.h>
 #include <kernel/kprintf.h>
+#include <kernel/spinlock.h>
 
 
 /* Fonctions externes supposees existantes */
@@ -34,23 +35,43 @@ int kernel_log_level = KLOG_WARN;
 static char kmsg_buf[KMSG_BUF_SIZE];
 static uint32_t kmsg_head = 0;
 static uint32_t kmsg_count = 0;
+static DEFINE_SPINLOCK(kmsg_lock);
 
 static void kmsg_putc(char c)
 {
+    unsigned long flags;
+
+    spin_lock_irqsave(&kmsg_lock, &flags);
+    /*
+     * kmsg is used precisely when the kernel is reporting faults.  If prior
+     * corruption or an SMP race damages the indices, never let diagnostics
+     * turn into a second kernel abort while writing the ring buffer.
+     */
+    if (kmsg_head >= KMSG_BUF_SIZE || kmsg_count > KMSG_BUF_SIZE) {
+        kmsg_head = 0;
+        kmsg_count = 0;
+    }
     kmsg_buf[kmsg_head] = c;
     kmsg_head = (kmsg_head + 1) % KMSG_BUF_SIZE;
     if (kmsg_count < KMSG_BUF_SIZE)
         kmsg_count++;
+    spin_unlock_irqrestore(&kmsg_lock, flags);
 }
 
 size_t kmsg_read(char* out, size_t max)
 {
+    unsigned long flags;
     uint32_t start;
     size_t n;
 
     if (!out || max == 0)
         return 0;
 
+    spin_lock_irqsave(&kmsg_lock, &flags);
+    if (kmsg_head >= KMSG_BUF_SIZE || kmsg_count > KMSG_BUF_SIZE) {
+        kmsg_head = 0;
+        kmsg_count = 0;
+    }
     n = kmsg_count;
     if (n > max)
         n = max;
@@ -58,6 +79,7 @@ size_t kmsg_read(char* out, size_t max)
     start = (kmsg_head + KMSG_BUF_SIZE - kmsg_count) % KMSG_BUF_SIZE;
     for (size_t i = 0; i < n; i++)
         out[i] = kmsg_buf[(start + i) % KMSG_BUF_SIZE];
+    spin_unlock_irqrestore(&kmsg_lock, flags);
 
     return n;
 }

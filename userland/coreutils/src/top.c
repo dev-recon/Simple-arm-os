@@ -24,6 +24,7 @@
 #define TOP_PROC_BUF 4096
 #define TOP_MAX_TASKS 128
 #define TOP_HZ 1000
+#define TOP_MAX_CPUS 8
 
 #define C_RESET   "\033[0m"
 #define C_BOLD    "\033[1m"
@@ -45,6 +46,7 @@ typedef struct top_task {
     unsigned ctx;
     unsigned pf;
     unsigned rss_kb;
+    int cpu;
     char state;
     char state_detail[16];
     char name[64];
@@ -73,6 +75,8 @@ static int top_prev_count = 0;
 static int top_have_prev = 0;
 static struct termios top_saved_termios;
 static int top_termios_saved = 0;
+static unsigned top_cpu_load_x10[TOP_MAX_CPUS];
+static unsigned top_cpu_count = 1;
 
 static void top_buf_free(top_buf_t *buf)
 {
@@ -371,6 +375,26 @@ static void read_mem(top_mem_t *mem)
         parse_uint(p, &mem->free_kb);
 }
 
+static unsigned read_cpu_count(void)
+{
+    char buf[1024];
+    const char *p;
+    unsigned cpus = 1;
+
+    if (read_file("/proc/smp", buf, sizeof(buf)) < 0)
+        return 1;
+
+    p = line_after_key(buf, "possible:");
+    if (p)
+        parse_uint(p, &cpus);
+
+    if (cpus == 0)
+        cpus = 1;
+    if (cpus > TOP_MAX_CPUS)
+        cpus = TOP_MAX_CPUS;
+    return cpus;
+}
+
 static int parse_proc_stat(const char *buf, top_task_t *task)
 {
     const char *p;
@@ -450,6 +474,10 @@ static void enrich_from_status(top_task_t *task)
     if (p)
         parse_uint(p, &task->debt_score);
 
+    p = line_after_key(buf, "CPU:");
+    if (p)
+        parse_int(p, &task->cpu);
+
     p = line_after_key(buf, "State:");
     if (p) {
         const char *open = strchr(p, '(');
@@ -497,6 +525,7 @@ static int load_tasks(top_task_t *tasks, int max_tasks)
             if (e->d_ino != 0 && is_digit(e->d_name[0])) {
                 memset(&tasks[count], 0, sizeof(tasks[count]));
                 tasks[count].tty = -1;
+                tasks[count].cpu = -1;
                 tasks[count].priority = 10;
                 sprintf(path, "/proc/%s/stat", e->d_name);
                 if (read_file(path, statbuf, sizeof(statbuf)) >= 0 &&
@@ -543,6 +572,9 @@ static void update_cpu_percent(top_task_t *tasks, int count, unsigned delay_sec)
                              tasks[i].runtime_ticks - prev_ticks : 0;
             tasks[i].cpu_pct_x10 = (delta * 1000u) / elapsed_ticks;
         }
+
+        if (tasks[i].cpu >= 0 && tasks[i].cpu < (int)TOP_MAX_CPUS)
+            top_cpu_load_x10[tasks[i].cpu] += tasks[i].cpu_pct_x10;
     }
 
     top_prev_count = count > TOP_MAX_TASKS ? TOP_MAX_TASKS : count;
@@ -636,6 +668,14 @@ static void append_tty(top_buf_t *buf, int tty)
         top_buf_append(buf, "?", 1);
 }
 
+static void append_cpu(top_buf_t *buf, int cpu)
+{
+    if (cpu >= 0)
+        top_buf_printf(buf, "%3d", cpu);
+    else
+        top_buf_append(buf, "  -", 3);
+}
+
 static void render_top(unsigned delay_sec, int iteration)
 {
     top_buf_t frame = {0};
@@ -646,12 +686,18 @@ static void render_top(unsigned delay_sec, int iteration)
     int count;
 
     read_mem(&mem);
+    top_cpu_count = read_cpu_count();
+    memset(top_cpu_load_x10, 0, sizeof(top_cpu_load_x10));
     count = load_tasks(top_tasks, TOP_MAX_TASKS);
     update_cpu_percent(top_tasks, count, delay_sec);
     for (int i = 0; i < count; i++)
         cpu_total_x10 += top_tasks[i].cpu_pct_x10;
     if (cpu_total_x10 > 1000u)
         cpu_total_x10 = 1000u;
+    for (unsigned cpu = 0; cpu < top_cpu_count; cpu++) {
+        if (top_cpu_load_x10[cpu] > 1000u)
+            top_cpu_load_x10[cpu] = 1000u;
+    }
     qsort(top_tasks, (size_t)count, sizeof(top_tasks[0]), compare_tasks);
 
     used_kb = mem.total_kb >= mem.free_kb ? mem.total_kb - mem.free_kb : 0;
@@ -665,6 +711,16 @@ static void render_top(unsigned delay_sec, int iteration)
                    " - CPU " C_GREEN "%u.%u%%" C_RESET " - " C_DIM "q quit, +/- delay" C_RESET "\033[0K\r\n",
                    cpu_total_x10 / 10u,
                    cpu_total_x10 % 10u);
+    top_buf_printf(&frame, C_BOLD "CPU:" C_RESET " total " C_GREEN "%u.%u%%" C_RESET,
+                   cpu_total_x10 / 10u,
+                   cpu_total_x10 % 10u);
+    for (unsigned cpu = 0; cpu < top_cpu_count; cpu++) {
+        top_buf_printf(&frame, " cpu%u " C_GREEN "%u.%u%%" C_RESET,
+                       cpu,
+                       top_cpu_load_x10[cpu] / 10u,
+                       top_cpu_load_x10[cpu] % 10u);
+    }
+    top_buf_append(&frame, "\033[0K\r\n", 6);
     top_buf_printf(&frame,
                    C_BOLD "Mem:" C_RESET " %uM total, " C_GREEN "%uM free" C_RESET
                    ", " C_YELLOW "%u.%u%% used" C_RESET ", tasks: %d\033[0K\r\n\033[0K\r\n",
@@ -674,10 +730,10 @@ static void render_top(unsigned delay_sec, int iteration)
                    pct_x10 % 10u,
                    count);
 
-    top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %3s %5s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
-                   "PID", "TTY", "STATE", "PRI", "DEBT", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
-    top_buf_append(&frame, C_DIM "--------------------------------------------------------------------------" C_RESET "\033[0K\r\n",
-                   (int)strlen(C_DIM "--------------------------------------------------------------------------" C_RESET "\033[0K\r\n"));
+    top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %4s %3s %5s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
+                   "PID", "TTY", "STATE", "LAST", "PRI", "DEBT", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
+    top_buf_append(&frame, C_DIM "------------------------------------------------------------------------------" C_RESET "\033[0K\r\n",
+                   (int)strlen(C_DIM "------------------------------------------------------------------------------" C_RESET "\033[0K\r\n"));
 
     for (int i = 0; i < count; i++) {
         char timebuf[16];
@@ -688,11 +744,13 @@ static void render_top(unsigned delay_sec, int iteration)
         format_count(top_tasks[i].ctx, ctxbuf, sizeof(ctxbuf));
         top_buf_printf(&frame, C_CYAN "%5d" C_RESET " ", top_tasks[i].pid);
         append_tty(&frame, top_tasks[i].tty);
-        top_buf_printf(&frame, "%*s %s%-8s" C_RESET " %3u %5u %3u.%u %8s %8s %6u %5uK %s\033[0K\r\n",
+        top_buf_printf(&frame, "%*s %s%-8s" C_RESET " ",
                        top_tasks[i].tty >= 0 ? 4 : 7,
                        "",
                        color,
-                       state_name(&top_tasks[i]),
+                       state_name(&top_tasks[i]));
+        append_cpu(&frame, top_tasks[i].cpu);
+        top_buf_printf(&frame, " %3u %5u %3u.%u %8s %8s %6u %5uK %s\033[0K\r\n",
                        top_tasks[i].priority,
                        top_tasks[i].debt_score,
                        top_tasks[i].cpu_pct_x10 / 10u,

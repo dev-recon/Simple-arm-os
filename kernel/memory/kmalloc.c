@@ -21,6 +21,7 @@
 #include <kernel/string.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
+#include <kernel/spinlock.h>
 
 typedef struct __attribute__((aligned(8))) {
     uint32_t magic_start;
@@ -44,6 +45,14 @@ typedef struct free_block {
 } free_block_t;
 
 free_block_t* free_list = NULL;
+
+/*
+ * The kernel heap is a single global free-list.  On SMP, kmalloc/kfree can be
+ * reached concurrently from syscall/procfs/VFS paths running on different
+ * CPUs.  Protect every free-list mutation; otherwise two CPUs can corrupt the
+ * next pointers and turn a later kfree into a near-null data abort.
+ */
+static DEFINE_SPINLOCK(kmalloc_lock);
 
 void init_kernel_heap(void)
 {
@@ -86,12 +95,17 @@ void* kmalloc(size_t size)
 
     size = ALIGN_UP(size, 8);
     size_t total_size = sizeof(alloc_header_t) + size;
+    unsigned long irq_flags;
+
+    spin_lock_irqsave(&kmalloc_lock, &irq_flags);
     
     free_block_t* prev = NULL;
     free_block_t* current = free_list;
 
     if (((uintptr_t)current & 0x7) != 0) {
+        spin_unlock_irqrestore(&kmalloc_lock, irq_flags);
         KERROR("kmalloc() misaligned: %p\n", current);
+        return NULL;
     }
 
     while (current) {
@@ -125,9 +139,12 @@ void* kmalloc(size_t size)
             size_t padding = (uint8_t*)aligned_ptr - (uint8_t*)raw_ptr;
             if (padding != 0) {
                 // Impossible dans ton alloc actuel sans deplacer header, donc on peut juste assert ici
+                spin_unlock_irqrestore(&kmalloc_lock, irq_flags);
                 KERROR("kmalloc(): alignment padding detected, allocator not designed for this!\n");
+                return NULL;
             }
 
+            spin_unlock_irqrestore(&kmalloc_lock, irq_flags);
             return aligned_ptr;
         }
 
@@ -135,6 +152,7 @@ void* kmalloc(size_t size)
         current = current->next;
     }
 
+    spin_unlock_irqrestore(&kmalloc_lock, irq_flags);
     return NULL; // Out of memory
 }
 
@@ -144,9 +162,13 @@ void kfree(void* ptr)
     if (!ptr || !heap_initialized) return;
 
     alloc_header_t* header = (alloc_header_t*)((uint8_t*)ptr - sizeof(alloc_header_t));
+    unsigned long irq_flags;
+
+    spin_lock_irqsave(&kmalloc_lock, &irq_flags);
 
     // Verifier les canaries
     if (header->magic_start != ALLOC_MAGIC_START || header->magic_end != ALLOC_MAGIC_END) {
+        spin_unlock_irqrestore(&kmalloc_lock, irq_flags);
         KERROR("kfree(): canary corruption at %p!\n", ptr);
         return;
     }
@@ -181,6 +203,8 @@ void kfree(void* ptr)
         if (prev) prev->next = block;
         else free_list = block;
     }
+
+    spin_unlock_irqrestore(&kmalloc_lock, irq_flags);
 }
 
 
@@ -228,6 +252,10 @@ void* krealloc(void* ptr, size_t size)
 
 void kheap_stats(void)
 {
+    unsigned long irq_flags;
+
+    spin_lock_irqsave(&kmalloc_lock, &irq_flags);
+
     free_block_t* current = free_list;
     size_t total_free = 0;
     int count = 0;
@@ -243,4 +271,6 @@ void kheap_stats(void)
     }
 
     kprintf("Total free: %u bytes in %d blocks\n", (uint32_t)total_free, count);
+
+    spin_unlock_irqrestore(&kmalloc_lock, irq_flags);
 }

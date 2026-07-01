@@ -23,6 +23,7 @@ select_qemu() {
 }
 
 QEMU="$(select_qemu "${1:-}")"
+SMP_CPUS="${SMP_CPUS:-1}"
 
 if [ ! -f kernel.bin ]; then
     echo "Error: kernel.bin not found. Run ./run.sh first to build everything."
@@ -41,8 +42,9 @@ fi
 
 echo "=== Booting existing kernel.bin + disk.img ==="
 echo "QEMU: $("$QEMU" --version | head -n 1)"
+echo "SMP: ${SMP_CPUS} CPU(s)"
 "$QEMU" -M virt -cpu cortex-a15 \
-    -m 2G -smp 1 \
+    -m 2G -smp "${SMP_CPUS}" \
     -drive file=disk.img,if=none,format=raw,id=hd0 \
     -device virtio-blk-device,drive=hd0 \
     -kernel kernel.bin \

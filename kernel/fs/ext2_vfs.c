@@ -138,49 +138,61 @@ static void ext2_mark_dirty(void)
     ext2_stats.dirty = 1;
 }
 
-static bool ext2_wait_prepare(ext2_wait_queue_t* queue)
+static bool ext2_wait_prepare(ext2_wait_queue_t* queue, task_t* task)
 {
     unsigned long flags;
+    bool enqueued = false;
 
-    if (!queue || !current_task)
+    if (!queue || !task)
         return false;
+
+    task_set_interruptible_until(task, get_system_ticks() + TIMER_FREQ);
 
     spin_lock_irqsave(&queue->lock, &flags);
     for (uint32_t i = 0; i < MAX_TASKS; i++) {
-        if (queue->waiters[i] == current_task)
+        if (queue->waiters[i] == task) {
+            enqueued = true;
             break;
+        }
         if (!queue->waiters[i]) {
-            queue->waiters[i] = current_task;
+            queue->waiters[i] = task;
+            enqueued = true;
             break;
         }
     }
-    current_task->wakeup_time = get_system_ticks() + TIMER_FREQ;
-    task_set_interruptible(current_task);
     spin_unlock_irqrestore(&queue->lock, flags);
-    return true;
+
+    if (!enqueued) {
+        task_set_wakeup_time(task, 0);
+        task_set_state(task, TASK_RUNNING);
+    }
+
+    return enqueued;
 }
 
-static void ext2_wait_finish(ext2_wait_queue_t* queue)
+static void ext2_wait_finish(ext2_wait_queue_t* queue, task_t* task)
 {
     unsigned long flags;
 
-    if (!queue || !current_task)
+    if (!queue || !task)
         return;
 
     spin_lock_irqsave(&queue->lock, &flags);
     for (uint32_t i = 0; i < MAX_TASKS; i++) {
-        if (queue->waiters[i] == current_task) {
+        if (queue->waiters[i] == task) {
             queue->waiters[i] = NULL;
             break;
         }
     }
-    current_task->wakeup_time = 0;
     spin_unlock_irqrestore(&queue->lock, flags);
+    task_set_wakeup_time(task, 0);
 }
 
 static void ext2_wait_wake_all(ext2_wait_queue_t* queue)
 {
     unsigned long flags;
+    task_t* wake[MAX_TASKS];
+    uint32_t wake_count = 0;
 
     if (!queue)
         return;
@@ -191,27 +203,33 @@ static void ext2_wait_wake_all(ext2_wait_queue_t* queue)
         if (!waiter)
             continue;
         queue->waiters[i] = NULL;
-        waiter->wakeup_time = 0;
         if (waiter->state == TASK_INTERRUPTIBLE ||
-            waiter->state == TASK_UNINTERRUPTIBLE)
-            add_to_ready_queue(waiter);
+            waiter->state == TASK_UNINTERRUPTIBLE) {
+            if (wake_count < MAX_TASKS)
+                wake[wake_count++] = waiter;
+        }
     }
     spin_unlock_irqrestore(&queue->lock, flags);
+
+    for (uint32_t i = 0; i < wake_count; i++) {
+        task_wake(wake[i]);
+    }
 }
 
 static bool ext2_op_try_acquire(void)
 {
+    task_t* task = task_current_local();
     unsigned long flags;
 
     spin_lock_irqsave(&ext2_op_lock, &flags);
-    if (ext2_op_busy && ext2_op_owner && ext2_op_owner == current_task) {
+    if (ext2_op_busy && ext2_op_owner && ext2_op_owner == task) {
         ext2_op_depth++;
         spin_unlock_irqrestore(&ext2_op_lock, flags);
         return true;
     }
     if (!ext2_op_busy) {
         ext2_op_busy = true;
-        ext2_op_owner = current_task;
+        ext2_op_owner = task;
         ext2_op_depth = 1;
         spin_unlock_irqrestore(&ext2_op_lock, flags);
         return true;
@@ -223,10 +241,12 @@ static bool ext2_op_try_acquire(void)
 static void ext2_op_acquire(void)
 {
     while (1) {
+        task_t* task = task_current_local();
+
         if (ext2_op_try_acquire())
             return;
 
-        if (!current_task) {
+        if (!task) {
             asm volatile("yield" ::: "memory");
             continue;
         }
@@ -239,25 +259,33 @@ static void ext2_op_acquire(void)
          * is only a lost-wakeup safety net.
          */
         ext2_stats.op_waits++;
-        if (!ext2_wait_prepare(&ext2_op_waitq))
+        if (!ext2_wait_prepare(&ext2_op_waitq, task))
             continue;
         if (ext2_op_try_acquire()) {
-            ext2_wait_finish(&ext2_op_waitq);
+            ext2_wait_finish(&ext2_op_waitq, task);
+            /*
+             * We never actually switched away in this fast recheck path.
+             * Restore the visible task state before returning with the ext2
+             * lock held, otherwise the caller keeps running kernel code while
+             * still reported as TASK_INTERRUPTIBLE.
+             */
+            task_set_state(task, TASK_RUNNING);
             return;
         }
         schedule();
-        ext2_wait_finish(&ext2_op_waitq);
+        ext2_wait_finish(&ext2_op_waitq, task);
     }
 }
 
 static void ext2_op_release(void)
 {
+    task_t* task = task_current_local();
     unsigned long flags;
 
     spin_lock_irqsave(&ext2_op_lock, &flags);
     if (!ext2_op_busy) {
         KERROR("ext2: op release without owner\n");
-    } else if (ext2_op_owner && current_task && ext2_op_owner != current_task) {
+    } else if (ext2_op_owner && task && ext2_op_owner != task) {
         KERROR("ext2: op release by non-owner\n");
     } else if (ext2_op_depth > 1) {
         ext2_op_depth--;
@@ -274,12 +302,13 @@ static void ext2_op_release(void)
 
 static bool ext2_cache_try_acquire(void)
 {
+    task_t* task = task_current_local();
     unsigned long flags;
 
     spin_lock_irqsave(&ext2_cache_lock, &flags);
     if (!ext2_cache_busy) {
         ext2_cache_busy = true;
-        ext2_cache_owner = current_task;
+        ext2_cache_owner = task;
         spin_unlock_irqrestore(&ext2_cache_lock, flags);
         return true;
     }
@@ -290,34 +319,43 @@ static bool ext2_cache_try_acquire(void)
 static void ext2_cache_acquire(void)
 {
     while (1) {
+        task_t* task = task_current_local();
+
         if (ext2_cache_try_acquire())
             return;
 
-        if (!current_task) {
+        if (!task) {
             asm volatile("yield" ::: "memory");
             continue;
         }
 
         ext2_stats.cache_waits++;
-        if (!ext2_wait_prepare(&ext2_cache_waitq))
+        if (!ext2_wait_prepare(&ext2_cache_waitq, task))
             continue;
         if (ext2_cache_try_acquire()) {
-            ext2_wait_finish(&ext2_cache_waitq);
+            ext2_wait_finish(&ext2_cache_waitq, task);
+            /*
+             * Same invariant as ext2_op_acquire(): if the lock became
+             * available before schedule(), the task did not sleep and must not
+             * leak an interruptible state into the protected section.
+             */
+            task_set_state(task, TASK_RUNNING);
             return;
         }
         schedule();
-        ext2_wait_finish(&ext2_cache_waitq);
+        ext2_wait_finish(&ext2_cache_waitq, task);
     }
 }
 
 static void ext2_cache_release(void)
 {
+    task_t* task = task_current_local();
     unsigned long flags;
 
     spin_lock_irqsave(&ext2_cache_lock, &flags);
     if (!ext2_cache_busy) {
         KERROR("ext2: cache release without owner\n");
-    } else if (ext2_cache_owner && current_task && ext2_cache_owner != current_task) {
+    } else if (ext2_cache_owner && task && ext2_cache_owner != task) {
         KERROR("ext2: cache release by non-owner\n");
     }
     ext2_cache_busy = false;

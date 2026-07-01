@@ -35,6 +35,8 @@
 #include <kernel/spinlock.h>
 #include <asm/mmu.h>
 
+#define SYSCALL_IO_BOUNCE_SIZE 16384u
+
 
 /* Forward declarations de toutes les fonctions statiques */
 static bool check_file_permission(inode_t* inode, int flags);
@@ -80,23 +82,54 @@ bool inode_permission(inode_t* inode, int mask) {
 
 int sys_read(int fd, void* buf, size_t count)
 {
+    task_t* task = task_current_local();
     file_t* file;
     ssize_t result;
+    void *kbuf = NULL;
+    size_t read_count;
     
+    if (count == 0) return 0;
+    if (!buf) return -EFAULT;
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     if (!can_read(file)) return -EBADF;
     
     if (!file->f_op || !file->f_op->read) return -ENOSYS;
-    
-    result = file->f_op->read(file, buf, count);
+
+    /*
+     * VFS read methods operate on kernel buffers.  User reads are bounced
+     * through kernel memory and copied out with page-aware validation; this
+     * prevents a partially unmapped user buffer from aborting the kernel
+     * inside a filesystem or driver memcpy().
+     */
+    if (IS_KERNEL_ADDR((uint32_t)buf)) {
+        result = file->f_op->read(file, buf, count);
+        return (int)result;
+    }
+
+    read_count = count;
+    if (read_count > SYSCALL_IO_BOUNCE_SIZE)
+        read_count = SYSCALL_IO_BOUNCE_SIZE;
+
+    kbuf = kmalloc(read_count);
+    if (!kbuf) return -ENOMEM;
+
+    result = file->f_op->read(file, kbuf, read_count);
+    if (result > 0) {
+        if (copy_to_user(buf, kbuf, (size_t)result) < 0)
+            result = -EFAULT;
+    }
+
+    kfree(kbuf);
     return (int)result;
 }
 
 int sys_write(int fd, const void* buf, size_t count)
 {
+    task_t* task = task_current_local();
     file_t* file;
     ssize_t result = 0;
     void *kbuf = NULL;
@@ -106,8 +139,9 @@ int sys_write(int fd, const void* buf, size_t count)
     if (!buf) return -EFAULT;
 
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     if (!can_write(file)) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
@@ -159,31 +193,35 @@ static int truncate_file_inode(inode_t *inode, const char *name)
 
 int sys_close(int fd)
 {
+    task_t* task = task_current_local();
     file_t* file;
 
     //KDEBUG("[CLOSE] fd=%d\n", fd);
 
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     
     close_file(file);
-    current_task->process->files[fd] = NULL;
-    current_task->process->fd_flags[fd] = 0;
+    task->process->files[fd] = NULL;
+    task->process->fd_flags[fd] = 0;
     
     return 0;
 }
 
 int sys_ftruncate(int fd, off_t length)
 {
+    task_t* task = task_current_local();
     file_t* file;
     int result;
 
     if (length < 0) return -EINVAL;
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
 
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     if (!can_write(file)) return -EBADF;
     if (!file->inode) return -EINVAL;
@@ -219,12 +257,15 @@ int sys_truncate(const char* pathname, off_t length)
 
 int sys_fsync(int fd)
 {
+    task_t* task = task_current_local();
     file_t* file;
 
     if (fd < 0 || fd >= MAX_FILES)
         return -EBADF;
+    if (!task || !task->process)
+        return -EBADF;
 
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file)
         return -EBADF;
 
@@ -279,6 +320,7 @@ int split_path(const char* full_path, char** parent_path, char** filename) {
 
 int kernel_open(char* kernel_path, int flags, mode_t mode)
 {
+    task_t* task = task_current_local();
     inode_t* inode;
     file_t* file;
     int fd;
@@ -394,8 +436,8 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
                 filename = NULL;
             } else {
                 /* Créer le nouveau fichier */
-                if (current_task && current_task->process)
-                    mode &= ~current_task->process->umask;
+                if (task && task->process)
+                    mode &= ~task->process->umask;
 
                 if (parent->i_op == &fat32_inode_ops) {
                     inode = fat32_create_file(parent_path, filename, mode);
@@ -447,6 +489,14 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
             truncate_result = truncate_file_inode(inode, opened_name);
         } else if (inode->f_op == &ext2_file_ops) {
             truncate_result = ext2_truncate_inode(inode);
+        } else if (inode->f_op && inode->f_op->write) {
+            /*
+             * Pseudo files such as /proc control endpoints and character
+             * devices do not have persistent contents to truncate. Shell
+             * redirection still uses O_TRUNC, so treat it as a no-op when the
+             * target is writable but not backed by a disk filesystem.
+             */
+            truncate_result = 0;
         } else {
             truncate_result = -EROFS;
         }
@@ -458,7 +508,7 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     }
     
     /* Allocate file descriptor */
-    fd = allocate_fd(current_task);
+    fd = allocate_fd(task);
     if (fd < 0) {
         put_inode(inode);
         return -EMFILE;
@@ -504,14 +554,14 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
         }
     }
     
-    current_task->process->files[fd] = file;
-    current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
+    task->process->files[fd] = file;
+    task->process->fd_flags[fd] = flags & O_CLOEXEC;
     return fd;
 }
 
 char *get_current_working_directory(void){
 
-    task_t *task = current_task;
+    task_t *task = task_current_local();
     
     if(!task || !task->process) return NULL;
 
@@ -661,6 +711,7 @@ int vfs_check_search_permission(const char* path, bool include_final)
 
 int sys_open(const char* pathname, int flags, mode_t mode)
 {
+    task_t* task = task_current_local();
     char* kernel_path;
     char* full_path;
     file_t* tty_file;
@@ -671,6 +722,9 @@ int sys_open(const char* pathname, int flags, mode_t mode)
 
     /* Suppression du warning unused parameter */
     (void)mode;
+
+    if (!task || !task->process)
+        return -EINVAL;
 
     kernel_path = copy_string_from_user(pathname);
     if (!kernel_path) return -EFAULT;
@@ -702,7 +756,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
             return -ENODEV;
         }
 
-        fd = allocate_fd(current_task);
+        fd = allocate_fd(task);
         if (fd < 0) {
             kfree(full_path);
             return fd;
@@ -714,13 +768,13 @@ int sys_open(const char* pathname, int flags, mode_t mode)
             strcmp(full_path, "/dev/tty1") == 0 ? "tty1" : "tty0",
             flags & ~O_CLOEXEC);
         if (!tty_file) {
-            free_fd(current_task, fd);
+            free_fd(task, fd);
             kfree(full_path);
             return -ENOMEM;
         }
 
-        current_task->process->files[fd] = tty_file;
-        current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
+        task->process->files[fd] = tty_file;
+        task->process->fd_flags[fd] = flags & O_CLOEXEC;
         kfree(full_path);
         return fd;
     }
@@ -731,7 +785,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
             return -ENOTDIR;
         }
 
-        fd = allocate_fd(current_task);
+        fd = allocate_fd(task);
         if (fd < 0) {
             kfree(full_path);
             return fd;
@@ -739,13 +793,13 @@ int sys_open(const char* pathname, int flags, mode_t mode)
 
         null_file = create_null_device_file("null", flags & ~O_CLOEXEC);
         if (!null_file) {
-            free_fd(current_task, fd);
+            free_fd(task, fd);
             kfree(full_path);
             return -ENOMEM;
         }
 
-        current_task->process->files[fd] = null_file;
-        current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
+        task->process->files[fd] = null_file;
+        task->process->fd_flags[fd] = flags & O_CLOEXEC;
         kfree(full_path);
         return fd;
     }
@@ -756,7 +810,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
             return -ENOTDIR;
         }
 
-        fd = allocate_fd(current_task);
+        fd = allocate_fd(task);
         if (fd < 0) {
             kfree(full_path);
             return fd;
@@ -764,13 +818,13 @@ int sys_open(const char* pathname, int flags, mode_t mode)
 
         net_echo_file = create_net_echo_device_file("netecho", flags & ~O_CLOEXEC);
         if (!net_echo_file) {
-            free_fd(current_task, fd);
+            free_fd(task, fd);
             kfree(full_path);
             return -ENODEV;
         }
 
-        current_task->process->files[fd] = net_echo_file;
-        current_task->process->fd_flags[fd] = flags & O_CLOEXEC;
+        task->process->files[fd] = net_echo_file;
+        task->process->fd_flags[fd] = flags & O_CLOEXEC;
         kfree(full_path);
         return fd;
     }
@@ -794,12 +848,14 @@ int sys_creat(const char* pathname, mode_t mode)
 
 off_t sys_lseek(int fd, off_t offset, int whence)
 {
+    task_t* task = task_current_local();
     file_t* file;
     off_t new_offset;
     
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     
     if (file->f_op && file->f_op->lseek) {
@@ -980,13 +1036,15 @@ int sys_lstat(const char* pathname, struct stat* statbuf)
 int sys_fstat(int fd, struct stat* statbuf)
 {
 
+    task_t* task = task_current_local();
     inode_t* inode;
     struct stat kstat;
     file_t* file;
 
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file) return -EBADF;
     
     inode = file->inode;
@@ -1100,21 +1158,23 @@ static bool check_file_permission(inode_t* inode, int flags)
 
 
 int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count) {
+    task_t *task = task_current_local();
     file_t *file;
-    char *user_buf = (char *)dirp;
-    char *buf_ptr = user_buf;
+    char *kbuf = NULL;
+    char *buf_ptr;
     size_t bytes_written = 0;
+    unsigned int kernel_count = count;
 
     //KDEBUG("[GETDENTS] entry fd=%u dirp=%p count=%u\n", fd, dirp, count);
 
     /* Vérifier le fd */
-    if (fd >= MAX_FILES || !current_task->process->files[fd]) {
+    if (!task || !task->process || fd >= MAX_FILES || !task->process->files[fd]) {
         KERROR("[GETDENTS] EBADF fd=%u files[fd]=%p\n", fd,
-               fd < MAX_FILES ? (void*)current_task->process->files[fd] : NULL);
+               task && task->process && fd < MAX_FILES ? (void*)task->process->files[fd] : NULL);
         return -EBADF;
     }
     
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     
     /* Vérifier que c'est un répertoire */
     if (!file->inode || !S_ISDIR(file->inode->mode)) {
@@ -1122,9 +1182,12 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
     }
     
     /* Vérifier que le buffer est valide */
-    if (!user_buf || count < sizeof(struct linux_dirent)) {
+    if (!dirp || count < sizeof(struct linux_dirent)) {
         return -EINVAL;
     }
+
+    if (!IS_KERNEL_ADDR((uint32_t)dirp) && kernel_count > SYSCALL_IO_BOUNCE_SIZE)
+        kernel_count = SYSCALL_IO_BOUNCE_SIZE;
     
     //KDEBUG("Reading entries from %s fd=%d\n", file->name, fd);
 
@@ -1136,11 +1199,20 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         return -ENOSYS;
     }
 
+    if (IS_KERNEL_ADDR((uint32_t)dirp)) {
+        buf_ptr = (char *)dirp;
+    } else {
+        kbuf = kmalloc(kernel_count);
+        if (!kbuf)
+            return -ENOMEM;
+        buf_ptr = kbuf;
+    }
+
     //KDEBUG("[GETDENTS] fd=%u file=%p inode=%p f_op=%p readdir=%p\n",
     //       fd, file, file->inode, file->f_op, file->f_op->readdir);
 
     /* Lire les entrées du répertoire */
-    while (bytes_written < count) {
+    while (bytes_written < kernel_count) {
         struct dirent entry;
         struct linux_dirent *dirent;
         size_t name_len;
@@ -1162,7 +1234,7 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         rec_len = (rec_len + 7) & ~7;  /* Aligner sur 4 bytes */
 
         /* Vérifier qu'il reste assez de place */
-        if (bytes_written + rec_len > count) {
+        if (bytes_written + rec_len > kernel_count) {
             /* Reculer la position de lecture pour cette entrée */
             file->offset = saved_offset;
             break;
@@ -1181,6 +1253,15 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         
         buf_ptr += rec_len;
         bytes_written += rec_len;
+    }
+
+    if (kbuf) {
+        int ret = 0;
+        if (bytes_written > 0 && copy_to_user(dirp, kbuf, bytes_written) < 0)
+            ret = -EFAULT;
+        kfree(kbuf);
+        if (ret < 0)
+            return ret;
     }
     
     return bytes_written;

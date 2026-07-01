@@ -27,6 +27,7 @@
 #include <kernel/signal.h>
 #include <kernel/timer.h>
 #include <kernel/process.h>
+#include <kernel/smp.h>
 #include <asm/arm.h>
 #include <kernel/file.h>
 
@@ -39,6 +40,7 @@ _Static_assert(sizeof(task_context_t) == 168,
 
 /* Variables globales du scheduler */
 task_t* current_task = NULL;
+task_t* current_tasks[ARMOS_MAX_CPUS];
 task_t* task_list_head = NULL;
 typedef struct runqueue {
     task_t* head[TASK_PRIORITY_LEVELS];
@@ -54,13 +56,173 @@ uint32_t task_count = 0;
 static bool scheduler_initialized = false;
 DEFINE_SPINLOCK(task_lock);
 
-volatile int need_resched = 0;
+static bool task_header_plausible(task_t* task);
+static uint32_t task_reserve_task_id(void);
+static uint32_t task_reserve_pid(void);
+
+static volatile int legacy_need_resched = 0;
+static volatile int need_resched_cpu[ARMOS_MAX_CPUS];
+static volatile uint32_t idle_work_seen_count[ARMOS_MAX_CPUS];
+static volatile uint32_t idle_schedule_count[ARMOS_MAX_CPUS];
+static volatile uint32_t idle_fallback_count[ARMOS_MAX_CPUS];
 
 //static spinlock_t task_lock = {0};
 
+static uint32_t task_reserve_task_id(void)
+{
+    unsigned long flags;
+    uint32_t id;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    id = next_task_id++;
+    spin_unlock_irqrestore(&task_lock, flags);
+    return id;
+}
+
+static uint32_t task_reserve_pid(void)
+{
+    unsigned long flags;
+    uint32_t pid;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    pid = next_pid++;
+    spin_unlock_irqrestore(&task_lock, flags);
+    return pid;
+}
+
+task_t* task_current_on_cpu(uint32_t cpu_id)
+{
+    task_t* task;
+
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return NULL;
+
+    task = current_tasks[cpu_id];
+    return task_header_plausible(task) ? task : NULL;
+}
+
+static task_t* task_current_from_cpu_register(void)
+{
+    task_t* task;
+
+    /*
+     * TPIDRPRW is private to each CPU and cannot be modified by userland.
+     * It is therefore a better SMP source of truth than a shared global array
+     * for the hot "who am I?" path. current_tasks[] remains useful for /proc
+     * and cross-CPU diagnostics.
+     */
+    __asm__ volatile("mrc p15, 0, %0, c13, c0, 4" : "=r"(task));
+    return task_header_plausible(task) ? task : NULL;
+}
+
+task_t* task_current_local(void)
+{
+    task_t* task = task_current_from_cpu_register();
+
+    if (task)
+        return task;
+
+    return task_current_on_cpu(smp_processor_id());
+}
+
+void scheduler_request_resched_current_cpu(void)
+{
+    uint32_t cpu = smp_processor_id();
+
+    if (cpu < ARMOS_MAX_CPUS)
+        need_resched_cpu[cpu] = 1;
+
+    /*
+     * Keep the legacy global mirror alive for CPU0-only paths while the syscall
+     * path is being migrated. Secondary CPUs must rely on their per-CPU flag or
+     * they can consume another CPU's reschedule request.
+     */
+    if (smp_is_boot_cpu())
+        legacy_need_resched = 1;
+}
+
+bool scheduler_take_resched_current_cpu(void)
+{
+    uint32_t cpu = smp_processor_id();
+    bool requested = false;
+
+    if (cpu < ARMOS_MAX_CPUS && need_resched_cpu[cpu]) {
+        need_resched_cpu[cpu] = 0;
+        requested = true;
+    }
+
+    if (smp_is_boot_cpu() && legacy_need_resched) {
+        legacy_need_resched = 0;
+        requested = true;
+    }
+
+    return requested;
+}
+
+bool scheduler_resched_pending_on_cpu(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return false;
+
+    return need_resched_cpu[cpu_id] != 0;
+}
+
+uint32_t scheduler_idle_work_seen_count(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return 0;
+    return idle_work_seen_count[cpu_id];
+}
+
+uint32_t scheduler_idle_schedule_count(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return 0;
+    return idle_schedule_count[cpu_id];
+}
+
+uint32_t scheduler_idle_fallback_count(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return 0;
+    return idle_fallback_count[cpu_id];
+}
+
 /* Tache idle et processus init */
 task_t* idle_task = NULL;
+task_t* idle_tasks[ARMOS_MAX_CPUS] = { NULL };
 task_t* init_process = NULL;
+
+task_t* task_idle_on_cpu(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return NULL;
+
+    return idle_tasks[cpu_id];
+}
+
+bool task_is_idle_task(task_t* task)
+{
+    if (!task)
+        return false;
+
+    for (uint32_t cpu = 0; cpu < ARMOS_MAX_CPUS; cpu++) {
+        if (idle_tasks[cpu] == task)
+            return true;
+    }
+
+    return task == idle_task;
+}
+
+void task_register_idle_cpu(uint32_t cpu_id, task_t* task)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return;
+
+    idle_tasks[cpu_id] = task;
+    if (cpu_id == smp_boot_cpu_id())
+        idle_task = task;
+}
 volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
 static spinlock_t sched_trace_lock = SPINLOCK_INIT("sched_trace");
 static sched_trace_event_t sched_trace[SCHED_TRACE_SIZE];
@@ -87,11 +249,19 @@ static task_t* schedule_next_task(void);
 static bool task_stack_metadata_valid(task_t* task);
 static bool task_is_schedulable(task_t* task);
 static bool runqueue_contains_locked(task_t* task);
+static bool runqueue_link_plausible_locked(task_t* task, uint32_t prio);
+static bool runqueue_membership_valid_locked(task_t* task);
+static void runqueue_reset_task_locked(task_t* task);
+static void runqueue_append_raw_locked(task_t* task, uint32_t prio);
 static void runqueue_enqueue_tail_locked(task_t* task);
 static void runqueue_remove_locked(task_t* task);
 static void runqueue_clear_locked(void);
+static void runqueue_rebuild_locked(task_t* exclude);
+static bool runqueue_validate_locked(const char* caller);
 static bool scheduler_has_ready_work(void);
-static void task_make_ready_locked(task_t* task);
+void task_make_ready_under_lock(task_t* task);
+static void scheduler_mark_running_locked(task_t* task);
+static void add_task_to_list_locked(task_t* task);
 void add_task_to_list(task_t* task);
 void remove_task_from_list(task_t* task);
 void setup_task_context(task_t* task);
@@ -112,10 +282,51 @@ static uint32_t task_trace_pid(task_t* task)
         : 0;
 }
 
+static bool task_pointer_plausible(task_t* task)
+{
+    uintptr_t p = (uintptr_t)task;
+
+    if (!task)
+        return false;
+    if (p & 7u)
+        return false;
+    if (p < VIRT_RAM_START)
+        return false;
+    if (p > (uintptr_t)VIRT_RAM_END - sizeof(task_t))
+        return false;
+    return true;
+}
+
+static bool task_header_plausible(task_t* task)
+{
+    if (!task_pointer_plausible(task))
+        return false;
+    if (task->magic != TASK_MAGIC_ALIVE)
+        return false;
+    if (task->state > TASK_STOPPED)
+        return false;
+    if (task->type != TASK_TYPE_PROCESS &&
+        task->type != TASK_TYPE_THREAD &&
+        task->type != TASK_TYPE_KERNEL)
+        return false;
+    return true;
+}
+
+bool task_is_valid(task_t* task)
+{
+    return task_header_plausible(task);
+}
+
 void sched_trace_record(sched_trace_event_type_t event, task_t* task)
 {
     unsigned long flags;
     sched_trace_event_t* dst;
+    task_t* current = task_current_local();
+    bool unsafe_task = event == SCHED_TRACE_REFUSE_BROKEN_LIST ||
+                       event == SCHED_TRACE_REFUSE_NULL_NEXT ||
+                       event == SCHED_TRACE_READY_REFUSE_CORRUPT;
+    task_t* safe_task = (!unsafe_task && task_header_plausible(task)) ? task : NULL;
+    task_t* safe_current = task_header_plausible(current) ? current : NULL;
 
     spin_lock_irqsave(&sched_trace_lock, &flags);
     dst = &sched_trace[sched_trace_seq % SCHED_TRACE_SIZE];
@@ -123,21 +334,21 @@ void sched_trace_record(sched_trace_event_type_t event, task_t* task)
     dst->seq = sched_trace_seq + 1;
     dst->tick = get_system_ticks();
     dst->event = event;
-    dst->syscall = task ? task->current_syscall : 0;
-    dst->pid = task_trace_pid(task);
-    dst->tid = task ? task->task_id : 0;
-    dst->state = task ? (uint32_t)task->state : 0xffffffffu;
-    dst->wakeup_time = task ? task->wakeup_time : 0;
-    dst->current_pid = task_trace_pid(current_task);
-    dst->current_tid = current_task ? current_task->task_id : 0;
-    dst->current_syscall = current_task ? current_task->current_syscall : 0;
+    dst->syscall = safe_task ? safe_task->current_syscall : 0;
+    dst->pid = task_trace_pid(safe_task);
+    dst->tid = safe_task ? safe_task->task_id : 0;
+    dst->state = safe_task ? (uint32_t)safe_task->state : 0xffffffffu;
+    dst->wakeup_time = safe_task ? safe_task->wakeup_time : 0;
+    dst->current_pid = task_trace_pid(safe_current);
+    dst->current_tid = safe_current ? safe_current->task_id : 0;
+    dst->current_syscall = safe_current ? safe_current->current_syscall : 0;
     dst->task_ptr = (uintptr_t)task;
-    dst->next_ptr = task ? (uintptr_t)task->next : 0;
-    dst->prev_ptr = task ? (uintptr_t)task->prev : 0;
-    if (task)
-        strncpy(dst->name, task->name, TASK_NAME_MAX - 1);
-    if (current_task)
-        strncpy(dst->current_name, current_task->name, TASK_NAME_MAX - 1);
+    dst->next_ptr = safe_task ? (uintptr_t)safe_task->next : 0;
+    dst->prev_ptr = safe_task ? (uintptr_t)safe_task->prev : 0;
+    if (safe_task)
+        strncpy(dst->name, safe_task->name, TASK_NAME_MAX - 1);
+    if (safe_current)
+        strncpy(dst->current_name, safe_current->name, TASK_NAME_MAX - 1);
     sched_trace_seq++;
     spin_unlock_irqrestore(&sched_trace_lock, flags);
 }
@@ -178,6 +389,7 @@ void sched_trace_snapshot(sched_trace_event_t* out, uint32_t max,
 void scheduler_get_stats(scheduler_stats_t* stats)
 {
     unsigned long flags;
+    task_t* current;
     process_t* proc;
     uint32_t now;
     uint32_t total_debt = 0;
@@ -189,6 +401,7 @@ void scheduler_get_stats(scheduler_stats_t* stats)
     memset(stats, 0, sizeof(*stats));
 
     spin_lock_irqsave(&task_lock, &flags);
+    current = task_current_local();
 
     stats->nr_running = ready_queue.nr_running;
     stats->policy_levels = TASK_PRIORITY_LEVELS;
@@ -214,6 +427,11 @@ void scheduler_get_stats(scheduler_stats_t* stats)
     stats->lowest_ready_priority = TASK_PRIORITY_LEVELS;
     now = get_system_ticks();
 
+    if (!runqueue_validate_locked("scheduler_get_stats")) {
+        kernel_lifecycle_stats.scheduler_refused++;
+        runqueue_rebuild_locked(NULL);
+    }
+
     for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
         task_t* task;
 
@@ -226,7 +444,7 @@ void scheduler_get_stats(scheduler_stats_t* stats)
         }
 
         task = ready_queue.head[prio];
-        while (task) {
+        while (task && runqueue_link_plausible_locked(task, prio)) {
             uint32_t debt = task->sched_debt;
 
             if (task->ready_since_tick && now >= task->ready_since_tick) {
@@ -249,12 +467,12 @@ void scheduler_get_stats(scheduler_stats_t* stats)
     if (debt_count)
         stats->avg_ready_debt = (uint32_t)(total_debt / debt_count);
 
-    if (current_task) {
-        proc = (current_task->type == TASK_TYPE_PROCESS) ? current_task->process : NULL;
-        stats->current_tid = current_task->task_id;
+    if (current) {
+        proc = (current->type == TASK_TYPE_PROCESS) ? current->process : NULL;
+        stats->current_tid = current->task_id;
         stats->current_pid = proc ? (uint32_t)proc->pid : 0;
-        stats->current_priority = current_task->priority;
-        strncpy(stats->current_name, current_task->name, TASK_NAME_MAX - 1);
+        stats->current_priority = current->priority;
+        strncpy(stats->current_name, current->name, TASK_NAME_MAX - 1);
     }
 
     spin_unlock_irqrestore(&task_lock, flags);
@@ -281,21 +499,26 @@ extern void print_system_stats(void);
 
 
 uid_t current_uid(void) {
-    if (current_task && current_task->process) {
-        return current_task->process->uid;
+    task_t* task = task_current_local();
+    if (task && task->process) {
+        return task->process->uid;
     }
     return 0;  /* Root par défaut */
 }
 
 uid_t current_gid(void) {
-    if (current_task && current_task->process) {
-        return current_task->process->gid;
+    task_t* task = task_current_local();
+    if (task && task->process) {
+        return task->process->gid;
     }
     return 0;  /* Root group par défaut */
 }
 
 static bool task_stack_metadata_valid(task_t* task)
 {
+    if (!task_header_plausible(task))
+        return false;
+
     if (!task || !task->stack_base || !task->stack_top || task->stack_size == 0) {
         return false;
     }
@@ -345,6 +568,15 @@ static bool runqueue_contains_locked(task_t* task)
     return task && task->rq_priority < TASK_PRIORITY_LEVELS;
 }
 
+static bool runqueue_link_plausible_locked(task_t* task, uint32_t prio)
+{
+    if (!task_header_plausible(task))
+        return false;
+    if (task->rq_priority != prio)
+        return false;
+    return true;
+}
+
 static uint32_t task_runqueue_priority(task_t* task)
 {
     if (!task)
@@ -356,14 +588,60 @@ static uint32_t task_runqueue_priority(task_t* task)
     return task->priority;
 }
 
-static void runqueue_enqueue_tail_locked(task_t* task)
+static bool runqueue_membership_valid_locked(task_t* task)
 {
     uint32_t prio;
 
-    if (!task || task == idle_task || runqueue_contains_locked(task))
+    if (!task_header_plausible(task) || !runqueue_contains_locked(task))
+        return false;
+
+    prio = task->rq_priority;
+    if (prio >= TASK_PRIORITY_LEVELS)
+        return false;
+
+    if (task->rq_prev &&
+        (!runqueue_link_plausible_locked(task->rq_prev, prio) ||
+         task->rq_prev->rq_next != task))
+        return false;
+
+    if (task->rq_next &&
+        (!runqueue_link_plausible_locked(task->rq_next, prio) ||
+         task->rq_next->rq_prev != task))
+        return false;
+
+    if (!task->rq_prev && ready_queue.head[prio] != task)
+        return false;
+
+    if (!task->rq_next && ready_queue.tail[prio] != task)
+        return false;
+
+    return true;
+}
+
+static void runqueue_reset_task_locked(task_t* task)
+{
+    if (!task_header_plausible(task))
         return;
 
-    prio = task_runqueue_priority(task);
+    task->rq_next = NULL;
+    task->rq_prev = NULL;
+    task->rq_priority = TASK_PRIORITY_LEVELS;
+    task->ready_since_tick = 0;
+}
+
+static void runqueue_append_raw_locked(task_t* task, uint32_t prio)
+{
+    if (!task_header_plausible(task) || prio >= TASK_PRIORITY_LEVELS)
+        return;
+
+    if (ready_queue.tail[prio] &&
+        !runqueue_link_plausible_locked(ready_queue.tail[prio], prio)) {
+        KERROR("runqueue_append_raw: corrupt tail %p at prio %u\n",
+               ready_queue.tail[prio], prio);
+        kernel_lifecycle_stats.ready_queue_refused++;
+        return;
+    }
+
     task->ready_since_tick = get_system_ticks();
     task->rq_next = NULL;
     task->rq_prev = ready_queue.tail[prio];
@@ -379,18 +657,67 @@ static void runqueue_enqueue_tail_locked(task_t* task)
     ready_queue.nr_running++;
 }
 
+static void runqueue_enqueue_tail_locked(task_t* task)
+{
+    uint32_t prio;
+
+    if (!task_header_plausible(task) || task_is_idle_task(task))
+        return;
+
+    if (runqueue_contains_locked(task)) {
+        if (runqueue_membership_valid_locked(task))
+            return;
+        KERROR("runqueue_enqueue: stale membership for task %p (%s), rebuilding\n",
+               task, task->name);
+        kernel_lifecycle_stats.ready_queue_refused++;
+        runqueue_reset_task_locked(task);
+        runqueue_rebuild_locked(task);
+    }
+
+    prio = task_runqueue_priority(task);
+    if (ready_queue.tail[prio] &&
+        !runqueue_link_plausible_locked(ready_queue.tail[prio], prio)) {
+        KERROR("runqueue_enqueue: corrupt tail %p at prio %u, rebuilding\n",
+               ready_queue.tail[prio], prio);
+        kernel_lifecycle_stats.ready_queue_refused++;
+        runqueue_rebuild_locked(task);
+    }
+
+    if (ready_queue.tail[prio] &&
+        !runqueue_link_plausible_locked(ready_queue.tail[prio], prio)) {
+        KERROR("runqueue_enqueue: refusing enqueue after failed rebuild task=%p prio=%u tail=%p\n",
+               task, prio, ready_queue.tail[prio]);
+        kernel_lifecycle_stats.ready_queue_refused++;
+        return;
+    }
+
+    runqueue_append_raw_locked(task, prio);
+}
+
 static void runqueue_remove_locked(task_t* task)
 {
     uint32_t prio;
 
-    if (!task || !runqueue_contains_locked(task))
+    if (!task_header_plausible(task) || !runqueue_contains_locked(task))
         return;
 
     prio = task->rq_priority;
     if (prio >= TASK_PRIORITY_LEVELS) {
-        task->rq_next = NULL;
-        task->rq_prev = NULL;
-        task->rq_priority = TASK_PRIORITY_LEVELS;
+        runqueue_reset_task_locked(task);
+        return;
+    }
+
+    if ((task->rq_prev && (!runqueue_link_plausible_locked(task->rq_prev, prio) ||
+                           task->rq_prev->rq_next != task)) ||
+        (task->rq_next && (!runqueue_link_plausible_locked(task->rq_next, prio) ||
+                           task->rq_next->rq_prev != task)) ||
+        (!task->rq_prev && ready_queue.head[prio] != task) ||
+        (!task->rq_next && ready_queue.tail[prio] != task)) {
+        KERROR("runqueue_remove: corrupt links for task %p (%s) at prio %u, rebuilding\n",
+               task, task->name, prio);
+        kernel_lifecycle_stats.ready_queue_refused++;
+        runqueue_reset_task_locked(task);
+        runqueue_rebuild_locked(task);
         return;
     }
 
@@ -404,10 +731,7 @@ static void runqueue_remove_locked(task_t* task)
     else
         ready_queue.tail[prio] = task->rq_prev;
 
-    task->rq_next = NULL;
-    task->rq_prev = NULL;
-    task->rq_priority = TASK_PRIORITY_LEVELS;
-    task->ready_since_tick = 0;
+    runqueue_reset_task_locked(task);
     if (ready_queue.count[prio] > 0)
         ready_queue.count[prio]--;
     if (ready_queue.nr_running > 0)
@@ -419,16 +743,159 @@ static void runqueue_clear_locked(void)
     memset(&ready_queue, 0, sizeof(ready_queue));
 }
 
-static void task_make_ready_locked(task_t* task)
+static void runqueue_rebuild_locked(task_t* exclude)
 {
-    if (!task || task->state == TASK_ZOMBIE || task->state == TASK_TERMINATED)
+    task_t* task;
+    task_t* start;
+    int count = 0;
+
+    start = task_list_head;
+    memset(&ready_queue, 0, sizeof(ready_queue));
+
+    if (!task_header_plausible(start))
         return;
+
+    task = start;
+    do {
+        task_t* next;
+
+        if (!task_header_plausible(task))
+            break;
+
+        next = task->next;
+        runqueue_reset_task_locked(task);
+
+        if (task != exclude &&
+            task->state == TASK_READY &&
+            task->running_cpu == TASK_CPU_NONE &&
+            !task_is_idle_task(task) &&
+            task_stack_metadata_valid(task))
+            runqueue_append_raw_locked(task, task_runqueue_priority(task));
+
+        task = next;
+        count++;
+    } while (task != start && count < MAX_TASKS);
+}
+
+static bool runqueue_validate_locked(const char* caller)
+{
+    uint32_t total = 0;
+
+    for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
+        task_t* task = ready_queue.head[prio];
+        task_t* prev = NULL;
+        uint32_t count = 0;
+
+        if (!task && ready_queue.tail[prio]) {
+            KERROR("%s: runqueue prio %u has NULL head but tail=%p\n",
+                   caller, prio, ready_queue.tail[prio]);
+            return false;
+        }
+
+        while (task) {
+            task_t* next;
+
+            if (!runqueue_link_plausible_locked(task, prio)) {
+                KERROR("%s: corrupt runqueue entry %p at prio %u head=%p tail=%p prev=%p\n",
+                       caller, task, prio, ready_queue.head[prio],
+                       ready_queue.tail[prio], prev);
+                return false;
+            }
+
+            if (task->rq_prev != prev) {
+                KERROR("%s: corrupt runqueue prev link task=%p (%s) prio=%u rq_prev=%p expected=%p\n",
+                       caller, task, task->name, prio, task->rq_prev, prev);
+                return false;
+            }
+
+            next = task->rq_next;
+            if (!next && ready_queue.tail[prio] != task) {
+                KERROR("%s: corrupt runqueue tail link task=%p (%s) prio=%u tail=%p\n",
+                       caller, task, task->name, prio, ready_queue.tail[prio]);
+                return false;
+            }
+
+            prev = task;
+            task = next;
+            count++;
+            total++;
+
+            if (count > MAX_TASKS || total > MAX_TASKS) {
+                KERROR("%s: runqueue loop at prio %u count=%u total=%u\n",
+                       caller, prio, count, total);
+                return false;
+            }
+        }
+
+        if (ready_queue.count[prio] != count) {
+            KERROR("%s: runqueue count mismatch prio=%u stored=%u actual=%u\n",
+                   caller, prio, ready_queue.count[prio], count);
+            return false;
+        }
+    }
+
+    if (ready_queue.nr_running != total) {
+        KERROR("%s: runqueue total mismatch stored=%u actual=%u\n",
+               caller, ready_queue.nr_running, total);
+        return false;
+    }
+
+    return true;
+}
+
+void task_make_ready_under_lock(task_t* task)
+{
+    uint32_t cpu = smp_processor_id();
+
+    if (!task_header_plausible(task)) {
+        kernel_lifecycle_stats.ready_queue_refused++;
+        sched_trace_record(SCHED_TRACE_READY_REFUSE_CORRUPT, task);
+        return;
+    }
+
+    if (task->state == TASK_ZOMBIE || task->state == TASK_TERMINATED)
+        return;
+
+    /*
+     * SMP handoff invariant:
+     * a running task owns exactly one kernel stack. When the current CPU yields,
+     * the task is queued as READY before __task_switch() saves the final SVC
+     * frame, but running_cpu stays set until task_context_save_complete().
+     * Other CPUs must not be allowed to run it during that short window.
+     */
+    if (task->state == TASK_RUNNING && task->running_cpu != cpu) {
+        kernel_lifecycle_stats.ready_queue_refused++;
+        sched_trace_record(SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING, task);
+        return;
+    }
 
     task->state = TASK_READY;
     if (task->type == TASK_TYPE_PROCESS && task->process)
         task->process->state = (proc_state_t)PROC_READY;
 
     runqueue_enqueue_tail_locked(task);
+}
+
+void task_context_save_complete(task_context_t* ctx)
+{
+    task_t* task;
+    uint32_t cpu;
+    unsigned long flags;
+
+    if (!ctx)
+        return;
+
+    task = (task_t*)((char*)ctx - offsetof(task_t, context));
+    cpu = smp_processor_id();
+
+    if (!task_header_plausible(task))
+        return;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    if (task->state != TASK_RUNNING && task->running_cpu == cpu) {
+        task->running_cpu = TASK_CPU_NONE;
+    }
+    spin_unlock_irqrestore(&task_lock, flags);
 }
 
 #define KERNEL_TASK_STACK_PAGES \
@@ -648,13 +1115,15 @@ task_t* task_create_copy(task_t* parent, bool from_user)
 
     /* Copier la structure parent */
     memcpy(child, parent, sizeof(task_t));
+    child->magic = TASK_MAGIC_DEAD;
     
     /* Reinitialiser les champs specifiques a l'enfant */
-    child->task_id = next_task_id++;
+    child->task_id = task_reserve_task_id();
     strncpy(child->name, parent->name, TASK_NAME_MAX - 1);
     child->name[TASK_NAME_MAX - 1] = '\0';
     
     if(!set_process_stack(parent,child, from_user)) {
+        child->magic = TASK_MAGIC_DEAD;
         kfree(child);
         return NULL;
     }
@@ -665,7 +1134,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
         child->process = (process_t *)kmalloc(sizeof(process_t));
         if(child->process){
             child->type = TASK_TYPE_PROCESS;
-            child->process->pid = next_pid++;
+            child->process->pid = task_reserve_pid();
             child->process->ppid = parent->process->pid;
             child->process->pgid = parent->process->pgid;
             child->process->sid = parent->process->sid;
@@ -705,6 +1174,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
 
         }
         else {
+            child->magic = TASK_MAGIC_DEAD;
             task_free_kernel_stack(child);
             kfree(child);
             panic("Task Create Copy - cannot allocate Process Structure");
@@ -714,8 +1184,11 @@ task_t* task_create_copy(task_t* parent, bool from_user)
         child->type = parent->type;
     }
     
-    /* etat initial */
-    child->state = TASK_READY;
+    /*
+     * Fork completes VM, parent/child links and file-table setup in sys_fork()
+     * before publishing the child to the runqueue.
+     */
+    child->state = TASK_BLOCKED;
     child->next = NULL;
     child->prev = NULL;
     child->rq_next = NULL;
@@ -732,6 +1205,9 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->quantum_left = QUANTUM_TICKS;
     child->ready_since_tick = 0;
     child->sched_debt = 0;
+    child->running_cpu = TASK_CPU_NONE;
+    child->last_cpu = TASK_CPU_NONE;
+    child->magic = TASK_MAGIC_ALIVE;
 
     kernel_lifecycle_stats.tasks_created++;
     return child;
@@ -835,6 +1311,7 @@ void init_task_system(void)
     
     /* Initialiser les variables globales */
     current_task = NULL;
+    memset(current_tasks, 0, sizeof(current_tasks));
     task_list_head = NULL;
     runqueue_clear_locked();
     next_task_id = 1;
@@ -862,7 +1339,7 @@ void cleanup_task_system(void)
     
     while (task) {
         next = task->next;
-        if (task != idle_task) {
+        if (!task_is_idle_task(task)) {
             task_destroy(task);
         }
         task = (next == task_list_head) ? NULL : next;
@@ -873,9 +1350,11 @@ void cleanup_task_system(void)
         task_destroy(idle_task);
         idle_task = NULL;
     }
+    memset(idle_tasks, 0, sizeof(idle_tasks));
     
     /* Reinitialiser les variables */
     current_task = NULL;
+    memset(current_tasks, 0, sizeof(current_tasks));
     task_list_head = NULL;
     runqueue_clear_locked();
     next_task_id = 1;
@@ -1079,20 +1558,28 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
         KERROR("task_create: Failed to allocate task structure\n");
         return NULL;
     }
+    task->magic = TASK_MAGIC_DEAD;
     
     /* Allouer la stack */
     if (!task_alloc_kernel_stack(task)) {
         KERROR("task_create: Failed to allocate stack\n");
+        task->magic = TASK_MAGIC_DEAD;
         kfree(task);
         return NULL;
     }
     
     /* Initialiser la structure */
-    task->task_id = next_task_id++;
+    task->task_id = task_reserve_task_id();
     strncpy(task->name, name ? name : "unnamed", TASK_NAME_MAX - 1);
     task->name[TASK_NAME_MAX - 1] = '\0';
     
-    task->state = TASK_READY;
+    /*
+     * A freshly allocated task is private to its creator.  It must not enter
+     * task_list_head or the runqueue until the caller has finished all process,
+     * VM, FD and signal metadata.  SMP schedulers scan task_list_head from
+     * several CPUs, so publishing a half-built task is observable state.
+     */
+    task->state = TASK_BLOCKED;
     task->priority = priority;
     
     task->entry_point = entry;
@@ -1127,6 +1614,9 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     task->wakeup_time = 0;
     task->ready_since_tick = 0;
     task->sched_debt = 0;
+    task->running_cpu = TASK_CPU_NONE;
+    task->last_cpu = TASK_CPU_NONE;
+    task->magic = TASK_MAGIC_ALIVE;
     task->process = NULL;  /* Par defaut, pas de processus associe */
 
     //debug_context_registers(&task->context, "AFTER_setup_task_context");
@@ -1134,13 +1624,12 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     /* === VALIDATION CRITIQUE === */
     if (!validate_task_stack_safe(task)) {
         KERROR("KO Stack validation failed for task %s\n", task->name);
+        task->magic = TASK_MAGIC_DEAD;
         task_free_kernel_stack(task);
         kfree(task);
         return NULL;
     }
     
-    /* Ajouter a la liste des taches */
-    add_task_to_list(task);
     kernel_lifecycle_stats.tasks_created++;
     
     KINFO("OK Created task '%s' (ID=%u, priority=%u) - Stack validated\n", 
@@ -1170,6 +1659,7 @@ void init_standard_files(process_t* process) {
 task_t* task_create_process(const char* name, void (*entry)(void* arg), 
                                   void* arg, uint32_t priority, task_type_t type)
 {
+    task_t* parent = task_current_local();
     task_t* task = task_create(name, entry, arg, priority);
     if (!task) return NULL;
     
@@ -1186,14 +1676,14 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         }
 
         /* Initialiser les champs processus */
-        task->process->pid = next_pid++;
-        task->process->ppid = (current_task && current_task->type == TASK_TYPE_PROCESS) ? 
-                             current_task->process->pid : 0;
+        task->process->pid = task_reserve_pid();
+        task->process->ppid = (parent && parent->type == TASK_TYPE_PROCESS) ?
+                             parent->process->pid : 0;
         task->process->pgid = task->process->pid;
         task->process->sid = task->process->pid;
         task->process->controlling_tty = 0;
-        task->process->parent = (current_task && current_task->type == TASK_TYPE_PROCESS) ? 
-                               current_task : NULL;
+        task->process->parent = (parent && parent->type == TASK_TYPE_PROCESS) ?
+                               parent : NULL;
         task->process->children = NULL;
         task->process->sibling_next = NULL;
         task->process->exit_code = 0;
@@ -1290,12 +1780,16 @@ void setup_task_context(task_t* task)
 void task_destroy(task_t* task)
 {
     unsigned long flags;
+    task_t* current = task_current_local();
 
     if (!task) {
-        task = current_task;  /* Detruire la tache courante si NULL */
+        task = current;  /* Detruire la tache courante si NULL */
     }
+
+    if (!task)
+        return;
     
-    if (task == idle_task) {
+    if (task_is_idle_task(task)) {
         KERROR("Cannot destroy idle task\n");
         return;
     }
@@ -1307,13 +1801,14 @@ void task_destroy(task_t* task)
     if (task->state != TASK_ZOMBIE && task->state != TASK_TERMINATED) {
         runqueue_remove_locked(task);
         task->state = TASK_ZOMBIE;
+        task->running_cpu = TASK_CPU_NONE;
         if (task->process)
             task->process->state = (proc_state_t)PROC_ZOMBIE;
         kernel_lifecycle_stats.zombies_created++;
     }
     
     /* Si c'est la tache courante, forcer une commutation */
-    if (task == (task_t*)current_task) {
+    if (task == current) {
         spin_unlock_irqrestore(&task_lock, flags);
         schedule();  /* Ne reviendra jamais ici */
         /* NOTREACHED */
@@ -1323,6 +1818,8 @@ void task_destroy(task_t* task)
 
     /* Retirer de la liste */
     remove_task_from_list(task);
+
+    task->magic = TASK_MAGIC_DEAD;
     
     /* Liberer les ressources */
     task_free_kernel_stack(task);
@@ -1380,14 +1877,15 @@ void verify_ready_queue_integrity(void)
 void yield(void)
 {
     unsigned long flags;
+    task_t* task = task_current_local();
 
     if (!scheduler_initialized) {
         return;
     }
     
     spin_lock_irqsave(&task_lock, &flags);
-    if (current_task && current_task->state == TASK_RUNNING) {
-        task_make_ready_locked(current_task);
+    if (task && task->state == TASK_RUNNING) {
+        task_make_ready_under_lock(task);
     }
     spin_unlock_irqrestore(&task_lock, flags);
 
@@ -1420,6 +1918,8 @@ bool is_on_task_stack(task_t* task, uint32_t sp)
 
 void debug_idle_corruption_source(void)
 {
+    task_t* current = task_current_local();
+
     if (!idle_task) return;
     
     /* Obtenir la trace de la pile */
@@ -1428,7 +1928,7 @@ void debug_idle_corruption_source(void)
     
     KERROR("IDLE CORRUPTION DETECTED!\n");
     KERROR("  Called from: 0x%08X\n", lr);
-    KERROR("  Current task: %s\n", current_task ? current_task->name : "NULL");
+    KERROR("  Current task: %s\n", current ? current->name : "NULL");
     
     /* Dump de toutes les tâches pour voir qui a un stack_top bizarre */
     task_t* task = task_list_head;
@@ -1501,7 +2001,7 @@ void save_task_context_safe(task_t* task, uint32_t current_sp)
     if (!task) return;
     
     /* Protéger idle avant toute manipulation */
-    if (task == idle_task) {
+    if (task_is_idle_task(task)) {
         protect_idle_task();
     }
 
@@ -1524,7 +2024,7 @@ void save_task_context_safe(task_t* task, uint32_t current_sp)
         //       current_sp, task->context.sp);
     } */
     
-    if (task == idle_task) {
+    if (task_is_idle_task(task)) {
         /* Vérification spéciale pour idle */
         if (is_on_task_stack(task, current_sp)) {
             /* SP valide dans la pile d'idle */
@@ -1557,23 +2057,25 @@ void save_task_context_safe(task_t* task, uint32_t current_sp)
 
 void switch_to_idle(void){
     unsigned long flags;
+    task_t *current = task_current_local();
     task_t *next_task = schedule_next_task();
+    task_t *local_idle = task_idle_on_cpu(smp_processor_id());
+    uint32_t cpu = smp_processor_id();
 
     if (!next_task ||
-        next_task == (task_t *)current_task ||
+        next_task == current ||
         next_task->state == TASK_ZOMBIE ||
         next_task->state == TASK_TERMINATED) {
-        next_task = idle_task;
+        next_task = local_idle ? local_idle : idle_task;
     }
 
     spin_lock_irqsave(&task_lock, &flags);
-
-    runqueue_remove_locked(next_task);
-    next_task->state = TASK_RUNNING;
-    if (next_task->type == TASK_TYPE_PROCESS && next_task->process)
-        next_task->process->state = (proc_state_t)PROC_RUNNING;
-    next_task->switch_count++;
-
+    if (current &&
+        (current->state == TASK_ZOMBIE || current->state == TASK_TERMINATED) &&
+        current->running_cpu == cpu) {
+        current->running_cpu = TASK_CPU_NONE;
+    }
+    scheduler_mark_running_locked(next_task);
     spin_unlock_irqrestore(&task_lock, flags);
 
     /*
@@ -1585,24 +2087,73 @@ void switch_to_idle(void){
     __builtin_unreachable();
 }
 
-static void for_each_task(task_t* current)
+void task_start_secondary_scheduler(uint32_t cpu_id)
+{
+    unsigned long flags;
+    task_t* local_idle;
+
+    local_idle = task_idle_on_cpu(cpu_id);
+    if (!local_idle)
+        panic("SMP secondary scheduler without idle task");
+
+    spin_lock_irqsave(&task_lock, &flags);
+    scheduler_mark_running_locked(local_idle);
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    __task_switch(NULL, &local_idle->context);
+    __builtin_unreachable();
+}
+
+#define SCHED_ALARM_BATCH 16
+
+static void scheduler_scan_waiters(task_t* current)
 {
     task_t* task;
+    task_t* start;
+    task_t* alarm_tasks[SCHED_ALARM_BATCH];
+    task_t* zombie_wake_tasks[SCHED_ALARM_BATCH];
     uint32_t current_time = get_system_ticks();
+    uint32_t alarm_count = 0;
+    uint32_t zombie_wake_count = 0;
+    unsigned long flags;
     int count = 0;
 
-    if (!current || !current->next)
-        return;
+    spin_lock_irqsave(&task_lock, &flags);
 
-    task = current->next;
+    if (!task_list_head) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return;
+    }
+
+    start = (task_header_plausible(current) &&
+             task_header_plausible(current->next)) ? current->next : task_list_head;
+    task = start;
     
-    /* Chercher la prochaine tache READY avec la meme priorite */
+    /*
+     * Walk the global task list while holding task_lock. This keeps wakeup
+     * state transitions and runqueue insertion atomic for the future
+     * multi-scheduler-CPU model. Signal delivery is collected and performed
+     * after dropping the lock, because it may itself wake tasks.
+     */
     do {
-        if (!task) {
-            KERROR("for_each_task: broken task list near %s\n",
-                   current ? current->name : "?");
+        if (!task_header_plausible(task)) {
+            KERROR("scheduler_scan_waiters: invalid task pointer %p near %p\n",
+                   task, current);
             kernel_lifecycle_stats.scheduler_refused++;
             sched_trace_record(SCHED_TRACE_REFUSE_BROKEN_LIST, current);
+            spin_unlock_irqrestore(&task_lock, flags);
+            return;
+        }
+
+        if (!task_header_plausible(task->next) ||
+            !task_header_plausible(task->prev) ||
+            task->next->prev != task ||
+            task->prev->next != task) {
+            KERROR("scheduler_scan_waiters: broken task links task=%p next=%p prev=%p\n",
+                   task, task->next, task->prev);
+            kernel_lifecycle_stats.scheduler_refused++;
+            sched_trace_record(SCHED_TRACE_REFUSE_BROKEN_LIST, task);
+            spin_unlock_irqrestore(&task_lock, flags);
             return;
         }
 
@@ -1617,11 +2168,8 @@ static void for_each_task(task_t* current)
                 kernel_lifecycle_stats.fs_wait_timeouts++;
                 sched_trace_record(SCHED_TRACE_FS_WAIT_TIMEOUT, task);
             }
-            task->state = TASK_READY;
-            if (task->type == TASK_TYPE_PROCESS && task->process)
-                task->process->state = (proc_state_t)PROC_READY;
             task->wakeup_time = 0;
-            add_to_ready_queue(task);
+            task_make_ready_under_lock(task);
         }
 
         if (task->type == TASK_TYPE_PROCESS && task->process &&
@@ -1629,20 +2177,53 @@ static void for_each_task(task_t* current)
             current_time >= task->process->alarm_expire_tick) {
             task->process->alarm_active = 0;
             task->process->alarm_expire_tick = 0;
-            send_signal(task, SIGALRM);
+            if (alarm_count < SCHED_ALARM_BATCH)
+                alarm_tasks[alarm_count++] = task;
         }
 
-        if (!task->next) {
-            KERROR("for_each_task: task %s has NULL next\n", task->name);
-            kernel_lifecycle_stats.scheduler_refused++;
-            sched_trace_record(SCHED_TRACE_REFUSE_NULL_NEXT, task);
-            return;
+        /*
+         * sys_exit() cannot wake the parent directly on SMP: the parent may
+         * run on another CPU and free the child while the child is still
+         * executing on its kernel stack. Once the exiting task has switched
+         * away and one timer tick elapsed, wake the parent from here.
+         */
+        if (task->state == TASK_ZOMBIE &&
+            task->type == TASK_TYPE_PROCESS &&
+            task->process &&
+            task->running_cpu == TASK_CPU_NONE &&
+            task->wakeup_time > 0 &&
+            current_time >= task->wakeup_time) {
+            if (zombie_wake_count < SCHED_ALARM_BATCH) {
+                task->wakeup_time = 0;
+                zombie_wake_tasks[zombie_wake_count++] = task;
+            }
         }
+
         task = task->next;
         count++;
-    } while (task != current && count < MAX_TASKS);
-    
-    return ;  /* Pas d'autre tache de meme priorite */
+    } while (task != start && count < MAX_TASKS);
+
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    for (uint32_t i = 0; i < alarm_count; i++)
+        send_signal(alarm_tasks[i], SIGALRM);
+
+    for (uint32_t i = 0; i < zombie_wake_count; i++) {
+        task_t* zombie = zombie_wake_tasks[i];
+        task_t* parent = zombie && zombie->process ? zombie->process->parent : NULL;
+        bool parent_waiting = parent && parent->process &&
+            parent->state == TASK_BLOCKED &&
+            parent->process->state == (proc_state_t)PROC_BLOCKED;
+
+        wakeup_parent(zombie);
+        if (!parent_waiting && parent && parent->process) {
+            sig_handler_t handler = parent->process->signals.actions[SIGCHLD].sa_handler;
+            if (handler != SIG_DFL && handler != SIG_IGN)
+                send_signal(parent, SIGCHLD);
+        }
+    }
+
+    return;
 }
 
 static bool scheduler_has_ready_work(void)
@@ -1659,17 +2240,26 @@ static bool scheduler_has_ready_work(void)
 
 static bool scheduler_entry_allowed(const char* caller, task_t* requested)
 {
-    if (!scheduler_initialized || !current_task) {
+    task_t* current = task_current_local();
+
+    if (!smp_scheduler_can_run_on_current_cpu()) {
+        KERROR("%s: refusing scheduler entry on CPU%u; SMP scheduler disabled\n",
+               caller, smp_processor_id());
+        kernel_lifecycle_stats.scheduler_refused++;
+        return false;
+    }
+
+    if (!scheduler_initialized || !task_header_plausible(current)) {
         KERROR("%s: scheduler not initialized or no current task\n", caller);
         return false;
     }
 
     if (requested &&
-        (requested->state == TASK_ZOMBIE ||
+        (!task_header_plausible(requested) ||
+         requested->state == TASK_ZOMBIE ||
          requested->state == TASK_TERMINATED ||
          !task_stack_metadata_valid(requested))) {
-        KERROR("%s: refusing invalid task %s state=%d\n",
-               caller, requested->name, requested->state);
+        KERROR("%s: refusing invalid task %p\n", caller, requested);
         kernel_lifecycle_stats.scheduler_refused++;
         sched_trace_record(SCHED_TRACE_REFUSE_INVALID_TASK, requested);
         return false;
@@ -1677,7 +2267,7 @@ static bool scheduler_entry_allowed(const char* caller, task_t* requested)
 
     if (get_critical_section()) {
         kernel_lifecycle_stats.scheduler_refused++;
-        sched_trace_record(SCHED_TRACE_REFUSE_CRITICAL, current_task);
+        sched_trace_record(SCHED_TRACE_REFUSE_CRITICAL, current);
         unset_critical_section();
     }
 
@@ -1689,11 +2279,18 @@ static bool scheduler_entry_allowed(const char* caller, task_t* requested)
 
 static void scheduler_mark_running_locked(task_t* task)
 {
+    uint32_t cpu = smp_processor_id();
+
     if (!task)
+        return;
+
+    if (task->state == TASK_RUNNING && task->running_cpu == cpu)
         return;
 
     runqueue_remove_locked(task);
     task->state = TASK_RUNNING;
+    task->running_cpu = cpu;
+    task->last_cpu = cpu;
     if (task->type == TASK_TYPE_PROCESS && task->process)
         task->process->state = (proc_state_t)PROC_RUNNING;
     task->switch_count++;
@@ -1703,7 +2300,18 @@ static bool scheduler_validate_switch(task_t* old_task,
                                       task_t* next_task,
                                       uint32_t current_sp)
 {
+    uint32_t cpu = smp_processor_id();
+
     if (!next_task || !task_stack_metadata_valid(next_task)) {
+        kernel_lifecycle_stats.scheduler_refused++;
+        sched_trace_record(SCHED_TRACE_REFUSE_INVALID_TASK, next_task);
+        return false;
+    }
+
+    if (next_task->running_cpu != TASK_CPU_NONE &&
+        next_task->running_cpu != cpu) {
+        KERROR("SCHED: task %s already running on CPU%u, refusing CPU%u\n",
+               next_task->name, next_task->running_cpu, cpu);
         kernel_lifecycle_stats.scheduler_refused++;
         sched_trace_record(SCHED_TRACE_REFUSE_INVALID_TASK, next_task);
         return false;
@@ -1731,23 +2339,23 @@ static void scheduler_finish_no_switch(uint32_t irq_flags)
     restore_interrupts(irq_flags);
 }
 
-static void scheduler_restore_current_if_needed(void)
+static void scheduler_restore_current_if_needed(task_t* current)
 {
     unsigned long flags;
 
     spin_lock_irqsave(&task_lock, &flags);
-    if (current_task && current_task->state == TASK_READY)
-        scheduler_mark_running_locked(current_task);
+    if (current && current->state == TASK_READY)
+        scheduler_mark_running_locked(current);
     spin_unlock_irqrestore(&task_lock, flags);
 }
 
-static void scheduler_prepare_current_for_switch(void)
+static void scheduler_prepare_current_for_switch(task_t* current)
 {
     unsigned long flags;
 
     spin_lock_irqsave(&task_lock, &flags);
-    if (current_task && current_task->state == TASK_RUNNING)
-        task_make_ready_locked(current_task);
+    if (current && current->state == TASK_RUNNING)
+        task_make_ready_under_lock(current);
     spin_unlock_irqrestore(&task_lock, flags);
 }
 
@@ -1762,12 +2370,13 @@ static void scheduler_prepare_next_for_switch(task_t* next_task)
 
 static void scheduler_switch_to(task_t* next_task,
                                 uint32_t irq_flags,
-                                bool save_current_context)
+                                bool save_current_context,
+                                task_t* current)
 {
     scheduler_prepare_next_for_switch(next_task);
     unset_critical_section();
 
-    __task_switch(save_current_context ? &current_task->context : NULL,
+    __task_switch(save_current_context ? &current->context : NULL,
                   &next_task->context);
 
     restore_interrupts(irq_flags);
@@ -1778,6 +2387,7 @@ void schedule(void)
     uint32_t irq_flags;
     uint32_t current_sp;
     bool save_current_context;
+    task_t* current;
     task_t* next_task;
     
     if (!scheduler_entry_allowed("schedule", NULL))
@@ -1786,33 +2396,34 @@ void schedule(void)
     irq_flags = disable_interrupts_save();
     set_critical_section();
 
-    for_each_task(current_task);
+    current = task_current_local();
+    scheduler_scan_waiters(current);
 
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
-    save_current_context = current_task->state != TASK_ZOMBIE &&
-                           current_task->state != TASK_TERMINATED;
+    save_current_context = current->state != TASK_ZOMBIE &&
+                           current->state != TASK_TERMINATED;
 
     if (save_current_context)
-        scheduler_prepare_current_for_switch();
+        scheduler_prepare_current_for_switch(current);
 
     next_task = schedule_next_task();
 
-    if (next_task == (task_t *)current_task) {
-        scheduler_restore_current_if_needed();
+    if (next_task == current) {
+        scheduler_restore_current_if_needed(current);
         scheduler_finish_no_switch(irq_flags);
         return;
     }
 
-    if (!scheduler_validate_switch(save_current_context ? current_task : NULL,
+    if (!scheduler_validate_switch(save_current_context ? current : NULL,
                                    next_task,
                                    current_sp)) {
         if (save_current_context)
-            scheduler_restore_current_if_needed();
+            scheduler_restore_current_if_needed(current);
         scheduler_finish_no_switch(irq_flags);
         return;
     }
 
-    scheduler_switch_to(next_task, irq_flags, save_current_context);
+    scheduler_switch_to(next_task, irq_flags, save_current_context, current);
 
 }
 
@@ -1821,6 +2432,7 @@ void schedule_to(task_t *next_task)
     uint32_t irq_flags;
     uint32_t current_sp;
     bool save_current_context;
+    task_t* current;
     
     if (!next_task || !scheduler_entry_allowed("schedule_to", next_task))
         return;
@@ -1828,31 +2440,32 @@ void schedule_to(task_t *next_task)
     irq_flags = disable_interrupts_save();
     set_critical_section();
 
-    for_each_task(current_task);
+    current = task_current_local();
+    scheduler_scan_waiters(current);
 
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
-    save_current_context = current_task->state != TASK_ZOMBIE &&
-                           current_task->state != TASK_TERMINATED;
+    save_current_context = current->state != TASK_ZOMBIE &&
+                           current->state != TASK_TERMINATED;
 
     if (save_current_context)
-        scheduler_prepare_current_for_switch();
+        scheduler_prepare_current_for_switch(current);
 
-    if (next_task == (task_t *)current_task) {
-        scheduler_restore_current_if_needed();
+    if (next_task == current) {
+        scheduler_restore_current_if_needed(current);
         scheduler_finish_no_switch(irq_flags);
         return;
     }
 
-    if (!scheduler_validate_switch(save_current_context ? current_task : NULL,
+    if (!scheduler_validate_switch(save_current_context ? current : NULL,
                                    next_task,
                                    current_sp)) {
         if (save_current_context)
-            scheduler_restore_current_if_needed();
+            scheduler_restore_current_if_needed(current);
         scheduler_finish_no_switch(irq_flags);
         return;
     }
 
-    scheduler_switch_to(next_task, irq_flags, save_current_context);
+    scheduler_switch_to(next_task, irq_flags, save_current_context, current);
 
 }
 
@@ -1975,7 +2588,13 @@ static task_t* schedule_next_task(void)
 
     spin_lock_irqsave(&task_lock, &flags);
 
+    if (!runqueue_validate_locked("schedule_next_task")) {
+        kernel_lifecycle_stats.scheduler_refused++;
+        runqueue_rebuild_locked(NULL);
+    }
+
     while (ready_queue.nr_running > 0 && scanned <= MAX_TASKS) {
+restart_scan:
         best = NULL;
         best_prio = TASK_PRIORITY_LEVELS;
         best_debt = 0xffffffffu;
@@ -1989,11 +2608,27 @@ static task_t* schedule_next_task(void)
             task_t* candidate = ready_queue.head[prio];
 
             while (candidate) {
-                task_t* next_candidate = candidate->rq_next;
+                task_t* next_candidate;
                 uint32_t effective;
                 uint32_t debt;
                 uint32_t waited;
                 uint32_t reason = SCHED_PICK_NONE;
+
+                if (!task_header_plausible(candidate)) {
+                    KERROR("schedule_next_task: corrupt runqueue entry %p at prio %u\n",
+                           candidate, prio);
+                    kernel_lifecycle_stats.scheduler_refused++;
+                    sched_trace_record(SCHED_TRACE_REFUSE_INVALID_TASK, candidate);
+                    runqueue_rebuild_locked(NULL);
+                    scanned++;
+                    goto restart_scan;
+                }
+
+                next_candidate = candidate->rq_next;
+                if (candidate->running_cpu != TASK_CPU_NONE) {
+                    candidate = next_candidate;
+                    continue;
+                }
 
                 effective = scheduler_effective_priority_locked(candidate, now);
                 debt = scheduler_debt_score_locked(candidate, now);
@@ -2030,7 +2665,6 @@ static task_t* schedule_next_task(void)
             break;
 
         task = best;
-        runqueue_remove_locked(task);
         scanned++;
 
         if (task_is_schedulable(task)) {
@@ -2049,6 +2683,7 @@ static task_t* schedule_next_task(void)
             sched_last_pick_debt = best_debt;
             sched_last_pick_waited_ticks = best_waited;
             sched_last_scan_tasks = candidate_scan_count;
+            scheduler_mark_running_locked(task);
             spin_unlock_irqrestore(&task_lock, flags);
             return task;
         }
@@ -2058,6 +2693,7 @@ static task_t* schedule_next_task(void)
          * through the scheduler helpers. Drop it instead of letting a dead or
          * blocked task spin forever at the head of the queue.
          */
+        runqueue_remove_locked(task);
         kernel_lifecycle_stats.scheduler_refused++;
         sched_trace_record(SCHED_TRACE_REFUSE_INVALID_TASK, task);
     }
@@ -2068,23 +2704,29 @@ static task_t* schedule_next_task(void)
         sched_trace_record(SCHED_TRACE_REFUSE_LOOP, NULL);
     }
 
+    idle_fallback_count[smp_processor_id()]++;
+    task = task_idle_on_cpu(smp_processor_id());
+    if (!task)
+        task = idle_task;
+    scheduler_mark_running_locked(task);
     spin_unlock_irqrestore(&task_lock, flags);
-    return idle_task;
+    return task;
 }
 
 
 
-/**
- * Ajouter une tache a la liste circulaire
- */
-void add_task_to_list(task_t* task)
+static void add_task_to_list_locked(task_t* task)
 {
-    unsigned long flags;
-
     if (!task)
         return;
 
-    spin_lock_irqsave(&task_lock, &flags);
+    /*
+     * A task may be woken from several paths on SMP. Treat list insertion as
+     * idempotent under task_lock; inserting the same node twice corrupts the
+     * circular list and later makes scheduler_scan_waiters() walk into NULL.
+     */
+    if (task->next || task->prev || task == task_list_head)
+        return;
 
     task->rq_next = NULL;
     task->rq_prev = NULL;
@@ -2103,6 +2745,20 @@ void add_task_to_list(task_t* task)
         task_list_head->prev = task;
     }
     task_count++;
+}
+
+/**
+ * Ajouter une tache a la liste circulaire
+ */
+void add_task_to_list(task_t* task)
+{
+    unsigned long flags;
+
+    if (!task)
+        return;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    add_task_to_list_locked(task);
 
     spin_unlock_irqrestore(&task_lock, flags);
 
@@ -2173,6 +2829,7 @@ void remove_task_from_list(task_t* task)
 void idle_task_func(void* arg)
 {
     (void)arg;
+    uint32_t cpu = smp_processor_id();
     
     KINFO("Idle task started\n");
     
@@ -2185,9 +2842,14 @@ void idle_task_func(void* arg)
          */
         __asm__ volatile("cpsie i" ::: "memory");
         __asm__ volatile("wfi" ::: "memory");
-        for_each_task((task_t*)current_task);
-        if (scheduler_has_ready_work())
+        scheduler_scan_waiters(task_current_local());
+        if (scheduler_has_ready_work()) {
+            if (cpu < ARMOS_MAX_CPUS) {
+                idle_work_seen_count[cpu]++;
+                idle_schedule_count[cpu]++;
+            }
             schedule();
+        }
     }
 }
 
@@ -2240,6 +2902,7 @@ task_t* task_find_by_name(const char* name)
 void task_set_priority(task_t* task, uint32_t priority)
 {
     unsigned long flags;
+    task_t* current = task_current_local();
     bool queued;
 
     if (!task) return;
@@ -2257,7 +2920,7 @@ void task_set_priority(task_t* task, uint32_t priority)
     spin_unlock_irqrestore(&task_lock, flags);
     
     /* Si on change la priorite de la tache courante, re-scheduler */
-    if (task == (task_t *)current_task) {
+    if (task == current) {
         schedule();
     }
 }
@@ -2295,15 +2958,96 @@ void task_set_state(task_t* task, task_state_t state)
     if (!task) return;
     
     spin_lock_irqsave(&task_lock, &flags);
-    if (state != TASK_READY)
-        runqueue_remove_locked(task);
+    if (state == TASK_READY) {
+        task_make_ready_under_lock(task);
+        spin_unlock_irqrestore(&task_lock, flags);
+        return;
+    }
+
+    if (task->state == TASK_RUNNING &&
+        task->running_cpu != TASK_CPU_NONE &&
+        task->running_cpu != smp_processor_id() &&
+        state != TASK_RUNNING) {
+        kernel_lifecycle_stats.ready_queue_refused++;
+        sched_trace_record(SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING, task);
+        spin_unlock_irqrestore(&task_lock, flags);
+        return;
+    }
+
+    runqueue_remove_locked(task);
+
     task->state = state;
+    if (state == TASK_RUNNING) {
+        task->running_cpu = smp_processor_id();
+        task->last_cpu = task->running_cpu;
+    }
+    /*
+     * Do not clear running_cpu when the currently executing task marks itself
+     * sleeping/blocking before calling schedule(). It still owns its kernel
+     * stack until task_switch.S saves the final SVC frame and calls
+     * task_context_save_complete().
+     */
     if (task->type == TASK_TYPE_PROCESS && task->process) {
         proc_state_t proc_state = task_state_to_proc_state(state);
         if (task->process->state != proc_state)
             kernel_lifecycle_stats.state_sync_repairs++;
         task->process->state = proc_state;
     }
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
+static void task_set_sleep_state_until(task_t* task, task_state_t state,
+                                       uint32_t wakeup_time)
+{
+    unsigned long flags;
+
+    if (!task)
+        return;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    if (task->state == TASK_RUNNING &&
+        task->running_cpu != TASK_CPU_NONE &&
+        task->running_cpu != smp_processor_id()) {
+        kernel_lifecycle_stats.ready_queue_refused++;
+        sched_trace_record(SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING, task);
+        spin_unlock_irqrestore(&task_lock, flags);
+        return;
+    }
+
+    runqueue_remove_locked(task);
+    task->state = state;
+    task->wakeup_time = wakeup_time;
+    if (task->type == TASK_TYPE_PROCESS && task->process) {
+        proc_state_t proc_state = task_state_to_proc_state(state);
+        if (task->process->state != proc_state)
+            kernel_lifecycle_stats.state_sync_repairs++;
+        task->process->state = proc_state;
+    }
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
+void task_set_wakeup_time(task_t* task, uint32_t wakeup_time)
+{
+    unsigned long flags;
+
+    if (!task)
+        return;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task->wakeup_time = wakeup_time;
+    spin_unlock_irqrestore(&task_lock, flags);
+}
+
+void task_wake(task_t* task)
+{
+    unsigned long flags;
+
+    if (!task)
+        return;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    task->wakeup_time = 0;
+    task_make_ready_under_lock(task);
     spin_unlock_irqrestore(&task_lock, flags);
 }
 
@@ -2322,9 +3066,19 @@ void task_set_interruptible(task_t* task)
     task_set_state(task, TASK_INTERRUPTIBLE);
 }
 
+void task_set_interruptible_until(task_t* task, uint32_t wakeup_time)
+{
+    task_set_sleep_state_until(task, TASK_INTERRUPTIBLE, wakeup_time);
+}
+
 void task_set_uninterruptible(task_t* task)
 {
     task_set_state(task, TASK_UNINTERRUPTIBLE);
+}
+
+void task_set_uninterruptible_until(task_t* task, uint32_t wakeup_time)
+{
+    task_set_sleep_state_until(task, TASK_UNINTERRUPTIBLE, wakeup_time);
 }
 
 void task_set_stopped(task_t* task)
@@ -2407,6 +3161,7 @@ void task_dump_info(task_t* task)
 
 void task_dump_stacks(void)
 {
+    task_t* current = task_current_local();
     task_t* task;
     task_t* start_task;
     int count = 0;
@@ -2486,13 +3241,13 @@ void task_dump_stacks(void)
     KINFO("Average per task: %u bytes\n", count > 0 ? total_stack_memory / count : 0);
     
     /* Afficher la tache courante */
-    if (current_task) {
-        KINFO("Current task:     %s (ID=%u)\n", current_task->name, current_task->task_id);
-        KINFO("Current SP:       0x%08X\n", current_task->context.sp);
+    if (current) {
+        KINFO("Current task:     %s (ID=%u)\n", current->name, current->task_id);
+        KINFO("Current SP:       0x%08X\n", current->context.sp);
         
         /* Verifier la stack de la tache courante */
-        if (current_task->context.sp < (uint32_t)current_task->stack_base ||
-            current_task->context.sp >= (uint32_t)current_task->stack_top) {
+        if (current->context.sp < (uint32_t)current->stack_base ||
+            current->context.sp >= (uint32_t)current->stack_top) {
             KINFO("*** CURRENT TASK HAS INVALID SP! ***\n");
         }
     }
@@ -2569,6 +3324,7 @@ void task_check_stack_integrity(void)
 
 void task_list_all(void)
 {
+    task_t* current = task_current_local();
     task_t* task;
     int count = 0;
     
@@ -2580,8 +3336,8 @@ void task_list_all(void)
     }
     
     KINFO("Current task: %s (ID=%u)\n", 
-          current_task ? current_task->name : "none",
-          current_task ? current_task->task_id : 0);
+          current ? current->name : "none",
+          current ? current->task_id : 0);
     
     spin_lock(&task_lock);
     
@@ -2602,10 +3358,10 @@ void task_list_all(void)
 
 void task_sleep_ms(uint32_t ms)
 {
-    unsigned long flags;
+    task_t* task = task_current_local();
     uint32_t ticks;
 
-    if (!current_task || ms == 0) {
+    if (!task || ms == 0) {
         yield();
         return;
     }
@@ -2621,19 +3377,11 @@ void task_sleep_ms(uint32_t ms)
     if (ticks == 0)
         ticks = 1;
 
-    spin_lock_irqsave(&task_lock, &flags);
-    current_task->wakeup_time = get_system_ticks() + ticks;
-    runqueue_remove_locked(current_task);
-    current_task->state = TASK_INTERRUPTIBLE;
-    if (current_task->type == TASK_TYPE_PROCESS && current_task->process)
-        current_task->process->state = (proc_state_t)PROC_INTERRUPTIBLE;
-    spin_unlock_irqrestore(&task_lock, flags);
+    task_set_interruptible_until(task, get_system_ticks() + ticks);
 
     schedule();
 
-    spin_lock_irqsave(&task_lock, &flags);
-    current_task->wakeup_time = 0;
-    spin_unlock_irqrestore(&task_lock, flags);
+    task_set_wakeup_time(task, 0);
 }
 
 /**
@@ -2649,10 +3397,12 @@ uint32_t task_get_count(void)
  */
 void task_print_stats(void)
 {
+    task_t* current = task_current_local();
+
     KINFO("=== Task Statistics ===\n");
     KINFO("Total tasks:     %u\n", task_count);
     KINFO("Max tasks:       %u\n", MAX_TASKS);
-    KINFO("Current task:    %s\n", current_task ? current_task->name : "none");
+    KINFO("Current task:    %s\n", current ? current->name : "none");
     KINFO("Scheduler:       %s\n", scheduler_initialized ? "running" : "stopped");
     KINFO("Next task ID:    %u\n", next_task_id);
 }
@@ -2760,31 +3510,33 @@ void debug_task_detailed(task_t *current_task)
 /* 1. DIAGNOSTIC: Ajouter debug detaille */
 void debug_current_task_detailed(const char* location)
 {
+    task_t* task = task_current_local();
+
     KDEBUG("[%s] === current_task DEBUG ===\n", location);
-    KDEBUG("  current_task pointer: %p\n", current_task);
+    KDEBUG("  current_task pointer: %p\n", task);
     
-    if (!current_task) {
+    if (!task) {
         KERROR("  KO current_task is NULL!\n");
         return;
     }
     
     /* Verifier que le pointeur est dans une zone valide */
-    if ((uint32_t)current_task < 0x40000000 || (uint32_t)current_task > 0x50000000) {
-        KERROR("  KO current_task pointer invalid: %p\n", current_task);
+    if ((uint32_t)task < 0x40000000 || (uint32_t)task > 0x50000000) {
+        KERROR("  KO current_task pointer invalid: %p\n", task);
         return;
     }
     
-    KDEBUG("  Task name: %s\n", current_task->name);
-    KDEBUG("  Task ID: %u\n", current_task->task_id);
-    KDEBUG("  Context SP: 0x%08X\n", current_task->context.sp);
-    KDEBUG("  Stack base: 0x%08X\n", (uint32_t)current_task->stack_base);
-    KDEBUG("  Stack top:  0x%08X\n", (uint32_t)current_task->stack_top);
-    KDEBUG("  is_first_run: %u\n", current_task->context.is_first_run);
+    KDEBUG("  Task name: %s\n", task->name);
+    KDEBUG("  Task ID: %u\n", task->task_id);
+    KDEBUG("  Context SP: 0x%08X\n", task->context.sp);
+    KDEBUG("  Stack base: 0x%08X\n", (uint32_t)task->stack_base);
+    KDEBUG("  Stack top:  0x%08X\n", (uint32_t)task->stack_top);
+    KDEBUG("  is_first_run: %u\n", task->context.is_first_run);
     
     /* Verification des limites de stack */
-    uint32_t sp = current_task->context.sp;
-    uint32_t base = (uint32_t)current_task->stack_base;
-    uint32_t top = (uint32_t)current_task->stack_top;
+    uint32_t sp = task->context.sp;
+    uint32_t base = (uint32_t)task->stack_base;
+    uint32_t top = (uint32_t)task->stack_top;
     
     if (sp >= base && sp < top) {
         KDEBUG("  OK SP in valid range\n");
@@ -3153,16 +3905,17 @@ void add_to_ready_queue(task_t* task)
         return;
     }
 
-    /*
-     * Fork creates the child object off-list. Put it in the global task list
-     * before exposing it to the scheduler runqueue.
-     */
-    if (!task->next && !task->prev && task != task_list_head) {
-        add_task_to_list(task);
-    }
-
     spin_lock_irqsave(&task_lock, &flags);
-    task_make_ready_locked(task);
+
+    /*
+     * Fork creates the child object off-list. The global task-list insertion
+     * and runqueue publication must be one atomic operation under task_lock:
+     * otherwise two CPUs can both observe next/prev == NULL and splice the
+     * same node twice into the circular task list.
+     */
+    add_task_to_list_locked(task);
+    task_make_ready_under_lock(task);
+
     spin_unlock_irqrestore(&task_lock, flags);
 
     //KDEBUG("add_to_ready_queue: Task %s added to ready queue\n", task->name);
@@ -3221,9 +3974,8 @@ void destroy_zombie_process(task_t* zombie)
     
     task_free_kernel_stack(zombie);
     
-    /* Marquer comme completement mort */
-    zombie->state = TASK_TERMINATED;
-    zombie->process->state = (proc_state_t)PROC_DEAD;
+    /* Mark the zombie as fully dead through the scheduler state helper. */
+    task_set_terminated(zombie);
     
     /* Liberer la structure (optionnel, ou garder pour debug) */
     /* kfree(zombie); */

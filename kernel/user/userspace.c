@@ -168,6 +168,89 @@ static bool is_mapped_user_range(uint32_t *pgdir, const void *ptr, size_t size)
     return true;
 }
 
+static int fault_in_user_write_range(uint32_t *pgdir, const void *ptr, size_t size)
+{
+    uint32_t start = (uint32_t)ptr;
+    uint32_t end = start + size - 1;
+    uint32_t page = start & PAGE_MASK;
+    uint32_t last_page = end & PAGE_MASK;
+
+    if (!pgdir || !is_valid_user_range(ptr, size))
+        return -1;
+
+    while (page <= last_page) {
+        if (!get_physical_address(pgdir, page)) {
+            /*
+             * A syscall may be the first writer to a freshly grown user stack
+             * frame.  Fault the stack page in explicitly; other unmapped user
+             * ranges remain invalid and will still return EFAULT.
+             */
+            if (handle_user_stack_fault(page) < 0)
+                return -1;
+            if (!get_physical_address(pgdir, page))
+                return -1;
+        }
+
+        if (page > 0xFFFFFFFFu - PAGE_SIZE)
+            break;
+        page += PAGE_SIZE;
+    }
+
+    return 0;
+}
+
+static int copy_to_user_pages(uint32_t *pgdir, uint32_t user_addr,
+                              const uint8_t *src, size_t n)
+{
+    size_t copied = 0;
+
+    while (copied < n) {
+        uint32_t current = user_addr + copied;
+        uint32_t phys = get_physical_address(pgdir, current);
+        size_t chunk = PAGE_SIZE - (current & (PAGE_SIZE - 1));
+
+        if (!phys)
+            return -1;
+
+        if (chunk > n - copied)
+            chunk = n - copied;
+
+        /*
+         * User pages live in RAM that is directly mapped in the kernel.  Copy
+         * through the resolved physical address instead of touching the user
+         * virtual address directly; otherwise a partially unmapped user range
+         * can abort the kernel inside memcpy().
+         */
+        memcpy((void *)phys, src + copied, chunk);
+        copied += chunk;
+    }
+
+    return 0;
+}
+
+static int copy_from_user_pages(uint32_t *pgdir, uint8_t *dst,
+                                uint32_t user_addr, size_t n)
+{
+    size_t copied = 0;
+
+    while (copied < n) {
+        uint32_t current = user_addr + copied;
+        uint32_t phys = get_physical_address(pgdir, current);
+        size_t chunk = PAGE_SIZE - (current & (PAGE_SIZE - 1));
+
+        if (!phys)
+            return -1;
+
+        if (chunk > n - copied)
+            chunk = n - copied;
+
+        memcpy(dst + copied, (const void *)phys, chunk);
+        copied += chunk;
+    }
+
+    return 0;
+}
+
 uint32_t map_user_to_kernel(uint32_t *pgdir, uint32_t vaddr){
 
     //uint32_t user_addr = vaddr;
@@ -193,7 +276,8 @@ uint32_t map_user_to_kernel(uint32_t *pgdir, uint32_t vaddr){
 int copy_to_user(void* to, const void* from, size_t n)
 {
     task_t* task = get_current_task();
-    uint32_t* pgdir = (task && task->process && task->process->vm)
+    uint32_t* pgdir = (task && task->type == TASK_TYPE_PROCESS &&
+                       task->process && task->process->vm)
                     ? task->process->vm->pgdir
                     : NULL;
 
@@ -221,14 +305,18 @@ int copy_to_user(void* to, const void* from, size_t n)
         return -1;  /* Overflow */
     }
 
-    if (!is_mapped_user_range(pgdir, to, n)) {
+    if (fault_in_user_write_range(pgdir, to, n) < 0 ||
+        !is_mapped_user_range(pgdir, to, n)) {
         KERROR("[COPY] ERROR: copy_to_user destination 0x%08X+%u is not mapped\n",
                 (uint32_t)to, n);
         return -1;
     }
 
-    /* Copie securisee */
-    memcpy(to, from, n);
+    if (copy_to_user_pages(pgdir, (uint32_t)to, (const uint8_t *)from, n) < 0) {
+        KERROR("[COPY] ERROR: copy_to_user destination 0x%08X+%u mapping changed during copy\n",
+                (uint32_t)to, n);
+        return -1;
+    }
 
     //hexdump((void *)to, 32);
     return 0;
@@ -238,7 +326,10 @@ int copy_to_user(void* to, const void* from, size_t n)
 int copy_from_user(void* to, const void* from, size_t n)
 {
     task_t* task = get_current_task();
-    uint32_t* pgdir = task->process->vm->pgdir;
+    uint32_t* pgdir = (task && task->type == TASK_TYPE_PROCESS &&
+                       task->process && task->process->vm)
+                    ? task->process->vm->pgdir
+                    : NULL;
 
     //KDEBUG("copy_from_user: Starting to copy...\n");
 
@@ -290,8 +381,11 @@ int copy_from_user(void* to, const void* from, size_t n)
 
     //KDEBUG("test_str = %s of len = %d\n", test_str, strlen(test_str));
     
-    /* Copie securisee */
-    memcpy(to, (void *)from, n);
+    if (copy_from_user_pages(pgdir, (uint8_t *)to, (uint32_t)from, n) < 0) {
+        KERROR("[COPY] ERROR: copy_from_user source 0x%08X+%u mapping changed during copy\n",
+                (uint32_t)from, n);
+        return -1;
+    }
     //memcpy(to, (void *)test_str, strlen(test_str));
 
 

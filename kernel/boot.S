@@ -19,11 +19,22 @@
 .global _start
 .global vectors
 .global dtb_address
+.global smp_secondary_entry
+
+.equ SMP_CPU_STATE_PARKED, 2
+.equ SMP_CPU_INFO_SIZE, 24
+.equ SMP_CPU_INFO_STATE, 4
 
 .extern data_abort_handler
 .extern undefined_instruction_handler
 .extern prefetch_abort_handler
 .extern swi_handler
+.extern smp_cpu_infos
+.extern smp_secondary_main
+.extern __smp_irq_stack_bottom
+.extern __smp_abt_stack_bottom
+.extern __smp_und_stack_bottom
+.extern kernel_pgdir
 
 
 /*
@@ -34,6 +45,13 @@
  */
 _start:
     /* === PHASE 1: SAUVEGARDE ET VeRIFICATIONS === */
+
+    /*
+     * Mask exceptions before deciding whether this CPU is the boot CPU.
+     * Secondary CPUs do not have mode stacks or VBAR set yet; letting them take
+     * an IRQ while parked can corrupt early boot state or steal UART input.
+     */
+    cpsid aif                   /* Disable async aborts, IRQ and FIQ */
     
     /* Sauvegarder le DTB address immediatement */
     ldr r3, =dtb_address
@@ -46,9 +64,6 @@ _start:
     bne halt_secondary_cpu      /* Arreter les autres CPUs */
     
     /* === PHASE 2: CONFIGURATION SeCURITe === */
-    
-    /* Desactiver toutes les interruptions */
-    cpsid if                    /* Disable IRQ and FIQ */
     
     /* Configuration systeme de base */
     bl setup_cpu_state
@@ -219,18 +234,149 @@ enable_caches_and_optimizations:
 /*
  * Gestion des CPUs secondaires (multi-core)
  */
+smp_secondary_entry:
+    cpsid aif                   /* Secondary CPUs must not take IRQs yet */
+    bl setup_cpu_state
+    bl setup_secondary_mmu_state
+    b halt_secondary_cpu
+
+/*
+ * Minimal MMU setup for secondary CPUs.
+ *
+ * PSCI starts secondary CPUs with their own CP15 state. RAM accesses work while
+ * MMU is off because QEMU virt RAM is identity-addressed at 0x40000000, but
+ * kernel MMIO drivers use TTBR1 aliases such as 0xF0000000. A secondary must
+ * therefore install the boot CPU's kernel page directory before touching GIC,
+ * TTY, or any other MMIO-backed subsystem.
+ */
+setup_secondary_mmu_state:
+    mov r4, lr
+
+    mov r0, #0
+    mcr p15, 0, r0, c2, c0, 0   /* TTBR0 unused while parked */
+
+    ldr r1, =kernel_pgdir
+    ldr r1, [r1]                /* r1 = kernel_page_dir physical/identity VA */
+    mcr p15, 0, r1, c2, c0, 1   /* TTBR1 */
+
+    mov r0, #2                  /* N=2: split at 0x40000000 */
+    mcr p15, 0, r0, c2, c0, 2   /* TTBCR */
+
+    ldr r0, =0x55555555         /* All domains client */
+    mcr p15, 0, r0, c3, c0, 0   /* DACR */
+
+    mov r0, #0
+    mcr p15, 0, r0, c8, c7, 0   /* Invalidate unified TLB */
+    dsb
+    isb
+
+    mrc p15, 0, r0, c1, c0, 0   /* SCTLR */
+    /*
+     * Keep the secondary CPUs aligned with the boot CPU policy. ArmOS allows
+     * userland unaligned data accesses because newlib/TinyCC code may emit
+     * halfword/word stores to packed or byte-shifted heap addresses. Leaving
+     * SCTLR.A set on secondaries makes the same process randomly SIGSEGV
+     * depending on the CPU that runs it.
+     */
+    bic r0, r0, #(1 << 1)       /* Disable strict alignment checks */
+    orr r0, r0, #1              /* Enable MMU, keep caches as setup_cpu_state left them */
+    mcr p15, 0, r0, c1, c0, 0
+    dsb
+    isb
+
+    mov lr, r4
+    bx lr
+
 halt_secondary_cpu:
-    /* CPU secondaire detecte - le mettre en attente */
+    /* CPU secondaire detecte - le mettre en attente.
+     * Interrupts are already masked by _start before reaching this point.
+     */
     
     /* Obtenir l'ID du CPU */
     mrc p15, 0, r0, c0, c0, 5
     and r0, r0, #3
-    
-    /* Pour debug: vous pourriez signaler quel CPU est arrete */
-    /* (necessiterait une fonction d'affichage) */
-    
+
+    /*
+     * Mark this CPU as observed before parking it. This is intentionally a
+     * simple early-boot store: all secondaries are still outside the scheduler,
+     * IRQs are masked, and the value is only diagnostic until CPU release exists.
+     */
+    mov r3, #1
+    lsl r3, r3, r0
+    ldr r1, =smp_seen_mask
+    ldr r2, [r1]
+    orr r2, r2, r3
+    str r2, [r1]
+
+    /* Mark the CPU as parked in the explicit SMP state table. */
+    ldr r1, =smp_cpu_infos
+    mov r4, #SMP_CPU_INFO_SIZE
+    mul r3, r0, r4
+    add r1, r1, r3
+    mov r2, #SMP_CPU_STATE_PARKED
+    str r2, [r1, #SMP_CPU_INFO_STATE]
+
+    /*
+     * Give the parked CPU a private early stack. It must not use CPU0's boot
+     * stack: later SMP bring-up will need to call small assembly/C helpers from
+     * the holding pen before the scheduler owns the CPU.
+     *
+     * stack(cpu N) = __smp_stack_bottom + (N + 1) * 4096
+     */
+    ldr r1, =__smp_stack_bottom
+    add r2, r0, #1
+    lsl r2, r2, #12
+    add sp, r1, r2
+    and sp, sp, #~7
+
+    /*
+     * Initialize the secondary CPU's banked exception stacks before entering C.
+     * IRQs remain masked, but this makes the next IPI bring-up step possible
+     * without risking an exception on an uninitialized SP_irq/SP_abt/SP_und.
+     */
+    mov r6, r0
+
+    cps #0x12                    /* IRQ mode */
+    ldr r1, =__smp_irq_stack_bottom
+    add r2, r6, #1
+    lsl r2, r2, #12              /* 4096 bytes per CPU */
+    add sp, r1, r2
+    and sp, sp, #~7
+
+    cps #0x17                    /* ABT mode */
+    ldr r1, =__smp_abt_stack_bottom
+    add r2, r6, #1
+    lsl r2, r2, #10              /* 1024 bytes per CPU */
+    add sp, r1, r2
+    and sp, sp, #~7
+
+    cps #0x1B                    /* UND mode */
+    ldr r1, =__smp_und_stack_bottom
+    add r2, r6, #1
+    lsl r2, r2, #10              /* 1024 bytes per CPU */
+    add sp, r1, r2
+    and sp, sp, #~7
+
+    cps #0x13                    /* Back to SVC mode */
+    mov r0, r6
+
+    /* Install VBAR so unexpected synchronous exceptions at least vector to the
+     * normal table. IRQ/FIQ/async abort stay masked while parked.
+     */
+    ldr r1, =vectors
+    mcr p15, 0, r1, c12, c0, 0
+    dsb
+    isb
+
+    /*
+     * From this point the secondary has a private SVC stack and a valid VBAR,
+     * so it can run a tiny C holding pen. IRQs remain masked; it must not enter
+     * the scheduler until the SMP release path is implemented.
+     */
+    bl smp_secondary_main
+
 secondary_wait_loop:
-    wfi                         /* Wait For Interrupt */
+    wfi                         /* Defensive fallback: C entry must not return */
     b secondary_wait_loop       /* Boucle infinie */
 
 /*

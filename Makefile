@@ -7,6 +7,7 @@ LD = $(CROSS_COMPILE)ld
 OBJCOPY = $(CROSS_COMPILE)objcopy
 OBJDUMP = $(CROSS_COMPILE)objdump
 QEMU ?= qemu-system-arm
+SMP_CPUS ?= 1
 
 ARCH_FLAGS = -mcpu=cortex-a15 -marm
 FPU_FLAGS = -mfpu=neon-vfpv4 -mfloat-abi=soft
@@ -34,6 +35,7 @@ TASK_OBJS = kernel/task/task.o \
             kernel/task/task_switch.o \
             kernel/task/task_test.o \
 			kernel/task/kernel_tasks.o \
+            kernel/smp.o \
             kernel/sync/spinlock.o
 
 # Objets de la bibliotheque
@@ -48,6 +50,7 @@ KERNEL_OBJS = \
 	kernel/memory/physical.o \
 	kernel/memory/virtual.o \
 	kernel/memory/mmu.o \
+	kernel/memory/tlb.o \
 	kernel/memory/kmalloc.o \
 	kernel/memory/memory_detect.o \
 	kernel/process/process.o \
@@ -293,7 +296,7 @@ userfs.bin: $(wildcard userfs/**/*)
 # Run avec userfs loader
 run-userfs: $(KERNEL_BIN)
 	$(QEMU) -M virt -cpu cortex-a15 \
-		-m 2G -smp 1 \
+		-m 2G -smp $(SMP_CPUS) \
 		-drive file=disk.img,if=none,format=raw,id=hd0 \
 		-device virtio-blk-device,drive=hd0 \
 		-kernel $(KERNEL_BIN) \
@@ -305,7 +308,7 @@ run-userfs: $(KERNEL_BIN)
 
 debug-run-userfs: $(KERNEL_BIN) userfs.bin
 	$(QEMU) -M virt -cpu cortex-a15 \
-		-m 2G -smp 1 \
+		-m 2G -smp $(SMP_CPUS) \
 		-drive file=disk.img,if=none,format=raw,id=hd0 \
 		-device virtio-blk-device,drive=hd0 \
 		-kernel $(KERNEL_BIN) \

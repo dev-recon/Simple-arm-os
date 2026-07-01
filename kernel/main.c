@@ -28,6 +28,8 @@
 #include <kernel/virtio_net.h>
 #include <kernel/vfs.h>
 #include <kernel/ata.h>
+#include <kernel/smp.h>
+#include <kernel/tlb.h>
 
 /* Inclusion des fonctions inline ARM apres les prototypes */
 #include <asm/arm.h>
@@ -201,6 +203,7 @@ void kernel_main(void)
     __asm__ volatile ("cpsie aif");
 
     sctlr_set_smp();
+    smp_init_boot_cpu();
 
     timer_freq = boot_timer_frequency();
     bogo_x100 = boot_bogomips_x100(timer_freq);
@@ -234,6 +237,10 @@ void kernel_main(void)
     init_timer();
     KBOOT_OKF("Timer: ARM generic timer @ %u Hz, tick %u us",
                 timer_freq, 1000000 / TIMER_FREQ);
+
+    smp_start_secondary_cpus();
+    KBOOT_OKF("SMP: %u CPU(s) configured, %u online",
+              smp_possible_cpu_count(), smp_online_cpu_count());
 
     /* Phase 4: Peripheriques d'entree/sortie */
     init_keyboard();
@@ -331,6 +338,17 @@ void kernel_main(void)
     }
 
     KBOOT_OK("Process: scheduler ready");
+
+    if (smp_possible_cpu_count() > 1) {
+        KBOOT_OK("SMP: TLB/IPI preflight");
+        tlb_shootdown_all();
+        for (uint32_t cpu = 1; cpu < smp_possible_cpu_count(); cpu++) {
+            if (smp_enable_scheduler_cpu(cpu) == 0)
+                KBOOT_OKF("SMP: scheduler enabled on CPU%u", cpu);
+            else
+                KBOOT_WARNF("SMP: CPU%u scheduler remains parked", cpu);
+        }
+    }
 
     /* Main scheduler loop */
     sched_start();

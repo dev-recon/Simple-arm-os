@@ -26,6 +26,7 @@ select_qemu() {
 }
 
 QEMU="$(select_qemu "${1:-}")"
+SMP_CPUS="${SMP_CPUS:-1}"
 
 NET_HOST_ADDR="${NET_HOST_ADDR:-127.0.0.1}"
 NET_HOST_PORT="${NET_HOST_PORT:-2323}"
@@ -54,8 +55,9 @@ echo "UART console stays on this terminal; graphics are disabled."
 echo "QEMU: $("$QEMU" --version | head -n 1)"
 echo "NET: ${NET_DEVICE}"
 echo "FWD: ${NET_HOST_ADDR}:${NET_HOST_PORT} -> guest :${NET_GUEST_PORT}"
+echo "SMP: ${SMP_CPUS} CPU(s)"
 "$QEMU" -M virt -cpu cortex-a15 \
-    -m 2G -smp 1 \
+    -m 2G -smp "${SMP_CPUS}" \
     -drive file=disk.img,if=none,format=raw,id=hd0 \
     -device virtio-blk-device,drive=hd0 \
     -netdev "${NETDEV}" \

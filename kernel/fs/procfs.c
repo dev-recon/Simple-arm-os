@@ -33,6 +33,8 @@
 #include <kernel/virtio_net.h>
 #include <kernel/ext2.h>
 #include <kernel/syscalls.h>
+#include <kernel/smp.h>
+#include <kernel/tlb.h>
 #include <asm/arm.h>
 
 extern uint32_t task_count;
@@ -67,6 +69,8 @@ static file_operations_t procfs_dir_ops;
 #define PROC_INO_FS_EXT2_CHECK 20u
 #define PROC_INO_SCHED_TRACE 21u
 #define PROC_INO_SCHED      22u
+#define PROC_INO_SMP        23u
+#define PROC_INO_SMP_IPI    24u
 #define PROC_PID_BASE       100000u
 #define PROC_PID_STRIDE     512u
 #define PROC_PID_DIR        0u
@@ -284,8 +288,10 @@ static bool proc_pid_exists(pid_t pid)
 
 static pid_t proc_current_pid(void)
 {
-    if (current_task && current_task->process)
-        return current_task->process->pid;
+    task_t *task = task_current_local();
+
+    if (task && task->process)
+        return task->process->pid;
     return 0;
 }
 
@@ -381,6 +387,10 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_SCHED, S_IFREG | 0444, 0);
         if (strcmp(name, "sched_trace") == 0)
             return proc_make_inode(PROC_INO_SCHED_TRACE, S_IFREG | 0444, 0);
+        if (strcmp(name, "smp") == 0)
+            return proc_make_inode(PROC_INO_SMP, S_IFREG | 0444, 0);
+        if (strcmp(name, "smp_ipi") == 0)
+            return proc_make_inode(PROC_INO_SMP_IPI, S_IFREG | 0666, 0);
         if (strcmp(name, "self") == 0)
             return proc_make_inode(PROC_INO_SELF, S_IFLNK | 0777, 0);
         if (proc_parse_pid(name, &pid) && proc_pid_exists(pid))
@@ -677,6 +687,67 @@ static void proc_fill_cpuinfo(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "MPIDR\t\t: 0x%08x\n", proc_read_mpidr());
 }
 
+static void proc_fill_smp(char* buf, size_t cap, size_t* len)
+{
+    uint32_t current = smp_processor_id();
+    uint32_t boot = smp_boot_cpu_id();
+    uint32_t possible = smp_possible_cpu_count();
+    uint32_t seen = smp_seen_cpu_mask();
+
+    proc_append(buf, cap, len, "current_cpu: %u\n", current);
+    proc_append(buf, cap, len, "boot_cpu:    %u\n", boot);
+    proc_append(buf, cap, len, "possible:    %u\n", possible);
+    proc_append(buf, cap, len, "online:      %u\n", smp_online_cpu_count());
+    proc_append(buf, cap, len, "seen_mask:   0x%08x\n", seen);
+    proc_append(buf, cap, len, "sched_mask:  0x%08x\n", smp_scheduler_cpu_mask());
+    proc_append(buf, cap, len, "tlb_total:   %u\n", tlb_shootdown_total_count());
+    proc_append(buf, cap, len, "tlb_remote:  %u\n", tlb_shootdown_remote_count());
+    proc_append(buf, cap, len, "tlb_defer:   %u\n", tlb_shootdown_deferred_count());
+    proc_append(buf, cap, len, "tlb_gen:     %u\n", tlb_shootdown_generation());
+    proc_append(buf, cap, len, "sched_guard: %u\n", smp_scheduler_reject_count());
+    proc_append(buf, cap, len, "\n");
+    proc_append(buf, cap, len, "cpu state   seen sched rq      irq  ipi    timer    hb tlb idle  cur_tid cur_pid pri current      psci idle-work idle-sched idle-fb\n");
+
+    for (uint32_t cpu = 0; cpu < possible; cpu++) {
+        const smp_cpu_info_t* info = smp_cpu_info(cpu);
+        task_t* current_task_on_cpu = task_current_on_cpu(cpu);
+        task_t* idle_task_on_cpu = task_idle_on_cpu(cpu);
+        process_t* current_proc = current_task_on_cpu && current_task_on_cpu->type == TASK_TYPE_PROCESS
+                                ? current_task_on_cpu->process
+                                : NULL;
+
+        proc_append(buf, cap, len, "%3u %-7s %4s %5s %2u %8u %4u %8u %5u %3u %4u %8u %7u %3u %-12s %d %9u %10u %7u\n",
+                    cpu,
+                    smp_cpu_state_name(cpu),
+                    smp_cpu_seen(cpu) ? "yes" : "no",
+                    smp_scheduler_cpu_enabled(cpu) ? "yes" : "no",
+                    scheduler_resched_pending_on_cpu(cpu) ? 1u : 0u,
+                    info ? info->irq_count : 0,
+                    info ? info->ipi_count : 0,
+                    timer_cpu_tick_count(cpu),
+                    info ? info->park_heartbeat : 0,
+                    tlb_shootdown_cpu_ack(cpu),
+                    idle_task_on_cpu ? idle_task_on_cpu->task_id : 0u,
+                    current_task_on_cpu ? current_task_on_cpu->task_id : 0u,
+                    current_proc ? (uint32_t)current_proc->pid : 0u,
+                    current_task_on_cpu ? current_task_on_cpu->priority : 0u,
+                    current_task_on_cpu ? current_task_on_cpu->name : "-",
+                    smp_cpu_start_result(cpu),
+                    scheduler_idle_work_seen_count(cpu),
+                    scheduler_idle_schedule_count(cpu),
+                    scheduler_idle_fallback_count(cpu));
+    }
+}
+
+static void proc_fill_smp_ipi(char* buf, size_t cap, size_t* len)
+{
+    proc_append(buf, cap, len,
+                "SMP IPI test endpoint\n"
+                "write \"self\" or \"0\" to send IRQ_SGI_TLB_SHOOTDOWN to CPU0\n"
+                "write \"others\" to send it to all non-boot CPU interfaces\n"
+                "write \"tlb\" to run a full TLB shootdown rendezvous\n");
+}
+
 static void proc_fill_filesystems(char* buf, size_t cap, size_t* len)
 {
     proc_append(buf, cap, len, "nodev\tproc\n");
@@ -712,6 +783,9 @@ static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
     uint32_t virtio_net_irq = virtio_net_get_irq();
 
     proc_append(buf, cap, len, "           CPU0\n");
+    proc_append(buf, cap, len, "%3u: %10u GICv2  ipi-tlb\n",
+                IRQ_SGI_TLB_SHOOTDOWN,
+                gic_get_irq_count(IRQ_SGI_TLB_SHOOTDOWN));
     proc_append(buf, cap, len, "%3u: %10u GICv2  timer\n",
                 VIRT_TIMER_NS_EL1_IRQ,
                 gic_get_irq_count(VIRT_TIMER_NS_EL1_IRQ));
@@ -871,6 +945,7 @@ static const char* proc_sched_event_name(uint32_t event)
         case SCHED_TRACE_REFUSE_LOOP: return "refuse_loop";
         case SCHED_TRACE_READY_REFUSE_DEAD: return "ready_refuse_dead";
         case SCHED_TRACE_READY_REFUSE_CORRUPT: return "ready_refuse_corrupt";
+        case SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING: return "ready_refuse_remote_running";
         default: return "unknown";
     }
 }
@@ -1040,6 +1115,28 @@ static void proc_fill_sched(char* buf, size_t cap, size_t* len)
                 stats.current_pid,
                 stats.current_priority,
                 stats.current_name[0] ? stats.current_name : "-");
+    proc_append(buf, cap, len, "\n");
+    proc_append(buf, cap, len, "cpu state    sched resched idle_tid tid    pid    prio name\n");
+
+    for (uint32_t cpu = 0; cpu < smp_possible_cpu_count(); cpu++) {
+        task_t* current = task_current_on_cpu(cpu);
+        task_t* idle = task_idle_on_cpu(cpu);
+        process_t* proc = current && current->type == TASK_TYPE_PROCESS ? current->process : NULL;
+        bool schedulable = smp_scheduler_cpu_enabled(cpu);
+
+        proc_append(buf, cap, len, "%3u %-8s %5s %7u %8u %6u %6u %4u %s\n",
+                    cpu,
+                    smp_cpu_state_name(cpu),
+                    schedulable ? "yes" : "no",
+                    scheduler_resched_pending_on_cpu(cpu) ? 1u : 0u,
+                    idle ? idle->task_id : 0u,
+                    current ? current->task_id : 0u,
+                    proc ? (uint32_t)proc->pid : 0u,
+                    current ? current->priority : 0u,
+                    current ? current->name : "-");
+    }
+
+    proc_append(buf, cap, len, "\n");
     proc_append(buf, cap, len, "priority count\n");
 
     for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
@@ -1379,8 +1476,9 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
 
     proc_append(buf, cap, len, "cpu  0 0 0 %u 0 0 0 0 0 0\n", get_system_ticks());
     proc_append(buf, cap, len, "intr %u\n", gic_get_total_irq_count());
+    task_t *task = task_current_local();
     proc_append(buf, cap, len, "ctxt %u\n",
-                current_task ? current_task->switch_count : 0);
+                task ? task->switch_count : 0);
     proc_append(buf, cap, len, "processes %u\n", kernel_lifecycle_stats.tasks_created);
     proc_append(buf, cap, len, "procs_running %u\n", task_count);
     proc_append(buf, cap, len, "procs_blocked 0\n");
@@ -1538,6 +1636,9 @@ static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "SchedDebt:\t%u\n", task->sched_debt);
     proc_append(buf, cap, len, "DebtScore:\t%u\n", debt_score);
     proc_append(buf, cap, len, "ReadyWaitTicks:\t%u\n", ready_wait);
+    proc_append(buf, cap, len, "CPU:\t%d\n",
+                task->running_cpu != TASK_CPU_NONE ? (int)task->running_cpu :
+                task->last_cpu != TASK_CPU_NONE ? (int)task->last_cpu : -1);
     proc_append(buf, cap, len, "KStack:\t%u kB\n", KERNEL_TASK_STACK_SIZE / 1024);
     proc_append(buf, cap, len, "Heap:\t%u kB\n",
                 (vm && vm->brk >= vm->heap_start) ? ((vm->brk - vm->heap_start) / 1024u) : 0);
@@ -1654,6 +1755,8 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_STAT:    proc_fill_stat(buf, cap, len);    return 0;
         case PROC_INO_TASKS:   proc_fill_tasks(buf, cap, len);   return 0;
         case PROC_INO_CPUINFO: proc_fill_cpuinfo(buf, cap, len); return 0;
+        case PROC_INO_SMP:     proc_fill_smp(buf, cap, len);     return 0;
+        case PROC_INO_SMP_IPI: proc_fill_smp_ipi(buf, cap, len); return 0;
         case PROC_INO_FILESYSTEMS: proc_fill_filesystems(buf, cap, len); return 0;
         case PROC_INO_PARTITIONS: proc_fill_partitions(buf, cap, len); return 0;
         case PROC_INO_DMESG:   proc_fill_dmesg(buf, cap, len); return 0;
@@ -1754,7 +1857,41 @@ static ssize_t procfs_read(file_t* file, void* buffer, size_t count)
 
 static ssize_t procfs_write(file_t* file, const void* buffer, size_t count)
 {
-    (void)file; (void)buffer; (void)count;
+    char cmd[16];
+    size_t n;
+
+    if (!file || !file->inode || !buffer)
+        return -EINVAL;
+
+    if (file->inode->first_cluster != PROC_INO_SMP_IPI)
+        return -EROFS;
+
+    n = count;
+    if (n >= sizeof(cmd))
+        n = sizeof(cmd) - 1;
+    memcpy(cmd, buffer, n);
+    cmd[n] = '\0';
+
+    while (n > 0 && (cmd[n - 1] == '\n' || cmd[n - 1] == '\r' ||
+                     cmd[n - 1] == ' ' || cmd[n - 1] == '\t')) {
+        cmd[--n] = '\0';
+    }
+
+    if (strcmp(cmd, "self") == 0 || strcmp(cmd, "0") == 0) {
+        gic_send_sgi(1u << smp_boot_cpu_id(), IRQ_SGI_TLB_SHOOTDOWN);
+        return (ssize_t)count;
+    }
+
+    if (strcmp(cmd, "others") == 0) {
+        gic_send_sgi_others(IRQ_SGI_TLB_SHOOTDOWN);
+        return (ssize_t)count;
+    }
+
+    if (strcmp(cmd, "tlb") == 0) {
+        tlb_shootdown_all();
+        return (ssize_t)count;
+    }
+
     return -EROFS;
 }
 
@@ -1804,6 +1941,7 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         { "stat",    PROC_INO_STAT,    DT_REG },
         { "tasks",   PROC_INO_TASKS,   DT_REG },
         { "cpuinfo", PROC_INO_CPUINFO, DT_REG },
+        { "smp",     PROC_INO_SMP,     DT_REG },
         { "filesystems", PROC_INO_FILESYSTEMS, DT_REG },
         { "partitions", PROC_INO_PARTITIONS, DT_REG },
         { "dmesg",   PROC_INO_DMESG,  DT_REG },
@@ -1813,6 +1951,7 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         { "fs",      PROC_INO_FS_DIR, DT_DIR },
         { "sched",   PROC_INO_SCHED, DT_REG },
         { "sched_trace", PROC_INO_SCHED_TRACE, DT_REG },
+        { "smp_ipi", PROC_INO_SMP_IPI, DT_REG },
         { "self",    PROC_INO_SELF,    DT_LNK },
     };
     uint32_t offset = file->offset;

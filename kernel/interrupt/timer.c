@@ -24,30 +24,50 @@
 #include <kernel/kprintf.h>
 #include <kernel/uart.h>
 #include <kernel/tty.h>
+#include <kernel/smp.h>
 
 
 /* Flag pour savoir si le systeme de processus est pret */
 static bool process_system_ready = false;
 static uint32_t system_ticks = 0;
+static volatile uint32_t timer_cpu_ticks[ARMOS_MAX_CPUS];
 
 static uint64_t last_timer_count = 0;
 static uint32_t software_system_ticks = 0;
 static bool timer_software_initialized = false;
 
-static bool in_critical_section = false;
+static volatile bool in_critical_section_cpu[ARMOS_MAX_CPUS];
+
+static uint32_t timer_interval_from_frequency(uint32_t timer_freq)
+{
+    return timer_freq / TIMER_FREQ;
+}
+
+static void timer_program_next_tick(uint32_t timer_freq)
+{
+    uint32_t next_interval = timer_interval_from_frequency(timer_freq);
+
+    __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(next_interval));
+    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(1u));
+}
 
 
 void set_critical_section(void){
-    in_critical_section = true;
+    uint32_t cpu = smp_processor_id();
+    if (cpu < ARMOS_MAX_CPUS)
+        in_critical_section_cpu[cpu] = true;
 }
 
 void unset_critical_section(void){
-    in_critical_section = false;
+    uint32_t cpu = smp_processor_id();
+    if (cpu < ARMOS_MAX_CPUS)
+        in_critical_section_cpu[cpu] = false;
 }
 
 bool get_critical_section(void)
 {
-    return in_critical_section;
+    uint32_t cpu = smp_processor_id();
+    return cpu < ARMOS_MAX_CPUS ? in_critical_section_cpu[cpu] : false;
 }
 
 void init_timer_software(void)
@@ -115,7 +135,7 @@ void update_timer_software(void)
         last_timer_count += ticks_elapsed * tick_interval;
         
         /* Scheduling si nécessaire */
-        if (process_system_ready && ticks_elapsed > 0 && !in_critical_section) {
+        if (process_system_ready && ticks_elapsed > 0 && !get_critical_section()) {
             /* Faire du scheduling pour chaque tick écoulé */
             for (uint32_t i = 0; i < ticks_elapsed; i++) {
                 if (software_system_ticks % 10 == 0) {  /* Tous les 100ms */
@@ -161,6 +181,20 @@ void timer_set_timeout(uint64_t timeout_ticks)
     __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(1));
 }
 
+void timer_init_local_cpu(void)
+{
+    uint32_t timer_ctrl = 0;
+    uint32_t timer_freq = get_timer_frequency();
+
+    /*
+     * The ARM generic timer is per-CPU. This helper only programs the local
+     * CP15 timer registers; the caller must enable the matching GIC PPI for
+     * that CPU before expecting IRQ delivery.
+     */
+    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
+    timer_program_next_tick(timer_freq);
+}
+
 /* ARM Generic Timer - utilise par machine virt */
 void init_timer(void)
 {
@@ -179,22 +213,12 @@ void init_timer(void)
     KINFO("[TIMER] Timer frequency: %u Hz\n", timer_freq);
     
     /* 2. Calculer l'interval pour TIMER_FREQ Hz */
-    uint32_t interval = timer_freq / TIMER_FREQ;
+    uint32_t interval = timer_interval_from_frequency(timer_freq);
     KINFO("[TIMER] Timer interval: %u counter ticks (%u us)\n",
             interval, 1000000 / TIMER_FREQ);
     
-    /* 3. Configurer le timer EL1 (non-secure) */
-    
-    /* Desactiver le timer pendant la configuration */
-    uint32_t timer_ctrl = 0;
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
-    
-    /* Programmer la valeur de comparaison */
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(interval));
-    
-    /* Activer le timer : Enable=1, Interrupt=0 (non masque) */
-    timer_ctrl = 0x1;  // Enable bit
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
+    /* 3. Configurer le timer EL1 (non-secure) du CPU courant. */
+    timer_init_local_cpu();
     
     KINFO("[TIMER] ARM Generic Timer configured\n");
     
@@ -216,6 +240,8 @@ void init_timer(void)
 
 void timer_irq_handler(void)
 {
+    uint32_t cpu_id = smp_processor_id();
+
     /* 1. Acquitter l'interruption ARM Generic Timer */
     uint32_t timer_ctrl;
     __asm__ volatile("mrc p15, 0, %0, c14, c2, 1" : "=r"(timer_ctrl));
@@ -227,23 +253,21 @@ void timer_irq_handler(void)
     gic_ack_irq_kernel(IRQ_TIMER);
     
     /* 2. CORRECTION: Programmer le PROCHAIN timer (relatif) */
-    uint32_t timer_freq = get_timer_frequency();
-    uint32_t next_interval = timer_freq / TIMER_FREQ;
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(next_interval));
+    timer_program_next_tick(get_timer_frequency());
     
-    /* 3. Réactiver le timer */
-    timer_ctrl = 0x1;  /* Enable seulement */
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
-    
-    /* 4. Incrément système */
-    system_ticks++;
+    /* 4. Per-CPU accounting, plus one global wall-clock on the boot CPU. */
+    if (cpu_id < ARMOS_MAX_CPUS)
+        timer_cpu_ticks[cpu_id]++;
+    if (smp_is_boot_cpu())
+        system_ticks++;
 
     /*
      * PL011 TX interrupts are edge/level sensitive enough to miss a wake-up in
      * QEMU under dense console bursts. Poll the TTY TX ring from the periodic
-     * timer as a safety net; the check keeps the idle path cheap.
+     * timer as a safety net. Keep this on the boot CPU so future local timers
+     * do not make several CPUs compete for the same character backend.
      */
-    if (tty_has_pending_output())
+    if (smp_is_boot_cpu() && tty_has_pending_output())
         tty_drain_output();
     
     /* 5. RÉDUIRE drastiquement les messages */
@@ -253,21 +277,21 @@ void timer_irq_handler(void)
     
     /* 6. Scheduling sans messages debug */
     if (process_system_ready) {
-        extern task_t* current_task;
+        task_t* current = task_current_on_cpu(cpu_id);
         
-        if (current_task && current_task != idle_task && current_task->state == TASK_RUNNING) {
-            current_task->total_runtime++;
-            if (current_task->sched_debt < 0xffffffffu)
-                current_task->sched_debt++;
+        if (current && !task_is_idle_task(current) && current->state == TASK_RUNNING) {
+            current->total_runtime++;
+            if (current->sched_debt < 0xffffffffu)
+                current->sched_debt++;
         }
 
-        if (current_task && current_task != idle_task && !in_critical_section) {
-            current_task->quantum_left--;
+        if (current && !task_is_idle_task(current) && !get_critical_section()) {
+            current->quantum_left--;
 
-            if (current_task->quantum_left == 0) {
-                current_task->quantum_left = QUANTUM_TICKS;
+            if (current->quantum_left == 0) {
+                current->quantum_left = QUANTUM_TICKS;
                 //current_task->state = TASK_READY;
-                need_resched = 1;
+                scheduler_request_resched_current_cpu();
                 //KDEBUG("YIELDING BECAUSE OF TIMER\n");
                 //yield();
             }
@@ -321,6 +345,13 @@ uint32_t get_system_ticks(void)
     /* Mettre à jour avant de retourner */
     //update_timer_software();
     return system_ticks;
+}
+
+uint32_t timer_cpu_tick_count(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return 0;
+    return timer_cpu_ticks[cpu_id];
 }
 
 /* Fonction pour obtenir le temps en millisecondes */

@@ -189,6 +189,7 @@ static void cleanup_failed_fork_child(task_t* parent, task_t* child)
 
     task_free_kernel_stack(child);
 
+    child->magic = TASK_MAGIC_DEAD;
     kfree(child);
     kernel_lifecycle_stats.tasks_destroyed++;
 }
@@ -197,12 +198,14 @@ static int syscall_tty_id_from_fd(int fd)
 {
     file_t *file;
 
-    if (!current_task || !current_task->process)
+    task_t *task = task_current_local();
+
+    if (!task || !task->process)
         return -EINVAL;
     if (fd < 0 || fd >= MAX_FILES)
         return -EBADF;
 
-    file = current_task->process->files[fd];
+    file = task->process->files[fd];
     if (!file)
         return -EBADF;
     if (!file_is_tty(file))
@@ -466,7 +469,7 @@ void dbg_dump_pte_0x8000(void){
  */
 int sys_execve(const char* filename, char* const argv[], char* const envp[])
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
     char* kernel_filename;
     char** kernel_argv;
     char** kernel_envp;
@@ -587,9 +590,20 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
      */
     cleanup_process_signals(proc);
 
-    /* Remplacer l'espace memoire - ACCeS CORRECT */
-    destroy_vm_space(old_vm);
-    proc->process->vm = new_vm;
+    /*
+     * Publish the new VM under task_lock before freeing the old one. /proc and
+     * sysinfo readers hold task_lock while taking VM snapshots; this prevents
+     * them from walking a VMA list that execve() is about to destroy.  The
+     * actual free happens after switching TTBR0 away from old_vm.
+     */
+    {
+        unsigned long vm_flags;
+
+        spin_lock_irqsave(&task_lock, &vm_flags);
+        old_vm = proc->process->vm;
+        proc->process->vm = new_vm;
+        spin_unlock_irqrestore(&task_lock, vm_flags);
+    }
     init_process_signals(proc);
 
     /* Reinitialiser le contexte CPU - ADAPTe a VOTRE STRUCTURE */
@@ -625,6 +639,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     close_cloexec_files(proc);
 
     switch_to_vm_space(new_vm);
+    destroy_vm_space(old_vm);
 
     //tlb_flush_all_debug();
     data_memory_barrier();
@@ -654,7 +669,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
  */
 int sys_fork(void)
 {
-    task_t* parent = current_task;
+    task_t* parent = task_current_local();
     task_t* child;
 
     uint32_t return_address;
@@ -693,9 +708,15 @@ int sys_fork(void)
     }
 
     /* Configuration des relations parent-enfant apres creation VM reussie. */
-    child->process->parent = parent;
-    child->process->sibling_next = parent->process->children;
-    parent->process->children = child;
+    {
+        unsigned long child_flags;
+
+        spin_lock_irqsave(&task_lock, &child_flags);
+        child->process->parent = parent;
+        child->process->sibling_next = parent->process->children;
+        parent->process->children = child;
+        spin_unlock_irqrestore(&task_lock, child_flags);
+    }
     
     /* Copier les descripteurs de fichiers */
     copy_process_files(parent, child);
@@ -757,7 +778,7 @@ int sys_fork(void)
 
 void sys_exit(int status)
 {
-    task_t* proc = current_task;
+    task_t* proc = task_current_local();
 
     if (!proc) {
         KERROR("sys_exit: No current task\n");
@@ -793,6 +814,13 @@ void sys_exit(int status)
     if (proc->state != TASK_ZOMBIE) {
         proc->state = TASK_ZOMBIE;           /* Pas TASK_TERMINATED ! */
         proc->process->state = (proc_state_t)PROC_ZOMBIE;
+        /*
+         * SMP exit ordering:
+         * the parent must not reap/free this task while sys_exit() is still
+         * executing on the child's kernel stack. The scheduler will wake the
+         * parent after the child has switched away from that stack.
+         */
+        proc->wakeup_time = get_system_ticks() + 1;
         kernel_lifecycle_stats.zombies_created++;
     }
     spin_unlock_irqrestore(&task_lock, task_flags);
@@ -806,22 +834,11 @@ void sys_exit(int status)
     /* Orpheliner tous les enfants vers init (PID 1) - ACCeS CORRECT */
     orphan_children(proc);
 
-    task_t *parent = proc->process->parent;
-    bool parent_waiting = parent && parent->process &&
-        parent->state == TASK_BLOCKED &&
-        parent->process->state == (proc_state_t)PROC_BLOCKED;
-
-    /* Reveiller le parent seulement lorsque le nettoyage de sortie est termine. */
-    wakeup_parent(proc);
-    if (!parent_waiting && parent && parent->process) {
-        sig_handler_t handler = parent->process->signals.actions[SIGCHLD].sa_handler;
-        if (handler != SIG_DFL && handler != SIG_IGN)
-            send_signal(parent, SIGCHLD);
-    }
-
     /*
      * Ne pas reactiver les IRQ avant d'avoir quitte la pile du zombie: le
-     * parent reveille pourrait sinon liberer proc et sa pile kernel.
+     * parent reveille pourrait sinon liberer proc et sa pile kernel. En SMP,
+     * le reveil est differe par scheduler_scan_waiters() pour garantir cet
+     * ordre meme si le parent tourne sur un autre CPU.
      */
     (void)irq_flags;
     switch_to_idle();
@@ -981,7 +998,7 @@ int sys_waitpid(pid_t pid, int* status, int options)
     //KDEBUG("sys_waitpid: called for = %d - &status = 0x%08X\n", pid, (uint32_t)status);
 
 
-    task_t *parent = current_task;
+    task_t *parent = task_current_local();
     //debug_print_ctx(&parent->context, "PARENT CONTEXT BEFORE WAITPID");
 
     //parent->context.returns_to_user = 0;
@@ -1012,7 +1029,7 @@ int sys_waitpid(pid_t pid, int* status, int options)
 int sys_wait4(pid_t pid, int* status, int options, struct rusage_kernel* rusage)
 {
     struct rusage_kernel local;
-    task_t *parent = current_task;
+    task_t *parent = task_current_local();
     int exit_code;
     pid_t result;
 
@@ -1158,7 +1175,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
         return -ENOSYS;
     }
 
-    proc = current_task;
+    proc = task_current_local();
     if (proc) {
         proc->current_syscall = syscall_num;
         proc->last_syscall = syscall_num;
@@ -1181,7 +1198,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
     /* Call syscall */
     result = syscall_table[syscall_num](arg1, arg2, arg3, arg4, arg5);
 
-    proc = current_task;
+    proc = task_current_local();
 
     /*
      * Le contexte user canonique doit contenir la valeur de retour avant de
@@ -1193,7 +1210,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
 
     if (proc && syscall_num != __NR_rt_sigreturn) {
         sig_result = check_pending_signals();
-        proc = current_task;
+        proc = task_current_local();
     }
 
     if (!proc) {
@@ -1217,8 +1234,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
         return result;
     }
 
-    if (need_resched /* && (syscall_num != __NR_waitpid) */) {
-        need_resched = 0;
+    if (scheduler_take_resched_current_cpu()) {
         yield();
     }
 
@@ -1231,7 +1247,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
  */
 int sys_getpid(void)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
         return proc->process->pid;
@@ -1241,7 +1257,7 @@ int sys_getpid(void)
 
 int sys_getppid(void)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
         return proc->process->ppid;
@@ -1251,7 +1267,7 @@ int sys_getppid(void)
 
 int sys_getuid(void)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
         return proc->process->uid;
@@ -1267,7 +1283,7 @@ int sys_geteuid(void)
 
 int sys_setuid(uid_t uid)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
         return -EINVAL;
@@ -1281,7 +1297,7 @@ int sys_setuid(uid_t uid)
 
 int sys_getgid(void)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (proc && proc->type == TASK_TYPE_PROCESS && proc->process) {
         return proc->process->gid;
@@ -1296,7 +1312,7 @@ int sys_getegid(void)
 
 int sys_setgid(gid_t gid)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
 
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)
         return -EINVAL;
@@ -1356,7 +1372,7 @@ static bool can_change_task_priority(task_t *caller, task_t *target, int new_nic
 
 int sys_nice(int inc)
 {
-    task_t *proc = current_task;
+    task_t *proc = task_current_local();
     int old_nice;
     int new_nice;
 
@@ -1385,7 +1401,7 @@ int sys_getpriority(int which, int who)
         return -EINVAL;
 
     if (who == 0) {
-        target = current_task;
+        target = task_current_local();
     } else {
         target = find_process_by_pid((pid_t)who);
     }
@@ -1402,7 +1418,7 @@ int sys_getpriority(int which, int who)
 
 int sys_setpriority(int which, int who, int prio)
 {
-    task_t *caller = current_task;
+    task_t *caller = task_current_local();
     task_t *target;
 
     if (which != PRIO_PROCESS)
@@ -1411,7 +1427,7 @@ int sys_setpriority(int which, int who, int prio)
         return -EINVAL;
 
     if (who == 0) {
-        target = current_task;
+        target = task_current_local();
     } else {
         target = find_process_by_pid((pid_t)who);
     }
