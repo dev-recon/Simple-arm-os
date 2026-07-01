@@ -730,8 +730,8 @@ static void render_top(unsigned delay_sec, int iteration)
                    pct_x10 % 10u,
                    count);
 
-    top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %3s %3s %5s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
-                   "PID", "TTY", "STATE", "CPU", "PRI", "DEBT", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
+    top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %4s %3s %5s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
+                   "PID", "TTY", "STATE", "LAST", "PRI", "DEBT", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
     top_buf_append(&frame, C_DIM "------------------------------------------------------------------------------" C_RESET "\033[0K\r\n",
                    (int)strlen(C_DIM "------------------------------------------------------------------------------" C_RESET "\033[0K\r\n"));
 
