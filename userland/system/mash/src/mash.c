@@ -2560,7 +2560,7 @@ void shell_run(void) {
             break;
 
         jobs_reap_background();
-        shell_restore_tty_mode();
+        shell_restore_foreground();
         shell_print_prompt();
 
         SHELL_TRACE("read start");

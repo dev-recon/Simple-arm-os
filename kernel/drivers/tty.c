@@ -1072,13 +1072,17 @@ static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
 
             /*
              * A character may arrive between publishing read_wait and marking
-             * the task interruptible. Recheck before sleeping; if data is now
-             * available, cancel the wait and keep running in this syscall.
+             * the task interruptible. The input path then sees a RUNNING waiter,
+             * treats it as stale, clears read_wait, and leaves the byte queued.
+             * Recheck both conditions before sleeping; otherwise the reader can
+             * go to sleep with data already buffered and no registered waiter.
              */
             spin_lock_irqsave(&tty->lock, &flags);
-            if (tty->read_wait == task &&
-                (tty->input_head != tty->input_tail || tty->eof_pending)) {
-                tty->read_wait = NULL;
+            if (tty->input_head != tty->input_tail ||
+                tty->eof_pending ||
+                tty->read_wait != task) {
+                if (tty->read_wait == task)
+                    tty->read_wait = NULL;
                 spin_unlock_irqrestore(&tty->lock, flags);
                 task_set_wakeup_time(task, 0);
                 task_set_state(task, TASK_RUNNING);
