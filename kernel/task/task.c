@@ -60,6 +60,9 @@ static bool task_header_plausible(task_t* task);
 
 static volatile int legacy_need_resched = 0;
 static volatile int need_resched_cpu[ARMOS_MAX_CPUS];
+static volatile uint32_t idle_work_seen_count[ARMOS_MAX_CPUS];
+static volatile uint32_t idle_schedule_count[ARMOS_MAX_CPUS];
+static volatile uint32_t idle_fallback_count[ARMOS_MAX_CPUS];
 
 //static spinlock_t task_lock = {0};
 
@@ -119,6 +122,27 @@ bool scheduler_resched_pending_on_cpu(uint32_t cpu_id)
         return false;
 
     return need_resched_cpu[cpu_id] != 0;
+}
+
+uint32_t scheduler_idle_work_seen_count(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return 0;
+    return idle_work_seen_count[cpu_id];
+}
+
+uint32_t scheduler_idle_schedule_count(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return 0;
+    return idle_schedule_count[cpu_id];
+}
+
+uint32_t scheduler_idle_fallback_count(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return 0;
+    return idle_fallback_count[cpu_id];
 }
 
 /* Tache idle et processus init */
@@ -652,14 +676,10 @@ static void task_make_ready_locked(task_t* task)
      * frame, but running_cpu stays set until task_context_save_complete().
      * Other CPUs must not be allowed to run it during that short window.
      */
-    if (task->state == TASK_RUNNING) {
-        if (task->running_cpu != cpu) {
-            kernel_lifecycle_stats.ready_queue_refused++;
-            sched_trace_record(SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING, task);
-            return;
-        }
-    } else {
-        task->running_cpu = TASK_CPU_NONE;
+    if (task->state == TASK_RUNNING && task->running_cpu != cpu) {
+        kernel_lifecycle_stats.ready_queue_refused++;
+        sched_trace_record(SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING, task);
+        return;
     }
 
     task->state = TASK_READY;
@@ -685,9 +705,7 @@ void task_context_save_complete(task_context_t* ctx)
         return;
 
     spin_lock_irqsave(&task_lock, &flags);
-    if (task->state == TASK_READY &&
-        runqueue_contains_locked(task) &&
-        task->running_cpu == cpu) {
+    if (task->state != TASK_RUNNING && task->running_cpu == cpu) {
         task->running_cpu = TASK_CPU_NONE;
     }
     spin_unlock_irqrestore(&task_lock, flags);
@@ -2490,6 +2508,7 @@ restart_scan:
         sched_trace_record(SCHED_TRACE_REFUSE_LOOP, NULL);
     }
 
+    idle_fallback_count[smp_processor_id()]++;
     task = task_idle_on_cpu(smp_processor_id());
     if (!task)
         task = idle_task;
@@ -2614,6 +2633,7 @@ void remove_task_from_list(task_t* task)
 void idle_task_func(void* arg)
 {
     (void)arg;
+    uint32_t cpu = smp_processor_id();
     
     KINFO("Idle task started\n");
     
@@ -2627,8 +2647,13 @@ void idle_task_func(void* arg)
         __asm__ volatile("cpsie i" ::: "memory");
         __asm__ volatile("wfi" ::: "memory");
         scheduler_scan_waiters(task_current_local());
-        if (scheduler_has_ready_work())
+        if (scheduler_has_ready_work()) {
+            if (cpu < ARMOS_MAX_CPUS) {
+                idle_work_seen_count[cpu]++;
+                idle_schedule_count[cpu]++;
+            }
             schedule();
+        }
     }
 }
 
@@ -2743,9 +2768,13 @@ void task_set_state(task_t* task, task_state_t state)
     if (state == TASK_RUNNING) {
         task->running_cpu = smp_processor_id();
         task->last_cpu = task->running_cpu;
-    } else {
-        task->running_cpu = TASK_CPU_NONE;
     }
+    /*
+     * Do not clear running_cpu when the currently executing task marks itself
+     * sleeping/blocking before calling schedule(). It still owns its kernel
+     * stack until task_switch.S saves the final SVC frame and calls
+     * task_context_save_complete().
+     */
     if (task->type == TASK_TYPE_PROCESS && task->process) {
         proc_state_t proc_state = task_state_to_proc_state(state);
         if (task->process->state != proc_state)

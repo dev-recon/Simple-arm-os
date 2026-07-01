@@ -43,6 +43,7 @@ int shell_running = 0;
 static char token_buffer[SHELL_BUFFER_SIZE];
 static int shell_status = 0;
 static volatile sig_atomic_t shell_terminate_requested = 0;
+static volatile sig_atomic_t shell_terminate_signal = 0;
 
 #define SHELL_SCRIPT_ARG_MAX 10
 #define SHELL_SCRIPT_STACK_MAX 4
@@ -56,7 +57,6 @@ typedef struct shell_script_frame {
 static shell_script_frame_t script_frames[SHELL_SCRIPT_STACK_MAX];
 static int script_frame_depth = 1;
 
-static void shell_sigchld_handler(int sig);
 static void shell_term_handler(int sig);
 
 int shell_termination_requested(void)
@@ -111,7 +111,12 @@ static void shell_install_signal_handlers(void)
         signal(SIGTTOU, SIG_DFL);
     }
 
-    signal(SIGCHLD, shell_sigchld_handler);
+    /*
+     * Background jobs are reaped explicitly with waitpid(WNOHANG). Keeping the
+     * default SIGCHLD action avoids injecting a useless user signal frame into
+     * the interactive shell for every short-lived background child.
+     */
+    signal(SIGCHLD, SIG_DFL);
     signal(SIGHUP, shell_term_handler);
     signal(SIGTERM, shell_term_handler);
 }
@@ -140,14 +145,9 @@ static char shell_env_strings[SHELL_MAX_ENV][SHELL_ENV_NAME_LEN + SHELL_ENV_VALU
 static char* shell_envp[SHELL_MAX_ENV + 1];
 static int shell_pgid = 0;
 
-static void shell_sigchld_handler(int sig)
-{
-    (void)sig;
-}
-
 static void shell_term_handler(int sig)
 {
-    (void)sig;
+    shell_terminate_signal = sig;
     shell_terminate_requested = 1;
 }
 
@@ -2592,7 +2592,10 @@ void shell_run(void) {
     }
 
     shell_line_edit_shutdown();
-    printf("Shell closed\n");
+    if (shell_terminate_signal)
+        printf("Shell closed (signal %d)\n", (int)shell_terminate_signal);
+    else
+        printf("Shell closed\n");
 }
 
 
