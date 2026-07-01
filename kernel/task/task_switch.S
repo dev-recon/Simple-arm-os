@@ -177,6 +177,7 @@ __load_new_context:
     and    r4, r4, #3
     ldr    r2, =current_tasks
     str    r3, [r2, r4, lsl #2]
+    mcr    p15, 0, r3, c13, c0, 4        @ TPIDRPRW = current task for this CPU
     cmp    r4, #0
     ldreq  r2, =current_task
     streq  r3, [r2]

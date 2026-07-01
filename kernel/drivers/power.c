@@ -143,15 +143,9 @@ static unsigned shutdown_force_terminate_targets(void)
     for (i = 0; i < target_count; i++) {
         task_t *task = targets[i];
         if (shutdown_signal_target(task)) {
-            unsigned long flags;
-
             close_all_process_files(task);
             remove_from_ready_queue(task);
-
-            spin_lock_irqsave(&task_lock, &flags);
-            task->state = TASK_TERMINATED;
-            task->process->state = (proc_state_t)PROC_DEAD;
-            spin_unlock_irqrestore(&task_lock, flags);
+            task_set_terminated(task);
             stopped++;
         }
     }

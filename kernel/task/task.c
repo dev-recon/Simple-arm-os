@@ -57,6 +57,8 @@ static bool scheduler_initialized = false;
 DEFINE_SPINLOCK(task_lock);
 
 static bool task_header_plausible(task_t* task);
+static uint32_t task_reserve_task_id(void);
+static uint32_t task_reserve_pid(void);
 
 static volatile int legacy_need_resched = 0;
 static volatile int need_resched_cpu[ARMOS_MAX_CPUS];
@@ -65,6 +67,28 @@ static volatile uint32_t idle_schedule_count[ARMOS_MAX_CPUS];
 static volatile uint32_t idle_fallback_count[ARMOS_MAX_CPUS];
 
 //static spinlock_t task_lock = {0};
+
+static uint32_t task_reserve_task_id(void)
+{
+    unsigned long flags;
+    uint32_t id;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    id = next_task_id++;
+    spin_unlock_irqrestore(&task_lock, flags);
+    return id;
+}
+
+static uint32_t task_reserve_pid(void)
+{
+    unsigned long flags;
+    uint32_t pid;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    pid = next_pid++;
+    spin_unlock_irqrestore(&task_lock, flags);
+    return pid;
+}
 
 task_t* task_current_on_cpu(uint32_t cpu_id)
 {
@@ -77,8 +101,27 @@ task_t* task_current_on_cpu(uint32_t cpu_id)
     return task_header_plausible(task) ? task : NULL;
 }
 
+static task_t* task_current_from_cpu_register(void)
+{
+    task_t* task;
+
+    /*
+     * TPIDRPRW is private to each CPU and cannot be modified by userland.
+     * It is therefore a better SMP source of truth than a shared global array
+     * for the hot "who am I?" path. current_tasks[] remains useful for /proc
+     * and cross-CPU diagnostics.
+     */
+    __asm__ volatile("mrc p15, 0, %0, c13, c0, 4" : "=r"(task));
+    return task_header_plausible(task) ? task : NULL;
+}
+
 task_t* task_current_local(void)
 {
+    task_t* task = task_current_from_cpu_register();
+
+    if (task)
+        return task;
+
     return task_current_on_cpu(smp_processor_id());
 }
 
@@ -206,10 +249,15 @@ static task_t* schedule_next_task(void);
 static bool task_stack_metadata_valid(task_t* task);
 static bool task_is_schedulable(task_t* task);
 static bool runqueue_contains_locked(task_t* task);
+static bool runqueue_link_plausible_locked(task_t* task, uint32_t prio);
+static bool runqueue_membership_valid_locked(task_t* task);
+static void runqueue_reset_task_locked(task_t* task);
+static void runqueue_append_raw_locked(task_t* task, uint32_t prio);
 static void runqueue_enqueue_tail_locked(task_t* task);
 static void runqueue_remove_locked(task_t* task);
 static void runqueue_clear_locked(void);
 static void runqueue_rebuild_locked(task_t* exclude);
+static bool runqueue_validate_locked(const char* caller);
 static bool scheduler_has_ready_work(void);
 static void task_make_ready_locked(task_t* task);
 static void scheduler_mark_running_locked(task_t* task);
@@ -379,6 +427,11 @@ void scheduler_get_stats(scheduler_stats_t* stats)
     stats->lowest_ready_priority = TASK_PRIORITY_LEVELS;
     now = get_system_ticks();
 
+    if (!runqueue_validate_locked("scheduler_get_stats")) {
+        kernel_lifecycle_stats.scheduler_refused++;
+        runqueue_rebuild_locked(NULL);
+    }
+
     for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
         task_t* task;
 
@@ -391,7 +444,7 @@ void scheduler_get_stats(scheduler_stats_t* stats)
         }
 
         task = ready_queue.head[prio];
-        while (task) {
+        while (task && runqueue_link_plausible_locked(task, prio)) {
             uint32_t debt = task->sched_debt;
 
             if (task->ready_since_tick && now >= task->ready_since_tick) {
@@ -535,23 +588,58 @@ static uint32_t task_runqueue_priority(task_t* task)
     return task->priority;
 }
 
-static void runqueue_enqueue_tail_locked(task_t* task)
+static bool runqueue_membership_valid_locked(task_t* task)
 {
     uint32_t prio;
 
-    if (!task_header_plausible(task) || task_is_idle_task(task) ||
-        runqueue_contains_locked(task))
+    if (!task_header_plausible(task) || !runqueue_contains_locked(task))
+        return false;
+
+    prio = task->rq_priority;
+    if (prio >= TASK_PRIORITY_LEVELS)
+        return false;
+
+    if (task->rq_prev &&
+        (!runqueue_link_plausible_locked(task->rq_prev, prio) ||
+         task->rq_prev->rq_next != task))
+        return false;
+
+    if (task->rq_next &&
+        (!runqueue_link_plausible_locked(task->rq_next, prio) ||
+         task->rq_next->rq_prev != task))
+        return false;
+
+    if (!task->rq_prev && ready_queue.head[prio] != task)
+        return false;
+
+    if (!task->rq_next && ready_queue.tail[prio] != task)
+        return false;
+
+    return true;
+}
+
+static void runqueue_reset_task_locked(task_t* task)
+{
+    if (!task_header_plausible(task))
         return;
 
-    prio = task_runqueue_priority(task);
+    task->rq_next = NULL;
+    task->rq_prev = NULL;
+    task->rq_priority = TASK_PRIORITY_LEVELS;
+    task->ready_since_tick = 0;
+}
+
+static void runqueue_append_raw_locked(task_t* task, uint32_t prio)
+{
+    if (!task_header_plausible(task) || prio >= TASK_PRIORITY_LEVELS)
+        return;
+
     if (ready_queue.tail[prio] &&
         !runqueue_link_plausible_locked(ready_queue.tail[prio], prio)) {
-        KERROR("runqueue_enqueue: corrupt tail %p at prio %u, rebuilding\n",
+        KERROR("runqueue_append_raw: corrupt tail %p at prio %u\n",
                ready_queue.tail[prio], prio);
         kernel_lifecycle_stats.ready_queue_refused++;
-        runqueue_rebuild_locked(NULL);
-        if (runqueue_contains_locked(task))
-            return;
+        return;
     }
 
     task->ready_since_tick = get_system_ticks();
@@ -569,6 +657,43 @@ static void runqueue_enqueue_tail_locked(task_t* task)
     ready_queue.nr_running++;
 }
 
+static void runqueue_enqueue_tail_locked(task_t* task)
+{
+    uint32_t prio;
+
+    if (!task_header_plausible(task) || task_is_idle_task(task))
+        return;
+
+    if (runqueue_contains_locked(task)) {
+        if (runqueue_membership_valid_locked(task))
+            return;
+        KERROR("runqueue_enqueue: stale membership for task %p (%s), rebuilding\n",
+               task, task->name);
+        kernel_lifecycle_stats.ready_queue_refused++;
+        runqueue_reset_task_locked(task);
+        runqueue_rebuild_locked(task);
+    }
+
+    prio = task_runqueue_priority(task);
+    if (ready_queue.tail[prio] &&
+        !runqueue_link_plausible_locked(ready_queue.tail[prio], prio)) {
+        KERROR("runqueue_enqueue: corrupt tail %p at prio %u, rebuilding\n",
+               ready_queue.tail[prio], prio);
+        kernel_lifecycle_stats.ready_queue_refused++;
+        runqueue_rebuild_locked(task);
+    }
+
+    if (ready_queue.tail[prio] &&
+        !runqueue_link_plausible_locked(ready_queue.tail[prio], prio)) {
+        KERROR("runqueue_enqueue: refusing enqueue after failed rebuild task=%p prio=%u tail=%p\n",
+               task, prio, ready_queue.tail[prio]);
+        kernel_lifecycle_stats.ready_queue_refused++;
+        return;
+    }
+
+    runqueue_append_raw_locked(task, prio);
+}
+
 static void runqueue_remove_locked(task_t* task)
 {
     uint32_t prio;
@@ -578,9 +703,7 @@ static void runqueue_remove_locked(task_t* task)
 
     prio = task->rq_priority;
     if (prio >= TASK_PRIORITY_LEVELS) {
-        task->rq_next = NULL;
-        task->rq_prev = NULL;
-        task->rq_priority = TASK_PRIORITY_LEVELS;
+        runqueue_reset_task_locked(task);
         return;
     }
 
@@ -593,10 +716,7 @@ static void runqueue_remove_locked(task_t* task)
         KERROR("runqueue_remove: corrupt links for task %p (%s) at prio %u, rebuilding\n",
                task, task->name, prio);
         kernel_lifecycle_stats.ready_queue_refused++;
-        task->rq_next = NULL;
-        task->rq_prev = NULL;
-        task->rq_priority = TASK_PRIORITY_LEVELS;
-        task->ready_since_tick = 0;
+        runqueue_reset_task_locked(task);
         runqueue_rebuild_locked(task);
         return;
     }
@@ -611,10 +731,7 @@ static void runqueue_remove_locked(task_t* task)
     else
         ready_queue.tail[prio] = task->rq_prev;
 
-    task->rq_next = NULL;
-    task->rq_prev = NULL;
-    task->rq_priority = TASK_PRIORITY_LEVELS;
-    task->ready_since_tick = 0;
+    runqueue_reset_task_locked(task);
     if (ready_queue.count[prio] > 0)
         ready_queue.count[prio]--;
     if (ready_queue.nr_running > 0)
@@ -646,20 +763,84 @@ static void runqueue_rebuild_locked(task_t* exclude)
             break;
 
         next = task->next;
-        task->rq_next = NULL;
-        task->rq_prev = NULL;
-        task->rq_priority = TASK_PRIORITY_LEVELS;
+        runqueue_reset_task_locked(task);
 
         if (task != exclude &&
             task->state == TASK_READY &&
             task->running_cpu == TASK_CPU_NONE &&
-            !task_is_idle_task(task)) {
-            runqueue_enqueue_tail_locked(task);
-        }
+            !task_is_idle_task(task) &&
+            task_stack_metadata_valid(task))
+            runqueue_append_raw_locked(task, task_runqueue_priority(task));
 
         task = next;
         count++;
     } while (task != start && count < MAX_TASKS);
+}
+
+static bool runqueue_validate_locked(const char* caller)
+{
+    uint32_t total = 0;
+
+    for (uint32_t prio = 0; prio < TASK_PRIORITY_LEVELS; prio++) {
+        task_t* task = ready_queue.head[prio];
+        task_t* prev = NULL;
+        uint32_t count = 0;
+
+        if (!task && ready_queue.tail[prio]) {
+            KERROR("%s: runqueue prio %u has NULL head but tail=%p\n",
+                   caller, prio, ready_queue.tail[prio]);
+            return false;
+        }
+
+        while (task) {
+            task_t* next;
+
+            if (!runqueue_link_plausible_locked(task, prio)) {
+                KERROR("%s: corrupt runqueue entry %p at prio %u head=%p tail=%p prev=%p\n",
+                       caller, task, prio, ready_queue.head[prio],
+                       ready_queue.tail[prio], prev);
+                return false;
+            }
+
+            if (task->rq_prev != prev) {
+                KERROR("%s: corrupt runqueue prev link task=%p (%s) prio=%u rq_prev=%p expected=%p\n",
+                       caller, task, task->name, prio, task->rq_prev, prev);
+                return false;
+            }
+
+            next = task->rq_next;
+            if (!next && ready_queue.tail[prio] != task) {
+                KERROR("%s: corrupt runqueue tail link task=%p (%s) prio=%u tail=%p\n",
+                       caller, task, task->name, prio, ready_queue.tail[prio]);
+                return false;
+            }
+
+            prev = task;
+            task = next;
+            count++;
+            total++;
+
+            if (count > MAX_TASKS || total > MAX_TASKS) {
+                KERROR("%s: runqueue loop at prio %u count=%u total=%u\n",
+                       caller, prio, count, total);
+                return false;
+            }
+        }
+
+        if (ready_queue.count[prio] != count) {
+            KERROR("%s: runqueue count mismatch prio=%u stored=%u actual=%u\n",
+                   caller, prio, ready_queue.count[prio], count);
+            return false;
+        }
+    }
+
+    if (ready_queue.nr_running != total) {
+        KERROR("%s: runqueue total mismatch stored=%u actual=%u\n",
+               caller, ready_queue.nr_running, total);
+        return false;
+    }
+
+    return true;
 }
 
 static void task_make_ready_locked(task_t* task)
@@ -931,7 +1112,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->magic = TASK_MAGIC_DEAD;
     
     /* Reinitialiser les champs specifiques a l'enfant */
-    child->task_id = next_task_id++;
+    child->task_id = task_reserve_task_id();
     strncpy(child->name, parent->name, TASK_NAME_MAX - 1);
     child->name[TASK_NAME_MAX - 1] = '\0';
     
@@ -947,7 +1128,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
         child->process = (process_t *)kmalloc(sizeof(process_t));
         if(child->process){
             child->type = TASK_TYPE_PROCESS;
-            child->process->pid = next_pid++;
+            child->process->pid = task_reserve_pid();
             child->process->ppid = parent->process->pid;
             child->process->pgid = parent->process->pgid;
             child->process->sid = parent->process->sid;
@@ -1379,7 +1560,7 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     }
     
     /* Initialiser la structure */
-    task->task_id = next_task_id++;
+    task->task_id = task_reserve_task_id();
     strncpy(task->name, name ? name : "unnamed", TASK_NAME_MAX - 1);
     task->name[TASK_NAME_MAX - 1] = '\0';
     
@@ -1482,7 +1663,7 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         }
 
         /* Initialiser les champs processus */
-        task->process->pid = next_pid++;
+        task->process->pid = task_reserve_pid();
         task->process->ppid = (parent && parent->type == TASK_TYPE_PROCESS) ?
                              parent->process->pid : 0;
         task->process->pgid = task->process->pid;
@@ -1974,9 +2155,6 @@ static void scheduler_scan_waiters(task_t* current)
                 kernel_lifecycle_stats.fs_wait_timeouts++;
                 sched_trace_record(SCHED_TRACE_FS_WAIT_TIMEOUT, task);
             }
-            task->state = TASK_READY;
-            if (task->type == TASK_TYPE_PROCESS && task->process)
-                task->process->state = (proc_state_t)PROC_READY;
             task->wakeup_time = 0;
             task_make_ready_locked(task);
         }
@@ -2397,6 +2575,11 @@ static task_t* schedule_next_task(void)
 
     spin_lock_irqsave(&task_lock, &flags);
 
+    if (!runqueue_validate_locked("schedule_next_task")) {
+        kernel_lifecycle_stats.scheduler_refused++;
+        runqueue_rebuild_locked(NULL);
+    }
+
     while (ready_queue.nr_running > 0 && scanned <= MAX_TASKS) {
 restart_scan:
         best = NULL;
@@ -2762,8 +2945,14 @@ void task_set_state(task_t* task, task_state_t state)
     if (!task) return;
     
     spin_lock_irqsave(&task_lock, &flags);
-    if (state != TASK_READY)
-        runqueue_remove_locked(task);
+    if (state == TASK_READY) {
+        task_make_ready_locked(task);
+        spin_unlock_irqrestore(&task_lock, flags);
+        return;
+    }
+
+    runqueue_remove_locked(task);
+
     task->state = state;
     if (state == TASK_RUNNING) {
         task->running_cpu = smp_processor_id();
@@ -3706,9 +3895,8 @@ void destroy_zombie_process(task_t* zombie)
     
     task_free_kernel_stack(zombie);
     
-    /* Marquer comme completement mort */
-    zombie->state = TASK_TERMINATED;
-    zombie->process->state = (proc_state_t)PROC_DEAD;
+    /* Mark the zombie as fully dead through the scheduler state helper. */
+    task_set_terminated(zombie);
     
     /* Liberer la structure (optionnel, ou garder pour debug) */
     /* kfree(zombie); */

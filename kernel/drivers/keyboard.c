@@ -198,7 +198,6 @@ void add_to_keyboard_buffer(char c)
             task_t *waiter = kbd_state.waiters;
             kbd_state.waiters = NULL;
             task_set_ready(waiter);
-            add_to_ready_queue(waiter);
         }
     }
 }

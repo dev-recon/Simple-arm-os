@@ -194,7 +194,7 @@ pid_t spawn_ls_process(void)
     
     /* Configuration du processus ls */
     ls_proc->process->ppid = init_proc->process->pid;
-    ls_proc->state = TASK_READY;
+    task_set_ready(ls_proc);
     ls_pid = ls_proc->process->pid;
     
     /* Copier l'espace memoire virtuel (simplifie - pas de COW ici) */

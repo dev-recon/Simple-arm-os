@@ -194,7 +194,7 @@ static void ext2_wait_wake_all(ext2_wait_queue_t* queue)
         waiter->wakeup_time = 0;
         if (waiter->state == TASK_INTERRUPTIBLE ||
             waiter->state == TASK_UNINTERRUPTIBLE)
-            add_to_ready_queue(waiter);
+            task_set_ready(waiter);
     }
     spin_unlock_irqrestore(&queue->lock, flags);
 }

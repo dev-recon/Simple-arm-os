@@ -399,9 +399,7 @@ int tty_set_termios_for_id(int tty_id, const struct termios *tio, int flush_inpu
 
     if (reader) {
         reader->wakeup_time = 0;
-        if (reader->process)
-            reader->process->state = (proc_state_t)PROC_READY;
-        add_to_ready_queue(reader);
+        task_set_ready(reader);
     }
 
     return 0;
@@ -438,9 +436,7 @@ int tty_flush_for_id(int tty_id, int queue_selector)
 
         if (reader) {
             reader->wakeup_time = 0;
-            if (reader->process)
-                reader->process->state = (proc_state_t)PROC_READY;
-            add_to_ready_queue(reader);
+            task_set_ready(reader);
         }
     }
 
@@ -702,9 +698,7 @@ static void tty_wake_reader(task_t *reader)
         return;
 
     reader->wakeup_time = 0;
-    if (reader->process)
-        reader->process->state = (proc_state_t)PROC_READY;
-    add_to_ready_queue(reader);
+    task_set_ready(reader);
 }
 
 static bool tty_normalize_input_char(const struct termios *tio, char *c)
