@@ -87,6 +87,26 @@ Current supported platform:
 - UART console
 - Optional VirtIO-GPU display and VirtIO input keyboard
 
+### CPU Support Contract
+
+The stable public runtime profile is currently **SMP=1**:
+
+```sh
+./boot.sh
+```
+
+or explicitly:
+
+```sh
+SMP_CPUS=1 ./boot.sh
+```
+
+The kernel contains active SMP bring-up work for multi-CPU QEMU runs, including
+per-CPU scheduler state, SMP diagnostics, and TLB shootdown experiments.
+However, `SMP_CPUS>1` is still considered an experimental developer mode. It is
+useful for finding races and validating future scheduler/MMU work, but it is
+not the documented stable configuration for end users or public releases yet.
+
 Future targets may include Raspberry Pi boards or an AArch64 port, but the
 current development platform is QEMU `virt`.
 

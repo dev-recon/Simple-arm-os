@@ -290,46 +290,61 @@ Useful diagnostics:
 
 ## SMP Bring-Up Model
 
-ArmOS is currently a single-online-CPU kernel, but SMP bring-up has started by
-making low-level primitives CPU-aware before secondary CPUs are released.
+ArmOS now contains active SMP bring-up code, but the stable public runtime
+profile remains `SMP_CPUS=1`. Multi-CPU boots are intentionally available for
+kernel development and race hunting, but they are not yet the supported release
+configuration.
+
+Stable profile:
+
+```sh
+SMP_CPUS=1 ./boot.sh
+```
+
+Experimental developer profile:
+
+```sh
+SMP_CPUS=4 ./boot.sh
+```
+
+When documenting, testing, or publishing a release, treat `SMP_CPUS=1` as the
+baseline unless the test explicitly says it is exercising experimental SMP.
 
 Current SMP contract:
 
-- only the boot CPU is online;
 - `smp_processor_id()` reads the ARM MPIDR CPU id;
 - `smp_init_boot_cpu()` records the boot CPU during early kernel startup;
-- secondary CPUs mark themselves as `seen`, receive a private early parking
-  stack, then wait in a `WFE` holding pen;
 - SMP CPU state is explicit: `offline`, `booting`, `parked`, or `online`;
-- configured secondary CPUs are started through PSCI `CPU_ON` only far enough
-  to enter that holding pen;
 - `/proc/smp` exposes the boot CPU, online count, seen CPU mask, and per-CPU
-  state (`online`, `parked`, or `offline`) plus the PSCI start result;
+  state, scheduler participation, timer/IPI counters, TLB counters, and the
+  currently running task on each CPU;
 - spinlocks use ARMv7 `LDREX` / `STREX`, not compiler test-and-set helpers;
 - spinlocks record the owning CPU for diagnostics;
 - TLB maintenance now has two layers: local ARM helpers in `asm/mmu.h`
   (`tlb_flush_*`) and SMP-aware kernel entry points in `kernel/tlb.h`
   (`tlb_shootdown_*`);
-- scheduler entry is explicitly guarded so any accidental attempt to schedule
-  on a non-boot CPU is rejected and counted in `/proc/smp`;
 - `IRQ_SGI_TLB_SHOOTDOWN` is the TLB IPI and is visible in `/proc/interrupts`;
   `/proc/smp_ipi` can trigger a full shootdown rendezvous for diagnostics;
-- no secondary CPU executes scheduler, MMU, VFS, or userland code yet.
+- the scheduler has SMP-aware task ownership and runqueue protection, but this
+  path is still under hardening.
 
 The intended bring-up sequence is deliberately conservative:
 
-1. make atomics, spinlocks, and CPU identity correct while still running
-   `-smp 1`;
-2. start CPU1 into a private idle loop with its own stack and GIC CPU interface;
+1. keep the public release profile on `SMP_CPUS=1`;
+2. make atomics, spinlocks, CPU identity, and per-CPU current-task ownership
+   correct;
 3. keep one global scheduler lock and one global run queue initially;
-4. add TLB shootdown before allowing user address spaces to run on multiple CPUs;
-5. audit shared kernel structures: task lists, ready queues, ASIDs, physical
+4. use SMP stress runs to expose races without promoting them to release
+   support;
+5. harden TLB shootdown before relying on user address spaces across CPUs;
+6. audit shared kernel structures: task lists, ready queues, ASIDs, physical
    allocator, VFS mounts, file descriptors, TTY state, and signal queues;
-6. only then consider per-CPU run queues and load balancing.
+7. only then consider per-CPU run queues and load balancing.
 
-Do not let secondary CPUs run general kernel code until TLB shootdown and shared
-structure locking are explicit. A multi-core kernel that occasionally works is
-less useful than a single-core kernel with clear invariants.
+Do not describe `SMP_CPUS>1` as stable until the stress baseline includes mixed
+`kload`, `memstress`, `systest`, `vfstest`, `top`, TTY, procfs, and shutdown
+runs without corruption. A multi-core kernel that occasionally works is less
+useful than a single-core kernel with clear invariants.
 
 ## MMIO Mapping
 
