@@ -133,7 +133,7 @@ void init_process_system(void)
         }
 
         configure_idle_task_for_cpu(cpu, secondary_idle);
-        secondary_idle->state = TASK_BLOCKED;
+        task_set_blocked(secondary_idle);
     }
 
 

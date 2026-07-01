@@ -592,7 +592,7 @@ void virtio_block_irq_handler(void)
              virtio_blk_pending.waiter->state == TASK_INTERRUPTIBLE ||
              virtio_blk_pending.waiter->state == TASK_UNINTERRUPTIBLE)) {
             virtio_blk_pending.waiter->wakeup_time = 0;
-            add_to_ready_queue(virtio_blk_pending.waiter);
+            task_set_ready(virtio_blk_pending.waiter);
         }
     }
 }

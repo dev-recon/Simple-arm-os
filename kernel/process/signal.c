@@ -385,7 +385,6 @@ int send_signal(task_t* target, int sig)
             task_set_ready(target);
             target->process->stop_signal = 0;
             target->process->stop_reported = 0;
-            add_to_ready_queue(target);
         }
         wake_up_process_for_signal(target);
         return 0;
@@ -429,13 +428,12 @@ void wake_up_process_for_signal(task_t* proc)
     if (proc->state == TASK_BLOCKED) {
         KDEBUG("[SIGNAL] Waking up blocked process PID=%u for signal\n", proc->process->pid);
         kernel_lifecycle_stats.blocked_signal_wakeups++;
+        proc->wakeup_time = 0;
         task_set_ready(proc);
-        add_to_ready_queue(proc);
     } else if (proc->state == TASK_INTERRUPTIBLE) {
         kernel_lifecycle_stats.blocked_signal_wakeups++;
-        task_set_ready(proc);
         proc->wakeup_time = 0;
-        add_to_ready_queue(proc);
+        task_set_ready(proc);
     }
     //KDEBUG("wake_up_process_for_signal: state %s\n", task_state_string(proc->state));
 }
@@ -1024,6 +1022,5 @@ static void continue_process(task_t* proc)
         task_set_ready(proc);
         proc->process->stop_signal = 0;
         proc->process->stop_reported = 0;
-        add_to_ready_queue(proc);
     }
 }

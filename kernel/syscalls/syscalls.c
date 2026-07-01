@@ -696,9 +696,15 @@ int sys_fork(void)
     }
 
     /* Configuration des relations parent-enfant apres creation VM reussie. */
-    child->process->parent = parent;
-    child->process->sibling_next = parent->process->children;
-    parent->process->children = child;
+    {
+        unsigned long child_flags;
+
+        spin_lock_irqsave(&task_lock, &child_flags);
+        child->process->parent = parent;
+        child->process->sibling_next = parent->process->children;
+        parent->process->children = child;
+        spin_unlock_irqrestore(&task_lock, child_flags);
+    }
     
     /* Copier les descripteurs de fichiers */
     copy_process_files(parent, child);
