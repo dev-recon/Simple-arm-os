@@ -22,6 +22,32 @@
 .global irq_handler
 .global swi_handler
 
+/* ---------------- IRQ frame layout ----------------
+ * Built below by:
+ *   stmfd sp!, {r0-r12, lr}
+ *   stmfd sp!, {spsr}
+ *   sub   sp, sp, #4
+ *
+ * The frame starts at the alignment padding word passed to C.
+ */
+    .equ IRQ_FRAME_PAD,       0
+    .equ IRQ_FRAME_SPSR,      4
+    .equ IRQ_FRAME_R0,        8
+    .equ IRQ_FRAME_PC,       60
+    .equ IRQ_FRAME_SIZE,     64
+
+/* ---------------- task_context_t offsets ---------------- */
+    .equ TASK_CONTEXT_OFF,    48
+    .equ CTX_USR_R0,         88
+    .equ CTX_USR_R10,       128
+    .equ CTX_USR_R11,       132
+    .equ CTX_USR_R12,       136
+    .equ CTX_USR_SP,        140
+    .equ CTX_USR_LR,        144
+    .equ CTX_USR_PC,        148
+    .equ CTX_USR_CPSR,      152
+    .equ CTX_SVC_SP_TOP,    156
+
 irq_handler:
     /* Ajuster LR pour retour d'exception */
     sub     lr, lr, #4
@@ -40,6 +66,33 @@ irq_handler:
     mov     r0, sp               /* r0 pointe sur la zone pad (utilisable en C pour index) */
     bl      irq_c_handler
 
+    /*
+     * Return-to-user slow path, equivalent in spirit to Linux ARM's ret_to_user.
+     *
+     * Only user-mode IRQs are eligible. Kernel-mode IRQs keep the traditional
+     * fast return so no kernel critical section is preempted here.
+     */
+    ldr     r0, [sp, #IRQ_FRAME_SPSR]
+    and     r0, r0, #0x1F
+    cmp     r0, #0x10            /* USR mode? */
+    bne     irq_ret_no_user_work
+
+    mov     r0, sp               /* r0 = IRQ frame, still on the IRQ stack */
+    bl      irq_user_work_prepare
+    cmp     r0, #0
+    beq     irq_ret_no_user_work
+
+    /*
+     * ctx->usr_* now owns the interrupted user state. Drop the IRQ frame so
+     * the banked IRQ stack is ready for the next interrupt, then continue in
+     * SVC mode on the task kernel stack. IRQs remain masked across this mode
+     * switch; C will reopen them once the SVC stack is established.
+     */
+    add     sp, sp, #IRQ_FRAME_SIZE
+    cps     #0x13
+    b       irq_user_work_svc
+
+irq_ret_no_user_work:
     /* Retirer le padding (on retourne à l'adresse de SPSR) */
     add     sp, sp, #4
 
@@ -49,6 +102,58 @@ irq_handler:
 
     /* Restaurer r0-r12 et revenir en utilisant '^' pour restaurer CPSR depuis SPSR */
     ldmfd   sp!, {r0-r12, pc}^
+
+/*
+ * SVC continuation for IRQ return-to-user work.
+ *
+ * Entry:
+ *   - mode SVC, IRQs masked
+ *   - TPIDRPRW points to the current task
+ *   - task->context.usr_* contains the interrupted user state
+ *
+ * irq_user_work_pending() may call yield()/schedule(). On resume the task may
+ * run on another CPU, so TPIDRPRW must be reloaded before building the final
+ * exception return.
+ */
+irq_user_work_svc:
+    mrc     p15, 0, r12, c13, c0, 4
+    cmp     r12, #0
+    beq     irq_user_work_panic
+    add     r12, r12, #TASK_CONTEXT_OFF
+    ldr     sp, [r12, #CTX_SVC_SP_TOP]
+
+    bl      irq_user_work_pending
+
+    mrc     p15, 0, r12, c13, c0, 4
+    cmp     r12, #0
+    beq     irq_user_work_panic
+    add     r12, r12, #TASK_CONTEXT_OFF
+
+    ldr     sp, [r12, #CTX_SVC_SP_TOP]
+    ldr     r2, [r12, #CTX_USR_CPSR]
+    msr     spsr_cxsf, r2
+
+    cps     #0x1F
+    ldr     sp, [r12, #CTX_USR_SP]
+    ldr     lr, [r12, #CTX_USR_LR]
+    cps     #0x13
+
+    add     r10, r12, #CTX_USR_R0
+    ldmia   r10, {r0-r9}
+    ldr     r10, [r12, #CTX_USR_R10]
+    ldr     lr, [r12, #CTX_USR_PC]
+    ldr     r11, [r12, #CTX_USR_R11]
+    ldr     r12, [r12, #CTX_USR_R12]
+    movs    pc, lr
+
+irq_user_work_panic:
+    adr     r0, irq_user_work_panic_msg
+    bl      panic
+1:  b       1b
+
+irq_user_work_panic_msg:
+    .asciz  "irq_user_work_svc: no current task"
+    .align  2
 
 /* IRQ Handler pour machine virt avec GICv2 */
 irq_handler2:

@@ -43,6 +43,18 @@ void clear_irq(uint32_t irq);
 void irq_c_handler(void);
 void fiq_c_handler(void);
 
+/*
+ * IRQ return-to-user slow path.
+ *
+ * The assembly IRQ handler calls irq_user_work_prepare() while still in IRQ
+ * mode when the interrupted CPSR belongs to user mode. If it returns non-zero,
+ * the handler abandons the IRQ frame, switches to SVC mode on the task kernel
+ * stack, and calls irq_user_work_pending() before returning to user space from
+ * the canonical task_context_t user snapshot.
+ */
+uint32_t irq_user_work_prepare(uint32_t* irq_frame);
+void irq_user_work_pending(void);
+
 uint32_t gic_get_irq_count(uint32_t irq);
 uint32_t gic_get_total_irq_count(void);
 uint32_t gic_get_last_irq_id(void);

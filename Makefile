@@ -82,6 +82,7 @@ KERNEL_OBJS = \
 	kernel/drivers/virtio_block.o \
 	kernel/interrupt/exception.o \
 	kernel/interrupt/interrupt.o \
+	kernel/interrupt/irq_return.o \
 	kernel/interrupt/gic.o \
 	kernel/interrupt/timer.o \
 	kernel/syscalls/syscall.o \
