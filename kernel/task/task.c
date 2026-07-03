@@ -860,8 +860,9 @@ void task_make_ready_under_lock(task_t* task)
      * SMP handoff invariant:
      * a running task owns exactly one kernel stack. When the current CPU yields,
      * the task is queued as READY before __task_switch() saves the final SVC
-     * frame, but running_cpu stays set until task_context_save_complete().
-     * Other CPUs must not be allowed to run it during that short window.
+     * frame, but running_cpu stays set until __task_switch() has moved to the
+     * next task's stack and calls task_context_save_complete(). Other CPUs must
+     * not be allowed to run it during that handoff window.
      */
     if (task->state == TASK_RUNNING && task->running_cpu != cpu) {
         kernel_lifecycle_stats.ready_queue_refused++;

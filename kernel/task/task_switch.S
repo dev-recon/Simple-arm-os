@@ -103,6 +103,21 @@
 
 #define USE_RTUSR_SNAP 0
 
+/*
+ * Release the previous task only after this CPU has switched to the new
+ * kernel/SVC stack.  The old task may already be queued as READY, but while
+ * this routine still runs on its saved stack another CPU must not be allowed
+ * to restore that same SP.
+ *
+ * r0 = old_ctx or NULL
+ * r12 = new_ctx, preserved
+ */
+.macro finish_old_stack_handoff
+    push    {r12, lr}
+    bl      task_context_save_complete
+    pop     {r12, lr}
+.endm
+
 /* Entry: r0 = old_ctx or NULL, r1 = new_ctx. */
 /* r11 is not used as a scratch register here; r12 holds the context base. */
 
@@ -130,16 +145,6 @@ __user_ctx:
     mov     r2, #0
     str     r2, [r0, #CTX_FIRST]           // is_first_run = 0
     str     r2, [r0, #CTX_RET_TO_USER]     // force __restore_to_kernel on resume
-
-    /*
-     * The old task may already be present in the runqueue as READY, but it
-     * must remain owned by this CPU until the SVC frame above is saved. Release
-     * that ownership only now, otherwise another CPU can run the same task on
-     * the same kernel stack while this switch is still in progress.
-     */
-    push    {r1}
-    bl      task_context_save_complete
-    pop     {r1}
 
     /* usr_r[] is owned by SVC entry; do not refresh it from kernel registers. */
     //add     r3, r0, #CTX_USR_R0
@@ -196,6 +201,7 @@ __load_new_context:
     /* ---------- Restore a suspended kernel/SVC context ---------- */
 __restore_to_kernel:
     ldr     sp, [r12, #CTX_SP]             // r13_svc = saved kernel stack
+    finish_old_stack_handoff
     ldr     r2, [r12, #CTX_CPSR]
     msr     cpsr_cxsf, r2
     ldr     lr, [r12, #CTX_LR]             // r14_svc = kernel resume point
@@ -220,6 +226,7 @@ __restore_to_kernel:
     /* ---------- Restore a user context prepared for direct exception return ---------- */
 __restore_to_user:
     ldr     sp, [r12, #CTX_SVC_SP_TOP]
+    finish_old_stack_handoff
     /* 1) SPSR <- usr_cpsr (forcer ARM, T=0) */
     //push {r0-r3, lr}
     //mov r0, r12
@@ -262,6 +269,7 @@ __first_run_setup:
 __first_run_kernel:
     /* Initial kernel stack. */
     ldr     sp, [r12, #CTX_SP]
+    finish_old_stack_handoff
     /* Restore aussi l'state IRQ/FIQ du new contexte kernel. */
     ldr     r2, [r12, #CTX_CPSR]
     msr     cpsr_cxsf, r2
@@ -276,6 +284,7 @@ __first_run_kernel:
 __first_run_user:
     /* Kernel stack used for future SVC entries. */
     ldr     sp, [r12, #CTX_SVC_SP_TOP]
+    finish_old_stack_handoff
     //ldr     sp, [r12, #CTX_SVC_SP]
 
     /* SPSR = usr_cpsr (ARM) */

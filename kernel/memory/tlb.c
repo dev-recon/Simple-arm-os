@@ -48,6 +48,8 @@ static volatile uint32_t shootdown_asid;
 static volatile uint32_t shootdown_cpu_ack[ARMOS_MAX_CPUS];
 static spinlock_t shootdown_lock = SPINLOCK_INIT("tlb_shootdown");
 
+#define TLB_SHOOTDOWN_WARN_SPINS 5000000u
+
 static bool tlb_request_is_kernel_scope(tlb_request_kind_t kind, uint32_t asid)
 {
     if (kind == TLB_REQ_ALL)
@@ -120,15 +122,34 @@ static void tlb_flush_local(tlb_request_kind_t kind, uint32_t vaddr, uint32_t as
     }
 }
 
+static void tlb_lock_with_ipi_service(void)
+{
+    /*
+     * A CPU can request a TLB shootdown while another CPU already owns the
+     * global request slot. If the owner targets this CPU and waits for an ACK,
+     * a plain spin here can deadlock when local IRQs are masked. Poll the
+     * pending generation while waiting so the rendezvous can complete even
+     * before the IRQ handler runs.
+     */
+    while (!spin_trylock(&shootdown_lock)) {
+        tlb_handle_remote_ipi(smp_processor_id());
+        wait_for_event();
+    }
+}
+
 static void tlb_wait_remote_ack(uint32_t target_mask, uint32_t generation)
 {
     uint32_t pending = target_mask;
+    uint32_t spin = 0;
+    uint32_t slow_reports = 0;
 
     /*
-     * This is intentionally bounded. During SMP bring-up, a missing IPI ack
-     * should degrade to a diagnostic counter, not freeze the boot CPU.
+     * Correctness beats availability here. Continuing after a missed TLB
+     * shootdown lets another CPU execute with stale translations, which can
+     * corrupt arbitrary kernel state. Keep waiting, but report and resend the
+     * SGI periodically so a lost edge or long IRQ-disabled section is visible.
      */
-    for (uint32_t spin = 0; spin < 5000000 && pending; spin++) {
+    while (pending) {
         uint32_t acked = 0;
 
         for (uint32_t cpu = 0; cpu < ARMOS_MAX_CPUS; cpu++) {
@@ -137,17 +158,21 @@ static void tlb_wait_remote_ack(uint32_t target_mask, uint32_t generation)
         }
 
         pending &= ~acked;
-        __asm__ volatile("nop");
-    }
+        if (!pending)
+            break;
 
-    if (pending) {
-        shootdown_deferred_count++;
-        KWARN("TLB: remote shootdown generation %u missing ack mask=0x%08x\n",
-              generation, pending);
-        for (uint32_t cpu = 0; cpu < ARMOS_MAX_CPUS; cpu++) {
-            if (pending & (1u << cpu))
-                smp_disable_scheduler_cpu(cpu);
+        if (++spin >= TLB_SHOOTDOWN_WARN_SPINS) {
+            shootdown_deferred_count++;
+            slow_reports++;
+            if (slow_reports <= 4 || (slow_reports % 64) == 0) {
+                KWARN("TLB: waiting for shootdown generation %u ack mask=0x%08x\n",
+                      generation, pending);
+            }
+            gic_send_sgi(pending, IRQ_SGI_TLB_SHOOTDOWN);
+            spin = 0;
         }
+
+        __asm__ volatile("nop");
     }
 }
 
@@ -156,7 +181,7 @@ static void tlb_shootdown_common(tlb_request_kind_t kind, uint32_t vaddr, uint32
     uint32_t target_mask;
     uint32_t generation;
 
-    spin_lock(&shootdown_lock);
+    tlb_lock_with_ipi_service();
     shootdown_total_count++;
 
     tlb_flush_local(kind, vaddr, asid);

@@ -150,13 +150,20 @@ void init_gic(void)
         uint32_t irq = important_irqs[i];
         uint8_t target;
         
-        /* 1. Configurer comme edge-triggered si IRQ >= 16 */
+        /*
+         * Core QEMU virt interrupts used by ArmOS are level-triggered:
+         * - ARM generic timer PPI
+         * - PL011 UART SPI (GIC id 33)
+         *
+         * Treating PL011 as edge-triggered can lose RX interrupts when the
+         * line is asserted while masked or already being serviced. That maps
+         * exactly to the historical "long idle then no keyboard" failure mode.
+         */
         if (irq >= 16) {
             volatile uint32_t* icfgr = (volatile uint32_t*)(LOCAL_GICD_BASE + 0xC00);
             uint32_t cfg = icfgr[irq / 16];
             uint32_t shift = (irq % 16) * 2;
             cfg &= ~(0b11 << shift);
-            cfg |=  (0b10 << shift);  /* Edge-triggered */
             icfgr[irq / 16] = cfg;
         }
         
@@ -243,6 +250,16 @@ void irq_c_handler(void)
     uint32_t irq_id = gicc[0x00C/4];  /* GICC_IAR */
     uint32_t int_id = irq_id & 0x3FF;
     uint32_t cpu_id = smp_processor_id();
+
+    /*
+     * GIC spurious interrupt: no active interrupt was acknowledged, so there
+     * is nothing to service and no EOIR to write. Keep it silent; printing from
+     * IRQ context can inject text into the interactive TTY input line.
+     */
+    if (int_id == 1023) {
+        last_irq_id = int_id;
+        return;
+    }
     
     /* Compteur global */
     irq_count++;
@@ -315,11 +332,6 @@ void irq_c_handler(void)
         case 79:
         case 48:
             //kprintf("[IRQ] Ignoring unused VirtIO IRQ %u\n", int_id);
-            break;
-            
-        case 1023:
-            /* Spurious interrupt - ne pas traiter */
-            kprintf("[IRQ] Spurious interrupt (1023)\n");
             break;
             
         default:
@@ -434,7 +446,12 @@ static void enable_irq_with_type(uint32_t irq, bool edge_triggered)
 
 void enable_irq(uint32_t irq)
 {
-    enable_irq_with_type(irq, true);
+    /*
+     * Default to level-triggered interrupts. QEMU virt's PL011, VirtIO MMIO
+     * devices and ARM generic timer all use level semantics; edge-triggering
+     * them risks losing interrupts that remain asserted while masked.
+     */
+    enable_irq_with_type(irq, false);
 }
 
 void enable_irq_level(uint32_t irq)
