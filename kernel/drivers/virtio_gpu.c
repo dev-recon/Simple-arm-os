@@ -25,6 +25,8 @@
 #include <kernel/string.h>
 #include <kernel/kprintf.h>
 #include <kernel/timer.h>
+#include <kernel/spinlock.h>
+#include <kernel/task.h>
 #include <asm/arm.h>
 
 #define VIRTIO_ID_GPU 16
@@ -129,6 +131,9 @@ typedef struct {
 } virtio_gpu_state_t;
 
 static virtio_gpu_state_t gpu = {0};
+static spinlock_t gpu_lock = SPINLOCK_INIT("virtio_gpu");
+static volatile bool gpu_busy = false;
+static task_t *gpu_owner = NULL;
 
 static inline uint32_t fdt32_to_cpu_gpu(uint32_t x)
 {
@@ -300,11 +305,64 @@ static int gpu_wait_used(uint16_t prev_used)
     return -1;
 }
 
+static int gpu_acquire(void)
+{
+    while (1) {
+        task_t *task = task_current_local();
+        unsigned long flags;
+
+        spin_lock_irqsave(&gpu_lock, &flags);
+        if (!gpu_busy) {
+            gpu_busy = true;
+            gpu_owner = task;
+            spin_unlock_irqrestore(&gpu_lock, flags);
+            return 0;
+        }
+        if (gpu_owner && task && gpu_owner == task) {
+            KERROR("virtio_gpu: recursive command submission by %s\n",
+                   task->name);
+            spin_unlock_irqrestore(&gpu_lock, flags);
+            return -1;
+        }
+        spin_unlock_irqrestore(&gpu_lock, flags);
+
+        /*
+         * The legacy control queue is shared by all console paths.  Under SMP,
+         * displayd, tty writes, and boot-time drawing can all request flushes;
+         * only one command chain may own next_desc/avail/last_used at a time.
+         */
+        if (task)
+            yield();
+        else
+            asm volatile("yield" ::: "memory");
+    }
+}
+
+static void gpu_release(void)
+{
+    task_t *task = task_current_local();
+    unsigned long flags;
+
+    spin_lock_irqsave(&gpu_lock, &flags);
+    if (!gpu_busy) {
+        KERROR("virtio_gpu: release without owner\n");
+    } else if (gpu_owner && task && gpu_owner != task) {
+        KERROR("virtio_gpu: release by non-owner\n");
+    }
+    gpu_busy = false;
+    gpu_owner = NULL;
+    spin_unlock_irqrestore(&gpu_lock, flags);
+}
+
 static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len)
 {
+    int ret = -1;
+
     if (!gpu.initialized || !cmd || cmd_len == 0 || !resp || resp_len == 0)
         return -1;
     if (gpu.vq.qsize < 2)
+        return -1;
+    if (gpu_acquire() < 0)
         return -1;
 
     unsigned d0 = gpu.next_desc;
@@ -346,17 +404,17 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
     if (gpu_wait_used(prev_used) < 0) {
         KERROR("virtio_gpu: command timeout type=0x%08X\n",
                ((virtio_gpu_ctrl_hdr_t *)cmd)->type);
-        return -1;
+        goto out;
     }
 
     struct vring_used *used = gpu_used_ptr(&gpu.vq);
     if ((uint16_t)(used->idx - prev_used) != 1) {
         KERROR("virtio_gpu: unexpected used ring advance\n");
-        return -1;
+        goto out;
     }
     if (used->ring[prev_used % gpu.vq.qsize].id != d0) {
         KERROR("virtio_gpu: unexpected used descriptor id\n");
-        return -1;
+        goto out;
     }
 
     gpu.vq.last_used_idx = used->idx;
@@ -364,7 +422,11 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
     uint32_t irq_status = mmio_read32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_STATUS);
     if (irq_status)
         mmio_write32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_ACK, irq_status);
-    return 0;
+    ret = 0;
+
+out:
+    gpu_release();
+    return ret;
 }
 
 static int gpu_submit_simple(void *cmd, uint32_t cmd_len, const char *name)
