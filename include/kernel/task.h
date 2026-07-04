@@ -503,6 +503,8 @@ uint32_t task_get_priority(task_t* task);
 
 /* etats des taches */
 void task_set_state(task_t* task, task_state_t state);
+void task_set_blocked_under_lock(task_t* task);
+void task_set_stopped_under_lock(task_t* task);
 void task_set_ready(task_t* task);
 void task_set_blocked(task_t* task);
 void task_set_interruptible(task_t* task);

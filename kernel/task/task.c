@@ -3002,6 +3002,44 @@ void task_set_state(task_t* task, task_state_t state)
     spin_unlock_irqrestore(&task_lock, flags);
 }
 
+void task_set_blocked_under_lock(task_t* task)
+{
+    if (!task_header_plausible(task))
+        return;
+
+    if (task->state == TASK_RUNNING &&
+        task->running_cpu != TASK_CPU_NONE &&
+        task->running_cpu != smp_processor_id()) {
+        kernel_lifecycle_stats.ready_queue_refused++;
+        sched_trace_record(SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING, task);
+        return;
+    }
+
+    runqueue_remove_locked(task);
+    task->state = TASK_BLOCKED;
+    if (task->type == TASK_TYPE_PROCESS && task->process)
+        task->process->state = (proc_state_t)PROC_BLOCKED;
+}
+
+void task_set_stopped_under_lock(task_t* task)
+{
+    if (!task_header_plausible(task))
+        return;
+
+    if (task->state == TASK_RUNNING &&
+        task->running_cpu != TASK_CPU_NONE &&
+        task->running_cpu != smp_processor_id()) {
+        kernel_lifecycle_stats.ready_queue_refused++;
+        sched_trace_record(SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING, task);
+        return;
+    }
+
+    runqueue_remove_locked(task);
+    task->state = TASK_STOPPED;
+    if (task->type == TASK_TYPE_PROCESS && task->process)
+        task->process->state = (proc_state_t)PROC_STOPPED;
+}
+
 static void task_set_sleep_state_until(task_t* task, task_state_t state,
                                        uint32_t wakeup_time)
 {

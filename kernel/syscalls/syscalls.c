@@ -855,7 +855,7 @@ void sys_exit(int status)
 
 
 
-static task_t* find_stopped_child(task_t* parent, pid_t pid)
+static task_t* find_stopped_child_locked(task_t* parent, pid_t pid)
 {
     task_t* child;
 
@@ -863,7 +863,7 @@ static task_t* find_stopped_child(task_t* parent, pid_t pid)
         return NULL;
 
     child = parent->process->children;
-    while (child) {
+    while (child && child->process) {
         int matches = (pid == -1) ||
                       (pid > 0 && child->process->pid == pid) ||
                       (pid == 0 && child->process->pgid == parent->process->pgid) ||
@@ -881,10 +881,76 @@ static task_t* find_stopped_child(task_t* parent, pid_t pid)
     return NULL;
 }
 
+static pid_t consume_stopped_child(task_t* parent, pid_t pid, int* status)
+{
+    unsigned long flags;
+    task_t* stopped;
+    pid_t stopped_pid = 0;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    stopped = find_stopped_child_locked(parent, pid);
+    if (stopped) {
+        if (status)
+            *status = 0x7f | ((stopped->process->stop_signal & 0xff) << 8);
+        stopped->process->stop_reported = 1;
+        stopped_pid = stopped->process->pid;
+    }
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    return stopped_pid;
+}
+
+static bool waitpid_prepare_sleep(task_t* parent, pid_t pid, int options,
+                                  int* status, pid_t* stopped_pid)
+{
+    unsigned long flags;
+    task_t* stopped = NULL;
+
+    if (stopped_pid)
+        *stopped_pid = 0;
+
+    spin_lock_irqsave(&task_lock, &flags);
+
+    /*
+     * Avoid a lost wakeup with WUNTRACED: the child may stop between the
+     * caller's last unlocked scan and the moment the parent publishes its
+     * wait state. Re-check and consume the stop report in the same critical
+     * section that blocks the parent.
+     */
+    if (options & WUNTRACED) {
+        stopped = find_stopped_child_locked(parent, pid);
+        if (stopped) {
+            if (status)
+                *status = 0x7f | ((stopped->process->stop_signal & 0xff) << 8);
+            stopped->process->stop_reported = 1;
+            if (stopped_pid)
+                *stopped_pid = stopped->process->pid;
+            spin_unlock_irqrestore(&task_lock, flags);
+            return false;
+        }
+    }
+
+    if (has_pending_signals(parent)) {
+        parent->process->waitpid_pid = 0;
+        parent->process->waitpid_status = NULL;
+        parent->process->waitpid_options = 0;
+        spin_unlock_irqrestore(&task_lock, flags);
+        return false;
+    }
+
+    parent->process->waitpid_pid = pid;
+    parent->process->waitpid_status = status;
+    parent->process->waitpid_options = options;
+    parent->process->waitpid_iteration++;
+    task_set_blocked_under_lock(parent);
+
+    spin_unlock_irqrestore(&task_lock, flags);
+    return true;
+}
+
 int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
 {
     task_t* zombie = NULL;
-    task_t* stopped = NULL;
     //uint32_t iteration = 1;
 
     if (!parent || parent->type != TASK_TYPE_PROCESS || !parent->process) {
@@ -939,15 +1005,9 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
         }
 
         if (options & WUNTRACED) {
-            stopped = find_stopped_child(parent, pid);
-            if (stopped) {
-                int stop_status = 0x7f | ((stopped->process->stop_signal & 0xff) << 8);
-                stopped->process->stop_reported = 1;
-                if (status) {
-                    *status = stop_status;
-                }
-                return stopped->process->pid;
-            }
+            pid_t stopped_pid = consume_stopped_child(parent, pid, status);
+            if (stopped_pid > 0)
+                return stopped_pid;
         }
         
         //KDEBUG("NO ZOMBIE CHILD FOUND...\n");
@@ -964,17 +1024,14 @@ int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent)
             return 0;
         }
         
-        /* Sauvegarder le contexte d'attente - ACCeS CORRECT */
-        parent->process->waitpid_pid = pid;
-        parent->process->waitpid_status = status;
-        parent->process->waitpid_options = options;
-        parent->process->waitpid_iteration++;
-        
-        /* Bloquer le parent en attente - ACCeS CORRECT */
-        //task_set_state(parent, TASK_BLOCKED);
-        task_set_blocked(parent);
-
-        remove_from_ready_queue(parent);
+        {
+            pid_t stopped_pid = 0;
+            if (!waitpid_prepare_sleep(parent, pid, options, status, &stopped_pid)) {
+                if (stopped_pid > 0)
+                    return stopped_pid;
+                continue;
+            }
+        }
 
         //KDEBUG("kernel_waitpid: Parent PID %u going to sleep, waiting for child PID %d\n", 
         //       parent->process->pid, pid);

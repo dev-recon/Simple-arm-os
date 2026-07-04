@@ -131,18 +131,15 @@ static void shell_restore_child_signal_handlers(void)
     signal(SIGTTOU, SIG_DFL);
 }
 
-#define SHELL_MAX_ENV       16
 #define SHELL_ENV_NAME_LEN  32
-#define SHELL_ENV_VALUE_LEN 160
 typedef struct shell_env {
-    char name[SHELL_ENV_NAME_LEN];
-    char value[SHELL_ENV_VALUE_LEN];
+    char* name;
+    char* value;
 } shell_env_t;
 
-static shell_env_t shell_env[SHELL_MAX_ENV];
+static shell_env_t* shell_env = NULL;
 static int shell_env_count = 0;
-static char shell_env_strings[SHELL_MAX_ENV][SHELL_ENV_NAME_LEN + SHELL_ENV_VALUE_LEN + 1];
-static char* shell_envp[SHELL_MAX_ENV + 1];
+static int shell_env_capacity = 0;
 static int shell_pgid = 0;
 
 static void shell_term_handler(int sig)
@@ -218,28 +215,24 @@ static int shell_prepare_child_pgid(int child_pid)
     return -1;
 }
 
-static void shell_child_wait_until_foreground(void)
+static void shell_child_wait_for_parent(int sync_fd)
 {
-    int self_pgid = getpgrp();
+    char byte;
 
-    if (self_pgid <= 0)
+    if (sync_fd < 0)
         return;
 
     /*
-     * The parent shell gives the terminal to the child process group after
-     * fork(). With preemption, the child may run first and reach its initial
-     * read() before tcsetpgrp() has completed; the TTY would correctly see it
-     * as a background reader and deliver SIGTTIN. Poll the foreground group
-     * before exec to close that race. If stdin is not a TTY, tcgetpgrp() fails
-     * and there is nothing to wait for.
+     * Foreground children must not reach their first terminal read before the
+     * parent has moved their process group to the foreground. The parent closes
+     * the write end after setpgid()+tcsetpgrp(); EOF is the release signal.
      */
-    for (int i = 0; i < 1000; i++) {
-        int fg = tcgetpgrp(STDIN_FILENO);
-
-        if (fg < 0 || fg == self_pgid)
-            return;
-        usleep(1000);
+    while (read(sync_fd, &byte, 1) < 0 &&
+           errno == EINTR &&
+           !shell_termination_requested()) {
     }
+
+    close(sync_fd);
 }
 
 static int shell_wait_foreground_child(int child_pid, int* status)
@@ -279,6 +272,7 @@ typedef struct shell_redirs {
     const char* error;
     int output_append;
     int error_append;
+    int stderr_to_stdout;
 } shell_redirs_t;
 
 #define SHELL_MAX_PIPELINE 8
@@ -324,6 +318,49 @@ static int shell_var_char(char c) {
     return shell_var_start(c) || (c >= '0' && c <= '9');
 }
 
+static char* shell_strdup(const char* s)
+{
+    size_t len;
+    char* copy;
+
+    if (!s)
+        s = "";
+
+    len = strlen(s) + 1;
+    copy = malloc(len);
+    if (!copy)
+        return NULL;
+
+    memcpy(copy, s, len);
+    return copy;
+}
+
+static int shell_reserve_env(int needed)
+{
+    shell_env_t* new_env;
+    int new_capacity;
+
+    if (needed <= shell_env_capacity)
+        return 0;
+
+    new_capacity = shell_env_capacity ? shell_env_capacity * 2 : 16;
+    while (new_capacity < needed)
+        new_capacity *= 2;
+
+    new_env = realloc(shell_env, new_capacity * sizeof(shell_env[0]));
+    if (!new_env)
+        return -1;
+
+    for (int i = shell_env_capacity; i < new_capacity; i++) {
+        new_env[i].name = NULL;
+        new_env[i].value = NULL;
+    }
+
+    shell_env = new_env;
+    shell_env_capacity = new_capacity;
+    return 0;
+}
+
 const char* shell_getenv(const char* name) {
     int i;
 
@@ -337,25 +374,35 @@ const char* shell_getenv(const char* name) {
 
 int shell_setenv(const char* name, const char* value) {
     int i;
+    char* value_copy;
 
     if (!name || !value || !*name)
         return -1;
 
     for (i = 0; i < shell_env_count; i++) {
         if (strcmp(shell_env[i].name, name) == 0) {
-            strncpy(shell_env[i].value, value, SHELL_ENV_VALUE_LEN - 1);
-            shell_env[i].value[SHELL_ENV_VALUE_LEN - 1] = '\0';
+            value_copy = shell_strdup(value);
+            if (!value_copy)
+                return -1;
+            free(shell_env[i].value);
+            shell_env[i].value = value_copy;
             return 0;
         }
     }
 
-    if (shell_env_count >= SHELL_MAX_ENV)
+    if (shell_reserve_env(shell_env_count + 1) < 0)
         return -1;
 
-    strncpy(shell_env[shell_env_count].name, name, SHELL_ENV_NAME_LEN - 1);
-    shell_env[shell_env_count].name[SHELL_ENV_NAME_LEN - 1] = '\0';
-    strncpy(shell_env[shell_env_count].value, value, SHELL_ENV_VALUE_LEN - 1);
-    shell_env[shell_env_count].value[SHELL_ENV_VALUE_LEN - 1] = '\0';
+    shell_env[shell_env_count].name = shell_strdup(name);
+    shell_env[shell_env_count].value = shell_strdup(value);
+    if (!shell_env[shell_env_count].name || !shell_env[shell_env_count].value) {
+        free(shell_env[shell_env_count].name);
+        free(shell_env[shell_env_count].value);
+        shell_env[shell_env_count].name = NULL;
+        shell_env[shell_env_count].value = NULL;
+        return -1;
+    }
+
     shell_env_count++;
     return 0;
 }
@@ -370,9 +417,13 @@ int shell_unsetenv(const char* name) {
         if (strcmp(shell_env[i].name, name) == 0) {
             int j;
 
+            free(shell_env[i].name);
+            free(shell_env[i].value);
             for (j = i; j < shell_env_count - 1; j++)
                 shell_env[j] = shell_env[j + 1];
             shell_env_count--;
+            shell_env[shell_env_count].name = NULL;
+            shell_env[shell_env_count].value = NULL;
             return 0;
         }
     }
@@ -442,17 +493,33 @@ static const char* shell_script_arg_value(int index) {
 }
 
 static char** shell_build_envp(void) {
+    static char* empty_envp[] = { NULL };
+    char** envp;
     int i;
 
+    envp = malloc((shell_env_count + 1) * sizeof(envp[0]));
+    if (!envp)
+        return empty_envp;
+
     for (i = 0; i < shell_env_count; i++) {
-        shell_env_strings[i][0] = '\0';
-        strncat(shell_env_strings[i], shell_env[i].name, sizeof(shell_env_strings[i]) - 1);
-        strncat(shell_env_strings[i], "=", sizeof(shell_env_strings[i]) - strlen(shell_env_strings[i]) - 1);
-        strncat(shell_env_strings[i], shell_env[i].value, sizeof(shell_env_strings[i]) - strlen(shell_env_strings[i]) - 1);
-        shell_envp[i] = shell_env_strings[i];
+        size_t name_len = strlen(shell_env[i].name);
+        size_t value_len = strlen(shell_env[i].value);
+        char* entry = malloc(name_len + value_len + 2);
+
+        if (!entry) {
+            for (int j = 0; j < i; j++)
+                free(envp[j]);
+            free(envp);
+            return empty_envp;
+        }
+
+        memcpy(entry, shell_env[i].name, name_len);
+        entry[name_len] = '=';
+        memcpy(entry + name_len + 1, shell_env[i].value, value_len + 1);
+        envp[i] = entry;
     }
-    shell_envp[shell_env_count] = NULL;
-    return shell_envp;
+    envp[shell_env_count] = NULL;
+    return envp;
 }
 
 static void shell_import_environ(char **envp)
@@ -460,7 +527,7 @@ static void shell_import_environ(char **envp)
     if (!envp)
         return;
 
-    for (char **p = envp; *p && shell_env_count < SHELL_MAX_ENV; p++) {
+    for (char **p = envp; *p; p++) {
         char *eq = strchr(*p, '=');
         char name[SHELL_ENV_NAME_LEN];
         size_t name_len;
@@ -516,6 +583,11 @@ static int starts_with(const char* s, const char* prefix) {
             return 0;
     }
     return 1;
+}
+
+static int shell_ifs_space(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
 static int shell_is_valid_name(const char* name) {
@@ -579,32 +651,65 @@ static void shell_apply_rc_line(char* line) {
         value++;
     }
 
-    shell_setenv(name, value);
+    if (!shell_is_valid_name(name)) {
+        printf("mash: rc: invalid variable name '%s'\n", name);
+        return;
+    }
+
+    if (shell_setenv(name, value) < 0)
+        printf("mash: rc: cannot set '%s'\n", name);
 }
 
 static void shell_load_rc_file(const char* path) {
-    char buffer[512];
+    char buffer[128];
+    char line[1024];
     int fd;
     int n;
-    int start = 0;
-    int i;
+    int line_len = 0;
+    int line_no = 1;
+    int skipping_long_line = 0;
 
     fd = open(path, O_RDONLY, 0);
     if (fd < 0)
         return;
 
-    n = read(fd, buffer, sizeof(buffer) - 1);
-    close(fd);
-    if (n <= 0)
-        return;
+    while ((n = read(fd, buffer, sizeof(buffer))) > 0) {
+        for (int i = 0; i < n; i++) {
+            char c = buffer[i];
 
-    buffer[n] = '\0';
-    for (i = 0; i <= n; i++) {
-        if (buffer[i] == '\n' || buffer[i] == '\0') {
-            buffer[i] = '\0';
-            shell_apply_rc_line(&buffer[start]);
-            start = i + 1;
+            if (skipping_long_line) {
+                if (c == '\n') {
+                    skipping_long_line = 0;
+                    line_len = 0;
+                    line_no++;
+                }
+                continue;
+            }
+
+            if (c == '\n') {
+                line[line_len] = '\0';
+                shell_apply_rc_line(line);
+                line_len = 0;
+                line_no++;
+                continue;
+            }
+
+            if (line_len >= (int)sizeof(line) - 1) {
+                printf("mash: rc: %s:%d: line too long, ignored\n",
+                       path, line_no);
+                skipping_long_line = 1;
+                line_len = 0;
+                continue;
+            }
+
+            line[line_len++] = c;
         }
+    }
+    close(fd);
+
+    if (!skipping_long_line && line_len > 0) {
+        line[line_len] = '\0';
+        shell_apply_rc_line(line);
     }
 }
 
@@ -801,11 +906,20 @@ static int parse_redirections(int* argc, char* argv[], shell_redirs_t* redirs) {
     redirs->error = NULL;
     redirs->output_append = 0;
     redirs->error_append = 0;
+    redirs->stderr_to_stdout = 0;
 
     while (src < *argc) {
         int target_fd = -1;
         int op_index = src;
         const char* op = argv[src];
+
+        if (strcmp(argv[src], "2>&1") == 0) {
+            redirs->error = NULL;
+            redirs->error_append = 0;
+            redirs->stderr_to_stdout = 1;
+            src++;
+            continue;
+        }
 
         if ((strcmp(argv[src], "1") == 0 || strcmp(argv[src], "2") == 0) &&
             src + 1 < *argc &&
@@ -827,6 +941,17 @@ static int parse_redirections(int* argc, char* argv[], shell_redirs_t* redirs) {
             int is_append = strcmp(op, ">>") == 0;
             int target_index = op_index + 1;
 
+            if (!is_input && target_fd == STDERR_FILENO &&
+                target_index + 1 < *argc &&
+                strcmp(argv[target_index], "&") == 0 &&
+                strcmp(argv[target_index + 1], "1") == 0) {
+                redirs->error = NULL;
+                redirs->error_append = 0;
+                redirs->stderr_to_stdout = 1;
+                src = target_index + 2;
+                continue;
+            }
+
             if (target_index >= *argc) {
                 printf("mash: missing redirection target after %s\n", argv[op_index]);
                 return -1;
@@ -837,6 +962,7 @@ static int parse_redirections(int* argc, char* argv[], shell_redirs_t* redirs) {
             } else if (target_fd == 2) {
                 redirs->error = argv[target_index];
                 redirs->error_append = is_append;
+                redirs->stderr_to_stdout = 0;
             } else {
                 redirs->output = argv[target_index];
                 redirs->output_append = is_append;
@@ -854,18 +980,10 @@ static int parse_redirections(int* argc, char* argv[], shell_redirs_t* redirs) {
 }
 
 static int open_redirect_output(const char* path, int append) {
-    int fd;
+    int flags = O_CREAT | O_WRONLY;
 
-    if (!append) {
-        return open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
-    }
-
-    fd = open(path, O_WRONLY, 0);
-    if (fd < 0)
-        fd = open(path, O_CREAT | O_WRONLY, 0644);
-    if (fd >= 0)
-        lseek(fd, 0, SEEK_END);
-    return fd;
+    flags |= append ? O_APPEND : O_TRUNC;
+    return open(path, flags, 0644);
 }
 
 static int apply_redirections(const shell_redirs_t* redirs) {
@@ -911,6 +1029,13 @@ static int apply_redirections(const shell_redirs_t* redirs) {
             return -1;
         }
         close(fd);
+    }
+
+    if (redirs->stderr_to_stdout) {
+        if (dup2(STDOUT_FILENO, STDERR_FILENO) < 0) {
+            printf("mash: cannot redirect stderr to stdout\n");
+            return -1;
+        }
     }
 
     return 0;
@@ -1128,6 +1253,7 @@ static int run_pipeline(int argc, char* argv[], int background) {
     int launched = 0;
     int pgid = 0;
     int reported = 0;
+    int sync_pipe[2] = { -1, -1 };
     char command[JOBS_COMMAND_LEN];
 
     for (i = 0; i < SHELL_MAX_PIPELINE - 1; i++) {
@@ -1159,12 +1285,22 @@ static int run_pipeline(int argc, char* argv[], int background) {
         }
     }
 
+    if (!background && pipe(sync_pipe) < 0) {
+        printf("mash: foreground sync pipe failed\n");
+        close_pipeline_fds(pipes, pipe_count);
+        return SHELL_ERROR;
+    }
+
     for (i = 0; i < command_count; i++) {
         int pid = fork();
 
         if (pid < 0) {
             printf("mash: fork failed\n");
             close_pipeline_fds(pipes, pipe_count);
+            if (sync_pipe[0] >= 0)
+                close(sync_pipe[0]);
+            if (sync_pipe[1] >= 0)
+                close(sync_pipe[1]);
             for (i = 0; i < launched; i++)
                 waitpid(pids[i], &status, 0);
             return SHELL_ERROR;
@@ -1179,8 +1315,10 @@ static int run_pipeline(int argc, char* argv[], int background) {
                 setpgid(0, pgid);
 
             shell_restore_child_signal_handlers();
-            if (!background)
-                shell_child_wait_until_foreground();
+            if (!background) {
+                close(sync_pipe[1]);
+                shell_child_wait_for_parent(sync_pipe[0]);
+            }
 
             if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
                 printf("mash: cannot connect pipeline input\n");
@@ -1215,7 +1353,9 @@ static int run_pipeline(int argc, char* argv[], int background) {
             pgid = pid;
             shell_prepare_child_pgid(pid);
         } else {
-            setpgid(pid, pgid);
+            errno = 0;
+            if (setpgid(pid, pgid) < 0 && errno != ESRCH)
+                printf("mash: setpgid failed for pid %d\n", pid);
         }
         launched++;
     }
@@ -1231,8 +1371,12 @@ static int run_pipeline(int argc, char* argv[], int background) {
         return SHELL_OK;
     }
 
+    if (sync_pipe[0] >= 0)
+        close(sync_pipe[0]);
     if (pgid > 0)
         shell_set_foreground_pgid(pgid);
+    if (sync_pipe[1] >= 0)
+        close(sync_pipe[1]);
     while (reported < command_count) {
         int waited = waitpid(-pgid, &status, WUNTRACED);
         int idx;
@@ -1290,7 +1434,7 @@ static int run_builtin_with_redirs(command_entry_t* entry, int argc, char* argv[
         }
     }
 
-    if (redirs->error) {
+    if (redirs->error || redirs->stderr_to_stdout) {
         saved_stderr = dup(STDERR_FILENO);
         if (saved_stderr < 0) {
             if (saved_stdin >= 0)
@@ -1336,166 +1480,6 @@ static int run_builtin_with_redirs(command_entry_t* entry, int argc, char* argv[
     return result;
 }
 
-void my_handler(int sig) {
-    const char msg[] = "Child: received SIGUSR1\n";
-    /* write is async-signal-safe */
-    write(1, msg, sizeof(msg)-1);
-    exit(58);
-}
-
-int test_kill(void) {
-
-    pid_t pid;
-    int status = 0;
-
-    printf("Testing signal system call from userspace...\n");
-    
-    pid = fork();
-    if (pid == 0) {
-        /* child - writer */
-        //signal(SIGUSR1, my_handler);
-            struct sigaction sa = {0};
-
-    /* Install the handler for SIGUSR1 with SA_SIGINFO */
-    sa.sa_handler = my_handler;
-    //sigemptyset(&sa.sa_mask);          /* no signal masked during handler execution */
-    sa.sa_flags = SA_RESTART; /* SA_RESTART useful to restart certain syscalls */
-
-    if (sigaction(SIGUSR1, &sa, NULL) == -1) {
-        printf("     SIGACTION ERROR ... 0x%08X\n", my_handler);
-        exit(EXIT_FAILURE);
-    }
-        printf("     Child is writing message ... 0x%08X\n", my_handler);
-
-        long i = 0;
-        while(1)
-        {
-            for(int j=0; j<1000000; j++){
-
-            }
-
-            printf("            Child wait loop tour %u\n", i);
-            
-            i++;
-        }
-
-    } else {
-        /* Parent - reader */
-        printf(" DAD will send a signal to son ...\n");
-
-        for(int i=0; i<100000; i++)
-        {
-            for(int j=0; j<10000; j++){
-
-            }
-
-            if( (i%10000) == 0)
-                printf(" dad loop before kill %d\n", i);
-
-        }
-
-        printf(" DAD sending signal SIGUSR1 ...\n");
-        kill(pid, SIGUSR1);
-        waitpid(-1, &status, 0);
-        printf("Parent waked up waited_pid %d, son status = %d\n", pid, status);
-
-    }
-    
-    return 0;
-}
-
-int test_pipe(void) {
-    int pipefd[2];
-    pid_t pid;
-    char buffer[100];
-
-    printf("Testing pipe system call from userspace...\n");
-    
-    if (pipe(pipefd) == -1) {
-        printf("PIPE error\n");
-        return 1;
-    }
-    
-    pid = fork();
-    if (pid == 0) {
-        /* Child - writer */
-        printf("     Child is writing message ...\n", pipefd[1]);
-
-        close(pipefd[0]);  /* Close read end */
-        int nb = write(pipefd[1], "Hello from child!", 17);
-        printf("     Child wrote %d chars in pipe ...\n", nb);
-        close(pipefd[1]);
-        printf("     Child returning ok ...\n");
-        exit(0);
-    } else {
-        /* Parent - reader */
-        printf(" DAD is reading message in pipe ...\n");
-
-        close(pipefd[1]);  /* Close write end */
-        /*for(int i=0; i<1000000; i++){
-            for(int j=0; j<1000; j++);
-            if( (i%10000) == 0)
-                printf(" dad loop before kill %d\n", i);
-        }*/
-       int status = -1;
-        int waited_pid = waitpid(-1, &status, 0);
-        ssize_t n = read(pipefd[0], buffer, sizeof(buffer));
-        buffer[n] = '\0';
-        printf("Parent read %d bytes from %d: %s\n",n, pipefd[0], buffer);
-        close(pipefd[0]);
-
-
-        printf("Parent did wait for child pid %d - status = %d\n",waited_pid, status);
-
-    }
-    
-    return 0;
-}
-
-int test_execve(void) {
-    int version = 11 ;
-    
-    printf("******************************************************\n");
-    printf("*************** HELLO FROM USER SPACE ****************\n");
-    printf("*************** This process is going to fork() ******\n");
-    printf("******************************************************\n");
-
-    int child_pid = fork();
-    if (child_pid == 0) {
-        printf("                 ************ Child process running!\n");
-        printf("                 ************ Will be exiting with value %d!\n", version);
-
-        const char* path = "/usr/bin/hello";
-        char* name = "hello2";
-
-        printf("                 ************ Process PID: %d about to exec\n", getpid());
-            
-        char* const argv[] = { name, NULL };
-        char* const envp[] = { NULL };
-            
-        int result = execve(path , argv, envp);
-            
-        // Si on arrive ici, exec a échoué
-        printf("                 ************ Child: exec failed with %d\n", result);
-        exit(version);
-        
-    } else {
-
-        int status = 0;
-        printf("Cool thing happened in user space\n");
-        printf("Speaking from Parent %d\n", getpid());
-        printf("Parent created child PID %d\n", child_pid);
-        printf("Waiting for my child process\n");
-        printf("Taking a while ......\n");
-        printf("Will be exiting soon with status code %d ......\n", version+1);
-
-        int waited_pid = waitpid(child_pid, &status, 0);
-        printf("Parent waked up waited_pid %d, son status = %d\n", waited_pid, status);
-
-        return(version+1);
-    } 
-}
-
 // Display the shell banner
 void shell_print_banner(void) {
     printf("\n");
@@ -1521,8 +1505,13 @@ void shell_print_prompt(void) {
 
     while (*ps1) {
         if (*ps1 == '\\' && ps1[1] == 'w') {
-            const char* cwd = shell_getenv("PWD");
-            printf("%s", cwd && *cwd ? cwd : "/");
+            char cwd[256];
+            const char* pwd = shell_getenv("PWD");
+
+            if (getcwd(cwd, sizeof(cwd)))
+                printf("%s", cwd);
+            else
+                printf("%s", pwd && *pwd ? pwd : "/");
             ps1 += 2;
             continue;
         }
@@ -1562,13 +1551,148 @@ void shell_print_prompt(void) {
     pflush();
 }
 
+static int shell_extract_command_substitution(char** readp,
+                                              char* command,
+                                              size_t command_size)
+{
+    char* p = *readp + 2;
+    char quote = 0;
+    int depth = 1;
+    size_t used = 0;
+
+    while (*p) {
+        if (quote) {
+            if (*p == quote) {
+                quote = 0;
+            } else if (*p == '\\' && shell_backslash_escapes(quote, p[1])) {
+                if (used + 2 >= command_size)
+                    return -1;
+                command[used++] = *p++;
+                command[used++] = *p++;
+                continue;
+            }
+        } else {
+            if (*p == '\'' || *p == '"') {
+                quote = *p;
+            } else if (*p == '$' && p[1] == '(') {
+                depth++;
+                if (used + 2 >= command_size)
+                    return -1;
+                command[used++] = *p++;
+                command[used++] = *p++;
+                continue;
+            } else if (*p == ')') {
+                depth--;
+                if (depth == 0) {
+                    command[used] = '\0';
+                    *readp = p + 1;
+                    return 0;
+                }
+            }
+        }
+
+        if (used + 1 >= command_size)
+            return -1;
+        command[used++] = *p++;
+    }
+
+    printf("mash: unmatched command substitution\n");
+    return -1;
+}
+
+static int shell_capture_command(const char* command, char* out, size_t out_size)
+{
+    int pipefd[2];
+    int pid;
+    int status = 0;
+    int overflow = 0;
+    size_t used = 0;
+
+    if (!out || out_size == 0)
+        return -1;
+    out[0] = '\0';
+
+    if (pipe(pipefd) < 0) {
+        printf("mash: command substitution: pipe failed\n");
+        return -1;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        printf("mash: command substitution: fork failed\n");
+        return -1;
+    }
+
+    if (pid == 0) {
+        char line[SHELL_BUFFER_SIZE];
+        int result;
+
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        shell_restore_child_signal_handlers();
+
+        strncpy(line, command, sizeof(line) - 1);
+        line[sizeof(line) - 1] = '\0';
+        result = shell_execute_line(line);
+        if (result == SHELL_EXIT)
+            result = 0;
+        exit(result);
+    }
+
+    close(pipefd[1]);
+    for (;;) {
+        char buf[128];
+        int n = read(pipefd[0], buf, sizeof(buf));
+
+        if (n < 0) {
+            if (errno == EINTR && !shell_termination_requested())
+                continue;
+            break;
+        }
+        if (n == 0)
+            break;
+
+        for (int i = 0; i < n; i++) {
+            if (used + 1 < out_size) {
+                out[used++] = buf[i];
+            } else {
+                overflow = 1;
+            }
+        }
+    }
+    close(pipefd[0]);
+
+    while (waitpid(pid, &status, 0) < 0 &&
+           errno == EINTR &&
+           !shell_termination_requested()) {
+    }
+
+    if (overflow) {
+        printf("mash: command substitution output too long\n");
+        return -1;
+    }
+
+    while (used > 0 && (out[used - 1] == '\n' || out[used - 1] == '\r'))
+        used--;
+    out[used] = '\0';
+    return shell_status_from_wait_status(status);
+}
+
 static int shell_parse_line_into(char* line, char* argv[],
                                  char* tokens, size_t tokens_size) {
     int argc = 0;
     char* readp = line;
     char* writep = tokens;
     char* endp = tokens + tokens_size - 1;
-    
+
+    if (tokens_size < 2) {
+        printf("mash: tokenizer buffer too small\n");
+        return -1;
+    }
+
     while (*readp && argc < SHELL_MAX_ARGS - 1) {
         while (*readp == ' ' || *readp == '\t') {
             readp++;
@@ -1580,16 +1704,30 @@ static int shell_parse_line_into(char* line, char* argv[],
 
         argv[argc++] = writep;
 
-        if ((*readp == '&' && readp[1] == '&') ||
+        if (readp[0] == '2' && readp[1] == '>' &&
+            readp[2] == '&' && readp[3] == '1') {
+            if (writep + 4 >= endp) {
+                printf("mash: token buffer full\n");
+                return -1;
+            }
+            *writep++ = *readp++;
+            *writep++ = *readp++;
+            *writep++ = *readp++;
+            *writep++ = *readp++;
+        } else if ((*readp == '&' && readp[1] == '&') ||
             (*readp == '|' && readp[1] == '|') ||
             (*readp == '>' && readp[1] == '>')) {
-            if (writep + 2 >= endp)
-                break;
+            if (writep + 2 >= endp) {
+                printf("mash: token buffer full\n");
+                return -1;
+            }
             *writep++ = *readp++;
             *writep++ = *readp++;
         } else if (token_is_special(*readp)) {
-            if (writep + 1 >= endp)
-                break;
+            if (writep + 1 >= endp) {
+                printf("mash: token buffer full\n");
+                return -1;
+            }
             *writep++ = *readp++;
         } else {
             char quote = 0;
@@ -1614,6 +1752,14 @@ static int shell_parse_line_into(char* line, char* argv[],
                 if (*readp == '\\' && shell_backslash_escapes(quote, readp[1])) {
                     readp++;
                 }
+                if (!token_start) {
+                    if (argc >= SHELL_MAX_ARGS - 1) {
+                        printf("mash: too many arguments\n");
+                        return -SHELL_MAX_ARGS;
+                    }
+                    argv[argc++] = writep;
+                    token_start = writep;
+                }
                 if (!quote && writep == token_start && *readp == '~' &&
                     (readp[1] == '\0' || readp[1] == '/' ||
                      readp[1] == ' ' || readp[1] == '\t' ||
@@ -1625,6 +1771,10 @@ static int shell_parse_line_into(char* line, char* argv[],
 
                     while (*home && writep < endp)
                         *writep++ = *home++;
+                    if (*home) {
+                        printf("mash: expansion too long\n");
+                        return -1;
+                    }
                     readp++;
                     continue;
                 }
@@ -1635,6 +1785,49 @@ static int shell_parse_line_into(char* line, char* argv[],
                     char status_buf[16];
 
                     readp++;
+                    if (*readp == '(') {
+                        char command[SHELL_BUFFER_SIZE];
+                        char output[SHELL_BUFFER_SIZE];
+
+                        readp--;
+                        if (shell_extract_command_substitution(&readp,
+                                                               command,
+                                                               sizeof(command)) < 0)
+                            return -1;
+                        if (shell_capture_command(command, output,
+                                                  sizeof(output)) < 0)
+                            return -1;
+                        value = output;
+                        while (*value) {
+                            if (!quote && shell_ifs_space(*value)) {
+                                if (writep != token_start) {
+                                    if (writep >= endp) {
+                                        printf("mash: token buffer full\n");
+                                        return -1;
+                                    }
+                                    *writep++ = '\0';
+                                    token_start = NULL;
+                                }
+                                value++;
+                                continue;
+                            }
+
+                            if (!token_start) {
+                                if (argc >= SHELL_MAX_ARGS - 1) {
+                                    printf("mash: too many arguments\n");
+                                    return -SHELL_MAX_ARGS;
+                                }
+                                argv[argc++] = writep;
+                                token_start = writep;
+                            }
+                            if (writep >= endp) {
+                                printf("mash: expansion too long\n");
+                                return -1;
+                            }
+                            *writep++ = *value++;
+                        }
+                        continue;
+                    }
                     if (*readp == '{') {
                         int basename = 0;
 
@@ -1663,11 +1856,17 @@ static int shell_parse_line_into(char* line, char* argv[],
                             }
                             while (*value && writep < endp)
                                 *writep++ = *value++;
+                            if (*value) {
+                                printf("mash: expansion too long\n");
+                                return -1;
+                            }
                             continue;
                         }
 
-                        if (writep >= endp)
-                            break;
+                        if (writep + 2 >= endp) {
+                            printf("mash: token buffer full\n");
+                            return -1;
+                        }
                         *writep++ = '$';
                         *writep++ = '{';
                         continue;
@@ -1678,6 +1877,10 @@ static int shell_parse_line_into(char* line, char* argv[],
                         readp++;
                         while (*value && writep < endp)
                             *writep++ = *value++;
+                        if (*value) {
+                            printf("mash: expansion too long\n");
+                            return -1;
+                        }
                         continue;
                     }
                     if (*readp == '#') {
@@ -1688,6 +1891,10 @@ static int shell_parse_line_into(char* line, char* argv[],
                         readp++;
                         while (*value && writep < endp)
                             *writep++ = *value++;
+                        if (*value) {
+                            printf("mash: expansion too long\n");
+                            return -1;
+                        }
                         continue;
                     }
                     if (*readp >= '0' && *readp <= '9') {
@@ -1695,11 +1902,17 @@ static int shell_parse_line_into(char* line, char* argv[],
                         readp++;
                         while (*value && writep < endp)
                             *writep++ = *value++;
+                        if (*value) {
+                            printf("mash: expansion too long\n");
+                            return -1;
+                        }
                         continue;
                     }
                     if (!shell_var_start(*readp)) {
-                        if (writep >= endp)
-                            break;
+                        if (writep >= endp) {
+                            printf("mash: token buffer full\n");
+                            return -1;
+                        }
                         *writep++ = '$';
                         continue;
                     }
@@ -1716,14 +1929,24 @@ static int shell_parse_line_into(char* line, char* argv[],
 
                     while (*value && writep < endp)
                         *writep++ = *value++;
+                    if (*value) {
+                        printf("mash: expansion too long\n");
+                        return -1;
+                    }
                     continue;
                 }
-                if (writep >= endp)
-                    break;
+                if (writep >= endp) {
+                    printf("mash: token too long\n");
+                    return -1;
+                }
                 *writep++ = *readp++;
             }
         }
 
+        if (writep >= endp) {
+            printf("mash: token buffer full\n");
+            return -1;
+        }
         *writep++ = '\0';
 
         if (*readp == ' ' || *readp == '\t') {
@@ -1735,7 +1958,10 @@ static int shell_parse_line_into(char* line, char* argv[],
         readp++;
     if (*readp) {
         argv[0] = NULL;
-        printf("mash: too many arguments\n");
+        if (argc >= SHELL_MAX_ARGS - 1)
+            printf("mash: too many arguments\n");
+        else
+            printf("mash: parse error near '%c'\n", *readp);
         return -SHELL_MAX_ARGS;
     }
 
@@ -1748,20 +1974,11 @@ int shell_parse_line(char* line, char* argv[]) {
     return shell_parse_line_into(line, argv, token_buffer, sizeof(token_buffer));
 }
 
-// Execute a command
-int shell_execute(int argc, char* argv[]) {
-    int background = 0;
+static int shell_execute_command(int argc, char* argv[], int background) {
     shell_redirs_t redirs;
 
     if (argc == 0) {
         return SHELL_OK;
-    }
-
-    if (strcmp(argv[argc - 1], "&") == 0) {
-        background = 1;
-        argv[--argc] = NULL;
-        if (argc == 0)
-            return SHELL_OK;
     }
 
     SHELL_TRACE("execute argc=%d cmd=%s bg=%d", argc, argv[0], background);
@@ -1776,8 +1993,12 @@ int shell_execute(int argc, char* argv[]) {
     if (argc == 0)
         return SHELL_OK;
 
-    if (argc == 1 && shell_apply_assignment(argv[0]) == 0)
-        return SHELL_OK;
+    if (argc == 1 && strchr(argv[0], '=')) {
+        if (shell_apply_assignment(argv[0]) == 0)
+            return SHELL_OK;
+        printf("mash: invalid assignment: %s\n", argv[0]);
+        return SHELL_ERROR;
+    }
 
     // Command exit built-in
     if (strcmp(argv[0], "exit") == 0 ||
@@ -1807,8 +2028,18 @@ int shell_execute(int argc, char* argv[]) {
     }
 
     SHELL_TRACE("fork start cmd=%s", argv[0]);
+    int sync_pipe[2] = { -1, -1 };
+    if (!background && pipe(sync_pipe) < 0) {
+        printf("mash: foreground sync pipe failed\n");
+        return SHELL_ERROR;
+    }
+
     int child_pid = fork();
     if (child_pid < 0) {
+        if (sync_pipe[0] >= 0)
+            close(sync_pipe[0]);
+        if (sync_pipe[1] >= 0)
+            close(sync_pipe[1]);
         printf("mash: fork failed: errno=%d\n", errno);
         return SHELL_ERROR;
     }
@@ -1817,8 +2048,10 @@ int shell_execute(int argc, char* argv[]) {
         SHELL_TRACE("child exec cmd=%s", argv[0]);
         setpgid(0, 0);
         shell_restore_child_signal_handlers();
-        if (!background)
-            shell_child_wait_until_foreground();
+        if (!background) {
+            close(sync_pipe[1]);
+            shell_child_wait_for_parent(sync_pipe[0]);
+        }
         if (apply_redirections(&redirs) < 0)
             exit(-1);
 
@@ -1827,6 +2060,8 @@ int shell_execute(int argc, char* argv[]) {
     } else {
         SHELL_TRACE("fork done cmd=%s child=%d", argv[0], child_pid);
         shell_prepare_child_pgid(child_pid);
+        if (sync_pipe[0] >= 0)
+            close(sync_pipe[0]);
 
         if (background) {
             char command[JOBS_COMMAND_LEN];
@@ -1844,6 +2079,8 @@ int shell_execute(int argc, char* argv[]) {
 
         jobs_build_command(argc, argv, command, sizeof(command));
         shell_set_foreground_pgid(child_pid);
+        if (sync_pipe[1] >= 0)
+            close(sync_pipe[1]);
 
         SHELL_TRACE("wait start child=%d cmd=%s", child_pid, argv[0]);
         int waited_pid = shell_wait_foreground_child(child_pid, &status);
@@ -1870,14 +2107,33 @@ int shell_execute(int argc, char* argv[]) {
     return SHELL_ERROR;
 }
 
+// Execute a command
+int shell_execute(int argc, char* argv[]) {
+    int background = 0;
+
+    if (argc == 0)
+        return SHELL_OK;
+
+    if (strcmp(argv[argc - 1], "&") == 0) {
+        background = 1;
+        argv[--argc] = NULL;
+        if (argc == 0)
+            return SHELL_OK;
+    }
+
+    return shell_execute_command(argc, argv, background);
+}
+
 static int shell_is_sequence_operator(const char* token) {
     return strcmp(token, ";") == 0 ||
+           strcmp(token, "&") == 0 ||
            strcmp(token, "&&") == 0 ||
            strcmp(token, "||") == 0;
 }
 
 static int shell_should_execute_segment(const char* previous_op, int last_status) {
-    if (!previous_op || strcmp(previous_op, ";") == 0)
+    if (!previous_op || strcmp(previous_op, ";") == 0 ||
+        strcmp(previous_op, "&") == 0)
         return 1;
     if (strcmp(previous_op, "&&") == 0)
         return last_status == 0;
@@ -2269,13 +2525,30 @@ static int shell_execute_argv_line(int argc, char* argv[]) {
         }
 
         if (shell_should_execute_segment(previous_op, last_status)) {
+            int background = next_op && strcmp(next_op, "&") == 0;
+
             argv[end] = NULL;
-            if (shell_token_is_word(argv[start], "if"))
+            if (background &&
+                (shell_token_is_word(argv[start], "if") ||
+                 shell_token_is_word(argv[start], "for") ||
+                 shell_token_is_word(argv[start], "while") ||
+                 shell_token_is_word(argv[start], "until"))) {
+                printf("mash: background compound commands are not supported\n");
+                last_status = SHELL_ERROR;
+            } else if (shell_token_is_word(argv[start], "if")) {
                 last_status = shell_execute_if(segment_argc, &argv[start]);
-            else if (shell_token_is_word(argv[start], "for"))
+            } else if (shell_token_is_word(argv[start], "for")) {
                 last_status = shell_execute_for(segment_argc, &argv[start]);
-            else
-                last_status = shell_execute(segment_argc, &argv[start]);
+            } else if (shell_token_is_word(argv[start], "while") ||
+                       shell_token_is_word(argv[start], "until")) {
+                /* Line-oriented while/until is handled before token execution. */
+                printf("mash: loop syntax error\n");
+                last_status = SHELL_ERROR;
+            } else {
+                last_status = shell_execute_command(segment_argc,
+                                                    &argv[start],
+                                                    background);
+            }
             if (last_status != SHELL_EXIT)
                 shell_status = last_status;
             if (last_status == SHELL_EXIT)
@@ -2289,7 +2562,7 @@ static int shell_execute_argv_line(int argc, char* argv[]) {
         start = end + 1;
 
         if (start >= argc) {
-            if (strcmp(previous_op, ";") == 0)
+            if (strcmp(previous_op, ";") == 0 || strcmp(previous_op, "&") == 0)
                 break;
             printf("mash: expected command after '%s'\n", previous_op);
             return SHELL_ERROR;
@@ -2446,6 +2719,66 @@ static int shell_execute_for_line(char* line) {
     return result;
 }
 
+static int shell_execute_loop_line(char* line, int until_loop)
+{
+    char cond_copy[SHELL_BUFFER_SIZE];
+    char body_copy[SHELL_BUFFER_SIZE];
+    char* do_word;
+    char* done_word;
+    char* cond_start;
+    char* body_start;
+    int result = SHELL_OK;
+
+    cond_start = trim_spaces(line + (until_loop ? 5 : 5));
+    do_word = shell_find_control_word(cond_start, "do");
+    if (!do_word) {
+        printf("mash: %s: missing do\n", until_loop ? "until" : "while");
+        return SHELL_ERROR;
+    }
+
+    body_start = do_word + 2;
+    done_word = shell_find_control_word(body_start, "done");
+    if (!done_word) {
+        printf("mash: %s: missing done\n", until_loop ? "until" : "while");
+        return SHELL_ERROR;
+    }
+
+    *do_word = '\0';
+    *done_word = '\0';
+    cond_start = shell_skip_separators(trim_spaces(cond_start));
+    body_start = shell_skip_separators(trim_spaces(body_start));
+    shell_trim_trailing_separators(cond_start);
+    shell_trim_trailing_separators(body_start);
+
+    if (!*cond_start) {
+        printf("mash: %s: missing condition\n", until_loop ? "until" : "while");
+        return SHELL_ERROR;
+    }
+
+    while (!shell_termination_requested()) {
+        int cond_status;
+        int should_run;
+
+        strncpy(cond_copy, cond_start, sizeof(cond_copy) - 1);
+        cond_copy[sizeof(cond_copy) - 1] = '\0';
+        cond_status = shell_execute_line(cond_copy);
+        if (cond_status == SHELL_EXIT)
+            return cond_status;
+
+        should_run = until_loop ? (cond_status != 0) : (cond_status == 0);
+        if (!should_run)
+            break;
+
+        strncpy(body_copy, body_start, sizeof(body_copy) - 1);
+        body_copy[sizeof(body_copy) - 1] = '\0';
+        result = shell_execute_line(body_copy);
+        if (result == SHELL_EXIT)
+            return result;
+    }
+
+    return result;
+}
+
 static void shell_strip_comment(char* line) {
     char quote = 0;
     char* p = line;
@@ -2526,6 +2859,13 @@ int shell_execute_line(char* line) {
 
     if (starts_with(trimmed, "for ")) {
         result = shell_execute_for_line(trimmed);
+        if (result != SHELL_EXIT)
+            shell_status = result;
+        return result;
+    }
+
+    if (starts_with(trimmed, "while ") || starts_with(trimmed, "until ")) {
+        result = shell_execute_loop_line(trimmed, starts_with(trimmed, "until "));
         if (result != SHELL_EXIT)
             shell_status = result;
         return result;

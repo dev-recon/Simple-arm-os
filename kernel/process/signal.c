@@ -1005,13 +1005,23 @@ static void dump_core(task_t* proc)
  */
 static void stop_process(task_t* proc, int sig)
 {
+    unsigned long flags;
+
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
     
     KINFO("[SIGNAL] Stopping process PID=%u\n", proc->process->pid);
-    task_set_stopped(proc);
+
+    /*
+     * Publish the stop state and wake the waiting parent as one scheduler
+     * transaction. Otherwise waitpid(WUNTRACED) can miss a SIGSTOP that lands
+     * between its final child scan and the parent blocking itself.
+     */
+    spin_lock_irqsave(&task_lock, &flags);
     proc->process->stop_signal = sig;
     proc->process->stop_reported = 0;
-    wakeup_parent(proc);
+    task_set_stopped_under_lock(proc);
+    wakeup_parent_under_lock(proc);
+    spin_unlock_irqrestore(&task_lock, flags);
 }
 
 /**
@@ -1019,12 +1029,20 @@ static void stop_process(task_t* proc, int sig)
  */
 static void continue_process(task_t* proc)
 {
+    unsigned long flags;
+    bool continued = false;
+
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) return;
     
+    spin_lock_irqsave(&task_lock, &flags);
     if (proc->state == TASK_STOPPED) {
-        KINFO("[SIGNAL] Continuing process PID=%u\n", proc->process->pid);
-        task_set_ready(proc);
+        task_make_ready_under_lock(proc);
         proc->process->stop_signal = 0;
         proc->process->stop_reported = 0;
+        continued = true;
     }
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    if (continued)
+        KINFO("[SIGNAL] Continuing process PID=%u\n", proc->process->pid);
 }

@@ -120,8 +120,10 @@ static job_t* jobs_current(void)
     job_t* current = NULL;
 
     for (int i = 0; i < JOBS_MAX; i++) {
-        if (jobs[i].state != JOB_EMPTY)
+        if (jobs[i].state != JOB_EMPTY &&
+            (!current || jobs[i].id > current->id)) {
             current = &jobs[i];
+        }
     }
 
     return current;
@@ -133,8 +135,10 @@ static job_t* jobs_previous(void)
     job_t* previous = NULL;
 
     for (int i = 0; i < JOBS_MAX; i++) {
-        if (jobs[i].state != JOB_EMPTY && &jobs[i] != current)
+        if (jobs[i].state != JOB_EMPTY && &jobs[i] != current &&
+            (!previous || jobs[i].id > previous->id)) {
             previous = &jobs[i];
+        }
     }
 
     return previous;

@@ -72,7 +72,7 @@ void shell_line_edit_init(void);
 void shell_line_edit_shutdown(void);
 int shell_termination_requested(void);
 
-#define SHELL_BUFFER_SIZE 256
+#define SHELL_BUFFER_SIZE 1024
 #define SHELL_MAX_ARGS      64
 
 // Codes de retour des commandes

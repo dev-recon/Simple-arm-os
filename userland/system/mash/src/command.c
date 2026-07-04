@@ -436,7 +436,9 @@ static int source_if_depth_delta(const char* line) {
             }
 
             if (source_word_is(start, len, "if") ||
-                source_word_is(start, len, "for"))
+                source_word_is(start, len, "for") ||
+                source_word_is(start, len, "while") ||
+                source_word_is(start, len, "until"))
                 delta++;
             else if (source_word_is(start, len, "fi") ||
                      source_word_is(start, len, "done"))

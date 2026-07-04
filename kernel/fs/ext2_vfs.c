@@ -100,7 +100,20 @@ inode_operations_t ext2_inode_ops = {
     .readlink = ext2_inode_readlink_op,
 };
 
-#define EXT2_BLOCK_CACHE_SIZE 8
+/*
+ * Set-associative block cache: 256 sets x 8 ways = 2048 blocks.
+ *
+ * A set lookup bounds the hot path to eight comparisons regardless of total
+ * cache size. Buffers are allocated lazily from the page allocator rather than
+ * kmalloc: the kmalloc heap is small and should stay focused on small objects.
+ * Fully warmed cost is 2048 pages (8 MiB) on the default 2 GiB QEMU machine.
+ */
+#define EXT2_BLOCK_CACHE_SETS 256u
+#define EXT2_BLOCK_CACHE_WAYS 8u
+#define EXT2_BLOCK_CACHE_SIZE (EXT2_BLOCK_CACHE_SETS * EXT2_BLOCK_CACHE_WAYS)
+
+_Static_assert((EXT2_BLOCK_CACHE_SETS & (EXT2_BLOCK_CACHE_SETS - 1u)) == 0,
+               "EXT2_BLOCK_CACHE_SETS must be a power of two");
 
 typedef struct ext2_block_cache_entry {
     bool valid;
@@ -109,7 +122,7 @@ typedef struct ext2_block_cache_entry {
 } ext2_block_cache_entry_t;
 
 static ext2_block_cache_entry_t ext2_block_cache[EXT2_BLOCK_CACHE_SIZE];
-static uint32_t ext2_block_cache_clock;
+static uint32_t ext2_block_cache_set_clock[EXT2_BLOCK_CACHE_SETS];
 static spinlock_t ext2_cache_lock = SPINLOCK_INIT("ext2_cache");
 static volatile bool ext2_cache_busy;
 static task_t* ext2_cache_owner;
@@ -378,36 +391,68 @@ static void ext2_block_cache_reset(void)
 {
     for (uint32_t i = 0; i < EXT2_BLOCK_CACHE_SIZE; i++)
         ext2_block_cache[i].valid = false;
-    ext2_block_cache_clock = 0;
+    for (uint32_t set = 0; set < EXT2_BLOCK_CACHE_SETS; set++)
+        ext2_block_cache_set_clock[set] = 0;
 }
 
 static uint8_t* ext2_block_cache_data(ext2_block_cache_entry_t* entry)
 {
     if (!entry) return NULL;
-    if (!entry->data && ext2_fs.block_size)
-        entry->data = kmalloc(ext2_fs.block_size);
+    if (!entry->data && ext2_fs.block_size) {
+        /*
+         * One physical page per entry covers all currently supported ext2
+         * block sizes (1/2/4 KiB). Entries keep their buffer for the lifetime
+         * of the mount; kmalloc is only a fallback for larger future blocks.
+         */
+        if (ext2_fs.block_size <= PAGE_SIZE)
+            entry->data = allocate_page();
+        else
+            entry->data = kmalloc(ext2_fs.block_size);
+    }
     return entry->data;
+}
+
+static inline uint32_t ext2_block_cache_set_index(uint32_t block)
+{
+    /*
+     * Fold higher block bits before masking. Plain low-bit indexing is fast,
+     * but ext2 metadata and group-aligned data can otherwise collide on
+     * power-of-two strides.
+     */
+    return (block ^ (block >> 8) ^ (block >> 16)) &
+           (EXT2_BLOCK_CACHE_SETS - 1u);
+}
+
+static inline ext2_block_cache_entry_t* ext2_block_cache_set(uint32_t block)
+{
+    uint32_t set = ext2_block_cache_set_index(block);
+
+    return &ext2_block_cache[set * EXT2_BLOCK_CACHE_WAYS];
 }
 
 static ext2_block_cache_entry_t* ext2_block_cache_find(uint32_t block)
 {
-    for (uint32_t i = 0; i < EXT2_BLOCK_CACHE_SIZE; i++) {
-        if (ext2_block_cache[i].valid && ext2_block_cache[i].block == block)
-            return &ext2_block_cache[i];
+    ext2_block_cache_entry_t* set = ext2_block_cache_set(block);
+
+    for (uint32_t way = 0; way < EXT2_BLOCK_CACHE_WAYS; way++) {
+        if (set[way].valid && set[way].block == block)
+            return &set[way];
     }
     return NULL;
 }
 
-static ext2_block_cache_entry_t* ext2_block_cache_pick(void)
+static ext2_block_cache_entry_t* ext2_block_cache_pick(uint32_t block)
 {
+    ext2_block_cache_entry_t* set = ext2_block_cache_set(block);
+    uint32_t set_index = ext2_block_cache_set_index(block);
     ext2_block_cache_entry_t* entry;
 
-    for (uint32_t i = 0; i < EXT2_BLOCK_CACHE_SIZE; i++) {
-        if (!ext2_block_cache[i].valid)
-            return &ext2_block_cache[i];
+    for (uint32_t way = 0; way < EXT2_BLOCK_CACHE_WAYS; way++) {
+        if (!set[way].valid)
+            return &set[way];
     }
 
-    entry = &ext2_block_cache[ext2_block_cache_clock++ % EXT2_BLOCK_CACHE_SIZE];
+    entry = &set[ext2_block_cache_set_clock[set_index]++ % EXT2_BLOCK_CACHE_WAYS];
     entry->valid = false;
     return entry;
 }
@@ -444,7 +489,15 @@ static int ext2_read_block(uint32_t block, void* buf)
     ext2_stats.read_blocks++;
 
     ext2_cache_acquire();
-    entry = ext2_block_cache_pick();
+    /*
+     * Another task may have inserted this block while the cache lock was
+     * dropped for disk I/O. Reuse the existing entry; duplicate entries would
+     * leave a stale copy behind after a future write updates only the first
+     * matching cache entry.
+     */
+    entry = ext2_block_cache_find(block);
+    if (!entry)
+        entry = ext2_block_cache_pick(block);
     if (entry && ext2_block_cache_data(entry)) {
         memcpy(entry->data, buf, ext2_fs.block_size);
         entry->block = block;
@@ -471,7 +524,7 @@ static int ext2_write_block(uint32_t block, void* buf)
     ext2_cache_acquire();
     entry = ext2_block_cache_find(block);
     if (!entry)
-        entry = ext2_block_cache_pick();
+        entry = ext2_block_cache_pick(block);
 
     if (entry && ext2_block_cache_data(entry)) {
         memcpy(entry->data, buf, ext2_fs.block_size);

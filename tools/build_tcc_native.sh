@@ -86,10 +86,12 @@ cd "$BUILD_DIR"
 "$PATCHED_SRC/configure" \
     --source-path="$PATCHED_SRC" \
     --prefix=/opt/tcc \
-    --cc="$CC $ARM_FLAGS -ffreestanding -fno-builtin -fno-stack-protector -DARM_OS_NEWLIB -I$NEWLIB_SYSROOT/include" \
-    --ar="$AR" \
+    --cross-prefix="$ARCH" \
+    --cc="gcc $ARM_FLAGS -ffreestanding -fno-builtin -fno-stack-protector -DARM_OS_NEWLIB -I$NEWLIB_SYSROOT/include" \
+    --ar=ar \
     --cpu=arm \
     --targetos=Linux \
+    --triplet=arm-none-eabi \
     --enable-static \
     --disable-rpath \
     --sysincludepaths=/opt/tcc/lib/tcc/include:/opt/tcc/include \

@@ -808,9 +808,9 @@ static void test_posix_compat_syscalls(void)
     }
 
     child = fork();
-    if (expect(child >= 0, "wait4 fork child", child) == 0) {
-        if (child == 0)
-            exit(33);
+    if (child == 0)
+        exit(33);
+    if (expect(child > 0, "wait4 fork child", child) == 0) {
         expect(wait4(child, &child_status, 0, &usage) == child,
                "wait4 collects child", errno);
         expect(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 33,
@@ -1997,12 +1997,6 @@ static void test_background_tty_read_stops(void)
         return;
 
     pid = fork();
-    if (expect(pid >= 0, "background tty read fork child", pid) < 0) {
-        close(sync_pipe[0]);
-        close(sync_pipe[1]);
-        return;
-    }
-
     if (pid == 0) {
         char c;
 
@@ -2012,6 +2006,12 @@ static void test_background_tty_read_stops(void)
         close(sync_pipe[1]);
         (void)read(STDIN_FILENO, &c, 1);
         exit(77);
+    }
+
+    if (expect(pid > 0, "background tty read fork child", pid) < 0) {
+        close(sync_pipe[0]);
+        close(sync_pipe[1]);
+        return;
     }
 
     close(sync_pipe[1]);
@@ -2071,8 +2071,6 @@ static void test_scheduler_priority_syscalls(void)
     expect(base >= -20 && base <= 19, "getpriority reports nice range", base);
 
     pid = fork();
-    if (expect(pid >= 0, "nice fork child", pid) < 0)
-        return;
     if (pid == 0) {
         int before = getpriority(PRIO_PROCESS, 0);
         int expected = before + 3;
@@ -2086,18 +2084,20 @@ static void test_scheduler_priority_syscalls(void)
         after = getpriority(PRIO_PROCESS, 0);
         exit(rc == expected && after == expected ? 0 : 1);
     }
+    if (expect(pid > 0, "nice fork child", pid) < 0)
+        return;
 
     waited = waitpid(pid, &status, 0);
     expect(waited == pid && status_exited(status, 0),
            "nice adjusts child priority", status);
 
     pid = fork();
-    if (expect(pid >= 0, "setpriority fork child", pid) < 0)
-        return;
     if (pid == 0) {
         while (1)
             sleep(1);
     }
+    if (expect(pid > 0, "setpriority fork child", pid) < 0)
+        return;
 
     target = base + 4;
     if (target > 19)

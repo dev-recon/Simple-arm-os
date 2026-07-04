@@ -377,9 +377,8 @@ void orphan_children(task_t* proc)
 }
 
 
-void wakeup_parent(task_t *proc)
+void wakeup_parent_under_lock(task_t *proc)
 {
-    unsigned long flags;
     task_t *parent;
 
     if (!proc || !proc->process)
@@ -390,7 +389,6 @@ void wakeup_parent(task_t *proc)
      * waitpid selector and child relationship are observed while task_lock is
      * held, then the parent is made READY without recursively taking task_lock.
      */
-    spin_lock_irqsave(&task_lock, &flags);
     parent = proc->process->parent;
     if (parent && parent->process &&
         parent->state == TASK_BLOCKED &&
@@ -399,5 +397,13 @@ void wakeup_parent(task_t *proc)
         if (child_matches_waitpid(parent, proc, wait_pid))
             task_make_ready_under_lock(parent);
     }
+}
+
+void wakeup_parent(task_t *proc)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    wakeup_parent_under_lock(proc);
     spin_unlock_irqrestore(&task_lock, flags);
 }
