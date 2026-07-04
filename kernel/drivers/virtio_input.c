@@ -133,11 +133,6 @@ typedef struct {
 
 static virtio_input_state_t input = {0};
 
-static inline uint32_t fdt32_to_cpu_input(uint32_t x)
-{
-    return __builtin_bswap32(x);
-}
-
 static struct vring_desc *input_desc_ptr(vq_legacy_t *vq, unsigned i)
 {
     return (struct vring_desc *)((uint8_t *)(uintptr_t)vq->va_desc +
@@ -196,127 +191,15 @@ static bool input_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
     return true;
 }
 
-static bool input_decode_reg(const uint32_t *reg, uint32_t len, uint32_t *out_phys)
-{
-    if (!reg || !out_phys)
-        return false;
-    if (len >= 16) {
-        if (fdt32_to_cpu_input(reg[0]) != 0)
-            return false;
-        *out_phys = fdt32_to_cpu_input(reg[1]);
-        return true;
-    }
-    if (len >= 8) {
-        *out_phys = fdt32_to_cpu_input(reg[0]);
-        return true;
-    }
-    return false;
-}
-
-static bool input_decode_interrupts(const uint32_t *intr, uint32_t len,
-                                    uint32_t *out_irq, bool *out_edge)
-{
-    if (!intr || !out_irq || len < 4)
-        return false;
-
-    if (len >= 12) {
-        uint32_t type = fdt32_to_cpu_input(intr[0]);
-        uint32_t irq = fdt32_to_cpu_input(intr[1]);
-        uint32_t flags = fdt32_to_cpu_input(intr[2]);
-
-        if (type == 0) {
-            /* GIC binding: SPI cell contains INTID - 32. */
-            *out_irq = irq + 32;
-            if (out_edge)
-                *out_edge = (flags == 1 || flags == 2);
-            return true;
-        }
-
-        if (type == 1) {
-            /* PPI cell contains INTID - 16. Not expected for virtio-mmio. */
-            *out_irq = irq + 16;
-            if (out_edge)
-                *out_edge = (flags == 1 || flags == 2);
-            return true;
-        }
-    }
-
-    *out_irq = fdt32_to_cpu_input(intr[0]);
-    if (out_edge)
-        *out_edge = true;
-    return true;
-}
-
 static bool input_probe_from_dtb(uint32_t *out_phys, uint32_t *out_irq, bool *out_edge)
 {
-    void *dtb_ptr = (void *)dtb_address;
-    if (!dtb_ptr || !out_phys || !out_irq)
+    paddr_t phys = 0;
+
+    if (!fdt_find_virtio_mmio_device(VIRTIO_ID_INPUT, &phys, out_irq, out_edge))
         return false;
 
-    struct fdt_header *fdt = (struct fdt_header *)dtb_ptr;
-    if (fdt32_to_cpu_input(fdt->magic) != FDT_MAGIC)
-        return false;
-
-    uint8_t *struct_block = (uint8_t *)dtb_ptr + fdt32_to_cpu_input(fdt->off_dt_struct);
-    uint32_t *token = (uint32_t *)struct_block;
-
-    while (1) {
-        uint32_t tag = fdt32_to_cpu_input(*token++);
-        switch (tag) {
-        case FDT_BEGIN_NODE: {
-            void *node_ptr = (void *)(token - 1);
-            const char *name = (const char *)token;
-            size_t len = strlen(name);
-            token += (len + 4) / 4;
-
-            if (!fdt_node_matches(name, "virtio_mmio"))
-                break;
-
-            uint32_t reg_len = 0;
-            uint32_t *reg = (uint32_t *)fdt_get_property(dtb_ptr, node_ptr, "reg", &reg_len);
-            uint32_t phys = 0;
-            if (!input_decode_reg(reg, reg_len, &phys))
-                break;
-
-            volatile uint32_t *base = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
-            if (mmio_read32(base, VIRTIO_MMIO_MAGIC) != 0x74726976)
-                break;
-            if (mmio_read32(base, VIRTIO_MMIO_DEVICE_ID) != VIRTIO_ID_INPUT)
-                break;
-
-            uint32_t index = (phys - VIRT_VIRTIO_BASE) / VIRT_VIRTIO_SIZE;
-            uint32_t intr_len = 0;
-            uint32_t *intr = (uint32_t *)fdt_get_property(dtb_ptr, node_ptr,
-                                                          "interrupts",
-                                                          &intr_len);
-            bool edge = true;
-            uint32_t irq = VIRT_VIRTIO_IRQ(index);
-            if (!input_decode_interrupts(intr, intr_len, &irq, &edge)) {
-                irq = VIRT_VIRTIO_IRQ(index);
-                edge = true;
-            }
-
-            *out_phys = phys;
-            *out_irq = irq;
-            if (out_edge)
-                *out_edge = edge;
-            return true;
-        }
-        case FDT_PROP: {
-            uint32_t prop_len = fdt32_to_cpu_input(*token++);
-            token++;
-            token += (prop_len + 3) / 4;
-            break;
-        }
-        case FDT_END_NODE:
-        case FDT_NOP:
-            break;
-        case FDT_END:
-            return false;
-        default:
-            return false;
-        }
-    }
+    *out_phys = phys;
+    return true;
 }
 
 static void input_emit_char(char c)

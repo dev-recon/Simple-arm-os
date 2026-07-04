@@ -21,6 +21,7 @@
 
 #include <kernel/types.h>
 #include <kernel/string.h>
+#include <kernel/fdt.h>
 
 #define USE_RAMFS 1
 
@@ -344,33 +345,12 @@ extern void PUT16(unsigned int, unsigned int); /* Compatible avec mmio.h */
 extern unsigned int GET16(unsigned int);       /* Compatible avec mmio.h */
 
 
-/* DTB structures */
-struct fdt_header {
-    uint32_t magic;           /* 0xd00dfeed */
-    uint32_t totalsize;       
-    uint32_t off_dt_struct;   
-    uint32_t off_dt_strings;  
-    uint32_t off_mem_rsvmap;  
-    uint32_t version;         
-    uint32_t last_comp_version;
-    uint32_t boot_cpuid_phys;
-    uint32_t size_dt_strings;
-    uint32_t size_dt_struct;
-};
-
 typedef struct {
     uint32_t cache_info;
     uint32_t tlb_info;
     uint32_t memory_model;
     uint32_t debug_features;
 } cpu_memory_info_t;
-
-#define FDT_MAGIC         0xd00dfeed
-#define FDT_BEGIN_NODE    0x00000001
-#define FDT_END_NODE      0x00000002
-#define FDT_PROP          0x00000003
-#define FDT_NOP           0x00000004
-#define FDT_END           0x00000009
 
 /* === FONCTIONS KERNEL === */
 
@@ -431,11 +411,6 @@ void virtio_init(void);
 void* get_dtb_address(void);
 bool parse_device_tree(void);
 void print_cpu_mode(void);
-
-void* fdt_find_node_by_name(void* dtb_ptr, const char* node_name);
-bool fdt_node_matches(const char* node_name, const char* prefix);
-bool fdt_device_present(void* dtb_ptr, const char* partial_name);
-void* fdt_get_property(void* dtb_ptr, void* node_ptr, const char* property_name, uint32_t* out_len);
 
 
 

@@ -57,11 +57,6 @@ static volatile uint32_t scheduler_reject_count;
 
 extern void smp_secondary_entry(void);
 
-static inline uint32_t smp_fdt32_to_cpu(uint32_t value)
-{
-    return __builtin_bswap32(value);
-}
-
 static uint32_t smp_detect_possible_cpus_from_dtb(void)
 {
     void* dtb_ptr = (void*)dtb_address;
@@ -70,15 +65,15 @@ static uint32_t smp_detect_possible_cpus_from_dtb(void)
     if (!dtb_ptr)
         return 1;
 
-    struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
-    if (smp_fdt32_to_cpu(fdt->magic) != FDT_MAGIC)
+    if (!fdt_check_header(dtb_ptr))
         return 1;
 
-    uint8_t* struct_block = (uint8_t*)dtb_ptr + smp_fdt32_to_cpu(fdt->off_dt_struct);
+    struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
+    uint8_t* struct_block = (uint8_t*)dtb_ptr + fdt32_to_cpu(fdt->off_dt_struct);
     uint32_t* token = (uint32_t*)struct_block;
 
     while (1) {
-        uint32_t tag = smp_fdt32_to_cpu(*token++);
+        uint32_t tag = fdt32_to_cpu(*token++);
 
         switch (tag) {
             case FDT_BEGIN_NODE: {
@@ -92,7 +87,7 @@ static uint32_t smp_detect_possible_cpus_from_dtb(void)
                 break;
             }
             case FDT_PROP: {
-                uint32_t len = smp_fdt32_to_cpu(*token++);
+                uint32_t len = fdt32_to_cpu(*token++);
                 token++;
                 token += (len + 3) / 4;
                 break;

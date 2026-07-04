@@ -54,7 +54,7 @@ bool is_valid_user_ptr(const void* ptr)
     __ret; \
 })
 
-int unmap_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
+int unmap_user_page(uint32_t* pgdir, vaddr_t vaddr, uint32_t asid)
 {
     uint32_t l1_index;
     uint32_t l2_index;
@@ -292,7 +292,7 @@ static int copy_from_user_pages(uint32_t *pgdir, uint8_t *dst,
     return 0;
 }
 
-uint32_t map_user_to_kernel(uint32_t *pgdir, uint32_t vaddr){
+vaddr_t map_user_to_kernel(uint32_t *pgdir, vaddr_t vaddr){
 
     //uint32_t user_addr = vaddr;
     //uint32_t user_page = user_addr & ~0xFFF;
@@ -300,11 +300,11 @@ uint32_t map_user_to_kernel(uint32_t *pgdir, uint32_t vaddr){
 
     //KDEBUG("map_user_to_kernel --------------------------\n");
 
-    uint32_t phys_addr = get_phys_addr_from_pgdir(pgdir, vaddr);
+    paddr_t phys_addr = get_phys_addr_from_pgdir(pgdir, vaddr);
 
     //KDEBUG("after get_phys_addr_from_pgdir ---- Physical Address 0x%08x ---- PGDIR = 0x%08X-------\n", phys_addr, pgdir);
 
-    uint32_t user_page = map_temp_page(phys_addr);
+    vaddr_t user_page = map_temp_page(phys_addr);
 
     //KDEBUG("after map_temp_user_page ---- 0x%08x ----------------\n", user_page);
 

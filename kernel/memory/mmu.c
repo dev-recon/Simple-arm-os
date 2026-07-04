@@ -67,12 +67,12 @@ uint32_t get_current_asid(void);
 static void setup_ttbr_split(void);
 static void setup_kernel_space(void);
 static void setup_user_template(void);
-static void map_kernel_mmio_alias(uint32_t vaddr, uint32_t paddr);
-static bool is_valid_vaddr(uint32_t vaddr);
+static void map_kernel_mmio_alias(vaddr_t vaddr, paddr_t paddr);
+static bool is_valid_vaddr(vaddr_t vaddr);
 uint32_t allocate_l2_page(bool is_kernel);
-void check_address_content(uint32_t phys_addr, const char* step);
-static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
-                                   uint32_t phys_addr, uint32_t vma_flags,
+void check_address_content(paddr_t phys_addr, const char* step);
+static int map_user_page_with_perm(uint32_t* pgdir, vaddr_t vaddr,
+                                   paddr_t phys_addr, uint32_t vma_flags,
                                    uint32_t asid, bool writable);
 
 static inline uint32_t asid_hw(uint32_t asid)
@@ -136,7 +136,7 @@ static uint32_t user_page_flags(uint32_t vma_flags, bool writable)
     return page_flags;
 }
 
-uint32_t* get_user_pte(uint32_t* pgdir, uint32_t vaddr)
+uint32_t* get_user_pte(uint32_t* pgdir, vaddr_t vaddr)
 {
     if (!pgdir || !is_valid_vaddr(vaddr) || vaddr >= 0x40000000 ||
         (vaddr & (PAGE_SIZE - 1))) {
@@ -155,7 +155,7 @@ uint32_t* get_user_pte(uint32_t* pgdir, uint32_t vaddr)
     return &l2_table[l2_index];
 }
 
-static int update_user_pte(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr,
+static int update_user_pte(uint32_t* pgdir, vaddr_t vaddr, paddr_t phys_addr,
                            uint32_t vma_flags, uint32_t asid, bool writable)
 {
     uint32_t* pte = get_user_pte(pgdir, vaddr);
@@ -583,7 +583,7 @@ KDEBUG("All checks passed, proceeding with MMU activation...\n");
 
 
 
-static void map_kernel_mmio_alias(uint32_t vaddr, uint32_t paddr)
+static void map_kernel_mmio_alias(vaddr_t vaddr, paddr_t paddr)
 {
     uint32_t index = get_L1_index(vaddr);
 
@@ -968,7 +968,7 @@ uint32_t vm_get_current_asid(void)
 }
 
 /* Reste des fonctions inchangées... */
-static bool is_valid_vaddr(uint32_t vaddr)
+static bool is_valid_vaddr(vaddr_t vaddr)
 {
     /* RAM kernel/user pour machine virt */
     if (vaddr >= VIRT_RAM_START && vaddr < (uint32_t)VIRT_RAM_END) {
@@ -1078,7 +1078,7 @@ uint32_t allocate_l2_page(bool is_kernel) {
     return (uint32_t)l2_page;
 }
 
-void check_address_content(uint32_t phys_addr, const char* step) {
+void check_address_content(paddr_t phys_addr, const char* step) {
     KDEBUG("check_address_content [%s]: ***********************************************************************\n", step);
     uint8_t* check = (uint8_t*)map_temp_page((uint32_t)phys_addr);
     KDEBUG("check_address_content: %02X %02X %02X %02X\n", check[0], check[1], check[2], check[3]);
@@ -1087,22 +1087,22 @@ void check_address_content(uint32_t phys_addr, const char* step) {
     KDEBUG("check_address_content [%s]: ***********************************************************************\n", step);
 }
 
-int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid)
+int map_user_page(uint32_t* pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid)
 {
     return map_user_page_with_perm(pgdir, vaddr, phys_addr, vma_flags, asid, true);
 }
 
-int map_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid)
+int map_user_page_readonly(uint32_t* pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid)
 {
     return map_user_page_with_perm(pgdir, vaddr, phys_addr, vma_flags, asid, false);
 }
 
-int remap_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid)
+int remap_user_page(uint32_t* pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid)
 {
     return update_user_pte(pgdir, vaddr, phys_addr, vma_flags, asid, true);
 }
 
-int set_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
+int set_user_page_readonly(uint32_t* pgdir, vaddr_t vaddr, uint32_t asid)
 {
     uint32_t* pte = get_user_pte(pgdir, vaddr);
     if (!pte || ((*pte & PTE_TYPE_MASK) == PTE_TYPE_FAULT)) {
@@ -1116,7 +1116,7 @@ int set_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
     return 0;
 }
 
-int set_user_page_writable(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
+int set_user_page_writable(uint32_t* pgdir, vaddr_t vaddr, uint32_t asid)
 {
     uint32_t* pte = get_user_pte(pgdir, vaddr);
     if (!pte || ((*pte & PTE_TYPE_MASK) == PTE_TYPE_FAULT)) {
@@ -1130,8 +1130,8 @@ int set_user_page_writable(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
     return 0;
 }
 
-static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
-                                   uint32_t phys_addr, uint32_t vma_flags,
+static int map_user_page_with_perm(uint32_t* pgdir, vaddr_t vaddr,
+                                   paddr_t phys_addr, uint32_t vma_flags,
                                    uint32_t asid, bool writable)
 {
     if (!pgdir || !is_valid_vaddr(vaddr)) {
@@ -1205,11 +1205,11 @@ static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
     return 0;
 }
 
-uint32_t get_L1_index(uint32_t vaddr){
+uint32_t get_L1_index(vaddr_t vaddr){
     return vaddr >= get_split_boundary() ? KERNEL_L1_INDEX(vaddr) : vaddr >> 20 ; 
 }
 
-uint32_t get_physical_address(uint32_t* pgdir, uint32_t vaddr) {
+paddr_t get_physical_address(uint32_t* pgdir, vaddr_t vaddr) {
     return get_phys_addr_from_pgdir(pgdir, vaddr);
 }
 
@@ -1219,12 +1219,12 @@ void invalidate_tlb_all(void)
     tlb_shootdown_all();
 }
 
-void invalidate_tlb_page(uint32_t vaddr)
+void invalidate_tlb_page(vaddr_t vaddr)
 {
     tlb_shootdown_page(vaddr);
 }
 
-void invalidate_tlb_page_asid(uint32_t vaddr, uint32_t asid)
+void invalidate_tlb_page_asid(vaddr_t vaddr, uint32_t asid)
 {
     tlb_shootdown_page_asid(vaddr, asid);
 }

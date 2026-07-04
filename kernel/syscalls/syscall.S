@@ -16,28 +16,22 @@
  * - Must stay consistent with task_context_t offsets.
  */
 
-#include <kernel/task.h>
-
 .section .text
 .align 2
 
 .global swi_handler
 .global current_task
 .global current_tasks
-//.global TASK_CONTEXT_OFF
 .global save_user_bank
 .global signal_return_trampoline
 .equ __NR_rt_sigreturn, 173
 .equ MAX_SYSCALLS,     512     /* Keep in sync with include/kernel/syscalls.h */
-.equ CTX_USR_R0,       88
-.equ CTX_USR_R10,     128
-.equ CTX_USR_R11,     132
-.equ CTX_USR_R12,     136
-.equ CTX_USR_SP,      140
-.equ CTX_USR_LR,      144
-.equ CTX_USR_PC,      148
-.equ CTX_USR_CPSR,    152
-.equ CTX_SVC_SP_TOP,  156
+
+/*
+ * Generated from kernel/asm-offsets.c. The syscall path is extremely sensitive
+ * to task_context_t layout, so no field offset is hardcoded here.
+ */
+.include "asm-offsets.h"
 
 .macro load_current_task_local reg tmp
     /*
@@ -145,21 +139,21 @@ swi_handler:
     ldmfd   sp!, {r0-r3}
     cmp     r12, #0
     beq     syscall_no_current_task
-    add     r12, r12, #48          /* r12 = &current->context */ // FIX IT !!!
+    add     r12, r12, #TASK_CONTEXT_OFF   /* r12 = &current->context */
 
     /* Copy user-visible registers into ctx->usr_r[]. */
-    str     r0,  [r12, #(88 + 0)]
-    str     r1,  [r12, #(88 + 4)]
-    str     r2,  [r12, #(88 + 8)]
-    str     r3,  [r12, #(88 + 12)]
-    str     r4,  [r12, #(88 + 16)]   /* user r4/r5 carry extra syscall args here */
-    str     r5,  [r12, #(88 + 20)]
-    str     r6,  [r12, #(88 + 24)]
-    str     r7,  [r12, #(88 + 28)]
-    str     r8,  [r12, #(88 + 32)]
-    str     r9,  [r12, #(88 + 36)]
-    str     r10, [r12, #(88 + 40)]
-    str     r11,  [r12, #(88 + 44)]
+    str     r0,  [r12, #CTX_USR_R0]
+    str     r1,  [r12, #CTX_USR_R1]
+    str     r2,  [r12, #CTX_USR_R2]
+    str     r3,  [r12, #CTX_USR_R3]
+    str     r4,  [r12, #CTX_USR_R4]   /* user r4/r5 carry extra syscall args here */
+    str     r5,  [r12, #CTX_USR_R5]
+    str     r6,  [r12, #CTX_USR_R6]
+    str     r7,  [r12, #CTX_USR_R7]
+    str     r8,  [r12, #CTX_USR_R8]
+    str     r9,  [r12, #CTX_USR_R9]
+    str     r10, [r12, #CTX_USR_R10]
+    str     r11, [r12, #CTX_USR_R11]
 
     /* Save syscall arguments before reusing scratch registers. */
     mov     r8, r0
@@ -168,7 +162,7 @@ swi_handler:
     mov     r6, r3
 
     ldr     r0, [sp, #36]
-    str     r0, [r12, #(88 + 48)]
+    str     r0, [r12, #CTX_USR_R12]
 
     /*
      * 2) Capture banked state without calling out.
@@ -176,23 +170,23 @@ swi_handler:
      * SYS mode to read them, then return to SVC before touching kernel state.
      */
     mrs     r0, spsr
-    str     r0,  [r12, #152]           /* user CPSR */
+    str     r0,  [r12, #CTX_USR_CPSR]  /* user CPSR */
     mov     r0,  lr
-    str     r0,  [r12, #148]          /* user resume PC = LR_svc */
+    str     r0,  [r12, #CTX_USR_PC]    /* user resume PC = LR_svc */
 
     cps     #0x1F                            /* switch to SYS mode to read user SP */
     mov     r0,  sp
     mov     r1,  lr
     cps     #0x13                            /* revenir en SVC */
-    str     r0,  [r12, #140]
-    str     r1,  [r12, #144]
+    str     r0,  [r12, #CTX_USR_SP]
+    str     r1,  [r12, #CTX_USR_LR]
 
     mov     r0,  #1
-    str     r0,  [r12, #84]         /* this SVC normally returns to user */
+    str     r0,  [r12, #CTX_RET_TO_USER]   /* this SVC normally returns to user */
 
     mov   r0, sp
-    str   r0, [r12, #160]         /* SVC SP before the handler-local arg frame */
-    str   r0, [r12, #52]          /* initial kernel resume SP snapshot */
+    str   r0, [r12, #CTX_SVC_SP]  /* SVC SP before the handler-local arg frame */
+    str   r0, [r12, #CTX_SP]      /* initial kernel resume SP snapshot */
 
     /* Prepare the stack-passed arguments for syscall_handler. */
     sub   sp, sp, #12          /* 2 args + AAPCS alignment padding */
@@ -200,8 +194,8 @@ swi_handler:
     str   r4, [sp, #4]         /* C arg5 = user r4 */
 
     mov     r0,  sp
-    str     r0,  [r12, #52]         /* authoritative SVC SP while in syscall */
-    str     r0,  [r12, #160]
+    str     r0,  [r12, #CTX_SP]      /* authoritative SVC SP while in syscall */
+    str     r0,  [r12, #CTX_SVC_SP]
 
     //push {r0-r3, lr}
     //mov r0, r12
@@ -259,7 +253,7 @@ syscall_return:
 
 signal_user_return:
     load_current_task_local r12, r2
-    add     r12, r12, #48
+    add     r12, r12, #TASK_CONTEXT_OFF
 
     /* Abandon the current SVC frame; ctx->usr_* now describes the return. */
     ldr     sp, [r12, #CTX_SVC_SP_TOP]

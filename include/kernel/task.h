@@ -574,7 +574,7 @@ extern void get_and_save_usr_context(task_t* t);
      t->context.usr_r[i] = r0..r12 user (cf. wrapper SVC)
 */
 
-#define TASK_CONTEXT_OFF = offsetof(task_t, context);
+#define TASK_CONTEXT_OFF offsetof(task_t, context)
 
 /* Ajout des fonctions de gestion des interruptions ARM */
 static inline uint32_t disable_interrupts_save(void)

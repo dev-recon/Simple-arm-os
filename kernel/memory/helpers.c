@@ -45,7 +45,7 @@ static void setup_temp_page_table_entry(uint32_t* pt, uint32_t phys_addr);
 static void clear_temp_page_table_entry(uint32_t* pt);
 static bool validate_temp_slot_configuration(int slot);
 static void init_multi_temp_mapping_state(void);
-uint32_t map_temp_page_multi(uint32_t phys_addr, int num_pages);
+vaddr_t map_temp_page_multi(paddr_t phys_addr, int num_pages);
 
 
 #define TEMP_USER_MAP_VADDR     0x7FF01000  // juste après TEMP_MAP_VADDR
@@ -322,8 +322,8 @@ static inline int va_uses_ttbr1(uint32_t va, uint32_t ttbcr){
 
 /* Structure pour gérer plusieurs mappings temporaires */
 typedef struct {
-    uint32_t virt_addr;      /* Virtual address of this slot */
-    uint32_t phys_addr;      /* Physical address currently mapped */
+    vaddr_t virt_addr;       /* Virtual address of this slot */
+    paddr_t phys_addr;       /* Physical address currently mapped */
     bool in_use;             /* Is this slot currently used */
     uint32_t npages;
 } temp_mapping_slot_t;
@@ -745,7 +745,7 @@ static bool setup_temp_slot_mapping(int slot, uint32_t phys_addr)
     return true;
 }
 
-void unmap_temp_pages_contiguous(uint32_t base_vaddr, int num_pages)
+void unmap_temp_pages_contiguous(vaddr_t base_vaddr, int num_pages)
 {
     if (num_pages > 4 || num_pages < 1) {
         KERROR("unmap_temp_pages_contiguous: Invalid num_pages %d\n", num_pages);
@@ -820,7 +820,7 @@ void unmap_temp_pages_contiguous(uint32_t base_vaddr, int num_pages)
 }
 
 
-uint32_t map_temp_pages_contiguous(uint32_t phys_addr, int num_pages)
+vaddr_t map_temp_pages_contiguous(paddr_t phys_addr, int num_pages)
 {
     if (num_pages < 1 || num_pages > 4) {
         KERROR("map_temp_pages_contiguous: invalid num_pages=%d\n", num_pages);
@@ -907,7 +907,7 @@ uint32_t map_temp_pages_contiguous(uint32_t phys_addr, int num_pages)
  * @num_pages: Nombre de pages à mapper (1-4)
  * Returns: Adresse virtuelle de la première page, ou 0 si échec
  */
-uint32_t map_temp_page_multi(uint32_t phys_addr, int num_pages)
+vaddr_t map_temp_page_multi(paddr_t phys_addr, int num_pages)
 {
     if (num_pages < 1 || num_pages > MAX_TEMP_MAPPINGS) {
         KERROR("map_temp_pages_multi: Invalid num_pages %d (max %d)\n", 
@@ -991,7 +991,7 @@ uint32_t map_temp_page_multi(uint32_t phys_addr, int num_pages)
  * @base_vaddr: Adresse virtuelle de la première page
  * @num_pages: Nombre de pages à démapper
  */
-void unmap_temp_page_multi(uint32_t base_vaddr, int num_pages)
+void unmap_temp_page_multi(vaddr_t base_vaddr, int num_pages)
 {
     if (num_pages < 1 || num_pages > MAX_TEMP_MAPPINGS) {
         KERROR("unmap_temp_pages_multi: Invalid num_pages %d\n", num_pages);
@@ -1060,7 +1060,7 @@ void unmap_temp_page_multi(uint32_t base_vaddr, int num_pages)
  * @size: Taille en bytes (sera arrondie aux pages supérieures)
  * Returns: Adresse virtuelle ou 0 si échec
  */
-uint32_t map_temp_page_large(uint32_t phys_addr, uint32_t size)
+vaddr_t map_temp_page_large(paddr_t phys_addr, uint32_t size)
 {
     /* Calculer le nombre de pages nécessaires */
     int num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -1075,7 +1075,7 @@ uint32_t map_temp_page_large(uint32_t phys_addr, uint32_t size)
  * @base_vaddr: Adresse virtuelle de départ
  * @size: Taille originale en bytes
  */
-void unmap_temp_page_large(uint32_t base_vaddr, uint32_t size)
+void unmap_temp_page_large(vaddr_t base_vaddr, uint32_t size)
 {
     int num_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     unmap_temp_pages_contiguous(base_vaddr, num_pages);
@@ -1085,7 +1085,7 @@ void unmap_temp_page_large(uint32_t base_vaddr, uint32_t size)
 /**
  * Wrapper functions pour compatibilité avec l'ancien système
  */
-uint32_t map_temp_page(uint32_t phys_addr)
+vaddr_t map_temp_page(paddr_t phys_addr)
 {
     //return map_temp_pages_contiguous(phys_addr,1);
     return phys_addr;
@@ -1203,7 +1203,7 @@ void debug_temp_mappings(void)
     spin_unlock(&multi_temp_state.lock);
 }
 
-uint32_t map_temp_user_page(uint32_t phys_addr)
+vaddr_t map_temp_user_page(paddr_t phys_addr)
 {
     uint32_t* kernel_pgdir = get_kernel_pgdir();
     uint32_t pgd_index = get_L1_index(TEMP_USER_MAP_VADDR);
@@ -1267,7 +1267,7 @@ void unmap_temp_user_page(void)
     spin_unlock(&temp_map_state.lock);
 }
 
-uint32_t get_phys_from_temp_mapping(uint32_t temp_ptr)
+paddr_t get_phys_from_temp_mapping(vaddr_t temp_ptr)
 {
     return temp_map_state.phys_addr + (temp_ptr & 0xFFF);
 }
@@ -1282,7 +1282,7 @@ uint32_t get_phys_from_temp_mapping(uint32_t temp_ptr)
  * 
  * Returns: adresse physique (uint32_t) ou 0 si non mappée
  */
-uint32_t get_phys_addr_from_pgdir(uint32_t* pgdir, uint32_t vaddr)
+paddr_t get_phys_addr_from_pgdir(uint32_t* pgdir, vaddr_t vaddr)
 {
     uint32_t l1_index = get_L1_index(vaddr);
     uint32_t l2_index = L2_INDEX(vaddr);
@@ -1620,7 +1620,7 @@ void restore_user_context2(uint32_t saved_asid)
  * Nouvelles fonctions helper pour split TTBR
  */
 
-uint32_t* get_page_entry_arm(uint32_t* pgdir, uint32_t vaddr) {
+uint32_t* get_page_entry_arm(uint32_t* pgdir, vaddr_t vaddr) {
     static uint32_t cached_entry = 0;
     uint32_t l1_index, l2_index;
     uint32_t* l1_entry;
@@ -1690,7 +1690,7 @@ uint32_t* get_page_entry_arm(uint32_t* pgdir, uint32_t vaddr) {
 /**
  * Vérifie si une adresse virtuelle est mappée et exécutable avec split TTBR
  */
-int check_page_permissions(uint32_t* pgdir, uint32_t vaddr) {
+int check_page_permissions(uint32_t* pgdir, vaddr_t vaddr) {
     uint32_t* page_entry;
     
     /* Vérifier que l'adresse est dans le bon espace */
@@ -2029,7 +2029,7 @@ void hexdump(const void* addr, size_t n) {
  * @param asid: ASID du processus source (pour la cohérence MMU)
  * @return: Adresse virtuelle temporaire dans l'espace kernel, ou 0 en cas d'erreur
  */
-uint32_t map_temp_user_page_from_pgdir(uint32_t *pgdir, uint32_t user_vaddr, uint32_t asid)
+vaddr_t map_temp_user_page_from_pgdir(uint32_t *pgdir, vaddr_t user_vaddr, uint32_t asid)
 {
     (void) asid;
     uint32_t phys_addr;

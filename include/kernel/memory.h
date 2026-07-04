@@ -33,8 +33,8 @@ typedef struct {
 
 /* Virtual Memory Area */
 typedef struct vma {
-    uint32_t start;        /* 4 bytes */
-    uint32_t end;          /* 4 bytes */
+    vaddr_t start;         /* 4 bytes */
+    vaddr_t end;           /* 4 bytes */
     uint32_t flags;        /* 4 bytes */
     uint32_t shm_id;       /* ID SHM si VMA_SHARED */
     struct vma* next;      /* 4 bytes */
@@ -46,10 +46,10 @@ typedef struct vm_space {
     uint32_t* pgdir;       /* 4 bytes - TTBR0 aligne pour le CPU */
     uint32_t* pgdir_alloc; /* 4 bytes - base brute a liberer */
     vma_t* vma_list;       /* 4 bytes */
-    uint32_t heap_start;   /* 4 bytes */
-    uint32_t heap_end;     /* 4 bytes */
-    uint32_t brk;          /* 4 bytes */
-    uint32_t stack_start;  /* 4 bytes */
+    vaddr_t heap_start;    /* 4 bytes */
+    vaddr_t heap_end;      /* 4 bytes */
+    vaddr_t brk;           /* 4 bytes */
+    vaddr_t stack_start;   /* 4 bytes */
     uint32_t asid;         /* 4 bytes - NOUVEAU: ASID du processus */
     uint32_t padding;      /* 4 bytes pour aligner sur 8 */
 } __attribute__((aligned(8))) vm_space_t;
@@ -154,15 +154,15 @@ uint32_t get_freed_page_count(void);
 vm_space_t* create_vm_space(void);
 void destroy_vm_space(vm_space_t* vm);
 vm_space_t* fork_vm_space(vm_space_t* parent_vm);
-vma_t* create_vma(vm_space_t* vm, uint32_t start, uint32_t size, uint32_t flags);
-int remove_vma(vm_space_t* vm, uint32_t start, uint32_t end);
-uint32_t vm_find_free_range(vm_space_t* vm, uint32_t hint, uint32_t size,
-                            uint32_t base, uint32_t limit);
-int vm_unmap_range(vm_space_t* vm, uint32_t start, uint32_t size);
-vma_t* find_vma(vm_space_t* vm, uint32_t addr);
-int handle_cow_fault(uint32_t fault_addr);
-int handle_user_stack_fault(uint32_t fault_addr);
-int handle_lazy_anon_fault(uint32_t fault_addr, bool is_write);
+vma_t* create_vma(vm_space_t* vm, vaddr_t start, uint32_t size, uint32_t flags);
+int remove_vma(vm_space_t* vm, vaddr_t start, vaddr_t end);
+vaddr_t vm_find_free_range(vm_space_t* vm, vaddr_t hint, uint32_t size,
+                           vaddr_t base, vaddr_t limit);
+int vm_unmap_range(vm_space_t* vm, vaddr_t start, uint32_t size);
+vma_t* find_vma(vm_space_t* vm, vaddr_t addr);
+int handle_cow_fault(vaddr_t fault_addr);
+int handle_user_stack_fault(vaddr_t fault_addr);
+int handle_lazy_anon_fault(vaddr_t fault_addr, bool is_write);
 
 /* Nouvelles fonctions pour ASID */
 void switch_to_vm_space(vm_space_t *vm);
@@ -174,38 +174,38 @@ void debug_asid_usage(void);
 bool setup_mmu(void);
 void switch_address_space(uint32_t* pgdir);                           /* TTBR0 seulement */
 void switch_address_space_with_asid(uint32_t* pgdir, uint32_t asid);   /* TTBR0 + ASID */
-int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid);
-int map_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid);
-int remap_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid);
-int set_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t asid);
-int set_user_page_writable(uint32_t* pgdir, uint32_t vaddr, uint32_t asid);
-uint32_t* get_user_pte(uint32_t* pgdir, uint32_t vaddr);
-uint32_t get_physical_address(uint32_t* pgdir, uint32_t vaddr);
+int map_user_page(uint32_t* pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid);
+int map_user_page_readonly(uint32_t* pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid);
+int remap_user_page(uint32_t* pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid);
+int set_user_page_readonly(uint32_t* pgdir, vaddr_t vaddr, uint32_t asid);
+int set_user_page_writable(uint32_t* pgdir, vaddr_t vaddr, uint32_t asid);
+uint32_t* get_user_pte(uint32_t* pgdir, vaddr_t vaddr);
+paddr_t get_physical_address(uint32_t* pgdir, vaddr_t vaddr);
 void debug_mmu_state(void);
-void unmap_temp_pages_contiguous(uint32_t base_vaddr, int num_pages);
-uint32_t map_temp_pages_contiguous(uint32_t phys_addr, int num_pages);
+void unmap_temp_pages_contiguous(vaddr_t base_vaddr, int num_pages);
+vaddr_t map_temp_pages_contiguous(paddr_t phys_addr, int num_pages);
 
-uint32_t* get_page_entry_arm(uint32_t* pgdir, uint32_t vaddr);
-int check_page_permissions(uint32_t* pgdir, uint32_t vaddr);
+uint32_t* get_page_entry_arm(uint32_t* pgdir, vaddr_t vaddr);
+int check_page_permissions(uint32_t* pgdir, vaddr_t vaddr);
 uint32_t get_current_ttrb0(void);
 
-uint32_t map_user_to_kernel(uint32_t *pgdir, uint32_t vaddr);
+vaddr_t map_user_to_kernel(uint32_t *pgdir, vaddr_t vaddr);
 void unmap_temp_user_page(void);
-uint32_t get_phys_addr_from_pgdir(uint32_t* pgdir, uint32_t vaddr);
+paddr_t get_phys_addr_from_pgdir(uint32_t* pgdir, vaddr_t vaddr);
 
 uint32_t read_l2_entry(uint32_t *pgdir, uintptr_t vaddr);
 
 /* MMU helper functions - implémentées dans mmu.c */
 void invalidate_tlb_all(void);
-void invalidate_tlb_page(uint32_t vaddr);
-void invalidate_tlb_page_asid(uint32_t vaddr, uint32_t asid);  /* NOUVEAU */
+void invalidate_tlb_page(vaddr_t vaddr);
+void invalidate_tlb_page_asid(vaddr_t vaddr, uint32_t asid);  /* NOUVEAU */
 void invalidate_tlb_asid(uint32_t asid);                       /* NOUVEAU */
 
 /* TTBR access functions */
 uint32_t get_ttbr0(void);
 uint32_t* get_kernel_ttbr0(void);
 void set_ttbr0(uint32_t ttbr0);
-uint32_t get_L1_index(uint32_t vaddr);
+uint32_t get_L1_index(vaddr_t vaddr);
 //uint32_t get_ttbr1(void);    /* NOUVEAU */
 //void set_ttbr1(uint32_t ttbr1);    /* NOUVEAU */
 
@@ -219,17 +219,17 @@ uint32_t vm_get_current_asid(void);
 void set_current_asid(uint32_t asid);
 
 /* Temporary mapping helpers */
-uint32_t map_temp_page(uint32_t phys_addr);
+vaddr_t map_temp_page(paddr_t phys_addr);
 void unmap_temp_page(void* temp_vaddr);
-uint32_t map_temp_user_page(uint32_t phys_addr);
+vaddr_t map_temp_user_page(paddr_t phys_addr);
 void unmap_temp_user_page();
-uint32_t get_phys_from_temp_mapping(uint32_t temp_ptr);
+paddr_t get_phys_from_temp_mapping(vaddr_t temp_ptr);
 uint32_t get_current_asid(void);
 void preallocate_temp_mapping_system(void);
 void create_l2_access_zone(void);
 void setup_temp_mapping_slots(void);
 void init_temp_mapping_system(void);
-uint32_t map_temp_page_large(uint32_t phys_addr, uint32_t size);
+vaddr_t map_temp_page_large(paddr_t phys_addr, uint32_t size);
 
 /* Kernel malloc */
 void init_kernel_heap(void);
@@ -246,7 +246,7 @@ uint32_t get_allocated_page_count(void);
 uint32_t get_freed_page_count(void);
 
 /* ELF helper functions */
-void zero_fill_bss(vm_space_t* vm, uint32_t vaddr, uint32_t size);
+void zero_fill_bss(vm_space_t* vm, vaddr_t vaddr, uint32_t size);
 
 /* Memory detection */
 uint32_t detect_memory(void);

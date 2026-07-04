@@ -36,17 +36,11 @@
     .equ IRQ_FRAME_PC,       60
     .equ IRQ_FRAME_SIZE,     64
 
-/* ---------------- task_context_t offsets ---------------- */
-    .equ TASK_CONTEXT_OFF,    48
-    .equ CTX_USR_R0,         88
-    .equ CTX_USR_R10,       128
-    .equ CTX_USR_R11,       132
-    .equ CTX_USR_R12,       136
-    .equ CTX_USR_SP,        140
-    .equ CTX_USR_LR,        144
-    .equ CTX_USR_PC,        148
-    .equ CTX_USR_CPSR,      152
-    .equ CTX_SVC_SP_TOP,    156
+/*
+ * Generated from kernel/asm-offsets.c. IRQ return-to-user shares the same
+ * task_context_t contract as syscall.S and task_switch.S.
+ */
+.include "asm-offsets.h"
 
 irq_handler:
     /* Ajuster LR pour retour d'exception */

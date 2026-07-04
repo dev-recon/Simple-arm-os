@@ -123,145 +123,16 @@ volatile uint32_t *virtio_mmio_base =
     (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(VIRTIO_FALLBACK_PHY_ADDR);
 static uint32_t virtio_blk_irq = VIRTIO_BLK_IRQ;
 
-static inline uint32_t fdt32_to_cpu(uint32_t x)
-{
-    return __builtin_bswap32(x);
-}
-
-static bool virtio_blk_decode_reg(const uint32_t *reg, uint32_t len, uint32_t *out_phys)
-{
-    if (!reg || !out_phys)
-        return false;
-
-    if (len >= 16) {
-        uint32_t addr_hi = fdt32_to_cpu(reg[0]);
-        uint32_t addr_lo = fdt32_to_cpu(reg[1]);
-        if (addr_hi != 0)
-            return false;
-        *out_phys = addr_lo;
-        return true;
-    }
-
-    if (len >= 8) {
-        *out_phys = fdt32_to_cpu(reg[0]);
-        return true;
-    }
-
-    return false;
-}
-
-static bool virtio_blk_irq_from_mmio(uint32_t phys_base, uint32_t *out_irq)
-{
-    if (!out_irq)
-        return false;
-    if (phys_base < VIRT_VIRTIO_BASE)
-        return false;
-    if (((phys_base - VIRT_VIRTIO_BASE) % VIRT_VIRTIO_SIZE) != 0)
-        return false;
-
-    uint32_t index = (phys_base - VIRT_VIRTIO_BASE) / VIRT_VIRTIO_SIZE;
-    *out_irq = VIRT_VIRTIO_IRQ(index);
-    return true;
-}
-
-static bool virtio_blk_decode_interrupts(const uint32_t *intr, uint32_t len, uint32_t *out_irq)
-{
-    if (!intr || !out_irq || len < 4)
-        return false;
-
-    if (len >= 12) {
-        uint32_t type = fdt32_to_cpu(intr[0]);
-        uint32_t irq = fdt32_to_cpu(intr[1]);
-        if (type == 0) {
-            /*
-             * QEMU virt exposes GIC interrupt specifiers.  This kernel's GIC
-             * routing currently uses the local virtio-mmio IDs (16+n), so this
-             * value is informational unless it matches that numbering.
-             */
-            *out_irq = irq;
-            return true;
-        }
-    }
-
-    *out_irq = fdt32_to_cpu(intr[0]);
-    return true;
-}
-
 static bool virtio_blk_probe_from_dtb(uint32_t *out_phys, uint32_t *out_irq)
 {
-    void *dtb_ptr = (void *)dtb_address;
-    if (!dtb_ptr || !out_phys || !out_irq)
+    paddr_t phys = 0;
+    bool edge = true;
+
+    if (!fdt_find_virtio_mmio_device(VIRTIO_ID_BLOCK, &phys, out_irq, &edge))
         return false;
 
-    struct fdt_header *fdt = (struct fdt_header *)dtb_ptr;
-    if (fdt32_to_cpu(fdt->magic) != FDT_MAGIC)
-        return false;
-
-    uint8_t *struct_block = (uint8_t *)dtb_ptr + fdt32_to_cpu(fdt->off_dt_struct);
-    uint32_t *token = (uint32_t *)struct_block;
-
-    while (1) {
-        uint32_t tag = fdt32_to_cpu(*token++);
-        switch (tag) {
-            case FDT_BEGIN_NODE: {
-                void *node_ptr = (void *)(token - 1);
-                const char *name = (const char *)token;
-                size_t len = strlen(name);
-                token += (len + 4) / 4;
-
-                if (!fdt_node_matches(name, "virtio_mmio"))
-                    break;
-
-                uint32_t reg_len = 0;
-                uint32_t *reg = (uint32_t *)fdt_get_property(dtb_ptr, node_ptr, "reg", &reg_len);
-                uint32_t phys = 0;
-                if (!virtio_blk_decode_reg(reg, reg_len, &phys))
-                    break;
-
-                volatile uint32_t *base = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
-                if (mmio_read32(base, VIRTIO_MMIO_MAGIC) != 0x74726976)
-                    break;
-                if (mmio_read32(base, VIRTIO_MMIO_DEVICE_ID) != VIRTIO_ID_BLOCK)
-                    break;
-
-                uint32_t irq = VIRTIO_BLK_IRQ;
-                uint32_t mmio_irq = 0;
-                uint32_t dtb_irq = 0;
-                bool have_mmio_irq = virtio_blk_irq_from_mmio(phys, &mmio_irq);
-
-                uint32_t intr_len = 0;
-                uint32_t *intr = (uint32_t *)fdt_get_property(dtb_ptr, node_ptr, "interrupts", &intr_len);
-                bool have_dtb_irq = virtio_blk_decode_interrupts(intr, intr_len, &dtb_irq);
-
-                if (have_mmio_irq) {
-                    irq = mmio_irq;
-                    if (have_dtb_irq && dtb_irq != mmio_irq) {
-                        KDEBUG("VirtIO blk DTB interrupt=%u, local IRQ=%u; using local IRQ\n",
-                               dtb_irq, mmio_irq);
-                    }
-                } else if (have_dtb_irq) {
-                    irq = dtb_irq;
-                }
-
-                *out_phys = phys;
-                *out_irq = irq;
-                return true;
-            }
-            case FDT_PROP: {
-                uint32_t prop_len = fdt32_to_cpu(*token++);
-                token++;
-                token += (prop_len + 3) / 4;
-                break;
-            }
-            case FDT_END_NODE:
-            case FDT_NOP:
-                break;
-            case FDT_END:
-                return false;
-            default:
-                return false;
-        }
-    }
+    *out_phys = phys;
+    return true;
 }
 
 static uint32_t virtio_blk_resolve_mmio_base(uint32_t requested_base)

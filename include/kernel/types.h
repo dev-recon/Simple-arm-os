@@ -52,8 +52,11 @@ typedef uint32_t           time_t;
 /* Pour les calculs d'adresses et pointeurs */
 typedef uint32_t           uintptr_t;    /* ARM32 = 32-bit addresses */
 typedef int32_t            intptr_t;     /* Version signee */
-typedef uint32_t           phys_addr_t;  /* Adresse physique */
-typedef uint32_t           virt_addr_t;  /* Adresse virtuelle */
+typedef uint32_t           paddr_t;      /* Physical address, 32-bit on ARMv7 */
+typedef uint32_t           vaddr_t;      /* Virtual address, 32-bit on ARMv7 */
+typedef uint32_t           pfn_t;        /* Physical page frame number */
+typedef paddr_t            phys_addr_t;  /* Legacy alias; prefer paddr_t */
+typedef vaddr_t            virt_addr_t;  /* Legacy alias; prefer vaddr_t */
 
 /* === TYPES BOOLeENS === */
 

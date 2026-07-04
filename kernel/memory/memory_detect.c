@@ -22,15 +22,6 @@
 #include <kernel/debug_print.h>
 #include <kernel/kernel.h>
 
-
-
-static inline uint32_t fdt32_to_cpu(uint32_t x) {
-    return __builtin_bswap32(x);
-}
-
-/* Variable globale pour stocker l'adresse DTB */
-extern uint32_t dtb_address;
-
 uint32_t kernel_memory_size = 0;
 
 /* Fonctions de detection */
@@ -47,128 +38,9 @@ void init_memory_detection(void)
     KDEBUG("Memory detection initialized for machine virt\n");
 }
 
-bool fdt_node_matches(const char* node_name, const char* prefix) {
-    size_t len = strlen(prefix);
-    return (strncmp(node_name, prefix, len) == 0 &&
-            (node_name[len] == '@' || node_name[len] == '\0'));
-}
-
 uint32_t get_kernel_memory_size(void){
     return kernel_memory_size;
 }
-
-void* fdt_find_node_by_name(void* dtb_ptr, const char* node_name) {
-    struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
-    uint8_t* struct_block = (uint8_t*)dtb_ptr + fdt32_to_cpu(fdt->off_dt_struct);
-
-    uint32_t* token = (uint32_t*)struct_block;
-
-    while (1) {
-        uint32_t tag = fdt32_to_cpu(*token++);
-        switch (tag) {
-            case FDT_BEGIN_NODE: {
-                const char* name = (const char*)token;
-                size_t len = strlen(name);
-                KDEBUG("fdt_find_node_by_name: node %s\n", name);
-                if (fdt_node_matches(name, node_name)) {
-                    KDEBUG("fdt_find_node_by_name: node %s\n", name);
-                    return (void*)(token - 1);  // retour sur le tag FDT_BEGIN_NODE
-                }
-                token += (len + 4) / 4;
-                break;
-            }
-            case FDT_PROP: {
-                uint32_t len = fdt32_to_cpu(*token++);
-                token++;  // skip name_offset
-                token += (len + 3) / 4;
-                break;
-            }
-            case FDT_END_NODE:
-                break;
-            case FDT_NOP:
-                break;
-            case FDT_END:
-                return NULL;
-            default:
-                return NULL;
-        }
-    }
-}
-
-bool fdt_device_present(void* dtb_ptr, const char* partial_name) {
-    struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
-    uint8_t* struct_block = (uint8_t*)dtb_ptr + fdt32_to_cpu(fdt->off_dt_struct);
-
-    uint32_t* token = (uint32_t*)struct_block;
-
-    while (1) {
-        uint32_t tag = fdt32_to_cpu(*token++);
-        switch (tag) {
-            case FDT_BEGIN_NODE: {
-                const char* name = (const char*)token;
-                size_t len = strlen(name);
-                if (strstr(name, partial_name) != NULL) {
-                    return true;
-                }
-                token += (len + 4) / 4;
-                break;
-            }
-            case FDT_PROP: {
-                uint32_t len = fdt32_to_cpu(*token++);
-                token++;  // name_off
-                token += (len + 3) / 4;
-                break;
-            }
-            case FDT_END_NODE:
-                break;
-            case FDT_NOP:
-                break;
-            case FDT_END:
-                return false;
-            default:
-                return false;
-        }
-    }
-}
-
-void* fdt_get_property(void* dtb_ptr, void* node_ptr, const char* property_name, uint32_t* out_len) {
-    struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
-    uint8_t* strings_block = (uint8_t*)dtb_ptr + __builtin_bswap32(fdt->off_dt_strings);
-
-    uint32_t* token = (uint32_t*)node_ptr;
-    token++;  // Skip FDT_BEGIN_NODE tag
-    const char* node_name = (const char*)token;
-    token += (strlen(node_name) + 4) / 4;
-
-    while (1) {
-        uint32_t tag = __builtin_bswap32(*token++);
-        switch (tag) {
-            case FDT_PROP: {
-                uint32_t len = __builtin_bswap32(*token++);
-                uint32_t name_off = __builtin_bswap32(*token++);
-
-                const char* name = (const char*)(strings_block + name_off);
-                if (strcmp(name, property_name) == 0) {
-                    if (out_len) *out_len = len;
-                    return (void*)token;
-                }
-
-                token += (len + 3) / 4;
-                break;
-            }
-            case FDT_END_NODE:
-                return NULL;
-            case FDT_NOP:
-                break;
-            case FDT_END:
-                return NULL;
-            default:
-                return NULL;
-        }
-    }
-}
-
-
 
 /* Fonction principale exportee */
 uint32_t detect_memory(void)
@@ -217,21 +89,21 @@ static uint32_t detect_memory_from_dtb(void* dtb_ptr)
     struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
     
     /* Verifier la signature DTB */
-    if (__builtin_bswap32(fdt->magic) != 0xd00dfeed) {
+    if (!fdt_check_header(dtb_ptr)) {
         KDEBUG("Invalid DTB magic: 0x%08x\n", fdt->magic);
         return 0;
     }
     
     KINFO("Valid DTB found at %p\n", dtb_ptr);
-    KINFO("DTB size: %ld bytes\n", __builtin_bswap32(fdt->totalsize));
+    KINFO("DTB size: %u bytes\n", fdt32_to_cpu(fdt->totalsize));
 
     void* node = fdt_find_node_by_name(dtb_ptr, "memory");
     if (node) {
         uint32_t len;
         uint32_t* reg = (uint32_t*)fdt_get_property(dtb_ptr, node, "reg", &len);
         if (reg) {
-            uint64_t base64 = ((uint64_t)__builtin_bswap32(reg[0]) << 32) | __builtin_bswap32(reg[1]);
-            uint64_t size64 = ((uint64_t)__builtin_bswap32(reg[2]) << 32) | __builtin_bswap32(reg[3]);
+            uint64_t base64 = ((uint64_t)fdt32_to_cpu(reg[0]) << 32) | fdt32_to_cpu(reg[1]);
+            uint64_t size64 = ((uint64_t)fdt32_to_cpu(reg[2]) << 32) | fdt32_to_cpu(reg[3]);
 
             if ((base64 >> 32) != 0 || (size64 >> 32) != 0) {
                 KERROR("64-bit memory range not supported on ARMv7: base=0x%llx, size=0x%llx\n", base64, size64);
