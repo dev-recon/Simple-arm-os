@@ -21,11 +21,27 @@
 
 #include <kernel/types.h>
 
+/*
+ * ARM short-descriptor page-table vocabulary.
+ *
+ * pgdir_t is still pointer-shaped because TTBR0/TTBR1 APIs historically pass
+ * page-directory bases as uint32_t*.  Treat it as a physical table base unless
+ * the name explicitly says "cpu": pgdir_cpu_t / l2_table_t are CPU-
+ * dereferenceable views.
+ */
+typedef uint32_t page_entry_t;
+typedef page_entry_t l1_entry_t;
+typedef page_entry_t l2_entry_t;
+typedef page_entry_t *pgdir_t;
+typedef page_entry_t *pgdir_cpu_t;
+typedef page_entry_t *l2_table_t;
+typedef page_entry_t *pte_ptr_t;
+
 typedef struct {
     uint32_t* bitmap;
     uint32_t total_pages;
     uint32_t free_pages;
-    uint32_t start_addr;
+    paddr_t start_addr;
     uint32_t bitmap_pages;  /* Nombre de pages utilisees par le bitmap */
     uint32_t pages_allocated;
     uint32_t pages_freed;
@@ -43,8 +59,8 @@ typedef struct vma {
 /* Taille: 24 bytes - alignée sur 8 OK */
 
 typedef struct vm_space {
-    uint32_t* pgdir;       /* 4 bytes - TTBR0 aligne pour le CPU */
-    uint32_t* pgdir_alloc; /* 4 bytes - base brute a liberer */
+    pgdir_t pgdir;         /* TTBR0 physical base, pointer-shaped legacy ABI */
+    pgdir_t pgdir_alloc;   /* Raw physical allocation base to free */
     vma_t* vma_list;       /* 4 bytes */
     vaddr_t heap_start;    /* 4 bytes */
     vaddr_t heap_end;      /* 4 bytes */
@@ -103,8 +119,8 @@ typedef struct vm_space {
 #define TTBCR_IRGN1_WT       (0b10 << 10) // Inner write-through TTBR1
 #define TTBCR_IRGN1_WB       (0b11 << 10) // Inner write-back TTBR1
 
-extern uint32_t* kernel_pgdir;  /* Page directory du kernel (TTBR1) */
-extern uint32_t* ttbr0_pgdir;   /* Page directory du kernel (TTBR0) */
+extern pgdir_cpu_t kernel_pgdir;  /* CPU view of kernel page directory (TTBR1) */
+extern pgdir_cpu_t ttbr0_pgdir;   /* CPU view of boot/minimal TTBR0 */
 extern uint32_t kernel_memory_size;
 
 typedef struct kernel_context_save {
@@ -126,7 +142,7 @@ struct page_info {
     size_t size        ;  // buddy order (si utilisé)
     uint8_t reserved : 1;  // marquée réservée (ex: DTB)
     uint16_t refcount;     // references physiques (COW, mappings partages)
-    uint32_t start;
+    paddr_t start;
 }__attribute__((packed));
 
 kernel_context_save_t switch_to_kernel_context(void);
@@ -172,28 +188,28 @@ void debug_asid_usage(void);
 
 /* MMU avec support split TTBR */
 bool setup_mmu(void);
-void switch_address_space(uint32_t* pgdir);                           /* TTBR0 seulement */
-void switch_address_space_with_asid(uint32_t* pgdir, uint32_t asid);   /* TTBR0 + ASID */
-int map_user_page(uint32_t* pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid);
-int map_user_page_readonly(uint32_t* pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid);
-int remap_user_page(uint32_t* pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid);
-int set_user_page_readonly(uint32_t* pgdir, vaddr_t vaddr, uint32_t asid);
-int set_user_page_writable(uint32_t* pgdir, vaddr_t vaddr, uint32_t asid);
-uint32_t* get_user_pte(uint32_t* pgdir, vaddr_t vaddr);
-paddr_t get_physical_address(uint32_t* pgdir, vaddr_t vaddr);
+void switch_address_space(pgdir_t pgdir);                           /* TTBR0 seulement */
+void switch_address_space_with_asid(pgdir_t pgdir, uint32_t asid);   /* TTBR0 + ASID */
+int map_user_page(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid);
+int map_user_page_readonly(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid);
+int remap_user_page(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid);
+int set_user_page_readonly(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid);
+int set_user_page_writable(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid);
+pte_ptr_t get_user_pte(pgdir_t pgdir, vaddr_t vaddr);
+paddr_t get_physical_address(pgdir_t pgdir, vaddr_t vaddr);
 void debug_mmu_state(void);
 void unmap_temp_pages_contiguous(vaddr_t base_vaddr, int num_pages);
 vaddr_t map_temp_pages_contiguous(paddr_t phys_addr, int num_pages);
 
-uint32_t* get_page_entry_arm(uint32_t* pgdir, vaddr_t vaddr);
-int check_page_permissions(uint32_t* pgdir, vaddr_t vaddr);
+pte_ptr_t get_page_entry_arm(pgdir_t pgdir, vaddr_t vaddr);
+int check_page_permissions(pgdir_t pgdir, vaddr_t vaddr);
 uint32_t get_current_ttrb0(void);
 
-vaddr_t map_user_to_kernel(uint32_t *pgdir, vaddr_t vaddr);
+vaddr_t map_user_to_kernel(pgdir_t pgdir, vaddr_t vaddr);
 void unmap_temp_user_page(void);
-paddr_t get_phys_addr_from_pgdir(uint32_t* pgdir, vaddr_t vaddr);
+paddr_t get_phys_addr_from_pgdir(pgdir_t pgdir, vaddr_t vaddr);
 
-uint32_t read_l2_entry(uint32_t *pgdir, uintptr_t vaddr);
+uint32_t read_l2_entry(pgdir_t pgdir, vaddr_t vaddr);
 
 /* MMU helper functions - implémentées dans mmu.c */
 void invalidate_tlb_all(void);
@@ -203,14 +219,14 @@ void invalidate_tlb_asid(uint32_t asid);                       /* NOUVEAU */
 
 /* TTBR access functions */
 uint32_t get_ttbr0(void);
-uint32_t* get_kernel_ttbr0(void);
+pgdir_cpu_t get_kernel_ttbr0(void);
 void set_ttbr0(uint32_t ttbr0);
 uint32_t get_L1_index(vaddr_t vaddr);
 //uint32_t get_ttbr1(void);    /* NOUVEAU */
 //void set_ttbr1(uint32_t ttbr1);    /* NOUVEAU */
 
 /* Fonctions d'accès aux page directories */
-uint32_t* get_kernel_pgdir(void);        /* NOUVEAU - retourne TTBR1 */
+pgdir_cpu_t get_kernel_pgdir(void);        /* NOUVEAU - retourne TTBR1 */
 
 /* ASID management functions */
 uint32_t vm_allocate_asid(void);

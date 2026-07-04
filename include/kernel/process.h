@@ -67,7 +67,7 @@ void simple_shell_task(void* arg);
 void init_process_main(void* arg);
 
 /* Extensions memoire pour processus */
-void zero_fill_bss(vm_space_t* vm, uint32_t vaddr, uint32_t size);
+void zero_fill_bss(vm_space_t* vm, vaddr_t vaddr, uint32_t size);
 bool is_valid_user_ptr(const void* ptr);
 
 extern void add_to_ready_queue(task_t* task);

@@ -24,8 +24,8 @@
 #include <kernel/types.h>
 
 void tlb_shootdown_all(void);
-void tlb_shootdown_page(uint32_t vaddr);
-void tlb_shootdown_page_asid(uint32_t vaddr, uint32_t asid);
+void tlb_shootdown_page(vaddr_t vaddr);
+void tlb_shootdown_page_asid(vaddr_t vaddr, uint32_t asid);
 void tlb_shootdown_asid(uint32_t asid);
 void tlb_handle_remote_ipi(uint32_t cpu_id);
 

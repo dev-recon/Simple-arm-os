@@ -29,6 +29,7 @@
 #include <kernel/process.h>
 #include <kernel/smp.h>
 #include <asm/arm.h>
+#include <asm/mmu.h>
 #include <kernel/file.h>
 
 _Static_assert(offsetof(task_t, context) == 48,
@@ -59,6 +60,11 @@ DEFINE_SPINLOCK(task_lock);
 static bool task_header_plausible(task_t* task);
 static uint32_t task_reserve_task_id(void);
 static uint32_t task_reserve_pid(void);
+
+static inline vaddr_t task_stack_addr(const void* ptr)
+{
+    return (vaddr_t)(uintptr_t)ptr;
+}
 
 static volatile int legacy_need_resched = 0;
 static volatile int need_resched_cpu[ARMOS_MAX_CPUS];
@@ -529,11 +535,13 @@ static bool task_stack_metadata_valid(task_t* task)
         return false;
     }
 
-    if (task->context.sp < (uint32_t)task->stack_base ||
-        task->context.sp >= (uint32_t)task->stack_top) {
+    vaddr_t stack_base = task_stack_addr(task->stack_base);
+    vaddr_t stack_top = task_stack_addr(task->stack_top);
+    vaddr_t sp = (vaddr_t)task->context.sp;
+
+    if (sp < stack_base || sp >= stack_top) {
         KERROR("TASK: %s context SP 0x%08X outside stack 0x%08X-0x%08X\n",
-               task->name, task->context.sp,
-               (uint32_t)task->stack_base, (uint32_t)task->stack_top);
+               task->name, task->context.sp, stack_base, stack_top);
         return false;
     }
 
@@ -546,8 +554,11 @@ static bool task_kernel_sp_valid(task_t* task, uint32_t sp)
         return false;
     }
 
-    return sp >= (uint32_t)task->stack_base &&
-           sp < (uint32_t)task->stack_top;
+    vaddr_t stack_base = task_stack_addr(task->stack_base);
+    vaddr_t stack_top = task_stack_addr(task->stack_top);
+    vaddr_t stack_sp = (vaddr_t)sp;
+
+    return stack_sp >= stack_base && stack_sp < stack_top;
 }
 
 static bool task_is_schedulable(task_t* task)
@@ -902,12 +913,19 @@ void task_context_save_complete(task_context_t* ctx)
 #define KERNEL_TASK_STACK_PAGES \
     ((KERNEL_TASK_STACK_SIZE + PAGE_SIZE - 1) / PAGE_SIZE)
 
-static void *kstack_alloc(void)
+static void *kstack_alloc(void **out_phys)
 {
-    void *p = allocate_pages(KERNEL_TASK_STACK_PAGES);
-    if (p)
-        memset(p, 0, KERNEL_TASK_STACK_SIZE);
-    return p;
+    void *phys = allocate_pages(KERNEL_TASK_STACK_PAGES);
+    void *virt;
+
+    if (!phys)
+        return NULL;
+
+    virt = (void *)phys_to_virt((paddr_t)phys);
+    memset(virt, 0, KERNEL_TASK_STACK_SIZE);
+    if (out_phys)
+        *out_phys = phys;
+    return virt;
 }
 
 static void kstack_free(void *p)
@@ -921,7 +939,7 @@ static bool task_alloc_kernel_stack(task_t *task)
     if (!task)
         return false;
 
-    task->stack_base = kstack_alloc();
+    task->stack_base = kstack_alloc(&task->stack_phys_base);
     if (!task->stack_base)
         return false;
 
@@ -936,9 +954,10 @@ void task_free_kernel_stack(task_t *task)
     if (!task || !task->stack_base)
         return;
 
-    kstack_free(task->stack_base);
+    kstack_free(task->stack_phys_base);
     task->stack_base = NULL;
     task->stack_top = NULL;
+    task->stack_phys_base = NULL;
     task->stack_size = 0;
     kernel_lifecycle_stats.stack_pages_freed += KERNEL_TASK_STACK_PAGES;
 }
@@ -951,8 +970,10 @@ static void build_clean_kernel_stack(task_t *t)
         return;
 
     // SP noyau posé près du top (garde 512B pour sentinelles/debug si tu veux)
-    t->context.svc_sp_top = (uint32_t)t->stack_top;
-    t->context.svc_sp     = ((uint32_t)t->stack_top - 512) & ~7u;
+    vaddr_t stack_top = task_stack_addr(t->stack_top);
+
+    t->context.svc_sp_top = (uint32_t)stack_top;
+    t->context.svc_sp     = (uint32_t)((stack_top - 512u) & ~7u);
     t->context.sp         = t->context.svc_sp;
     t->context.sp         = t->context.svc_sp;  // sp = SP_svc dans ton design
 }
@@ -1003,8 +1024,10 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
         /*  COPIE DE PILE AVEC AJUSTEMENT SP */
         if (parent->stack_base && parent->stack_size > 0) {
             /*  Calculer l'offset DEPUIS LE HAUT de la pile parent */
-            uint32_t parent_stack_top = (uint32_t)parent->stack_base + parent->stack_size;
-            uint32_t parent_sp_offset_from_top = parent_stack_top - parent->context.sp;
+            vaddr_t parent_stack_base = task_stack_addr(parent->stack_base);
+            vaddr_t parent_stack_top = parent_stack_base + parent->stack_size;
+            vaddr_t parent_sp = (vaddr_t)parent->context.sp;
+            uint32_t parent_sp_offset_from_top = (uint32_t)(parent_stack_top - parent_sp);
             
             //KDEBUG("Parent stack analysis:\n");
             //KDEBUG("  Parent stack: %p - %p\n", parent->stack_base, (uint8_t*)parent->stack_base + parent->stack_size);
@@ -1012,25 +1035,25 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
             //KDEBUG("  Offset from top: %u bytes\n", parent_sp_offset_from_top);
             
             /* Verifier que le SP parent est valide AVANT de copier */
-            if (parent->context.sp < (uint32_t)parent->stack_base || 
-                parent->context.sp >= parent_stack_top) {
+            if (parent_sp < parent_stack_base || parent_sp >= parent_stack_top) {
                 //KERROR("task_create_copy: Parent SP invalid! Cannot copy stack\n");
                 //KERROR("  Parent SP: 0x%08X, Range: %p - 0x%08X\n", 
                 //    parent->context.sp, parent->stack_base, parent_stack_top);
                 
                 /* Utiliser pile propre au lieu d'echouer */
                 memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
-                child->context.sp = (uint32_t)child->stack_top - 512;
+                vaddr_t child_stack_top = task_stack_addr(child->stack_top);
+                child->context.sp = (uint32_t)(child_stack_top - 512u);
             } else {
                 /*  Copier le contenu de la pile */
                 memcpy(child->stack_base, parent->stack_base, KERNEL_TASK_STACK_SIZE);
                 
                 /*  Calculer le nouveau SP avec le MeME offset depuis le haut */
-                child->context.sp = (uint32_t)child->stack_top - parent_sp_offset_from_top;
+                vaddr_t child_stack_top = task_stack_addr(child->stack_top);
+                child->context.sp = (uint32_t)(child_stack_top - parent_sp_offset_from_top);
 
                 /* NOUVEAU : Corriger les adresses dans le contenu copié */
-                uint32_t parent_stack_base = (uint32_t)parent->stack_base;
-                uint32_t child_stack_base = (uint32_t)child->stack_base;
+                vaddr_t child_stack_base = task_stack_addr(child->stack_base);
                 uint32_t stack_offset = child_stack_base - parent_stack_base;
 
                 //KDEBUG("Fixing stack addresses: offset=%d bytes\n", stack_offset);
@@ -1044,7 +1067,7 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
                     uint32_t value = stack_words[i];
                     
                     /* Si cette valeur pointe dans la pile du parent, la corriger */
-                    if (value >= parent_stack_base && value < parent_stack_top) {
+                    if ((vaddr_t)value >= parent_stack_base && (vaddr_t)value < parent_stack_top) {
                         uint32_t new_value = value + stack_offset;
                         stack_words[i] = new_value;
                         corrections++;
@@ -1067,11 +1090,12 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
             /* Pile propre si parent invalide */
             KWARN("Parent has no valid stack, creating clean stack\n");
             memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
-            child->context.sp = (uint32_t)child->stack_top - 512;
+            vaddr_t child_stack_top = task_stack_addr(child->stack_top);
+            child->context.sp = (uint32_t)(child_stack_top - 512u);
         }
 
         child->context.sp &= ~7; 
-        child->context.svc_sp_top = (uint32_t)child->stack_top;
+        child->context.svc_sp_top = (uint32_t)task_stack_addr(child->stack_top);
         child->context.svc_sp     = child->context.sp;
         // Ce child reprendra en SVC (kthread), pas de retour user implicite
         child->context.returns_to_user = 0;
@@ -1271,7 +1295,7 @@ void switch_to_idle_stack(void)
     
     //KINFO("Switching to idle stack...\n");
     
-    uint32_t current_sp;
+    vaddr_t current_sp;
     
     /* Copier quelques données importantes sur la nouvelle pile */
     uint32_t new_sp = idle_task->context.sp;
@@ -1294,8 +1318,8 @@ void switch_to_idle_stack(void)
     /* Vérification */
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
     
-    if (current_sp < (uint32_t)idle_task->stack_base || 
-        current_sp >= (uint32_t)idle_task->stack_top) {
+    if (current_sp < task_stack_addr(idle_task->stack_base) ||
+        current_sp >= task_stack_addr(idle_task->stack_top)) {
         panic("Failed to switch to idle stack");
     }
     
@@ -1379,9 +1403,9 @@ bool validate_task_stack_safe(task_t* task)
         return false;
     }
     
-    uint32_t base = (uint32_t)task->stack_base;
-    uint32_t top = (uint32_t)task->stack_top;
-    uint32_t sp = task->context.sp;
+    vaddr_t base = task_stack_addr(task->stack_base);
+    vaddr_t top = task_stack_addr(task->stack_top);
+    vaddr_t sp = (vaddr_t)task->context.sp;
     
     /* Verification fondamentale */
     if (base >= top) {
@@ -1451,9 +1475,9 @@ void task_dump_stacks_detailed(void)
         if (task && task->stack_base && task->stack_top) {
             count++;
             
-            uint32_t base = (uint32_t)task->stack_base;
-            uint32_t top = (uint32_t)task->stack_top;
-            uint32_t sp = task->context.sp;
+            vaddr_t base = task_stack_addr(task->stack_base);
+            vaddr_t top = task_stack_addr(task->stack_top);
+            vaddr_t sp = (vaddr_t)task->context.sp;
             uint32_t size = task->stack_size;
 
             print_cpu_mode();
@@ -1612,8 +1636,9 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     /* === CONFIGURATION CORRIGeE DU CONTEXTE === */
     setup_task_context(task);
 
-    task->context.svc_sp_top = (uint32_t)task->stack_top;
-    task->context.svc_sp = ((uint32_t)task->stack_top - 512) & ~7u;
+    vaddr_t stack_top = task_stack_addr(task->stack_top);
+    task->context.svc_sp_top = (uint32_t)stack_top;
+    task->context.svc_sp = (uint32_t)((stack_top - 512u) & ~7u);
     task->context.sp = task->context.svc_sp;
 
     task->quantum_left = QUANTUM_TICKS;
@@ -1758,9 +1783,10 @@ void setup_task_context(task_t* task)
     task->context.r0 = (uint32_t)task->entry_arg;
     
     /* Stack configuration corrigee */
-    uint32_t stack_top = (uint32_t)task->stack_top;
-    uint32_t stack_reserve = 512; /*512 avant*/
-    task->context.sp = stack_top - stack_reserve;
+    vaddr_t stack_base = task_stack_addr(task->stack_base);
+    vaddr_t stack_top = task_stack_addr(task->stack_top);
+    vaddr_t stack_reserve = 512; /*512 avant*/
+    task->context.sp = (uint32_t)(stack_top - stack_reserve);
     task->context.sp &= ~7;  /* Alignement 8-bytes */
     
     /* Autres registres */
@@ -1773,8 +1799,8 @@ void setup_task_context(task_t* task)
     task->context.is_first_run = 1;
     
     /* Validation */
-    if (task->context.sp >= (uint32_t)task->stack_top || 
-        task->context.sp <= (uint32_t)task->stack_base) {
+    vaddr_t sp = (vaddr_t)task->context.sp;
+    if (sp >= stack_top || sp <= stack_base) {
         KERROR("KO FATAL: Invalid SP for task %s\n", task->name);
         panic("Stack configuration error");
     }
@@ -1906,20 +1932,20 @@ void yield(void)
 bool is_on_kernel_stack(uint32_t sp)
 {
     extern uint32_t __stack_bottom, __stack_top;
-    uint32_t kernel_stack_bottom = (uint32_t)&__stack_bottom;
-    uint32_t kernel_stack_top = (uint32_t)&__stack_top;
+    vaddr_t kernel_stack_bottom = (vaddr_t)(uintptr_t)&__stack_bottom;
+    vaddr_t kernel_stack_top = (vaddr_t)(uintptr_t)&__stack_top;
     
-    return (sp >= kernel_stack_bottom && sp < kernel_stack_top);
+    return ((vaddr_t)sp >= kernel_stack_bottom && (vaddr_t)sp < kernel_stack_top);
 }
 
 bool is_on_task_stack(task_t* task, uint32_t sp)
 {
     if (!task) return false;
     
-    uint32_t task_stack_bottom = (uint32_t)task->stack_base;
-    uint32_t task_stack_top = (uint32_t)task->stack_top;
+    vaddr_t task_stack_bottom = task_stack_addr(task->stack_base);
+    vaddr_t task_stack_top = task_stack_addr(task->stack_top);
     
-    return (sp >= task_stack_bottom && sp < task_stack_top);
+    return ((vaddr_t)sp >= task_stack_bottom && (vaddr_t)sp < task_stack_top);
 }
 
 void debug_idle_corruption_source(void)
@@ -1940,11 +1966,11 @@ void debug_idle_corruption_source(void)
     task_t* task = task_list_head;
     if (task) {
         do {
-            uint32_t expected_top = (uint32_t)task->stack_base + task->stack_size;
-            if ((uint32_t)task->stack_top != expected_top) {
+            vaddr_t expected_top = task_stack_addr(task->stack_base) + task->stack_size;
+            if (task_stack_addr(task->stack_top) != expected_top) {
                 KERROR("SUSPECT: Task %s has corrupted stack_top!\n", task->name);
                 KERROR("  Expected: 0x%08X, Actual: 0x%08X\n", 
-                       expected_top, (uint32_t)task->stack_top);
+                       expected_top, task_stack_addr(task->stack_top));
             }
             task = task->next;
         } while (task != task_list_head);
@@ -1976,14 +2002,16 @@ void protect_idle_task(void)
     
     if (idle_task->stack_base != idle_real_stack_base) {
         KERROR("IDLE CORRUPTION: stack_base changed from 0x%08X to 0x%08X\n",
-               (uint32_t)idle_real_stack_base, (uint32_t)idle_task->stack_base);
+               task_stack_addr(idle_real_stack_base),
+               task_stack_addr(idle_task->stack_base));
         idle_task->stack_base = idle_real_stack_base;
         corrupted = true;
     }
     
     if (idle_task->stack_top != idle_real_stack_top) {
         KERROR("IDLE CORRUPTION: stack_top changed from 0x%08X to 0x%08X\n",
-               (uint32_t)idle_real_stack_top, (uint32_t)idle_task->stack_top);
+               task_stack_addr(idle_real_stack_top),
+               task_stack_addr(idle_task->stack_top));
         idle_task->stack_top = idle_real_stack_top;
         corrupted = true;
     }
@@ -2002,7 +2030,7 @@ void protect_idle_task(void)
     }
 }
 
-void save_task_context_safe(task_t* task, uint32_t current_sp)
+void save_task_context_safe(task_t* task, vaddr_t current_sp)
 {
     if (!task) return;
     
@@ -2024,7 +2052,7 @@ void save_task_context_safe(task_t* task, uint32_t current_sp)
             if(task->context.cpsr == 0x10 )
                 return; // User Process forking from userspace
         }
-        uint32_t current_sp;
+        vaddr_t current_sp;
         __asm__ volatile("mov %0, sp" : "=r"(current_sp));
         //KDEBUG("SAVE child: Current SP=0x%08X, task SP=0x%08X\n", 
         //       current_sp, task->context.sp);
@@ -2304,7 +2332,7 @@ static void scheduler_mark_running_locked(task_t* task)
 
 static bool scheduler_validate_switch(task_t* old_task,
                                       task_t* next_task,
-                                      uint32_t current_sp)
+                                      vaddr_t current_sp)
 {
     uint32_t cpu = smp_processor_id();
 
@@ -2391,7 +2419,7 @@ static void scheduler_switch_to(task_t* next_task,
 void schedule(void)
 {
     uint32_t irq_flags;
-    uint32_t current_sp;
+    vaddr_t current_sp;
     bool save_current_context;
     task_t* current;
     task_t* next_task;
@@ -2436,7 +2464,7 @@ void schedule(void)
 void schedule_to(task_t *next_task)
 {
     uint32_t irq_flags;
-    uint32_t current_sp;
+    vaddr_t current_sp;
     bool save_current_context;
     task_t* current;
     
@@ -3195,8 +3223,8 @@ void task_dump_info(task_t* task)
     KINFO("  ID:           %u\n", task->task_id);
     KINFO("  State:        %d\n", (int)task->state);
     KINFO("  Priority:     %u\n", task->priority);
-    KINFO("  Stack base:   0x%08X\n", (uint32_t)task->stack_base);
-    KINFO("  Stack top:    0x%08X\n", (uint32_t)task->stack_top);
+    KINFO("  Stack base:   0x%08X\n", task_stack_addr(task->stack_base));
+    KINFO("  Stack top:    0x%08X\n", task_stack_addr(task->stack_top));
     KINFO("  Stack size:   %u bytes\n", task->stack_size);
     KINFO("  Entry point:  0x%08X\n", (uint32_t)task->entry_point);
     KINFO("  Context SP:   0x%08X\n", task->context.sp);
@@ -3226,26 +3254,30 @@ void task_dump_stacks(void)
     
     do {
         if (task && task->stack_base && task->stack_top) {
+            vaddr_t stack_base = task_stack_addr(task->stack_base);
+            vaddr_t stack_top = task_stack_addr(task->stack_top);
+            vaddr_t sp = (vaddr_t)task->context.sp;
+
             KINFO("%-6u  %-11s  0x%08X   0x%08X   %-7u  0x%08X   ", 
                   task->task_id,
                   task->name,
-                  (uint32_t)task->stack_base,
-                  (uint32_t)task->stack_top,
+                  stack_base,
+                  stack_top,
                   task->stack_size,
                   task->context.sp);
             
             /* Calculer l'espace utilise dans la stack */
-            uint32_t stack_used = (uint32_t)task->stack_top - task->context.sp;
+            uint32_t stack_used = (uint32_t)(stack_top - sp);
             uint32_t stack_free = task->stack_size - stack_used;
             
             /* Verifier la prochaine tache pour calculer l'ecart */
             task_t* next_task = task->next;
             if (next_task && next_task != start_task && next_task->stack_base) {
-                uint32_t gap = (uint32_t)next_task->stack_base - (uint32_t)task->stack_top;
+                int32_t gap = (int32_t)(task_stack_addr(next_task->stack_base) - stack_top);
                 KINFO("%-11d\n", (int)gap);
                 
                 /* Verifier les chevauchements */
-                if ((uint32_t)task->stack_top > (uint32_t)next_task->stack_base) {
+                if (stack_top > task_stack_addr(next_task->stack_base)) {
                     KINFO("        *** OVERLAP DETECTED! Stack collision! ***\n");
                 }
             } else {
@@ -3253,10 +3285,10 @@ void task_dump_stacks(void)
             }
             
             /* Verifier les debordements de stack */
-            if (task->context.sp < (uint32_t)task->stack_base) {
+            if (sp < stack_base) {
                 KINFO("        *** STACK UNDERFLOW! SP below base! ***\n");
             }
-            if (task->context.sp >= (uint32_t)task->stack_top) {
+            if (sp >= stack_top) {
                 KINFO("        *** STACK OVERFLOW! SP above top! ***\n");
             }
             
@@ -3290,8 +3322,8 @@ void task_dump_stacks(void)
         KINFO("Current SP:       0x%08X\n", current->context.sp);
         
         /* Verifier la stack de la tache courante */
-        if (current->context.sp < (uint32_t)current->stack_base ||
-            current->context.sp >= (uint32_t)current->stack_top) {
+        if ((vaddr_t)current->context.sp < task_stack_addr(current->stack_base) ||
+            (vaddr_t)current->context.sp >= task_stack_addr(current->stack_top)) {
             KINFO("*** CURRENT TASK HAS INVALID SP! ***\n");
         }
     }
@@ -3317,15 +3349,19 @@ void task_check_stack_integrity(void)
     
     do {
         if (task && task->stack_base && task->stack_top) {
+            vaddr_t stack_base = task_stack_addr(task->stack_base);
+            vaddr_t stack_top = task_stack_addr(task->stack_top);
+            vaddr_t sp = (vaddr_t)task->context.sp;
+
             /* Verifier l'alignement des adresses */
-            if ((uint32_t)task->stack_base % 8 != 0) {
+            if (stack_base % 8 != 0) {
                 KERROR("Task %s: Stack base not 8-byte aligned (0x%08X)\n", 
-                       task->name, (uint32_t)task->stack_base);
+                       task->name, stack_base);
                 issues++;
             }
             
             /* Verifier la taille de stack */
-            uint32_t actual_size = (uint32_t)task->stack_top - (uint32_t)task->stack_base;
+            uint32_t actual_size = (uint32_t)(stack_top - stack_base);
             if (actual_size != task->stack_size) {
                 KERROR("Task %s: Stack size mismatch (expected %u, actual %u)\n",
                        task->name, task->stack_size, actual_size);
@@ -3333,15 +3369,15 @@ void task_check_stack_integrity(void)
             }
             
             /* Verifier SP dans les limites */
-            if (task->context.sp < (uint32_t)task->stack_base) {
+            if (sp < stack_base) {
                 KERROR("Task %s: SP underflow (SP=0x%08X, base=0x%08X)\n",
-                       task->name, task->context.sp, (uint32_t)task->stack_base);
+                       task->name, task->context.sp, stack_base);
                 issues++;
             }
             
-            if (task->context.sp >= (uint32_t)task->stack_top) {
+            if (sp >= stack_top) {
                 KERROR("Task %s: SP overflow (SP=0x%08X, top=0x%08X)\n",
-                       task->name, task->context.sp, (uint32_t)task->stack_top);
+                       task->name, task->context.sp, stack_top);
                 issues++;
             }
             
@@ -3498,7 +3534,8 @@ void debug_task_detailed(task_t *current_task)
     }
     
     /* Verifier que le pointeur est dans une zone valide */
-    if ((uint32_t)current_task < 0x40000000 || (uint32_t)current_task > 0x50000000) {
+    vaddr_t current_task_addr = (vaddr_t)(uintptr_t)current_task;
+    if (!IS_KERNEL_ADDR(current_task_addr)) {
         KERROR("  KO current_task pointer invalid: %p\n", current_task);
         return;
     }
@@ -3509,15 +3546,15 @@ void debug_task_detailed(task_t *current_task)
     KDEBUG("  ***************************************************************\n");
     KDEBUG("  KERNEL STACK ---\n");
     KDEBUG("  Context SP: 0x%08X\n", current_task->context.sp);
-    KDEBUG("  Stack base: 0x%08X\n", (uint32_t)current_task->stack_base);
-    KDEBUG("  Stack top:  0x%08X\n", (uint32_t)current_task->stack_top);
+    KDEBUG("  Stack base: 0x%08X\n", task_stack_addr(current_task->stack_base));
+    KDEBUG("  Stack top:  0x%08X\n", task_stack_addr(current_task->stack_top));
     KDEBUG("  is_first_run: %u\n", current_task->context.is_first_run);
     KDEBUG("  --------------------------\n");
     
     /* Verification des limites de stack */
     uint32_t sp = current_task->context.sp;
-    uint32_t base = (uint32_t)current_task->stack_base;
-    uint32_t top = (uint32_t)current_task->stack_top;
+    vaddr_t base = task_stack_addr(current_task->stack_base);
+    vaddr_t top = task_stack_addr(current_task->stack_top);
     
     if (sp >= base && sp < top) {
         KDEBUG("  OK KERNEL SP in valid range\n");
@@ -3530,14 +3567,14 @@ void debug_task_detailed(task_t *current_task)
     {
         KDEBUG("  USER STACK ---\n");
         KDEBUG("  User SP: 0x%08X\n", current_task->context.usr_sp);
-        KDEBUG("  User Stack base: 0x%08X\n", (uint32_t)current_task->process->vm->stack_start);
-        KDEBUG("  User Stack top:  0x%08X\n", (uint32_t)current_task->process->vm->stack_start + USER_STACK_SIZE);
+        KDEBUG("  User Stack base: 0x%08X\n", current_task->process->vm->stack_start);
+        KDEBUG("  User Stack top:  0x%08X\n", current_task->process->vm->stack_start + USER_STACK_SIZE);
         KDEBUG("  --------------------------\n");
         
         /* Verification des limites de stack */
         sp = current_task->context.usr_sp;
-        base = (uint32_t)current_task->process->vm->stack_start;
-        top = (uint32_t)current_task->process->vm->stack_start + USER_STACK_SIZE;
+        base = current_task->process->vm->stack_start;
+        top = current_task->process->vm->stack_start + USER_STACK_SIZE;
         
         if (sp >= base && sp < top) {
             KDEBUG("  OK USER SP in valid range\n");
@@ -3573,14 +3610,14 @@ void debug_current_task_detailed(const char* location)
     KDEBUG("  Task name: %s\n", task->name);
     KDEBUG("  Task ID: %u\n", task->task_id);
     KDEBUG("  Context SP: 0x%08X\n", task->context.sp);
-    KDEBUG("  Stack base: 0x%08X\n", (uint32_t)task->stack_base);
-    KDEBUG("  Stack top:  0x%08X\n", (uint32_t)task->stack_top);
+    KDEBUG("  Stack base: 0x%08X\n", task_stack_addr(task->stack_base));
+    KDEBUG("  Stack top:  0x%08X\n", task_stack_addr(task->stack_top));
     KDEBUG("  is_first_run: %u\n", task->context.is_first_run);
     
     /* Verification des limites de stack */
     uint32_t sp = task->context.sp;
-    uint32_t base = (uint32_t)task->stack_base;
-    uint32_t top = (uint32_t)task->stack_top;
+    vaddr_t base = task_stack_addr(task->stack_base);
+    vaddr_t top = task_stack_addr(task->stack_top);
     
     if (sp >= base && sp < top) {
         KDEBUG("  OK SP in valid range\n");
@@ -4051,25 +4088,25 @@ void debug_all_task_stacks(void)
     KINFO("=== DIAGNOSTIC TOUTES LES PILES ===\n");
     
     KINFO("Pile KERNEL:\n");
-    KINFO("  Bottom: 0x%08X\n", (uint32_t)&__stack_bottom);
-    KINFO("  Top:    0x%08X\n", (uint32_t)&__stack_top);
-    KINFO("  Size:   %u bytes\n", (uint32_t)&__stack_top - (uint32_t)&__stack_bottom);
+    vaddr_t kernel_start = (vaddr_t)(uintptr_t)&__stack_bottom;
+    vaddr_t kernel_end = (vaddr_t)(uintptr_t)&__stack_top;
+    KINFO("  Bottom: 0x%08X\n", kernel_start);
+    KINFO("  Top:    0x%08X\n", kernel_end);
+    KINFO("  Size:   %u bytes\n", (uint32_t)(kernel_end - kernel_start));
     
     task_t* task = task_list_head;
     if (!task) return;
     
     do {
         KINFO("Tache %s:\n", task->name);
-        KINFO("  Stack base: 0x%08X\n", (uint32_t)task->stack_base);
-        KINFO("  Stack top:  0x%08X\n", (uint32_t)task->stack_top);
+        KINFO("  Stack base: 0x%08X\n", task_stack_addr(task->stack_base));
+        KINFO("  Stack top:  0x%08X\n", task_stack_addr(task->stack_top));
         KINFO("  Stack size: %u bytes\n", task->stack_size);
         KINFO("  Context SP: 0x%08X\n", task->context.sp);
         
         /* Vérifier chevauchement avec pile kernel */
-        uint32_t task_start = (uint32_t)task->stack_base;
-        uint32_t task_end = (uint32_t)task->stack_top;
-        uint32_t kernel_start = (uint32_t)&__stack_bottom;
-        uint32_t kernel_end = (uint32_t)&__stack_top;
+        vaddr_t task_start = task_stack_addr(task->stack_base);
+        vaddr_t task_end = task_stack_addr(task->stack_top);
         
         if ((task_start < kernel_end && task_end > kernel_start)) {
             KERROR("  KO CONFLIT avec pile kernel !\n");

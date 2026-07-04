@@ -38,7 +38,7 @@ bool init_ata(void)
 
     ata_initialized = false;
 
-    if (!virtio_blk_init_legacy((uint32_t)virtio_mmio_base)) {
+    if (!virtio_blk_init_legacy((vaddr_t)virtio_mmio_base)) {
         KERROR("KO VirtIO block initialization failed\n");
         return false;
     }

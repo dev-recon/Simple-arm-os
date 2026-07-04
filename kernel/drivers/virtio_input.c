@@ -109,7 +109,7 @@ typedef struct {
 } __attribute__((packed, aligned(64))) virtio_input_event_slot_t;
 
 typedef struct {
-    uint32_t phys;
+    paddr_t phys;
     uint32_t irq;
     volatile uint32_t *mmio;
     vq_legacy_t vq;
@@ -158,8 +158,8 @@ static bool input_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
                      ALIGN_UP(avail_sz, 2) +
                      ALIGN_UP(used_sz, VQ_ALIGN);
     size_t npages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint32_t pa_base = (uint32_t)allocate_pages(npages);
-    uint8_t *va_base = (uint8_t *)pa_base;
+    paddr_t pa_base = (paddr_t)allocate_pages(npages);
+    uint8_t *va_base = pa_base ? (uint8_t *)phys_to_virt(pa_base) : NULL;
     uint32_t off = 0;
 
     if (!va_base)
@@ -191,7 +191,7 @@ static bool input_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
     return true;
 }
 
-static bool input_probe_from_dtb(uint32_t *out_phys, uint32_t *out_irq, bool *out_edge)
+static bool input_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq, bool *out_edge)
 {
     paddr_t phys = 0;
 
@@ -480,7 +480,7 @@ void virtio_input_get_stats(uint32_t *irq_count, uint32_t *used_count,
 
 bool virtio_input_init(int tty_id)
 {
-    uint32_t phys = 0;
+    paddr_t phys = 0;
     uint32_t irq = 0;
     bool irq_edge = true;
 
@@ -534,7 +534,7 @@ bool virtio_input_init(int tty_id)
 
     for (uint16_t i = 0; i < qsize; i++) {
         struct vring_desc *desc = input_desc_ptr(&input.vq, i);
-        desc->addr = (uint64_t)(uint32_t)&input.events[i];
+        desc->addr = (uint64_t)virt_to_phys((vaddr_t)&input.events[i]);
         desc->len = sizeof(input.events[i].event);
         desc->flags = VRING_DESC_F_WRITE;
         desc->next = 0;

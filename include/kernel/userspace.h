@@ -69,12 +69,12 @@ int strnlen_user(const char* str, int maxlen);
 int count_strings(char** strings);
 
 char** setup_stack_strings(char** strings, char** stack_ptr, int count,
-                           uint32_t temp_stack, uint32_t user_stack_page);
+                           vaddr_t temp_stack, vaddr_t user_stack_page);
 void copy_string_array(char** src, char** dest, int count);
-int unmap_user_page(uint32_t* pgdir, vaddr_t vaddr, uint32_t asid);
+int unmap_user_page(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid);
 
 int setup_user_stack(vm_space_t* vm, char** argv, char** envp);
 
-vaddr_t map_user_to_kernel(uint32_t *pgdir, vaddr_t vaddr);
+vaddr_t map_user_to_kernel(pgdir_t pgdir, vaddr_t vaddr);
 
 #endif   //  _KERNEL_USERSPACE_H_

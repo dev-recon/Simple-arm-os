@@ -31,7 +31,7 @@ typedef struct shm_object {
     char name[SHM_NAME_MAX];
     size_t size;
     uint32_t pages;
-    uint32_t phys[SHM_MAX_PAGES];
+    paddr_t phys[SHM_MAX_PAGES];
     uint32_t mappings;
 } shm_object_t;
 
@@ -87,11 +87,11 @@ static void shm_try_destroy_locked(shm_object_t *obj)
     memset(obj, 0, sizeof(*obj));
 }
 
-static uint32_t shm_find_free_vaddr(vm_space_t *vm, size_t size)
+static vaddr_t shm_find_free_vaddr(vm_space_t *vm, size_t size)
 {
     uint32_t aligned_size = ALIGN_UP(size, PAGE_SIZE);
 
-    for (uint32_t addr = USER_SHM_START; addr + aligned_size <= USER_SHM_END; addr += PAGE_SIZE) {
+    for (vaddr_t addr = USER_SHM_START; addr + aligned_size <= USER_SHM_END; addr += PAGE_SIZE) {
         bool overlaps = false;
         for (vma_t *vma = vm->vma_list; vma; vma = vma->next) {
             if (addr < vma->end && addr + aligned_size > vma->start) {
@@ -170,7 +170,7 @@ int sys_shm_open(const char *user_name, size_t size, int flags)
             spin_unlock(&shm_lock);
             return -ENOMEM;
         }
-        obj->phys[i] = (uint32_t)page;
+        obj->phys[i] = (paddr_t)page;
     }
 
     int id = (int)obj->id;
@@ -207,7 +207,7 @@ void *sys_shm_map(int id, void *addr, int flags)
     task_t *task = task_current_local();
     shm_object_t *obj;
     vm_space_t *vm;
-    uint32_t vaddr;
+    vaddr_t vaddr;
     uint32_t vma_flags = VMA_READ | VMA_SHARED;
     vma_t *vma;
 
@@ -226,7 +226,7 @@ void *sys_shm_map(int id, void *addr, int flags)
     }
 
     if (addr) {
-        vaddr = (uint32_t)addr;
+        vaddr = (vaddr_t)addr;
         if ((vaddr & (PAGE_SIZE - 1)) || vaddr < USER_SHM_START ||
             vaddr + obj->size > USER_SHM_END) {
             spin_unlock(&shm_lock);
@@ -281,8 +281,8 @@ int sys_shm_unmap(void *addr, size_t size)
     task_t *task = task_current_local();
     vm_space_t *vm;
     vma_t *vma;
-    uint32_t start = (uint32_t)addr;
-    uint32_t end;
+    vaddr_t start = (vaddr_t)addr;
+    vaddr_t end;
 
     if (!task || !task->process || !task->process->vm)
         return -EINVAL;
@@ -299,8 +299,8 @@ int sys_shm_unmap(void *addr, size_t size)
     if (!vma || !(vma->flags & VMA_SHARED) || vma->start != start || vma->end != end)
         return -EINVAL;
 
-    for (uint32_t vaddr = start; vaddr < end; vaddr += PAGE_SIZE) {
-        uint32_t phys = get_physical_address(vm->pgdir, vaddr);
+    for (vaddr_t vaddr = start; vaddr < end; vaddr += PAGE_SIZE) {
+        paddr_t phys = get_physical_address(vm->pgdir, vaddr);
         if (phys && unmap_user_page(vm->pgdir, vaddr, vm->asid) == 0)
             free_page((void *)phys);
     }

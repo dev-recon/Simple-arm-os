@@ -72,6 +72,55 @@ extern uint32_t __stack_svc_top;
 #define VIRT_RAM_SIZE           get_kernel_memory_size()        /* 4 GB */
 #define VIRT_RAM_END            (VIRT_RAM_START + VIRT_RAM_SIZE)
 
+/*
+ * Kernel RAM mapping policy.
+ *
+ * ArmOS is moving away from relying on VA == PA for all RAM.  The kernel
+ * image and early boot metadata still keep a small identity window so the
+ * current ARM32 boot/linker path remains simple, but general allocator pages
+ * must be accessed through the direct map.
+ *
+ * Direct map layout with the current 1GB TTBR0 / 3GB TTBR1 split:
+ *   VA 0x60000000..0xDFFFFFFF -> PA 0x40000000..0xBFFFFFFF
+ *
+ * That covers the supported QEMU virt 2GB RAM profile and leaves
+ * 0xE0000000..0xEFFFFFFF for temporary mappings before the MMIO aliases at
+ * 0xF0000000.
+ */
+#define KERNEL_BOOT_IDENTITY_END 0x54100000u
+#define KERNEL_DIRECT_MAP_BASE   0x60000000u
+#define KERNEL_DIRECT_MAP_END    0xE0000000u
+#define KERNEL_DIRECT_MAP_SIZE   (KERNEL_DIRECT_MAP_END - KERNEL_DIRECT_MAP_BASE)
+#define KERNEL_DIRECT_MAP_OFFSET (KERNEL_DIRECT_MAP_BASE - VIRT_RAM_START)
+
+static inline bool phys_in_direct_map(paddr_t paddr)
+{
+    return paddr >= VIRT_RAM_START &&
+           paddr < (VIRT_RAM_START + KERNEL_DIRECT_MAP_SIZE);
+}
+
+static inline bool virt_in_direct_map(vaddr_t vaddr)
+{
+    return vaddr >= KERNEL_DIRECT_MAP_BASE && vaddr < KERNEL_DIRECT_MAP_END;
+}
+
+static inline vaddr_t phys_to_virt(paddr_t paddr)
+{
+    return paddr + KERNEL_DIRECT_MAP_OFFSET;
+}
+
+static inline paddr_t virt_to_phys(vaddr_t vaddr)
+{
+    if (virt_in_direct_map(vaddr))
+        return vaddr - KERNEL_DIRECT_MAP_OFFSET;
+
+    /*
+     * Compatibility for the boot identity window and current low kernel link
+     * address.  Drivers and new allocator users should not rely on this path.
+     */
+    return vaddr;
+}
+
 /* Memory map machine virt */
 #define VIRT_FLASH_BASE         0x00000000u                    /* Flash/ROM */
 #define VIRT_FLASH_SIZE         0x08000000u                    /* 128MB */
@@ -125,7 +174,7 @@ extern uint32_t __stack_svc_top;
 #define KERNEL_MMIO_GIC_CPU_BASE  (KERNEL_MMIO_GIC_BASE + (VIRT_GIC_CPU_BASE - VIRT_GIC_DIST_BASE))
 #define KERNEL_MMIO_RTC_BASE       (KERNEL_MMIO_UART_BASE + (VIRT_RTC_BASE - VIRT_UART_BASE))
 #define KERNEL_MMIO_VIRTIO_ADDR(paddr) \
-    (KERNEL_MMIO_VIRTIO_BASE + ((uint32_t)(paddr) - VIRT_VIRTIO_BASE))
+    ((vaddr_t)(KERNEL_MMIO_VIRTIO_BASE + ((paddr_t)(paddr) - VIRT_VIRTIO_BASE)))
 
 /* Alias pour compatibilite avec votre code existant */
 #define VIRTIO_BASE             VIRT_VIRTIO_BASE              /* 0x0A000000 */
@@ -174,36 +223,36 @@ extern uint32_t __stack_svc_top;
 /* ========================================================================
  * KERNEL SPACE (utilise les symboles du linker)
  * ======================================================================== */
-#define KERNEL_START            ((uint32_t)&__start)          /* Debut kernel */
-#define KERNEL_END              ((uint32_t)&__end)            /* Fin kernel */
-#define KERNEL_SIZE             ((uint32_t)&__kernel_size)    /* Taille kernel */
+#define KERNEL_START            ((vaddr_t)(uintptr_t)&__start)          /* Debut kernel */
+#define KERNEL_END              ((vaddr_t)(uintptr_t)&__end)            /* Fin kernel */
+#define KERNEL_SIZE             ((size_t)(uintptr_t)&__kernel_size)     /* Taille kernel */
 #define KERNEL_BASE             KERNEL_START                  /* Alias compatibilite */
 
 /* Sections kernel */
-#define KERNEL_TEXT_START       ((uint32_t)&__text_start)
-#define KERNEL_TEXT_END         ((uint32_t)&__text_end)
-#define KERNEL_DATA_START       ((uint32_t)&__data_start)
-#define KERNEL_DATA_END         ((uint32_t)&__data_end)
-#define KERNEL_BSS_START        ((uint32_t)&__bss_start)
-#define KERNEL_BSS_END          ((uint32_t)&__bss_end)
+#define KERNEL_TEXT_START       ((vaddr_t)(uintptr_t)&__text_start)
+#define KERNEL_TEXT_END         ((vaddr_t)(uintptr_t)&__text_end)
+#define KERNEL_DATA_START       ((vaddr_t)(uintptr_t)&__data_start)
+#define KERNEL_DATA_END         ((vaddr_t)(uintptr_t)&__data_end)
+#define KERNEL_BSS_START        ((vaddr_t)(uintptr_t)&__bss_start)
+#define KERNEL_BSS_END          ((vaddr_t)(uintptr_t)&__bss_end)
 
 /* Stack kernel */
-#define KERNEL_STACK_BOTTOM     ((uint32_t)&__stack_bottom)
-#define KERNEL_STACK_TOP        ((uint32_t)&__stack_top)
+#define KERNEL_STACK_BOTTOM     ((vaddr_t)(uintptr_t)&__stack_bottom)
+#define KERNEL_STACK_TOP        ((vaddr_t)(uintptr_t)&__stack_top)
 #define KERNEL_STACK_SIZE       (KERNEL_STACK_TOP - KERNEL_STACK_BOTTOM)
 
 /* Heap kernel (defini par le linker) */
-#define KERNEL_HEAP_START       ((uint32_t)&__heap_start)
-#define KERNEL_HEAP_END         ((uint32_t)&__heap_end)
-#define KERNEL_HEAP_SIZE        ((uint32_t)&__heap_size)
+#define KERNEL_HEAP_START       ((vaddr_t)(uintptr_t)&__heap_start)
+#define KERNEL_HEAP_END         ((vaddr_t)(uintptr_t)&__heap_end)
+#define KERNEL_HEAP_SIZE        ((size_t)(uintptr_t)&__heap_size)
 
 /* RAM physique disponible (apres kernel et heap) */
-#define PHYSICAL_RAM_START      ((uint32_t)&__ram_start)
-#define PHYSICAL_RAM_END        ((uint32_t)&__ram_end)
-#define PHYSICAL_RAM_SIZE       ((uint32_t)&__ram_size)
-#define FREE_MEMORY_START       ((uint32_t)&__free_memory_start)
+#define PHYSICAL_RAM_START      ((paddr_t)(uintptr_t)&__ram_start)
+#define PHYSICAL_RAM_END        ((paddr_t)(uintptr_t)&__ram_end)
+#define PHYSICAL_RAM_SIZE       ((size_t)(uintptr_t)&__ram_size)
+#define FREE_MEMORY_START       ((paddr_t)(uintptr_t)&__free_memory_start)
 
-#define KERNEL_SVC_STACK_TOP    ((uint32_t)&__stack_svc_top)
+#define KERNEL_SVC_STACK_TOP    ((vaddr_t)(uintptr_t)&__stack_svc_top)
 
 /* Aliases pour compatibilite */
 #define HEAP_START              KERNEL_HEAP_START
@@ -362,30 +411,30 @@ void init_early_uart(void);
 uint32_t detect_memory(void);
 
 /* Informations du kernel */
-static inline uint32_t get_kernel_start(void) { return KERNEL_START; }
-static inline uint32_t get_kernel_end(void) { return KERNEL_END; }
-static inline uint32_t get_kernel_size(void) { return KERNEL_SIZE; }
+static inline vaddr_t get_kernel_start(void) { return KERNEL_START; }
+static inline vaddr_t get_kernel_end(void) { return KERNEL_END; }
+static inline size_t get_kernel_size(void) { return KERNEL_SIZE; }
 
 /* Informations des sections */
-static inline uint32_t get_text_start(void) { return (uint32_t)&__text_start; }
-static inline uint32_t get_text_end(void) { return (uint32_t)&__text_end; }
-static inline uint32_t get_text_size(void) { 
-    return (uint32_t)&__text_end - (uint32_t)&__text_start; 
+static inline vaddr_t get_text_start(void) { return KERNEL_TEXT_START; }
+static inline vaddr_t get_text_end(void) { return KERNEL_TEXT_END; }
+static inline size_t get_text_size(void) {
+    return (size_t)(KERNEL_TEXT_END - KERNEL_TEXT_START);
 }
 
-static inline uint32_t get_data_start(void) { return (uint32_t)&__data_start; }
-static inline uint32_t get_data_end(void) { return (uint32_t)&__data_end; }
-static inline uint32_t get_data_size(void) { 
-    return (uint32_t)&__data_end - (uint32_t)&__data_start; 
+static inline vaddr_t get_data_start(void) { return KERNEL_DATA_START; }
+static inline vaddr_t get_data_end(void) { return KERNEL_DATA_END; }
+static inline size_t get_data_size(void) {
+    return (size_t)(KERNEL_DATA_END - KERNEL_DATA_START);
 }
 
-static inline uint32_t get_bss_start(void) { return (uint32_t)&__bss_start; }
-static inline uint32_t get_bss_end(void) { return (uint32_t)&__bss_end; }
-static inline uint32_t get_bss_size(void) { 
-    return (uint32_t)&__bss_end - (uint32_t)&__bss_start; 
+static inline vaddr_t get_bss_start(void) { return KERNEL_BSS_START; }
+static inline vaddr_t get_bss_end(void) { return KERNEL_BSS_END; }
+static inline size_t get_bss_size(void) {
+    return (size_t)(KERNEL_BSS_END - KERNEL_BSS_START);
 }
 
-static inline uint32_t get_heap_start(void) { return (uint32_t)&__heap_start; }
+static inline vaddr_t get_heap_start(void) { return KERNEL_HEAP_START; }
 
 /* Fonction de debug pour afficher le layout memoire */
 void print_kernel_layout(void);

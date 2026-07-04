@@ -379,8 +379,8 @@ typedef struct {
     signal_state_t signals;
     
     /* Signal stack */
-    uint32_t signal_stack_base;
-    uint32_t signal_stack_size;
+    vaddr_t signal_stack_base;
+    size_t signal_stack_size;
 
     /* === AJOUT : Contexte waitpid === */
     /* Ces champs permettent de sauvegarder le contexte lors d'un blocage dans waitpid */
@@ -413,6 +413,7 @@ typedef struct task {
     void* stack_base;                       /* Base de la stack */
     void* stack_top;                        /* Sommet de la stack */
     uint32_t stack_size;                    /* Taille de la stack */
+    void* stack_phys_base;                  /* Physical base used to free stack pages */
     
     /* Fonction d'entree */
     void (*entry_point)(void* arg);         /* Point d'entree */

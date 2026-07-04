@@ -404,10 +404,12 @@ static uint8_t* ext2_block_cache_data(ext2_block_cache_entry_t* entry)
          * block sizes (1/2/4 KiB). Entries keep their buffer for the lifetime
          * of the mount; kmalloc is only a fallback for larger future blocks.
          */
-        if (ext2_fs.block_size <= PAGE_SIZE)
-            entry->data = allocate_page();
-        else
+        if (ext2_fs.block_size <= PAGE_SIZE) {
+            paddr_t phys = (paddr_t)allocate_page();
+            entry->data = phys ? (uint8_t*)phys_to_virt(phys) : NULL;
+        } else {
             entry->data = kmalloc(ext2_fs.block_size);
+        }
     }
     return entry->data;
 }

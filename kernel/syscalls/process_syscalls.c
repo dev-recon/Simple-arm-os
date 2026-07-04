@@ -579,10 +579,10 @@ static vma_t *find_heap_vma(vm_space_t *vm)
     return NULL;
 }
 
-static void rollback_brk_growth(vm_space_t *vm, uint32_t start, uint32_t end)
+static void rollback_brk_growth(vm_space_t *vm, vaddr_t start, vaddr_t end)
 {
-    for (uint32_t vaddr = start; vaddr < end; vaddr += PAGE_SIZE) {
-        uint32_t phys_addr = get_physical_address(vm->pgdir, vaddr);
+    for (vaddr_t vaddr = start; vaddr < end; vaddr += PAGE_SIZE) {
+        paddr_t phys_addr = get_physical_address(vm->pgdir, vaddr);
         if (phys_addr && unmap_user_page(vm->pgdir, vaddr, vm->asid) == 0) {
             free_page((void *)phys_addr);
         }
@@ -593,10 +593,10 @@ int sys_brk(void* addr)
 {
     task_t* task = task_current_local();
 
-    uint32_t new_brk = (uint32_t)addr;
-    uint32_t old_brk;
-    uint32_t addr_to_unmap;
-    uint32_t addr_to_map;
+    vaddr_t new_brk = (vaddr_t)addr;
+    vaddr_t old_brk;
+    vaddr_t addr_to_unmap;
+    vaddr_t addr_to_map;
     vma_t* heap_vma = NULL;
     
     if (!task ) {
@@ -636,7 +636,7 @@ int sys_brk(void* addr)
         
         /* Unmap pages */
         for (addr_to_unmap = new_brk; addr_to_unmap < old_brk; addr_to_unmap += PAGE_SIZE) {
-            uint32_t phys_addr = get_physical_address(proc->vm->pgdir, addr_to_unmap);
+            paddr_t phys_addr = get_physical_address(proc->vm->pgdir, addr_to_unmap);
             if (phys_addr) {
                 if (unmap_user_page(proc->vm->pgdir, addr_to_unmap, proc->vm->asid) < 0) {
                     return -EFAULT;
@@ -660,7 +660,7 @@ int sys_brk(void* addr)
                 return -ENOMEM;
             }
 
-            if (map_user_page(proc->vm->pgdir, addr_to_map, (uint32_t)new_page,
+            if (map_user_page(proc->vm->pgdir, addr_to_map, (paddr_t)new_page,
                               VMA_READ | VMA_WRITE, proc->vm->asid) < 0) {
                 free_page(new_page);
                 rollback_brk_growth(proc->vm, old_brk, addr_to_map);
@@ -2464,14 +2464,16 @@ static uint32_t vm_virtual_kb(vm_space_t *vm)
 static uint32_t vm_rss_kb(vm_space_t *vm)
 {
     uint32_t pages = 0;
+    pgdir_cpu_t pgdir_v;
     if (!vm || !vm->pgdir) return 0;
+    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
 
     for (uint32_t i = 0; i < 1024; i++) {
-        uint32_t l1_entry = vm->pgdir[i];
+        l1_entry_t l1_entry = pgdir_v[i];
         if ((l1_entry & 0x3) != 0x1)
             continue;
 
-        uint32_t *l2_table = (uint32_t *)(l1_entry & 0xFFFFFC00);
+        l2_table_t l2_table = (l2_table_t)phys_to_virt((paddr_t)(l1_entry & 0xFFFFFC00));
         for (uint32_t j = 0; j < 256; j++) {
             if ((l2_table[j] & 0x3) != 0)
                 pages++;
@@ -2484,10 +2486,12 @@ static uint32_t vm_rss_kb(vm_space_t *vm)
 static uint32_t vm_l2_table_count(vm_space_t *vm)
 {
     uint32_t count = 0;
+    pgdir_cpu_t pgdir_v;
     if (!vm || !vm->pgdir) return 0;
+    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
 
     for (uint32_t i = 0; i < 1024; i++) {
-        if ((vm->pgdir[i] & 0x3) == 0x1)
+        if ((pgdir_v[i] & 0x3) == 0x1)
             count++;
     }
     return count;
@@ -2615,8 +2619,8 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
     task_t *task = task_current_local();
     vm_space_t *vm;
     uint32_t size;
-    uint32_t hint = (uint32_t)addr;
-    uint32_t vaddr;
+    vaddr_t hint = (vaddr_t)addr;
+    vaddr_t vaddr;
     uint32_t vma_flags = 0;
     bool is_anon;
     bool lazy_anon;
@@ -2665,13 +2669,13 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
         return (void *)-ENOMEM;
 
     if (!lazy_anon) {
-        for (uint32_t page = vaddr; page < vaddr + size; page += PAGE_SIZE) {
+        for (vaddr_t page = vaddr; page < vaddr + size; page += PAGE_SIZE) {
             void *phys = allocate_page();
             if (!phys) {
                 vm_unmap_range(vm, vaddr, size);
                 return (void *)-ENOMEM;
             }
-            if (map_user_page(vm->pgdir, page, (uint32_t)phys, vma->flags, vm->asid) < 0) {
+            if (map_user_page(vm->pgdir, page, (paddr_t)phys, vma->flags, vm->asid) < 0) {
                 free_page(phys);
                 vm_unmap_range(vm, vaddr, size);
                 return (void *)-ENOMEM;
@@ -2692,8 +2696,8 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
         saved_offset = file->offset;
         file->offset = 0;
         while (copied < length) {
-            uint32_t page = vaddr + ALIGN_DOWN(copied, PAGE_SIZE);
-            uint32_t phys = get_physical_address(vm->pgdir, page);
+            vaddr_t page = vaddr + ALIGN_DOWN(copied, PAGE_SIZE);
+            paddr_t phys = get_physical_address(vm->pgdir, page);
             uint32_t page_off = copied % PAGE_SIZE;
             uint32_t chunk = PAGE_SIZE - page_off;
             int ret;
@@ -2706,7 +2710,7 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
             if (chunk > length - copied)
                 chunk = length - copied;
 
-            ret = file->f_op->read(file, (void *)(phys + page_off), chunk);
+            ret = file->f_op->read(file, (void *)(phys_to_virt(phys) + page_off), chunk);
             if (ret < 0) {
                 file->offset = saved_offset;
                 vm_unmap_range(vm, vaddr, size);
@@ -2727,7 +2731,7 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
 int sys_munmap(void* addr, size_t length)
 {
     task_t *task = task_current_local();
-    uint32_t start = (uint32_t)addr;
+    vaddr_t start = (vaddr_t)addr;
     uint32_t size;
 
     if (!task || task->type != TASK_TYPE_PROCESS || !task->process || !task->process->vm)
@@ -2747,7 +2751,7 @@ int sys_mprotect(void* addr, size_t length, int prot)
     task_t *task = task_current_local();
     vm_space_t *vm;
     vma_t *vma;
-    uint32_t start = (uint32_t)addr;
+    vaddr_t start = (vaddr_t)addr;
     uint32_t size;
     uint32_t flags = 0;
 
@@ -2776,8 +2780,8 @@ int sys_mprotect(void* addr, size_t length, int prot)
     if ((vma->flags & VMA_LAZY) && !(flags & VMA_EXEC))
         flags |= VMA_LAZY;
 
-    for (uint32_t page = start; page < start + size; page += PAGE_SIZE) {
-        uint32_t phys = get_physical_address(vm->pgdir, page);
+    for (vaddr_t page = start; page < start + size; page += PAGE_SIZE) {
+        paddr_t phys = get_physical_address(vm->pgdir, page);
         int ret;
 
         if (!phys)

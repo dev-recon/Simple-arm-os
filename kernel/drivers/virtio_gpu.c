@@ -121,7 +121,7 @@ typedef struct {
 } __attribute__((packed)) virtio_gpu_resource_flush_t;
 
 typedef struct {
-    uint32_t phys;
+    paddr_t phys;
     uint32_t irq;
     volatile uint32_t *mmio;
     vq_legacy_t vq;
@@ -151,14 +151,14 @@ static struct vring_used *gpu_used_ptr(vq_legacy_t *vq)
     return (struct vring_used *)((uint8_t *)(uintptr_t)vq->va_used);
 }
 
-static void *gpu_alloc_dma_pages(size_t npages, uint32_t *out_pa)
+static void *gpu_alloc_dma_pages(size_t npages, paddr_t *out_pa)
 {
-    uint32_t pa = (uint32_t)allocate_pages(npages);
+    paddr_t pa = (paddr_t)allocate_pages(npages);
     if (!pa)
         return NULL;
     if (out_pa)
         *out_pa = pa;
-    return (void *)pa;
+    return (void *)phys_to_virt(pa);
 }
 
 static bool gpu_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
@@ -170,7 +170,7 @@ static bool gpu_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
                      ALIGN_UP(avail_sz, 2) +
                      ALIGN_UP(used_sz, VQ_ALIGN);
     size_t npages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint32_t pa_base = 0;
+    paddr_t pa_base = 0;
     uint8_t *va_base = gpu_alloc_dma_pages(npages, &pa_base);
     uint32_t off = 0;
 
@@ -203,7 +203,7 @@ static bool gpu_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
     return true;
 }
 
-static bool gpu_probe_from_dtb(uint32_t *out_phys, uint32_t *out_irq)
+static bool gpu_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq)
 {
     paddr_t phys = 0;
     bool edge = true;
@@ -305,12 +305,12 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
 
     memset(resp, 0, resp_len);
 
-    desc0->addr = (uint64_t)(uint32_t)cmd;
+    desc0->addr = (uint64_t)virt_to_phys((vaddr_t)cmd);
     desc0->len = cmd_len;
     desc0->flags = VRING_DESC_F_NEXT;
     desc0->next = d1;
 
-    desc1->addr = (uint64_t)(uint32_t)resp;
+    desc1->addr = (uint64_t)virt_to_phys((vaddr_t)resp);
     desc1->len = resp_len;
     desc1->flags = VRING_DESC_F_WRITE;
     desc1->next = 0;
@@ -423,7 +423,7 @@ static int gpu_attach_backing(void)
     gpu_fill_hdr(&req.cmd.hdr, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING);
     req.cmd.resource_id = VIRTIO_GPU_RESOURCE_ID;
     req.cmd.nr_entries = 1;
-    req.entry.addr = (uint64_t)(uint32_t)framebuffer_base;
+    req.entry.addr = (uint64_t)framebuffer_phys;
     req.entry.length = gpu.framebuffer_size;
     req.entry.padding = 0;
 
@@ -577,7 +577,7 @@ bool virtio_gpu_is_initialized(void)
 
 bool virtio_gpu_init(void)
 {
-    uint32_t phys = 0;
+    paddr_t phys = 0;
     uint32_t irq = 0;
 
     memset(&gpu, 0, sizeof(gpu));

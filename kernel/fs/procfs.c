@@ -211,15 +211,17 @@ static uint32_t proc_vm_virtual_kb(vm_space_t* vm)
 static uint32_t proc_vm_rss_kb(vm_space_t* vm)
 {
     uint32_t pages = 0;
+    pgdir_cpu_t pgdir_v;
 
     if (!vm || !vm->pgdir) return 0;
+    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
 
     for (uint32_t i = 0; i < 1024; i++) {
-        uint32_t l1_entry = vm->pgdir[i];
+        l1_entry_t l1_entry = pgdir_v[i];
         if ((l1_entry & 0x3) != 0x1)
             continue;
 
-        uint32_t* l2_table = (uint32_t*)(l1_entry & 0xFFFFFC00);
+        l2_table_t l2_table = (l2_table_t)phys_to_virt((paddr_t)(l1_entry & 0xFFFFFC00));
         for (uint32_t j = 0; j < 256; j++) {
             if ((l2_table[j] & 0x3) != 0)
                 pages++;
@@ -232,11 +234,13 @@ static uint32_t proc_vm_rss_kb(vm_space_t* vm)
 static uint32_t proc_vm_l2_tables(vm_space_t* vm)
 {
     uint32_t count = 0;
+    pgdir_cpu_t pgdir_v;
 
     if (!vm || !vm->pgdir) return 0;
+    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
 
     for (uint32_t i = 0; i < 1024; i++) {
-        if ((vm->pgdir[i] & 0x3) == 0x1)
+        if ((pgdir_v[i] & 0x3) == 0x1)
             count++;
     }
 

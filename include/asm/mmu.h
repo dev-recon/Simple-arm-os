@@ -68,9 +68,9 @@
 #define ASID_MASK               MAX_ASID
 #define CONTEXTIDR_ASID_MASK    ASID_MASK
 
-/* Alternative : juste après la RAM kernel */
-#define TEMP_MAPPING_START  0x7D000000      /* Juste après la RAM kernel */
-#define TEMP_MAPPING_END    0x7F000000      /* 16MB pour mappings temporaires */
+/* Kernel temporary mappings live above the RAM direct-map window. */
+#define TEMP_MAPPING_START  0xE0000000u
+#define TEMP_MAPPING_END    0xE2000000u
 #define TEMP_MAP_VADDR      TEMP_MAPPING_START
 #define TEMP_MAP_SIZE       PAGE_SIZE       /* 4KB page size */
 
@@ -121,8 +121,8 @@
 
 /* MMU functions avec support split TTBR et ASID */
 void invalidate_tlb_all(void);
-void invalidate_tlb_page(uint32_t vaddr);
-void invalidate_tlb_page_asid(uint32_t vaddr, uint32_t asid);
+void invalidate_tlb_page(vaddr_t vaddr);
+void invalidate_tlb_page_asid(vaddr_t vaddr, uint32_t asid);
 void invalidate_tlb_asid(uint32_t asid);
 
 /* TTBR access functions - déclarées ici, implémentées dans mmu.c pour éviter conflits inline */
@@ -153,7 +153,7 @@ static inline uint32_t get_kernel_pgdir_size(uint32_t ttbcr_n)
 }
 
 /* Address space validation helpers */
-static inline bool is_valid_user_addr(uint32_t addr, uint32_t ttbcr_n)
+static inline bool is_valid_user_addr(vaddr_t addr, uint32_t ttbcr_n)
 {
     switch(ttbcr_n) {
         case TTBCR_N_1GB: return addr < TTBR0_MAX_ADDR;
@@ -163,7 +163,7 @@ static inline bool is_valid_user_addr(uint32_t addr, uint32_t ttbcr_n)
     }
 }
 
-static inline bool is_valid_kernel_addr(uint32_t addr, uint32_t ttbcr_n)
+static inline bool is_valid_kernel_addr(vaddr_t addr, uint32_t ttbcr_n)
 {
     switch(ttbcr_n) {
         case TTBCR_N_1GB: return addr >= TTBR0_MAX_ADDR;
@@ -181,7 +181,7 @@ static inline void tlb_flush_all(void)
     __asm__ volatile("isb");
 }
 
-static inline void tlb_flush_by_va(uint32_t vaddr)
+static inline void tlb_flush_by_va(vaddr_t vaddr)
 {
     vaddr &= ~0xFFF;  /* Page align */
     __asm__ volatile("mcr p15, 0, %0, c8, c7, 1" : : "r"(vaddr));  /* TLBIMVA */
@@ -196,10 +196,10 @@ static inline void tlb_flush_by_asid(uint32_t asid)
     __asm__ volatile("isb");
 }
 
-static inline void tlb_flush_by_va_asid(uint32_t vaddr, uint32_t asid)
+static inline void tlb_flush_by_va_asid(vaddr_t vaddr, uint32_t asid)
 {
     (void)asid;
-    uint32_t tlbimvaa_val = vaddr & ~0xFFF;
+    vaddr_t tlbimvaa_val = vaddr & ~0xFFF;
     __asm__ volatile("mcr p15, 0, %0, c8, c7, 3" : : "r"(tlbimvaa_val));  /* TLBIMVAA */
     __asm__ volatile("dsb");
     __asm__ volatile("isb");
@@ -277,12 +277,12 @@ static inline bool pde_is_fault(uint32_t pde)
     return (pde & 0x3) == 0x0;
 }
 
-static inline uint32_t pde_get_section_addr(uint32_t pde)
+static inline paddr_t pde_get_section_addr(uint32_t pde)
 {
     return pde & 0xFFF00000;  /* Bits 31:20 */
 }
 
-static inline uint32_t pde_get_page_table_addr(uint32_t pde)
+static inline paddr_t pde_get_page_table_addr(uint32_t pde)
 {
     return pde & 0xFFFFFC00;  /* Bits 31:10 */
 }
@@ -303,12 +303,12 @@ static inline bool pte_is_fault(uint32_t pte)
     return (pte & 0x3) == 0x0;
 }
 
-static inline uint32_t pte_get_small_page_addr(uint32_t pte)
+static inline paddr_t pte_get_small_page_addr(uint32_t pte)
 {
     return pte & 0xFFFFF000;  /* Bits 31:12 */
 }
 
-static inline uint32_t pte_get_large_page_addr(uint32_t pte)
+static inline paddr_t pte_get_large_page_addr(uint32_t pte)
 {
     return pte & 0xFFFF0000;  /* Bits 31:16 */
 }
@@ -346,7 +346,7 @@ static inline uint32_t read_cycle_counter(void)
     return pmccntr;
 }
 
-uint32_t get_split_boundary(void);
+vaddr_t get_split_boundary(void);
 uint32_t get_optimal_ttbcr_n(void);
 
 #define SPLIT_BOUNDARY      get_split_boundary()

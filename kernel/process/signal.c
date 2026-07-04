@@ -38,7 +38,7 @@ static int find_highest_priority_signal(uint32_t signal_mask);
 static signal_check_result_t handle_default_signal_action(task_t* proc, int sig);
 static bool setup_signal_handler(task_t* proc, int sig, sigaction_t* action);
 static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
-                               uint32_t signal_sp, uint32_t old_blocked);
+                               vaddr_t signal_sp, uint32_t old_blocked);
 static void terminate_process(task_t* proc, int sig);
 static void dump_core(task_t* proc);
 static void stop_process(task_t* proc, int sig);
@@ -167,8 +167,8 @@ typedef struct {
 
 /* Gestionnaire global des signal stacks */
 typedef struct {
-    uint32_t next_base;                           /* Prochaine adresse disponible */
-    uint32_t total_allocated;                     /* Total alloue */
+    vaddr_t next_base;                            /* Prochaine adresse disponible */
+    size_t total_allocated;                       /* Total alloue */
     uint32_t max_processes;                       /* Nombre max de processus */
     bool initialized;                             /* Gestionnaire initialise */
 } signal_stack_allocator_t;
@@ -189,7 +189,7 @@ void init_signal_stack_allocator(void)
 /**
  * Alloue une adresse de signal stack pour un processus
  */
-static uint32_t allocate_signal_stack_address(uint32_t size)
+static vaddr_t allocate_signal_stack_address(size_t size)
 {
     if (!sig_allocator.initialized) {
         KERROR("[SIGNAL] Allocator not initialized!\n");
@@ -202,7 +202,7 @@ static uint32_t allocate_signal_stack_address(uint32_t size)
     /* Verifier les limites */
     if (size < MIN_SIGNAL_STACK_SIZE || size > MAX_SIGNAL_STACK_SIZE) {
         KERROR("[SIGNAL] Invalid stack size: %u (min: %u, max: %u)\n",
-               size, MIN_SIGNAL_STACK_SIZE, MAX_SIGNAL_STACK_SIZE);
+               (uint32_t)size, MIN_SIGNAL_STACK_SIZE, MAX_SIGNAL_STACK_SIZE);
         return 0;
     }
 
@@ -266,14 +266,14 @@ void init_process_signals(task_t* proc)
     }
     
     /* Allouer et mapper les pages physiques */
-    uint32_t pages_needed = (proc->process->signal_stack_size + PAGE_SIZE - 1) / PAGE_SIZE;
+    size_t pages_needed = (proc->process->signal_stack_size + PAGE_SIZE - 1) / PAGE_SIZE;
     //KDEBUG("[SIGNAL] Pages needed %u for signal stack\n",pages_needed);
 
     
-    for (uint32_t i = 0; i < pages_needed; i++) {
+    for (size_t i = 0; i < pages_needed; i++) {
         void* stack_page = allocate_page();
         if (!stack_page) {
-            KERROR("[SIGNAL] Failed to allocate physical page %u\n", i);
+            KERROR("[SIGNAL] Failed to allocate physical page %u\n", (uint32_t)i);
             proc->process->signal_stack_base = 0;
             proc->process->signal_stack_size = 0;
             return;
@@ -281,7 +281,7 @@ void init_process_signals(task_t* proc)
 
         //KDEBUG("[SIGNAL] Physical pages allocated at 0x%08X\n", (uint32_t)stack_page);
 
-        uint32_t vaddr = proc->process->signal_stack_base + (i * PAGE_SIZE);
+        vaddr_t vaddr = proc->process->signal_stack_base + (i * PAGE_SIZE);
 
         uint32_t flags = VMA_READ | VMA_WRITE;
 
@@ -292,7 +292,7 @@ void init_process_signals(task_t* proc)
         //KDEBUG("SIGNAL NEW FLAGS = 0x%04X\n", proc->process->vm->vma_list->flags);
 
 
-        if (map_user_page(proc->process->vm->pgdir, vaddr, (uint32_t)stack_page,
+        if (map_user_page(proc->process->vm->pgdir, vaddr, (paddr_t)stack_page,
                           flags, proc->process->vm->asid) < 0) {
             free_page(stack_page);
             proc->process->signal_stack_base = 0;
@@ -324,12 +324,12 @@ void cleanup_process_signals(task_t* proc)
     /* ACCeS CORRECT */
     if (proc->process->signal_stack_base == 0) return;
     
-    uint32_t pages_to_free = (proc->process->signal_stack_size + PAGE_SIZE - 1) / PAGE_SIZE;
+    size_t pages_to_free = (proc->process->signal_stack_size + PAGE_SIZE - 1) / PAGE_SIZE;
     
-    for (uint32_t i = 0; i < pages_to_free; i++) {
-        uint32_t vaddr = proc->process->signal_stack_base + (i * PAGE_SIZE);
+    for (size_t i = 0; i < pages_to_free; i++) {
+        vaddr_t vaddr = proc->process->signal_stack_base + (i * PAGE_SIZE);
         
-        uint32_t phys_addr = get_physical_address(proc->process->vm->pgdir, vaddr);
+        paddr_t phys_addr = get_physical_address(proc->process->vm->pgdir, vaddr);
         if (phys_addr != 0) {
             //map_user_page(proc->process->vm->pgdir, vaddr, 0,proc->process->vm->vma_list->flags,proc->process->vm->asid);
             free_page((void*)phys_addr);
@@ -568,7 +568,7 @@ static bool setup_signal_handler(task_t* proc, int sig, sigaction_t* action)
 {
     signal_state_t* sig_state;
     uint32_t old_blocked;
-    uint32_t signal_sp;
+    vaddr_t signal_sp;
     
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)  {
         KERROR("setup_signal_handler: NULL PROC\n");
@@ -600,10 +600,10 @@ static bool setup_signal_handler(task_t* proc, int sig, sigaction_t* action)
  * Configurer la frame signal sur la pile - CORRIGe
  */
 static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
-                               uint32_t signal_sp, uint32_t old_blocked)
+                               vaddr_t signal_sp, uint32_t old_blocked)
 {
     user_signal_frame_t frame;
-    uint32_t final_sp;
+    vaddr_t final_sp;
     
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process)  {
         KERROR("setup_signal_frame: NULL PROC\n");

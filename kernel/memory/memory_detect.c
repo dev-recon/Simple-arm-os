@@ -29,8 +29,8 @@ static uint32_t detect_memory_from_dtb(void* dtb_ptr);
 static cpu_memory_info_t get_cpu_memory_info(void);
 static void print_cpu_memory_features(void);
 static uint32_t detect_memory_intelligent(void);
-static uint32_t probe_memory_range(uint32_t start, uint32_t end);
-static bool test_memory_block(uint32_t addr, uint32_t size);
+static uint32_t probe_memory_range(paddr_t start, paddr_t end);
+static bool test_memory_block(paddr_t addr, uint32_t size);
 
 /* Stub pour compilation si necessaire */
 void init_memory_detection(void)
@@ -110,7 +110,7 @@ static uint32_t detect_memory_from_dtb(void* dtb_ptr)
                 return -1;
             }
 
-            uint32_t base = (uint32_t)(base64 & 0xFFFFFFFF);
+            paddr_t base = (paddr_t)(base64 & 0xFFFFFFFF);
             uint32_t size = (uint32_t)(size64 & 0xFFFFFFFF);
 
             KINFO("Memory region: base=0x%08X, size=0x%08X\n", base, size);
@@ -185,7 +185,7 @@ static uint32_t detect_memory_intelligent(void)
     uint32_t max_detected = 0;
     
     for (i = 0; i < 3; i++) {
-        uint32_t end_addr = ranges[i].start + (ranges[i].size_mb * 1024 * 1024);
+        paddr_t end_addr = (paddr_t)ranges[i].start + (ranges[i].size_mb * 1024 * 1024);
         
         KDEBUG("Testing %s range: 0x%08X-0x%08X (%u MB)\n",
                 ranges[i].name, ranges[i].start, end_addr, ranges[i].size_mb);
@@ -219,15 +219,15 @@ static uint32_t detect_memory_intelligent(void)
     return max_detected;
 }
 
-static uint32_t probe_memory_range(uint32_t start, uint32_t end)
+static uint32_t probe_memory_range(paddr_t start, paddr_t end)
 {
     uint32_t total_size = 0;
-    uint32_t addr;
+    paddr_t addr;
     
     KDEBUG("Probing memory from 0x%08X to 0x%08X\n", start, end);
     
     /* Commencer juste apres le kernel pour eviter de corrompre le code en cours */
-    uint32_t safe_start = MAX(start, KERNEL_END + 0x100000); /* 1MB apres le kernel */
+    paddr_t safe_start = MAX(start, (paddr_t)KERNEL_END + 0x100000); /* 1MB apres le kernel */
     
     /* Tester par blocs de 16MB mais s'arreter AVANT de depasser */
     for (addr = safe_start; addr + 0x1000000 <= end; addr += 0x1000000) {
@@ -255,7 +255,7 @@ static uint32_t probe_memory_range(uint32_t start, uint32_t end)
     return total_size;
 }
 
-static bool test_memory_block(uint32_t addr, uint32_t size)
+static bool test_memory_block(paddr_t addr, uint32_t size)
 {
     /* eviter la zone kernel pour machine virt - utiliser les constantes */
     if (addr >= KERNEL_START && addr < KERNEL_END) {
@@ -272,8 +272,8 @@ static bool test_memory_block(uint32_t addr, uint32_t size)
     int i;
     
     for (i = 0; i < 4; i++) {
-        uint32_t test_addr = addr + test_offsets[i];
-        volatile uint32_t* ptr = (volatile uint32_t*)test_addr;
+        paddr_t test_addr = addr + test_offsets[i];
+        volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)test_addr;
         uint32_t original;
         
         /* Protection contre les exceptions - test simple */

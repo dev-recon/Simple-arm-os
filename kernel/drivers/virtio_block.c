@@ -123,7 +123,7 @@ volatile uint32_t *virtio_mmio_base =
     (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(VIRTIO_FALLBACK_PHY_ADDR);
 static uint32_t virtio_blk_irq = VIRTIO_BLK_IRQ;
 
-static bool virtio_blk_probe_from_dtb(uint32_t *out_phys, uint32_t *out_irq)
+static bool virtio_blk_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq)
 {
     paddr_t phys = 0;
     bool edge = true;
@@ -135,9 +135,9 @@ static bool virtio_blk_probe_from_dtb(uint32_t *out_phys, uint32_t *out_irq)
     return true;
 }
 
-static uint32_t virtio_blk_resolve_mmio_base(uint32_t requested_base)
+static vaddr_t virtio_blk_resolve_mmio_base(vaddr_t requested_base)
 {
-    uint32_t phys = 0;
+    paddr_t phys = 0;
     uint32_t irq = 0;
 
     if (virtio_blk_probe_from_dtb(&phys, &irq)) {
@@ -145,7 +145,7 @@ static uint32_t virtio_blk_resolve_mmio_base(uint32_t requested_base)
         virtio_blk_irq = irq;
         KINFO("VirtIO block from DTB: phys=0x%08X mmio=%p irq=%u\n",
               phys, virtio_mmio_base, virtio_blk_irq);
-        return (uint32_t)virtio_mmio_base;
+        return (vaddr_t)virtio_mmio_base;
     }
 
     virtio_mmio_base = (volatile uint32_t *)requested_base;
@@ -156,13 +156,11 @@ static uint32_t virtio_blk_resolve_mmio_base(uint32_t requested_base)
 }
 
 
-// Alloue N pages contiguës physiquement et retourne VA=PA (si kernel mappe identitairement ≥0x40000000)
-static void *alloc_dma_pages(size_t npages, uint32_t *out_pa) {
-    uint32_t pa = (uint32_t)allocate_pages(npages); // <- ta fonction
+static void *alloc_dma_pages(size_t npages, paddr_t *out_pa) {
+    paddr_t pa = (paddr_t)allocate_pages(npages);
     if (!pa) return NULL;
     if (out_pa) *out_pa = pa;
-    // Sur ton kernel, TTBR1 mappe les sections 1:1 : VA == PA dans la RAM noyau
-    return (void*)pa;
+    return (void*)phys_to_virt(pa);
 }
 
 
@@ -177,7 +175,7 @@ static bool vq_alloc_legacy(vq_legacy_t *vq, uint16_t qsize /*ex: 128*/) {
     // nb pages
     size_t npages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
 
-    uint32_t pa_base = 0;
+    paddr_t pa_base = 0;
     void *va_base = alloc_dma_pages(npages, &pa_base);
     if (!va_base) return false;
 
@@ -279,7 +277,7 @@ void virtio_mmio_dump32(uintptr_t base)
 }
 
 
-bool virtio_blk_init_legacy(uint32_t base_addr)
+bool virtio_blk_init_legacy(vaddr_t base_addr)
 {
     
     base_addr = virtio_blk_resolve_mmio_base(base_addr);
@@ -441,30 +439,56 @@ static inline uint64_t vblk_cntpct(void) {
 
 void virtio_block_irq_handler(void)
 {
+    unsigned long flags;
+    vq_legacy_t *vq;
+    uint16_t prev_used_idx;
+    task_t *waiter = NULL;
+    bool should_wake = false;
+
     virtio_blk_ack_interrupts(virtio_mmio_base);
 
-    if (!virtio_blk_pending.active || !virtio_blk_pending.vq)
+    spin_lock_irqsave(&virtio_blk_lock, &flags);
+    if (!virtio_blk_pending.active || !virtio_blk_pending.vq) {
+        spin_unlock_irqrestore(&virtio_blk_lock, flags);
         return;
+    }
+
+    vq = virtio_blk_pending.vq;
+    prev_used_idx = virtio_blk_pending.prev_used_idx;
+    spin_unlock_irqrestore(&virtio_blk_lock, flags);
 
     /*
-     * Completion IRQ: on ne prend pas virtio_blk_lock ici, car le thread qui a
-     * soumis la requete le garde jusqu'a la fin. Le handler observe seulement
-     * le used ring et reveille la tache bloquee.
+     * The MMIO IRQ and the submitting task share virtio_blk_pending. Keep the
+     * ring observation outside the lock, then re-check that the same request is
+     * still active before publishing completion. This avoids racing with
+     * virtio_blk_finish_wait() clearing waiter/vq while the interrupt handler is
+     * still running.
      */
-    vq_legacy_t *vq = virtio_blk_pending.vq;
     invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
         sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
     asm volatile("dmb ish" ::: "memory");
 
-    if (vq_used_ptr(vq)->idx != virtio_blk_pending.prev_used_idx) {
+    if (vq_used_ptr(vq)->idx == prev_used_idx)
+        return;
+
+    spin_lock_irqsave(&virtio_blk_lock, &flags);
+    if (virtio_blk_pending.active &&
+        virtio_blk_pending.vq == vq &&
+        virtio_blk_pending.prev_used_idx == prev_used_idx) {
         virtio_blk_pending.completed = true;
-        if (virtio_blk_pending.waiter &&
-            (virtio_blk_pending.waiter->state == TASK_BLOCKED ||
-             virtio_blk_pending.waiter->state == TASK_INTERRUPTIBLE ||
-             virtio_blk_pending.waiter->state == TASK_UNINTERRUPTIBLE)) {
-            task_wake(virtio_blk_pending.waiter);
+
+        waiter = virtio_blk_pending.waiter;
+        if (waiter &&
+            (waiter->state == TASK_BLOCKED ||
+             waiter->state == TASK_INTERRUPTIBLE ||
+             waiter->state == TASK_UNINTERRUPTIBLE)) {
+            should_wake = true;
         }
     }
+    spin_unlock_irqrestore(&virtio_blk_lock, flags);
+
+    if (should_wake)
+        task_wake(waiter);
 }
 
 static bool virtio_blk_used_advanced(vq_legacy_t *vq, uint16_t prev_idx)
@@ -478,22 +502,42 @@ static bool virtio_blk_used_advanced(vq_legacy_t *vq, uint16_t prev_idx)
 
 static void virtio_blk_prepare_wait(vq_legacy_t *vq, uint16_t prev_idx)
 {
+    unsigned long flags;
+
+    spin_lock_irqsave(&virtio_blk_lock, &flags);
     virtio_blk_pending.active = true;
     virtio_blk_pending.completed = false;
     virtio_blk_pending.prev_used_idx = prev_idx;
     virtio_blk_pending.vq = vq;
     virtio_blk_pending.waiter = task_current_local();
     asm volatile("dmb ish" ::: "memory");
+    spin_unlock_irqrestore(&virtio_blk_lock, flags);
 }
 
 static void virtio_blk_finish_wait(void)
 {
+    unsigned long flags;
+
+    spin_lock_irqsave(&virtio_blk_lock, &flags);
     virtio_blk_pending.active = false;
     virtio_blk_pending.completed = false;
     virtio_blk_pending.prev_used_idx = 0;
     virtio_blk_pending.vq = NULL;
     virtio_blk_pending.waiter = NULL;
     asm volatile("dmb ish" ::: "memory");
+    spin_unlock_irqrestore(&virtio_blk_lock, flags);
+}
+
+static bool virtio_blk_wait_completed(void)
+{
+    unsigned long flags;
+    bool completed;
+
+    spin_lock_irqsave(&virtio_blk_lock, &flags);
+    completed = virtio_blk_pending.completed;
+    spin_unlock_irqrestore(&virtio_blk_lock, flags);
+
+    return completed;
 }
 
 /* Attente IRQ-backed avec timeout: l'IRQ reveille vite, le timer borne l'attente. */
@@ -510,7 +554,7 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
     uint32_t wake_deadline = get_system_ticks() + 2;
 
     while (1) {
-        if (virtio_blk_pending.completed || virtio_blk_used_advanced(vq, prev_idx))
+        if (virtio_blk_wait_completed() || virtio_blk_used_advanced(vq, prev_idx))
             return 0;
 
         if ((vblk_cntpct() - t0) >= timeout_ticks) {
@@ -531,7 +575,7 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
         }
 
         uint32_t irq_flags = disable_interrupts_save();
-        if (virtio_blk_pending.completed || virtio_blk_used_advanced(vq, prev_idx)) {
+        if (virtio_blk_wait_completed() || virtio_blk_used_advanced(vq, prev_idx)) {
             restore_interrupts(irq_flags);
             return 0;
         }
@@ -553,9 +597,9 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
 /* Fonction générique de soumission synchrone (1 request) */
 static int virtio_blk_submit_one(vq_legacy_t *vq,
                                 volatile uint32_t *mmio_base,
-                                struct virtio_blk_req *hdr, uint32_t hdr_pa,
-                                void *data_va, uint32_t data_pa, uint32_t data_len, int data_is_write,
-                                uint8_t *status_va, uint32_t status_pa, unsigned timeout_ms)
+                                struct virtio_blk_req *hdr, paddr_t hdr_pa,
+                                void *data_va, paddr_t data_pa, uint32_t data_len, int data_is_write,
+                                uint8_t *status_va, paddr_t status_pa, unsigned timeout_ms)
 {
     /* choix des descripteurs : on utilise 3 descripteurs fixes : 0,1,2 (simple) */
     const unsigned d0 = 0, d1 = 1, d2 = 2;
@@ -681,8 +725,8 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
 
 static int virtio_blk_submit_flush(vq_legacy_t *vq,
                                   volatile uint32_t *mmio_base,
-                                  struct virtio_blk_req *hdr, uint32_t hdr_pa,
-                                  uint8_t *status_va, uint32_t status_pa,
+                                  struct virtio_blk_req *hdr, paddr_t hdr_pa,
+                                  uint8_t *status_va, paddr_t status_pa,
                                   unsigned timeout_ms)
 {
     const unsigned d0 = 0, d2 = 2;
@@ -793,7 +837,7 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
     }
 
     /* allocation DMA pour header+status (1 page) */
-    uint32_t hdr_pa = 0;
+    paddr_t hdr_pa = 0;
     void *hdr_va = alloc_dma_pages(1, &hdr_pa);
     if (!hdr_va) {
         virtio_blk_release();
@@ -801,11 +845,11 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
     }
     struct virtio_blk_req *hdr = (struct virtio_blk_req *)hdr_va;
     uint8_t *status_va = ((uint8_t*)hdr_va) + 512; /* statut à offset arbitraire dans la page */
-    uint32_t status_pa = hdr_pa + 512;
+    paddr_t status_pa = hdr_pa + 512;
 
     /* allocation DMA pour data */
     size_t npages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint32_t data_pa = 0;
+    paddr_t data_pa = 0;
     void *data_va = alloc_dma_pages(npages, &data_pa);
     if (!data_va) {
         free_pages(hdr_va, 1);
@@ -870,7 +914,7 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
     }
 
     /* allocation DMA pour header+status (1 page) */
-    uint32_t hdr_pa = 0;
+    paddr_t hdr_pa = 0;
     void *hdr_va = alloc_dma_pages(1, &hdr_pa);
     if (!hdr_va) {
         virtio_blk_release();
@@ -878,11 +922,11 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
     }
     struct virtio_blk_req *hdr = (struct virtio_blk_req *)hdr_va;
     uint8_t *status_va = ((uint8_t*)hdr_va) + 512;
-    uint32_t status_pa = hdr_pa + 512;
+    paddr_t status_pa = hdr_pa + 512;
 
     /* allocation DMA pour data */
     size_t npages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint32_t data_pa = 0;
+    paddr_t data_pa = 0;
     void *data_va = alloc_dma_pages(npages, &data_pa);
     if (!data_va) {
         free_pages(hdr_va, 1);
@@ -968,7 +1012,7 @@ int virtio_blk_flush(void)
         return -1;
     }
 
-    uint32_t hdr_pa = 0;
+    paddr_t hdr_pa = 0;
     void *hdr_va = alloc_dma_pages(1, &hdr_pa);
     if (!hdr_va) {
         virtio_blk_release();
@@ -977,7 +1021,7 @@ int virtio_blk_flush(void)
 
     struct virtio_blk_req *hdr = (struct virtio_blk_req *)hdr_va;
     uint8_t *status_va = ((uint8_t *)hdr_va) + 512;
-    uint32_t status_pa = hdr_pa + 512;
+    paddr_t status_pa = hdr_pa + 512;
 
     int ret = virtio_blk_submit_flush(&global_vq, virtio_mmio_base, hdr, hdr_pa,
                                       status_va, status_pa, VIRTIO_BLOCK_TIMEOUT);

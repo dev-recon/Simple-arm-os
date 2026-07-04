@@ -150,7 +150,7 @@ extern int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm);
 extern int setup_user_stack(vm_space_t* vm, char** argv, char** envp);
 extern int count_strings(char** strings);
 extern char** setup_stack_strings(char** strings, char** stack_ptr, int count,
-                                  uint32_t temp_stack, uint32_t user_stack_page);
+                                  vaddr_t temp_stack, vaddr_t user_stack_page);
 extern void copy_string_array(char** src, char** dest, int count);
 extern void orphan_children(task_t* proc);
 extern void switch_to_idle_stack(void);
@@ -391,7 +391,7 @@ fail:
     return NULL;
 }
 
-void check_instruction(uint32_t test_vaddr, uint32_t phys_addr, uint32_t instruction)
+void check_instruction(vaddr_t test_vaddr, paddr_t phys_addr, uint32_t instruction)
 {
     uint32_t l1_index = get_L1_index(test_vaddr);  // 0 
     uint32_t l2_index = L2_INDEX(test_vaddr);  // 8 
@@ -404,7 +404,7 @@ void check_instruction(uint32_t test_vaddr, uint32_t phys_addr, uint32_t instruc
     /* Lire depuis le pgdir actuel (maintenant 0x41538000) */
     uint32_t current_ttbr0;
     asm volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(current_ttbr0));
-    uint32_t* active_pgdir = (uint32_t*)(current_ttbr0 & ~0x7F);
+    pgdir_cpu_t active_pgdir = (pgdir_cpu_t)phys_to_virt((paddr_t)(current_ttbr0 & ~0x7F));
 
     uint32_t l1_entry = active_pgdir[l1_index];
     KDEBUG("Current TTBR0 = 0x%08X\n", (uint32_t)active_pgdir);
@@ -421,9 +421,9 @@ void check_instruction(uint32_t test_vaddr, uint32_t phys_addr, uint32_t instruc
 
     KDEBUG("=== FINAL INSTRUCTION CHECK ===\n"); 
 
-    uint32_t first_instruction; 
-    uint32_t paddr = phys_addr;
-    uint32_t* phys_code = (uint32_t*)paddr;
+    uint32_t first_instruction;
+    paddr_t paddr = phys_addr;
+    uint32_t* phys_code = (uint32_t*)phys_to_virt(paddr);
     first_instruction = *phys_code;
 
     KDEBUG("  First instruction at 0x8000: user code (phys 0x%08X): 0x%08X\n",
@@ -437,7 +437,7 @@ void check_instruction(uint32_t test_vaddr, uint32_t phys_addr, uint32_t instruc
     }  
 
     /* Lire l'instruction à l'adresse virtuelle 0x8000 */
-    uint32_t vaddr = test_vaddr;
+    vaddr_t vaddr = test_vaddr;
     uint32_t* user_code = (uint32_t*)vaddr;
     KDEBUG("=== USER CODE OK === user code 0x%08X \n", *user_code); 
 }
@@ -453,7 +453,7 @@ void dbg_dump_pte_0x8000(void){
 
     if ((e1 & 3u) == 1u){
         uint32_t l2_pa_1kb = e1 & 0xFFFFFC00u;
-        uint32_t l2_page_pa = l2_pa_1kb & ~0x3FFu;
+        paddr_t l2_page_pa = l2_pa_1kb & ~0x3FFu;
         uint32_t l2_off = l2_pa_1kb & 0x3FFu;
 
         uint8_t *l2p = (uint8_t*)map_temp_page(l2_page_pa);
@@ -1505,7 +1505,7 @@ int sys_print(const char* msg) {
 
     char *str = NULL;
 
-    bool user_mode = IS_USER_ADDR((uint32_t)msg);
+    bool user_mode = IS_USER_ADDR((vaddr_t)msg);
 
     if(user_mode){
         str = copy_string_from_user(msg);

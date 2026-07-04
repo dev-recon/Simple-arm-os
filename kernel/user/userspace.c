@@ -31,7 +31,7 @@
 
 bool is_valid_user_ptr(const void* ptr)
 {
-    return IS_USER_ADDR((uint32_t)ptr);
+    return IS_USER_ADDR((vaddr_t)(uintptr_t)ptr);
 }
 
 
@@ -54,12 +54,25 @@ bool is_valid_user_ptr(const void* ptr)
     __ret; \
 })
 
-int unmap_user_page(uint32_t* pgdir, vaddr_t vaddr, uint32_t asid)
+static inline pgdir_cpu_t user_pgdir_cpu_view(pgdir_t pgdir)
+{
+    vaddr_t addr = (vaddr_t)(uintptr_t)pgdir;
+
+    if (virt_in_direct_map(addr))
+        return (pgdir_cpu_t)pgdir;
+    if (phys_in_direct_map((paddr_t)addr))
+        return (pgdir_cpu_t)phys_to_virt((paddr_t)addr);
+
+    return (pgdir_cpu_t)pgdir;
+}
+
+int unmap_user_page(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid)
 {
     uint32_t l1_index;
     uint32_t l2_index;
-    uint32_t *l1_entry;
-    uint32_t *l2_table;
+    l1_entry_t *l1_entry;
+    l2_table_t l2_table;
+    paddr_t l2_phys;
 
     if (!pgdir || vaddr >= get_split_boundary() || (vaddr & (PAGE_SIZE - 1))) {
         return -EINVAL;
@@ -67,13 +80,14 @@ int unmap_user_page(uint32_t* pgdir, vaddr_t vaddr, uint32_t asid)
 
     l1_index = get_L1_index(vaddr);
     l2_index = L2_INDEX(vaddr);
-    l1_entry = &pgdir[l1_index];
+    l1_entry = &user_pgdir_cpu_view(pgdir)[l1_index];
 
     if ((*l1_entry & 0x3) != 0x1) {
         return -EINVAL;
     }
 
-    l2_table = (uint32_t *)(*l1_entry & 0xFFFFFC00);
+    l2_phys = *l1_entry & 0xFFFFFC00;
+    l2_table = (l2_table_t)phys_to_virt(l2_phys);
     if ((l2_table[l2_index] & 0x3) == 0) {
         return 0;
     }
@@ -93,7 +107,7 @@ int unmap_user_page(uint32_t* pgdir, vaddr_t vaddr, uint32_t asid)
     asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(l1_entry) : "memory");
     asm volatile("dsb ishst" ::: "memory");
     invalidate_tlb_page_asid(vaddr, asid);
-    free_page(l2_table);
+    free_page((void*)l2_phys);
     return 0;
 }
 
@@ -112,8 +126,8 @@ int strnlen_user(const char* user_str, int max_len)
 
 bool is_valid_user_range(const void* ptr, size_t size)
 {
-    uint32_t start = (uint32_t)ptr;
-    uint32_t end = start + size;
+    vaddr_t start = (vaddr_t)(uintptr_t)ptr;
+    vaddr_t end = start + size;
     
     /* Verifier les pointeurs invalides */
     if (!ptr || size == 0) {
@@ -143,12 +157,12 @@ bool is_valid_user_range(const void* ptr, size_t size)
     return true;
 }
 
-static bool is_mapped_user_range(uint32_t *pgdir, const void *ptr, size_t size)
+static bool is_mapped_user_range(pgdir_t pgdir, const void *ptr, size_t size)
 {
-    uint32_t start = (uint32_t)ptr;
-    uint32_t end = start + size - 1;
-    uint32_t page = start & PAGE_MASK;
-    uint32_t last_page = end & PAGE_MASK;
+    vaddr_t start = (vaddr_t)(uintptr_t)ptr;
+    vaddr_t end = start + size - 1;
+    vaddr_t page = start & PAGE_MASK;
+    vaddr_t last_page = end & PAGE_MASK;
 
     if (!pgdir || !is_valid_user_range(ptr, size)) {
         return false;
@@ -182,7 +196,7 @@ static void note_kernel_resolved_user_fault(bool is_lazy)
         task->stack_faults++;
 }
 
-static int fault_in_user_page(uint32_t *pgdir, uint32_t page, bool is_write)
+static int fault_in_user_page(pgdir_t pgdir, vaddr_t page, bool is_write)
 {
     if (get_physical_address(pgdir, page))
         return 0;
@@ -207,13 +221,13 @@ static int fault_in_user_page(uint32_t *pgdir, uint32_t page, bool is_write)
     return -1;
 }
 
-static int fault_in_user_range(uint32_t *pgdir, const void *ptr, size_t size,
+static int fault_in_user_range(pgdir_t pgdir, const void *ptr, size_t size,
                                bool is_write)
 {
-    uint32_t start = (uint32_t)ptr;
-    uint32_t end = start + size - 1;
-    uint32_t page = start & PAGE_MASK;
-    uint32_t last_page = end & PAGE_MASK;
+    vaddr_t start = (vaddr_t)(uintptr_t)ptr;
+    vaddr_t end = start + size - 1;
+    vaddr_t page = start & PAGE_MASK;
+    vaddr_t last_page = end & PAGE_MASK;
 
     if (!pgdir || !is_valid_user_range(ptr, size))
         return -1;
@@ -230,14 +244,14 @@ static int fault_in_user_range(uint32_t *pgdir, const void *ptr, size_t size,
     return 0;
 }
 
-static int copy_to_user_pages(uint32_t *pgdir, uint32_t user_addr,
+static int copy_to_user_pages(pgdir_t pgdir, vaddr_t user_addr,
                               const uint8_t *src, size_t n)
 {
     size_t copied = 0;
 
     while (copied < n) {
-        uint32_t current = user_addr + copied;
-        uint32_t phys = get_physical_address(pgdir, current);
+        vaddr_t current = user_addr + copied;
+        paddr_t phys = get_physical_address(pgdir, current);
         size_t chunk = PAGE_SIZE - (current & (PAGE_SIZE - 1));
 
         if (!phys) {
@@ -257,21 +271,21 @@ static int copy_to_user_pages(uint32_t *pgdir, uint32_t user_addr,
          * virtual address directly; otherwise a partially unmapped user range
          * can abort the kernel inside memcpy().
          */
-        memcpy((void *)phys, src + copied, chunk);
+        memcpy((void *)phys_to_virt(phys), src + copied, chunk);
         copied += chunk;
     }
 
     return 0;
 }
 
-static int copy_from_user_pages(uint32_t *pgdir, uint8_t *dst,
-                                uint32_t user_addr, size_t n)
+static int copy_from_user_pages(pgdir_t pgdir, uint8_t *dst,
+                                vaddr_t user_addr, size_t n)
 {
     size_t copied = 0;
 
     while (copied < n) {
-        uint32_t current = user_addr + copied;
-        uint32_t phys = get_physical_address(pgdir, current);
+        vaddr_t current = user_addr + copied;
+        paddr_t phys = get_physical_address(pgdir, current);
         size_t chunk = PAGE_SIZE - (current & (PAGE_SIZE - 1));
 
         if (!phys) {
@@ -285,14 +299,14 @@ static int copy_from_user_pages(uint32_t *pgdir, uint8_t *dst,
         if (chunk > n - copied)
             chunk = n - copied;
 
-        memcpy(dst + copied, (const void *)phys, chunk);
+        memcpy(dst + copied, (const void *)phys_to_virt(phys), chunk);
         copied += chunk;
     }
 
     return 0;
 }
 
-vaddr_t map_user_to_kernel(uint32_t *pgdir, vaddr_t vaddr){
+vaddr_t map_user_to_kernel(pgdir_t pgdir, vaddr_t vaddr){
 
     //uint32_t user_addr = vaddr;
     //uint32_t user_page = user_addr & ~0xFFF;
@@ -317,10 +331,12 @@ vaddr_t map_user_to_kernel(uint32_t *pgdir, vaddr_t vaddr){
 int copy_to_user(void* to, const void* from, size_t n)
 {
     task_t* task = get_current_task();
-    uint32_t* pgdir = (task && task->type == TASK_TYPE_PROCESS &&
-                       task->process && task->process->vm)
-                    ? task->process->vm->pgdir
-                    : NULL;
+    pgdir_t pgdir = (task && task->type == TASK_TYPE_PROCESS &&
+                     task->process && task->process->vm)
+                  ? task->process->vm->pgdir
+                  : NULL;
+    vaddr_t to_addr = (vaddr_t)(uintptr_t)to;
+    vaddr_t from_addr = (vaddr_t)(uintptr_t)from;
 
     /* Verifications de securite de base */
     if (!to || !from || n == 0 || !pgdir) {
@@ -330,32 +346,32 @@ int copy_to_user(void* to, const void* from, size_t n)
     /* Verifier que 'to' est dans l'espace utilisateur */
     if (!is_valid_user_range(to, n)) {
         KERROR("[COPY] ERROR: copy_to_user destination 0x%08X+%u not in user space\n", 
-                (uint32_t)to, n);
+                to_addr, n);
         return -1;
     }
     
     /* Verifier que 'from' est dans l'espace kernel */
-    if (!IS_KERNEL_ADDR((uint32_t)from)) {
+    if (!IS_KERNEL_ADDR(from_addr)) {
         KERROR("[COPY] ERROR: copy_to_user source 0x%08X not in kernel space\n", 
-                (uint32_t)from);
+                from_addr);
         return -1;
     }
     
     /* Verifier le debordement */
-    if ((uint32_t)to + n < (uint32_t)to) {
+    if (to_addr + n < to_addr) {
         return -1;  /* Overflow */
     }
 
     if (fault_in_user_range(pgdir, to, n, true) < 0 ||
         !is_mapped_user_range(pgdir, to, n)) {
         KERROR("[COPY] ERROR: copy_to_user destination 0x%08X+%u is not mapped\n",
-                (uint32_t)to, n);
+                to_addr, n);
         return -1;
     }
 
-    if (copy_to_user_pages(pgdir, (uint32_t)to, (const uint8_t *)from, n) < 0) {
+    if (copy_to_user_pages(pgdir, to_addr, (const uint8_t *)from, n) < 0) {
         KERROR("[COPY] ERROR: copy_to_user destination 0x%08X+%u mapping changed during copy\n",
-                (uint32_t)to, n);
+                to_addr, n);
         return -1;
     }
 
@@ -367,10 +383,12 @@ int copy_to_user(void* to, const void* from, size_t n)
 int copy_from_user(void* to, const void* from, size_t n)
 {
     task_t* task = get_current_task();
-    uint32_t* pgdir = (task && task->type == TASK_TYPE_PROCESS &&
-                       task->process && task->process->vm)
-                    ? task->process->vm->pgdir
-                    : NULL;
+    pgdir_t pgdir = (task && task->type == TASK_TYPE_PROCESS &&
+                     task->process && task->process->vm)
+                  ? task->process->vm->pgdir
+                  : NULL;
+    vaddr_t to_addr = (vaddr_t)(uintptr_t)to;
+    vaddr_t from_addr = (vaddr_t)(uintptr_t)from;
 
     //KDEBUG("copy_from_user: Starting to copy...\n");
 
@@ -383,36 +401,31 @@ int copy_from_user(void* to, const void* from, size_t n)
     /* Verifier que 'from' est dans l'espace utilisateur */
     if (!is_valid_user_range(from, n)) {
         KERROR("[COPY] ERROR: copy_from_user source 0x%08X+%u not in user space\n", 
-                (uint32_t)from, n);
+                from_addr, n);
         return -1;
     }
     
     /* Verifier que 'to' est dans l'espace kernel */
-    if (!IS_KERNEL_ADDR((uint32_t)to)) {
+    if (!IS_KERNEL_ADDR(to_addr)) {
         KERROR("[COPY] ERROR: copy_from_user destination 0x%08X not in kernel space\n", 
-                (uint32_t)to);
+                to_addr);
         return -1;
     }
     
     /* Verifier le debordement */
-    if ((uint32_t)from + n < (uint32_t)from) {
+    if (from_addr + n < from_addr) {
         return -1;  /* Overflow */
     }
 
     if (fault_in_user_range(pgdir, from, n, false) < 0 ||
         !is_mapped_user_range(pgdir, from, n)) {
         KERROR("[COPY] ERROR: copy_from_user source 0x%08X+%u is not mapped\n",
-                (uint32_t)from, n);
+                from_addr, n);
         return -1;
     }
 
-    //uint32_t offset = (uint32_t)from & 0xFFF;
-
     //KDEBUG("copy_from_user: All controls OK mapping address to kernel...\n");
     
-
-    //uint32_t *temp_page = (uint32_t *)map_user_to_kernel(pgdir,(uint32_t)from);
-
     //KDEBUG("current pgdir = 0x%08X\n", pgdir);
     //KDEBUG("temp_page = 0x%08X\n", temp_page);
     //KDEBUG("offset = 0x%08X\n", offset);
@@ -423,9 +436,9 @@ int copy_from_user(void* to, const void* from, size_t n)
 
     //KDEBUG("test_str = %s of len = %d\n", test_str, strlen(test_str));
     
-    if (copy_from_user_pages(pgdir, (uint8_t *)to, (uint32_t)from, n) < 0) {
+    if (copy_from_user_pages(pgdir, (uint8_t *)to, from_addr, n) < 0) {
         KERROR("[COPY] ERROR: copy_from_user source 0x%08X+%u mapping changed during copy\n",
-                (uint32_t)from, n);
+                from_addr, n);
         return -1;
     }
     //memcpy(to, (void *)test_str, strlen(test_str));
@@ -454,7 +467,7 @@ int strncpy_from_user(char* to, const char* from, size_t max_len)
     }
     
     /* Verifier que 'to' est dans l'espace kernel */
-    if (!IS_KERNEL_ADDR((uint32_t)to)) {
+    if (!IS_KERNEL_ADDR((vaddr_t)(uintptr_t)to)) {
         return -1;
     }
     
@@ -594,7 +607,7 @@ int count_strings(char** strings)
 }
 
 char** setup_stack_strings(char** strings, char** stack_ptr, int count,
-                           uint32_t temp_stack, uint32_t user_stack_page)
+                           vaddr_t temp_stack, vaddr_t user_stack_page)
 {
     if (!strings) return NULL;
     
@@ -616,7 +629,7 @@ char** setup_stack_strings(char** strings, char** stack_ptr, int count,
         
         // Copier la string
         strcpy(*stack_ptr, strings[i]);
-        result[i] = (char*)(user_stack_page + ((uint32_t)*stack_ptr - temp_stack));
+        result[i] = (char*)(user_stack_page + ((uintptr_t)*stack_ptr - (uintptr_t)temp_stack));
     }
     
     return result;
@@ -686,11 +699,11 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
 {
     /* Create VMA for stack */
     uint32_t stack_size = USER_STACK_SIZE;
-    uint32_t stack_start = USER_STACK_TOP - stack_size;
+    vaddr_t stack_start = USER_STACK_TOP - stack_size;
     vma_t* stack_vma;
     void* stack_page;
-    uint32_t stack_top_page;
-    uint32_t temp_stack;
+    vaddr_t stack_top_page;
+    vaddr_t temp_stack;
     char* stack_ptr;
     int argc;
     int envc;
@@ -698,7 +711,7 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
     char** stack_envp;
     char** envp_array;
     char** argv_array;
-    uint32_t final_sp;
+    vaddr_t final_sp;
     
     stack_vma = create_vma(vm, stack_start, stack_size, VMA_READ | VMA_WRITE);
     if (!stack_vma) return -1;
@@ -713,7 +726,7 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
 
     //stack_top_page = USER_STACK_TOP - PAGE_SIZE;
     stack_top_page = (USER_STACK_TOP - PAGE_SIZE) & ~0xFFF; 
-    if (map_user_page(vm->pgdir, stack_top_page, (uint32_t)stack_page,
+    if (map_user_page(vm->pgdir, stack_top_page, (paddr_t)stack_page,
                       VMA_READ | VMA_WRITE, vm->asid) < 0) {
         free_page(stack_page);
         return -1;
@@ -722,8 +735,7 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
     //KDEBUG("After map_user_page\n");
     
     /* Map temporarily for setup */
-    //temp_stack = map_temp_page((uint32_t)stack_page);
-    temp_stack = (uint32_t)stack_page;
+    temp_stack = map_temp_page((paddr_t)stack_page);
     stack_ptr = (char*)(temp_stack + PAGE_SIZE - 4);
 
 
@@ -742,7 +754,7 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
     //KDEBUG("After setup_stack_strings\n");     
     
     /* Align stack */
-    stack_ptr = (char*)((uint32_t)stack_ptr & ~7);
+    stack_ptr = (char*)((uintptr_t)stack_ptr & ~((uintptr_t)7));
     
     /* Build arrays */
     stack_ptr -= (envc + 1) * sizeof(char*);
@@ -765,8 +777,8 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
     *(int*)stack_ptr = argc;
     
     /* Calculate final SP for user space */
-    //final_sp = USER_STACK_TOP - (PAGE_SIZE - ((uint32_t)stack_ptr - temp_stack));
-    uint32_t offset_in_page = (uint32_t)stack_ptr - temp_stack;
+    //final_sp = USER_STACK_TOP - (PAGE_SIZE - ((uintptr_t)stack_ptr - temp_stack));
+    uint32_t offset_in_page = (uint32_t)((uintptr_t)stack_ptr - (uintptr_t)temp_stack);
     final_sp = stack_top_page + offset_in_page;
     vm->stack_start = final_sp;
 
@@ -805,7 +817,7 @@ int setup_user_stack(vm_space_t* vm, char** argv, char** envp)
 
     KDEBUG("  Final SP: 0x%08X\n", final_sp); */
     
-    //unmap_temp_page((void*)temp_stack);
+    unmap_temp_page((void*)temp_stack);
     
     kfree(stack_argv);
     kfree(stack_envp);

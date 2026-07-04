@@ -105,7 +105,7 @@ int sys_read(int fd, void* buf, size_t count)
      * prevents a partially unmapped user buffer from aborting the kernel
      * inside a filesystem or driver memcpy().
      */
-    if (IS_KERNEL_ADDR((uint32_t)buf)) {
+    if (IS_KERNEL_ADDR((vaddr_t)(uintptr_t)buf)) {
         result = file->f_op->read(file, buf, count);
         return (int)result;
     }
@@ -146,7 +146,7 @@ int sys_write(int fd, const void* buf, size_t count)
     if (!can_write(file)) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
 
-    if (IS_KERNEL_ADDR((uint32_t)buf)) {
+    if (IS_KERNEL_ADDR((vaddr_t)(uintptr_t)buf)) {
         write_buf = buf;
     } else {
         kbuf = kmalloc(count);
@@ -1186,7 +1186,8 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         return -EINVAL;
     }
 
-    if (!IS_KERNEL_ADDR((uint32_t)dirp) && kernel_count > SYSCALL_IO_BOUNCE_SIZE)
+    if (!IS_KERNEL_ADDR((vaddr_t)(uintptr_t)dirp) &&
+        kernel_count > SYSCALL_IO_BOUNCE_SIZE)
         kernel_count = SYSCALL_IO_BOUNCE_SIZE;
     
     //KDEBUG("Reading entries from %s fd=%d\n", file->name, fd);
@@ -1199,7 +1200,7 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         return -ENOSYS;
     }
 
-    if (IS_KERNEL_ADDR((uint32_t)dirp)) {
+    if (IS_KERNEL_ADDR((vaddr_t)(uintptr_t)dirp)) {
         buf_ptr = (char *)dirp;
     } else {
         kbuf = kmalloc(kernel_count);

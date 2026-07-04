@@ -35,6 +35,7 @@ static uint32_t dirty_y1;
 
 /* Variable globale pour le framebuffer */
 uint8_t* framebuffer_base = NULL;
+paddr_t framebuffer_phys = 0;
 
 #define CONSOLE_MAX_COLS 160
 #define CONSOLE_MAX_ROWS 64
@@ -809,15 +810,15 @@ void init_display(void)
     uint32_t pages_needed = (fb_size + PAGE_SIZE - 1) / PAGE_SIZE;
     KINFO("Pages needed: %u\n", pages_needed);
     
-    framebuffer_base = (uint8_t*)allocate_pages(pages_needed);
-    if (!framebuffer_base) {
+    framebuffer_phys = (paddr_t)allocate_pages(pages_needed);
+    if (!framebuffer_phys) {
         KERROR("Failed to allocate framebuffer memory\n");
         return;
     }
+    framebuffer_base = (uint8_t*)phys_to_virt(framebuffer_phys);
     
-    KINFO("Framebuffer allocated at: 0x%08X\n", (uint32_t)framebuffer_base);
-    
-    /* Le framebuffer est en RAM, donc deja mappe - pas besoin de mapping MMU */
+    KINFO("Framebuffer allocated at: phys=0x%08X virt=0x%08X\n",
+          framebuffer_phys, (vaddr_t)(uintptr_t)framebuffer_base);
     
     display.width = FB_WIDTH;
     display.height = FB_HEIGHT;
@@ -855,8 +856,9 @@ void init_display(void)
         KERROR("   Written: 0x12345678, Read: 0x%08X\n", read_back);
         
         /* Liberer la memoire en cas d'echec */
-        free_pages(framebuffer_base, pages_needed);
+        free_pages((void*)framebuffer_phys, pages_needed);
         framebuffer_base = NULL;
+        framebuffer_phys = 0;
     }
 }
 
