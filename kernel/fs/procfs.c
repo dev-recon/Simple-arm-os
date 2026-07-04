@@ -1650,6 +1650,7 @@ static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "PageFaults:\t%u\n", task->page_faults);
     proc_append(buf, cap, len, "CowFaults:\t%u\n", task->cow_faults);
     proc_append(buf, cap, len, "StackFaults:\t%u\n", task->stack_faults);
+    proc_append(buf, cap, len, "LazyFaults:\t%u\n", task->lazy_faults);
     spin_unlock_irqrestore(&task_lock, flags);
 }
 

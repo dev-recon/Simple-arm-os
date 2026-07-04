@@ -17,10 +17,28 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <arm_os_abi.h>
 
 #define COLOR_GREEN "\033[32m"
 #define COLOR_RED   "\033[31m"
 #define COLOR_RESET "\033[0m"
+
+static struct sysinfo_response sysinfo_scratch;
+
+static int read_self_rss_kb(unsigned *rss_kb)
+{
+    pid_t self = getpid();
+
+    if (getsysinfo(&sysinfo_scratch) < 0)
+        return -1;
+    for (int i = 0; i < sysinfo_scratch.proc_count; i++) {
+        if (sysinfo_scratch.procs[i].pid == self) {
+            *rss_kb = sysinfo_scratch.procs[i].rss_kb;
+            return 0;
+        }
+    }
+    return -1;
+}
 
 static int fail(const char *msg)
 {
@@ -37,6 +55,10 @@ int main(void)
 {
     char *p;
     char *q;
+    char *sparse;
+    unsigned rss_before;
+    unsigned rss_after_map;
+    unsigned rss_after_touch;
     int status = 0;
     pid_t pid;
 
@@ -92,6 +114,35 @@ int main(void)
     if (munmap(q, 4096) < 0)
         return fail("munmap second mapping");
     ok("munmap cleanup");
+
+    if (read_self_rss_kb(&rss_before) < 0)
+        return fail("sysinfo before sparse mmap");
+
+    sparse = mmap(NULL, 1024 * 1024, PROT_READ | PROT_WRITE,
+                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (sparse == MAP_FAILED)
+        return fail("sparse mmap 1MB");
+
+    if (read_self_rss_kb(&rss_after_map) < 0)
+        return fail("sysinfo after sparse mmap");
+    if (rss_after_map > rss_before + 16)
+        return fail("sparse mmap should not allocate full RSS eagerly");
+    ok("sparse mmap does not grow RSS eagerly");
+
+    sparse[0] = 'L';
+    sparse[(1024 * 1024) - 1] = 'Z';
+    if (sparse[0] != 'L' || sparse[(1024 * 1024) - 1] != 'Z')
+        return fail("sparse mmap touched pages");
+
+    if (read_self_rss_kb(&rss_after_touch) < 0)
+        return fail("sysinfo after sparse touch");
+    if (rss_after_touch < rss_after_map + 8)
+        return fail("sparse mmap did not fault in touched pages");
+    ok("sparse mmap faults in touched pages only");
+
+    if (munmap(sparse, 1024 * 1024) < 0)
+        return fail("munmap sparse mapping");
+    ok("munmap sparse mapping");
 
     printf("mmaptest: all tests passed\n");
     return 0;

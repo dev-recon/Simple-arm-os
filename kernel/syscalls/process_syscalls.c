@@ -2618,6 +2618,8 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
     uint32_t hint = (uint32_t)addr;
     uint32_t vaddr;
     uint32_t vma_flags = 0;
+    bool is_anon;
+    bool lazy_anon;
     vma_t *vma;
 
     if (!task || task->type != TASK_TYPE_PROCESS || !task->process || !task->process->vm)
@@ -2627,9 +2629,10 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
         return (void *)-ENOSYS;
     if (flags & ARMOS_MAP_FIXED)
         return (void *)-ENOSYS;
-    if ((flags & ARMOS_MAP_ANON) && fd != -1)
+    is_anon = (flags & ARMOS_MAP_ANON) != 0;
+    if (is_anon && fd != -1)
         return (void *)-EINVAL;
-    if (!(flags & ARMOS_MAP_ANON) && (fd < 0 || fd >= MAX_FILES))
+    if (!is_anon && (fd < 0 || fd >= MAX_FILES))
         return (void *)-EBADF;
     if (length == 0)
         return (void *)-EINVAL;
@@ -2648,6 +2651,9 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
         vma_flags |= VMA_WRITE;
     if (prot & ARMOS_PROT_EXEC)
         vma_flags |= VMA_EXEC;
+    lazy_anon = is_anon && !(prot & ARMOS_PROT_EXEC);
+    if (lazy_anon)
+        vma_flags |= VMA_LAZY;
 
     vm = task->process->vm;
     vaddr = vm_find_free_range(vm, hint, size, USER_MMAP_START, USER_MMAP_END);
@@ -2658,20 +2664,22 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
     if (!vma)
         return (void *)-ENOMEM;
 
-    for (uint32_t page = vaddr; page < vaddr + size; page += PAGE_SIZE) {
-        void *phys = allocate_page();
-        if (!phys) {
-            vm_unmap_range(vm, vaddr, size);
-            return (void *)-ENOMEM;
-        }
-        if (map_user_page(vm->pgdir, page, (uint32_t)phys, vma->flags, vm->asid) < 0) {
-            free_page(phys);
-            vm_unmap_range(vm, vaddr, size);
-            return (void *)-ENOMEM;
+    if (!lazy_anon) {
+        for (uint32_t page = vaddr; page < vaddr + size; page += PAGE_SIZE) {
+            void *phys = allocate_page();
+            if (!phys) {
+                vm_unmap_range(vm, vaddr, size);
+                return (void *)-ENOMEM;
+            }
+            if (map_user_page(vm->pgdir, page, (uint32_t)phys, vma->flags, vm->asid) < 0) {
+                free_page(phys);
+                vm_unmap_range(vm, vaddr, size);
+                return (void *)-ENOMEM;
+            }
         }
     }
 
-    if (!(flags & ARMOS_MAP_ANON)) {
+    if (!is_anon) {
         file_t *file = task->process->files[fd];
         uint32_t saved_offset;
         uint32_t copied = 0;
@@ -2765,6 +2773,8 @@ int sys_mprotect(void* addr, size_t length, int prot)
         flags |= VMA_WRITE;
     if (prot & ARMOS_PROT_EXEC)
         flags |= VMA_EXEC;
+    if ((vma->flags & VMA_LAZY) && !(flags & VMA_EXEC))
+        flags |= VMA_LAZY;
 
     for (uint32_t page = start; page < start + size; page += PAGE_SIZE) {
         uint32_t phys = get_physical_address(vm->pgdir, page);

@@ -1653,7 +1653,7 @@ static uint8_t vmov_encode_immediate_value(uint32_t value)
             limit >>= 1;
     }
     if (r == -1 || value < beginning || value > end) {
-        tcc_error("invalid decimal number for vmov: %d", value);
+        tcc_error("invalid decimal number for vmov: %lu", (unsigned long)value);
     }
     n = vmov_linear_approx_index(beginning, end, value);
     return n | (((3 - r) & 0x7) << 4);

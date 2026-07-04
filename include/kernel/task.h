@@ -434,6 +434,7 @@ typedef struct task {
     uint32_t page_faults;                   /* Fautes user resolues */
     uint32_t cow_faults;                    /* Fautes COW resolues */
     uint32_t stack_faults;                  /* Croissances de pile user */
+    uint32_t lazy_faults;                   /* Anonymous mmap pages faulted in lazily */
     uint32_t wakeup_time;                   /* Temps de reveil (ms) */
     
     /* === EXTENSIONS PROCESSUS === */

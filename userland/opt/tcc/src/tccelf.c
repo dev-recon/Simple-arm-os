@@ -3374,7 +3374,9 @@ invalid:
                 /* some crt1.o seem to have two ".note.GNU-stack" (SHT_NOTE & SHT_PROGBITS) */
                 && strcmp (s->name, ".note.GNU-stack")
                 ) {
-                tcc_error_noabort("section type conflict: %s %02x <> %02x", s->name, sh->sh_type, s->sh_type);
+                tcc_error_noabort("section type conflict: %s %02lx <> %02lx",
+                                  s->name, (unsigned long)sh->sh_type,
+                                  (unsigned long)s->sh_type);
                 goto the_end;
             }
             if (!strncmp(sh_name, ".gnu.linkonce", 13)) {

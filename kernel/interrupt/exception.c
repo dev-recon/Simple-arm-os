@@ -970,6 +970,13 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
             }
             return 0;
         }
+        if (handle_lazy_anon_fault(dfar, is_write) == 0) {
+            if (task) {
+                task->page_faults++;
+                task->lazy_faults++;
+            }
+            return 0;
+        }
     }
 
     if (status == 0x0F && is_write && mode == 0x10) {

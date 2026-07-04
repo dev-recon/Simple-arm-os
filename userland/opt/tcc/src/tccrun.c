@@ -1545,6 +1545,9 @@ ST_FUNC void dlclose(void *p)
 {
 }
 
+#ifdef ARM_OS_NEWLIB
+ST_FUNC const char *dlerror(void) __attribute__((unused));
+#endif
 ST_FUNC const char *dlerror(void)
 {
     return "error";

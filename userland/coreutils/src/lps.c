@@ -45,6 +45,7 @@ typedef struct task_row {
     unsigned page_faults;
     unsigned cow_faults;
     unsigned stack_faults;
+    unsigned lazy_faults;
     unsigned effective_priority;
     unsigned sched_debt;
     unsigned debt_score;
@@ -540,6 +541,7 @@ static void enrich_row_from_status(task_row_t *r)
     status_uint_value(buf, "PageFaults:", &r->page_faults);
     status_uint_value(buf, "CowFaults:", &r->cow_faults);
     status_uint_value(buf, "StackFaults:", &r->stack_faults);
+    status_uint_value(buf, "LazyFaults:", &r->lazy_faults);
 }
 
 static const char *state_name(char state)
@@ -730,10 +732,10 @@ int main(void)
     print_scheduler_table(&c);
     print_tty_table(&c);
 
-    printf("\033[1m%6s %6s %6s %4s %3s %-8s %4s %-6s %3s %4s %6s %6s %5s %5s %5s %5s %2s %7s %7s %7s %7s %-6s %4s %s\033[0m\n",
+    printf("\033[1m%6s %6s %6s %4s %3s %-8s %4s %-6s %3s %4s %6s %6s %5s %5s %5s %5s %2s %7s %7s %7s %7s %7s %-6s %4s %s\033[0m\n",
            "PID", "TID", "PPID", "SID", "TTY", "USER", "GID", "KIND", "PRI", "%CPU", "KSTK", "HEAP",
-           "DEBT", "WAIT", "VM", "RSS", "L2", "CTX", "PF", "COW", "STK", "STATE", "LAST", "NAME");
-    printf("--------------------------------------------------------------------------------------------------------------------------------------------------------\n");
+           "DEBT", "WAIT", "VM", "RSS", "L2", "CTX", "PF", "COW", "STK", "LZY", "STATE", "LAST", "NAME");
+    printf("---------------------------------------------------------------------------------------------------------------------------------------------------------------\n");
 
     for (int i = 0; i < count; i++) {
         task_row_t *p = &rows[i];
@@ -742,6 +744,7 @@ int main(void)
         char pfbuf[16];
         char cowbuf[16];
         char stkbuf[16];
+        char lazybuf[16];
         char user_fallback[USER_NAME_LEN];
         const char *user = user_name_for_uid(users, user_count, p->uid,
                                              user_fallback, sizeof(user_fallback));
@@ -750,8 +753,9 @@ int main(void)
         format_count(p->page_faults, pfbuf, sizeof(pfbuf));
         format_count(p->cow_faults, cowbuf, sizeof(cowbuf));
         format_count(p->stack_faults, stkbuf, sizeof(stkbuf));
+        format_count(p->lazy_faults, lazybuf, sizeof(lazybuf));
 
-        printf("%6d %6d %6d %4d %3d %-8s %4u %s%-6s\033[0m %3u %3u.%u %4uK %4uK %5u %5u %4uK %4uK %2u %7s %s%7s\033[0m %7s %7s %s%-6s\033[0m %4d %s\n",
+        printf("%6d %6d %6d %4d %3d %-8s %4u %s%-6s\033[0m %3u %3u.%u %4uK %4uK %5u %5u %4uK %4uK %2u %7s %s%7s\033[0m %7s %7s %7s %s%-6s\033[0m %4d %s\n",
                p->pid, p->tid, p->ppid, p->sid, p->tty,
                user, p->gid,
                kind_color(p->kind), kind_name(p->kind),
@@ -763,7 +767,7 @@ int main(void)
                p->l2_tables,
                ctxbuf,
                pfcolor, pfbuf,
-               cowbuf, stkbuf,
+               cowbuf, stkbuf, lazybuf,
                state_color(p->state), state_name(p->state),
                p->last_cpu,
                p->name);

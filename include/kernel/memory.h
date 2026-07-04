@@ -70,6 +70,7 @@ typedef struct vm_space {
 #define VMA_EXEC    (1 << 2)
 #define VMA_KERNEL  (1 << 3)
 #define VMA_SHARED  (1 << 4)
+#define VMA_LAZY    (1 << 5)
 
 /* ASID constants */
 #define ASID_KERNEL     254       /* ASID réservé pour le noyau */
@@ -161,6 +162,7 @@ int vm_unmap_range(vm_space_t* vm, uint32_t start, uint32_t size);
 vma_t* find_vma(vm_space_t* vm, uint32_t addr);
 int handle_cow_fault(uint32_t fault_addr);
 int handle_user_stack_fault(uint32_t fault_addr);
+int handle_lazy_anon_fault(uint32_t fault_addr, bool is_write);
 
 /* Nouvelles fonctions pour ASID */
 void switch_to_vm_space(vm_space_t *vm);

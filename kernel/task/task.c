@@ -1200,6 +1200,10 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->created_time = get_current_time();
     child->total_runtime = 0;
     child->switch_count = 0;
+    child->page_faults = 0;
+    child->cow_faults = 0;
+    child->stack_faults = 0;
+    child->lazy_faults = 0;
     child->context.is_first_run = 1;
     child->context.r0 = 0;
     child->wakeup_time = 0;
@@ -1599,6 +1603,7 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     task->page_faults = 0;
     task->cow_faults = 0;
     task->stack_faults = 0;
+    task->lazy_faults = 0;
 
     task->type = TASK_TYPE_PROCESS;  /* Nouvelle ligne */
     //task->process->pid = task->task_id;  /* Nouvelle ligne */

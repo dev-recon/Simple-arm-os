@@ -212,7 +212,8 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type, unsigned char *ptr,
                 h = x & 2;
                 th_ko = (x & 3) && (!blx_avail || !is_call);
                 if (th_ko || x >= 0x2000000 || x < -0x2000000)
-                    tcc_error_noabort("can't relocate value at %x,%d",addr, type);
+                    tcc_error_noabort("can't relocate value at %lx,%d",
+                                      (unsigned long)addr, type);
                 x >>= 2;
                 x &= 0xffffff;
                 /* Only reached if blx is avail and it is a call */
@@ -301,7 +302,8 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type, unsigned char *ptr,
                      - instruction must be a call (bl) or a jump to PLT */
                 if (!to_thumb || x >= 0x1000000 || x < -0x1000000)
                     if (to_thumb || (val & 2) || (!is_call && !to_plt))
-                        tcc_error_noabort("can't relocate value at %x,%d",addr, type);
+                        tcc_error_noabort("can't relocate value at %lx,%d",
+                                          (unsigned long)addr, type);
 
                 /* Compute and store final offset */
                 s = (x >> 24) & 1;
@@ -372,7 +374,8 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type, unsigned char *ptr,
                 x = (x * 2) / 2;
                 x += val - addr;
                 if((x^(x>>1))&0x40000000)
-                    tcc_error_noabort("can't relocate value at %x,%d",addr, type);
+                    tcc_error_noabort("can't relocate value at %lx,%d",
+                                      (unsigned long)addr, type);
                 write32le(ptr, read32le(ptr) | (x & 0x7fffffff));
             }
             return;

@@ -688,6 +688,54 @@ int handle_user_stack_fault(uint32_t fault_addr)
     return 0;
 }
 
+int handle_lazy_anon_fault(uint32_t fault_addr, bool is_write)
+{
+    task_t *task = task_current_local();
+    vm_space_t *vm;
+    vma_t *vma;
+    uint32_t vaddr;
+    void *page;
+
+    if (!task || task->type != TASK_TYPE_PROCESS ||
+        !task->process || !task->process->vm) {
+        return -EINVAL;
+    }
+
+    vm = task->process->vm;
+    vma = find_vma(vm, fault_addr);
+    if (!vma || !(vma->flags & VMA_LAZY)) {
+        return -EINVAL;
+    }
+    if (is_write && !(vma->flags & VMA_WRITE)) {
+        return -EACCES;
+    }
+    if (!is_write && !(vma->flags & VMA_READ)) {
+        return -EACCES;
+    }
+
+    /*
+     * Today one process has one schedulable user task, so this cannot race
+     * with another CPU faulting the same address space. clone()/threads will
+     * need a per-vm fault lock around the present-check + map sequence.
+     */
+    vaddr = fault_addr & PAGE_MASK;
+    if (get_physical_address(vm->pgdir, vaddr) != 0) {
+        return -EEXIST;
+    }
+
+    page = allocate_page();
+    if (!page) {
+        return -ENOMEM;
+    }
+
+    if (map_user_page(vm->pgdir, vaddr, (uint32_t)page, vma->flags, vm->asid) < 0) {
+        free_page(page);
+        return -ENOMEM;
+    }
+
+    return 0;
+}
+
 static inline void clean_dcache_line(void *addr)
 {
     asm volatile(

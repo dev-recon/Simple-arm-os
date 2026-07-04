@@ -168,7 +168,47 @@ static bool is_mapped_user_range(uint32_t *pgdir, const void *ptr, size_t size)
     return true;
 }
 
-static int fault_in_user_write_range(uint32_t *pgdir, const void *ptr, size_t size)
+static void note_kernel_resolved_user_fault(bool is_lazy)
+{
+    task_t *task = task_current_local();
+
+    if (!task || task->type != TASK_TYPE_PROCESS)
+        return;
+
+    task->page_faults++;
+    if (is_lazy)
+        task->lazy_faults++;
+    else
+        task->stack_faults++;
+}
+
+static int fault_in_user_page(uint32_t *pgdir, uint32_t page, bool is_write)
+{
+    if (get_physical_address(pgdir, page))
+        return 0;
+
+    /*
+     * Some syscalls are the first kernel-side access to a valid but still
+     * unmapped user page. Fault it in explicitly so copy_to/from_user follows
+     * the same VM contract as a user-mode load/store fault.
+     */
+    if (handle_lazy_anon_fault(page, is_write) == 0 &&
+        get_physical_address(pgdir, page)) {
+        note_kernel_resolved_user_fault(true);
+        return 0;
+    }
+
+    if (handle_user_stack_fault(page) == 0 &&
+        get_physical_address(pgdir, page)) {
+        note_kernel_resolved_user_fault(false);
+        return 0;
+    }
+
+    return -1;
+}
+
+static int fault_in_user_range(uint32_t *pgdir, const void *ptr, size_t size,
+                               bool is_write)
 {
     uint32_t start = (uint32_t)ptr;
     uint32_t end = start + size - 1;
@@ -179,17 +219,8 @@ static int fault_in_user_write_range(uint32_t *pgdir, const void *ptr, size_t si
         return -1;
 
     while (page <= last_page) {
-        if (!get_physical_address(pgdir, page)) {
-            /*
-             * A syscall may be the first writer to a freshly grown user stack
-             * frame.  Fault the stack page in explicitly; other unmapped user
-             * ranges remain invalid and will still return EFAULT.
-             */
-            if (handle_user_stack_fault(page) < 0)
-                return -1;
-            if (!get_physical_address(pgdir, page))
-                return -1;
-        }
+        if (fault_in_user_page(pgdir, page, is_write) < 0)
+            return -1;
 
         if (page > 0xFFFFFFFFu - PAGE_SIZE)
             break;
@@ -209,8 +240,13 @@ static int copy_to_user_pages(uint32_t *pgdir, uint32_t user_addr,
         uint32_t phys = get_physical_address(pgdir, current);
         size_t chunk = PAGE_SIZE - (current & (PAGE_SIZE - 1));
 
-        if (!phys)
-            return -1;
+        if (!phys) {
+            if (fault_in_user_page(pgdir, current & PAGE_MASK, true) < 0)
+                return -1;
+            phys = get_physical_address(pgdir, current);
+            if (!phys)
+                return -1;
+        }
 
         if (chunk > n - copied)
             chunk = n - copied;
@@ -238,8 +274,13 @@ static int copy_from_user_pages(uint32_t *pgdir, uint8_t *dst,
         uint32_t phys = get_physical_address(pgdir, current);
         size_t chunk = PAGE_SIZE - (current & (PAGE_SIZE - 1));
 
-        if (!phys)
-            return -1;
+        if (!phys) {
+            if (fault_in_user_page(pgdir, current & PAGE_MASK, false) < 0)
+                return -1;
+            phys = get_physical_address(pgdir, current);
+            if (!phys)
+                return -1;
+        }
 
         if (chunk > n - copied)
             chunk = n - copied;
@@ -305,7 +346,7 @@ int copy_to_user(void* to, const void* from, size_t n)
         return -1;  /* Overflow */
     }
 
-    if (fault_in_user_write_range(pgdir, to, n) < 0 ||
+    if (fault_in_user_range(pgdir, to, n, true) < 0 ||
         !is_mapped_user_range(pgdir, to, n)) {
         KERROR("[COPY] ERROR: copy_to_user destination 0x%08X+%u is not mapped\n",
                 (uint32_t)to, n);
@@ -358,7 +399,8 @@ int copy_from_user(void* to, const void* from, size_t n)
         return -1;  /* Overflow */
     }
 
-    if (!is_mapped_user_range(pgdir, from, n)) {
+    if (fault_in_user_range(pgdir, from, n, false) < 0 ||
+        !is_mapped_user_range(pgdir, from, n)) {
         KERROR("[COPY] ERROR: copy_from_user source 0x%08X+%u is not mapped\n",
                 (uint32_t)from, n);
         return -1;
