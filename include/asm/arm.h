@@ -140,6 +140,21 @@ INLINE void cpu_relax(void)
     __asm__ volatile("yield" ::: "memory");
 }
 
+INLINE uint32_t arm_hvc_call(uint32_t function_id, uint32_t arg0, uint32_t arg1, uint32_t arg2)
+{
+    register uint32_t r0 __asm__("r0") = function_id;
+    register uint32_t r1 __asm__("r1") = arg0;
+    register uint32_t r2 __asm__("r2") = arg1;
+    register uint32_t r3 __asm__("r3") = arg2;
+
+    __asm__ volatile("hvc #0"
+                     : "+r"(r0)
+                     : "r"(r1), "r"(r2), "r"(r3)
+                     : "memory");
+
+    return r0;
+}
+
 INLINE int arm_spin_try_acquire(volatile uint32_t *locked)
 {
     uint32_t old;

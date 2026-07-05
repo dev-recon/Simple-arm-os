@@ -106,17 +106,7 @@ static uint32_t smp_detect_possible_cpus_from_dtb(void)
 
 static int32_t smp_psci_cpu_on(uint32_t target_cpu, uint32_t entry_point, uint32_t context_id)
 {
-    register uint32_t function_id __asm__("r0") = PSCI_0_2_FN_CPU_ON;
-    register uint32_t r1 __asm__("r1") = target_cpu;
-    register uint32_t r2 __asm__("r2") = entry_point;
-    register uint32_t r3 __asm__("r3") = context_id;
-
-    __asm__ volatile("hvc #0"
-                     : "+r"(function_id)
-                     : "r"(r1), "r"(r2), "r"(r3)
-                     : "memory");
-
-    return (int32_t)function_id;
+    return (int32_t)arm_hvc_call(PSCI_0_2_FN_CPU_ON, target_cpu, entry_point, context_id);
 }
 
 void smp_init_boot_cpu(void)
@@ -159,7 +149,9 @@ void smp_start_secondary_cpus(void)
             smp_cpu_infos[cpu].state = SMP_CPU_OFFLINE;
     }
 
-    __asm__ volatile("dsb; sev; isb" ::: "memory");
+    data_sync_barrier();
+    send_event();
+    instruction_sync_barrier();
 }
 
 void smp_secondary_main(uint32_t cpu_id)

@@ -219,20 +219,16 @@ static void psci_system_off(void) __attribute__((noreturn));
 
 static void psci_system_off(void)
 {
-    __asm__ volatile("cpsid if\n"
-                     "dsb\n"
-                     "isb\n"
-                     ::: "memory", "cc");
+    uint32_t function_id;
 
-    register uint32_t function_id __asm__("r0") = PSCI_0_2_FN_SYSTEM_OFF;
-    __asm__ volatile("hvc #0"
-                     : "+r"(function_id)
-                     :
-                     : "r1", "r2", "r3", "memory");
+    (void)arm_disable_irq_fiq_save();
+    data_sync_barrier();
+    instruction_sync_barrier();
 
+    function_id = arm_hvc_call(PSCI_0_2_FN_SYSTEM_OFF, 0, 0, 0);
     KERROR("PSCI SYSTEM_OFF returned: 0x%08X\n", function_id);
     for (;;) {
-        __asm__ volatile("wfi");
+        wait_for_interrupt();
     }
 }
 
