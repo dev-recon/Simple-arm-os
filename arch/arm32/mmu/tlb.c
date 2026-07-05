@@ -5,8 +5,8 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/memory/tlb.c
- * Layer: Kernel / MMU and SMP coordination
+ * File: arch/arm32/mmu/tlb.c
+ * Layer: ARM32 / TLB shootdown and SMP rendezvous
  *
  * Responsibilities:
  * - Centralize TLB invalidation requests.
