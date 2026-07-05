@@ -66,5 +66,9 @@ void smp_disable_scheduler_cpu(uint32_t cpu_id);
 bool smp_scheduler_cpu_enabled(uint32_t cpu_id);
 bool smp_scheduler_can_run_on_current_cpu(void);
 uint32_t smp_scheduler_reject_count(void);
+void smp_request_shutdown_park_secondary_cpus(void);
+bool smp_shutdown_park_requested(uint32_t cpu_id);
+void smp_mark_shutdown_parked_cpu(uint32_t cpu_id);
+bool smp_shutdown_secondary_cpus_parked(void);
 
 #endif /* _KERNEL_SMP_H */

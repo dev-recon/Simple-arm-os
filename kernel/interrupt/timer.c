@@ -35,6 +35,7 @@ static volatile uint32_t timer_cpu_ticks[ARMOS_MAX_CPUS];
 static uint64_t last_timer_count = 0;
 static uint32_t software_system_ticks = 0;
 static bool timer_software_initialized = false;
+static uint64_t timer_next_compare[ARMOS_MAX_CPUS];
 
 static volatile bool in_critical_section_cpu[ARMOS_MAX_CPUS];
 
@@ -43,12 +44,44 @@ static uint32_t timer_interval_from_frequency(uint32_t timer_freq)
     return timer_freq / TIMER_FREQ;
 }
 
-static void timer_program_next_tick(uint32_t timer_freq)
+static uint32_t timer_program_next_tick(uint32_t timer_freq)
 {
-    uint32_t next_interval = timer_interval_from_frequency(timer_freq);
+    uint32_t cpu = smp_processor_id();
+    uint32_t interval = timer_interval_from_frequency(timer_freq);
+    uint64_t now;
+    uint64_t next;
+    uint32_t elapsed_ticks = 1;
 
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(next_interval));
+    if (cpu >= ARMOS_MAX_CPUS || interval == 0)
+        return 1;
+
+    now = timer_get_count();
+    next = timer_next_compare[cpu];
+
+    /*
+     * Program the ARM physical timer in absolute mode.  Reusing CNTP_TVAL
+     * after every IRQ makes handler latency accumulate into clock drift under
+     * SMP load.  Advancing CNTP_CVAL by fixed intervals keeps the average tick
+     * rate stable and lets accounting catch up when an IRQ was delayed.
+     */
+    if (next == 0) {
+        next = now + interval;
+    } else {
+        elapsed_ticks = 0;
+        do {
+            next += interval;
+            if (elapsed_ticks < 0xffffffffu)
+                elapsed_ticks++;
+        } while (next <= now);
+        if (elapsed_ticks == 0)
+            elapsed_ticks = 1;
+    }
+
+    timer_next_compare[cpu] = next;
+    timer_set_compare(next);
+
     __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(1u));
+    return elapsed_ticks;
 }
 
 
@@ -170,12 +203,14 @@ void timer_set_timeout(uint64_t timeout_ticks)
     /* Desactiver le timer */
     __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(0));
     
-    /* Calculer la nouvelle valeur de comparaison */
+    uint32_t cpu = smp_processor_id();
     uint64_t current = get_timer_count();
-    uint32_t compare = (uint32_t)(current + timeout_ticks);
+    uint64_t compare = current + timeout_ticks;
     
     /* Programmer la nouvelle valeur */
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(compare));
+    if (cpu < ARMOS_MAX_CPUS)
+        timer_next_compare[cpu] = compare;
+    timer_set_compare(compare);
     
     /* Reactiver le timer */
     __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(1));
@@ -185,6 +220,7 @@ void timer_init_local_cpu(void)
 {
     uint32_t timer_ctrl = 0;
     uint32_t timer_freq = get_timer_frequency();
+    uint32_t cpu = smp_processor_id();
 
     /*
      * The ARM generic timer is per-CPU. This helper only programs the local
@@ -192,6 +228,8 @@ void timer_init_local_cpu(void)
      * that CPU before expecting IRQ delivery.
      */
     __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
+    if (cpu < ARMOS_MAX_CPUS)
+        timer_next_compare[cpu] = 0;
     timer_program_next_tick(timer_freq);
 }
 
@@ -228,10 +266,6 @@ void init_timer(void)
     /* 3. Activer l'IRQ du timer dans le GIC */
     gic_enable_irq_kernel(VIRT_TIMER_NS_EL1_IRQ);  // IRQ 30
     
-    /* Programmer une interruption periodique */
-    uint32_t timeout = timer_freq / TIMER_FREQ;
-    timer_set_timeout(timeout);
-    
     /* 5. Activer les interruptions au niveau CPU */
     __asm__ volatile("cpsie i" ::: "memory");
     
@@ -241,6 +275,7 @@ void init_timer(void)
 void timer_irq_handler(void)
 {
     uint32_t cpu_id = smp_processor_id();
+    uint32_t elapsed_ticks;
 
     /* 1. Acquitter l'interruption ARM Generic Timer */
     uint32_t timer_ctrl;
@@ -252,14 +287,14 @@ void timer_irq_handler(void)
 
     gic_ack_irq_kernel(IRQ_TIMER);
     
-    /* 2. CORRECTION: Programmer le PROCHAIN timer (relatif) */
-    timer_program_next_tick(get_timer_frequency());
+    /* 2. Program the next absolute compare and catch up delayed ticks. */
+    elapsed_ticks = timer_program_next_tick(get_timer_frequency());
     
     /* 4. Per-CPU accounting, plus one global wall-clock on the boot CPU. */
     if (cpu_id < ARMOS_MAX_CPUS)
-        timer_cpu_ticks[cpu_id]++;
+        timer_cpu_ticks[cpu_id] += elapsed_ticks;
     if (smp_is_boot_cpu())
-        system_ticks++;
+        system_ticks += elapsed_ticks;
 
     /*
      * PL011 TX interrupts are edge/level sensitive enough to miss a wake-up in
@@ -280,13 +315,18 @@ void timer_irq_handler(void)
         task_t* current = task_current_on_cpu(cpu_id);
         
         if (current && !task_is_idle_task(current) && current->state == TASK_RUNNING) {
-            current->total_runtime++;
-            if (current->sched_debt < 0xffffffffu)
-                current->sched_debt++;
+            current->total_runtime += elapsed_ticks;
+            if (current->sched_debt <= 0xffffffffu - elapsed_ticks)
+                current->sched_debt += elapsed_ticks;
+            else
+                current->sched_debt = 0xffffffffu;
         }
 
         if (current && !task_is_idle_task(current) && !get_critical_section()) {
-            current->quantum_left--;
+            if (current->quantum_left > elapsed_ticks)
+                current->quantum_left -= elapsed_ticks;
+            else
+                current->quantum_left = 0;
 
             if (current->quantum_left == 0) {
                 current->quantum_left = QUANTUM_TICKS;

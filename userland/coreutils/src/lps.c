@@ -65,12 +65,15 @@ typedef struct proc_counters {
     unsigned phys_live, phys_alloc, phys_free;
     unsigned forkfail;
     unsigned sched_refuse;
+    unsigned sched_crit_repair;
     unsigned ready_refuse;
     unsigned asid_rollovers;
     unsigned state_set;
     unsigned signal_wake;
     unsigned tty_stale;
     unsigned fs_wait_timeout;
+    unsigned sleep_deadline;
+    unsigned sleep_overshoot;
     unsigned tty_tx_enqueued;
     unsigned tty_tx_drained;
     unsigned tty_tx_full_waits;
@@ -250,6 +253,8 @@ static void parse_proc_stat(proc_counters_t *c)
     if (p) parse_uint(p, &c->forkfail);
     p = line_after_key(buf, "sched_refuse ");
     if (p) parse_uint(p, &c->sched_refuse);
+    p = line_after_key(buf, "sched_crit_repair ");
+    if (p) parse_uint(p, &c->sched_crit_repair);
     p = line_after_key(buf, "ready_refuse ");
     if (p) parse_uint(p, &c->ready_refuse);
     p = line_after_key(buf, "asid_rollovers ");
@@ -264,6 +269,10 @@ static void parse_proc_stat(proc_counters_t *c)
     if (p) parse_uint(p, &c->fs_wait_timeout);
     p = line_after_key(buf, "unintr_timeout ");
     if (p) parse_uint(p, &c->fs_wait_timeout);
+    p = line_after_key(buf, "sleep_deadline ");
+    if (p) parse_uint(p, &c->sleep_deadline);
+    p = line_after_key(buf, "sleep_overshoot ");
+    if (p) parse_uint(p, &c->sleep_overshoot);
 
     p = line_after_key(buf, "tty_tx ");
     if (p) {
@@ -631,11 +640,16 @@ static void print_event_table(const proc_counters_t *c)
            "ready-refuse", c->ready_refuse);
     printf("%-16s %8u   %-16s %8u   %-16s %8u\n",
            "asid-roll", c->asid_rollovers,
-           "state-set", c->state_set,
+           "sched-crit", c->sched_crit_repair,
            "signal-wake", c->signal_wake);
-    printf("%-16s %8u   %-16s %8u\n",
+    printf("%-16s %8u   %-16s %8u   %-16s %8u\n",
+           "state-set", c->state_set,
            "tty-stale", c->tty_stale,
            "fs-wait-timeout", c->fs_wait_timeout);
+    printf("%-16s %8u   %-16s %8u   %-16s %8s\n",
+           "sleep-deadline", c->sleep_deadline,
+           "sleep-overshoot", c->sleep_overshoot,
+           "", "");
 }
 
 static void print_scheduler_table(const proc_counters_t *c)

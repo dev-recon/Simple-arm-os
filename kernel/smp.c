@@ -54,6 +54,7 @@ static volatile uint32_t scheduler_banned_mask;
 static uint32_t possible_cpu_count = 1;
 static volatile uint32_t online_cpu_count = 1;
 static volatile uint32_t scheduler_reject_count;
+static volatile uint32_t scheduler_shutdown_park_request_mask;
 
 extern void smp_secondary_entry(void);
 
@@ -330,6 +331,77 @@ void smp_disable_scheduler_cpu(uint32_t cpu_id)
     scheduler_banned_mask |= bit;
     scheduler_cpu_mask &= ~bit;
     data_sync_barrier();
+}
+
+void smp_request_shutdown_park_secondary_cpus(void)
+{
+    for (uint32_t cpu = 0; cpu < possible_cpu_count && cpu < ARMOS_MAX_CPUS; cpu++) {
+        uint32_t bit;
+
+        if (cpu == boot_cpu_id)
+            continue;
+
+        bit = 1u << cpu;
+
+        /*
+         * Do not disable scheduler participation here.  A secondary CPU may
+         * still be running a normal task when shutdown starts; it needs one
+         * more legal scheduler path to return to its idle task, where the park
+         * request is consumed.  The CPU is removed from scheduler_cpu_mask only
+         * after smp_mark_shutdown_parked_cpu().
+         */
+        if (smp_cpu_seen(cpu) && smp_cpu_infos[cpu].state == SMP_CPU_ONLINE)
+            scheduler_shutdown_park_request_mask |= bit;
+    }
+
+    data_sync_barrier();
+    send_event();
+}
+
+bool smp_shutdown_park_requested(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS || cpu_id == boot_cpu_id)
+        return false;
+
+    return (scheduler_shutdown_park_request_mask & (1u << cpu_id)) != 0;
+}
+
+void smp_mark_shutdown_parked_cpu(uint32_t cpu_id)
+{
+    uint32_t bit;
+
+    if (cpu_id >= ARMOS_MAX_CPUS || cpu_id == boot_cpu_id)
+        return;
+
+    bit = 1u << cpu_id;
+    scheduler_cpu_mask &= ~bit;
+    scheduler_banned_mask |= bit;
+    scheduler_shutdown_park_request_mask &= ~bit;
+
+    if (online_cpu_mask & bit) {
+        online_cpu_mask &= ~bit;
+        if (online_cpu_count > 0)
+            online_cpu_count--;
+    }
+
+    smp_cpu_infos[cpu_id].state = SMP_CPU_PARKED;
+    data_sync_barrier();
+}
+
+bool smp_shutdown_secondary_cpus_parked(void)
+{
+    for (uint32_t cpu = 0; cpu < possible_cpu_count && cpu < ARMOS_MAX_CPUS; cpu++) {
+        if (cpu == boot_cpu_id)
+            continue;
+        if (!smp_cpu_seen(cpu))
+            continue;
+        if (scheduler_shutdown_park_request_mask & (1u << cpu))
+            return false;
+        if (smp_cpu_infos[cpu].state == SMP_CPU_ONLINE)
+            return false;
+    }
+
+    return true;
 }
 
 bool smp_scheduler_cpu_enabled(uint32_t cpu_id)

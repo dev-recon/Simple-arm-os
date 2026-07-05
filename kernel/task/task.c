@@ -2139,6 +2139,7 @@ void task_start_secondary_scheduler(uint32_t cpu_id)
 }
 
 #define SCHED_ALARM_BATCH 16
+#define SCHED_SLEEP_OVERSHOOT_TRACE_TICKS 50u
 
 static void scheduler_scan_waiters(task_t* current)
 {
@@ -2195,12 +2196,19 @@ static void scheduler_scan_waiters(task_t* current)
              task->state == TASK_UNINTERRUPTIBLE) &&
             task->wakeup_time > 0 &&
             current_time >= task->wakeup_time) {
+            uint32_t overdue = current_time - task->wakeup_time;
 
             //KDEBUG("Waking up task %s from sleep\n", task->name);
             
             if (task->state == TASK_UNINTERRUPTIBLE) {
                 kernel_lifecycle_stats.fs_wait_timeouts++;
                 sched_trace_record(SCHED_TRACE_FS_WAIT_TIMEOUT, task);
+            } else {
+                kernel_lifecycle_stats.sleep_deadline_wakeups++;
+                if (overdue > SCHED_SLEEP_OVERSHOOT_TRACE_TICKS) {
+                    kernel_lifecycle_stats.sleep_overshoots++;
+                    sched_trace_record(SCHED_TRACE_SLEEP_OVERSHOOT, task);
+                }
             }
             task->wakeup_time = 0;
             task_make_ready_under_lock(task);
@@ -2300,9 +2308,10 @@ static bool scheduler_entry_allowed(const char* caller, task_t* requested)
     }
 
     if (get_critical_section()) {
-        kernel_lifecycle_stats.scheduler_refused++;
+        kernel_lifecycle_stats.scheduler_critical_repaired++;
         sched_trace_record(SCHED_TRACE_REFUSE_CRITICAL, current);
         unset_critical_section();
+        return false;
     }
 
     if (get_cpu_mode() == ARM_MODE_IRQ)
@@ -2510,6 +2519,32 @@ void schedule_extended(void)
 {
     /* Appeler votre schedule() existant */
     schedule();
+}
+
+static void secondary_idle_park_for_shutdown(uint32_t cpu) __attribute__((noreturn));
+
+static void secondary_idle_park_for_shutdown(uint32_t cpu)
+{
+    task_t* idle = task_current_local();
+    unsigned long flags;
+
+    spin_lock_irqsave(&task_lock, &flags);
+    if (idle) {
+        runqueue_remove_locked(idle);
+        idle->state = TASK_BLOCKED;
+        idle->running_cpu = TASK_CPU_NONE;
+        if (idle->type == TASK_TYPE_PROCESS && idle->process)
+            idle->process->state = (proc_state_t)PROC_BLOCKED;
+    }
+    spin_unlock_irqrestore(&task_lock, flags);
+
+    smp_mark_shutdown_parked_cpu(cpu);
+    KINFO("SMP: CPU%u parked for shutdown\n", cpu);
+
+    for (;;) {
+        data_sync_barrier();
+        wait_for_interrupt();
+    }
 }
 
 
@@ -2876,6 +2911,8 @@ void idle_task_func(void* arg)
          */
         __asm__ volatile("cpsie i" ::: "memory");
         __asm__ volatile("wfi" ::: "memory");
+        if (smp_shutdown_park_requested(cpu))
+            secondary_idle_park_for_shutdown(cpu);
         scheduler_scan_waiters(task_current_local());
         if (scheduler_has_ready_work()) {
             if (cpu < ARMOS_MAX_CPUS) {

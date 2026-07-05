@@ -450,6 +450,7 @@ void gic_ack_irq_kernel(uint32_t irq);     /* Renamed pour eviter conflit */
 /* ARM Generic Timer */
 void timer_init(void);
 uint64_t timer_get_count(void);
+void timer_set_compare(uint64_t compare);
 uint32_t timer_get_frequency(void);
 
 /* VirtIO support */

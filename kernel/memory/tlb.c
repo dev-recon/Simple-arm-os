@@ -21,6 +21,7 @@
 
 #include <kernel/tlb.h>
 #include <kernel/smp.h>
+#include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/interrupt.h>
 #include <kernel/memory.h>
@@ -49,6 +50,7 @@ static volatile uint32_t shootdown_cpu_ack[ARMOS_MAX_CPUS];
 static spinlock_t shootdown_lock = SPINLOCK_INIT("tlb_shootdown");
 
 #define TLB_SHOOTDOWN_WARN_SPINS 5000000u
+#define TLB_SHOOTDOWN_PANIC_REPORTS 256u
 
 static bool tlb_request_is_kernel_scope(tlb_request_kind_t kind, uint32_t asid)
 {
@@ -169,6 +171,8 @@ static void tlb_wait_remote_ack(uint32_t target_mask, uint32_t generation)
                       generation, pending);
             }
             gic_send_sgi(pending, IRQ_SGI_TLB_SHOOTDOWN);
+            if (slow_reports >= TLB_SHOOTDOWN_PANIC_REPORTS)
+                panic("TLB shootdown ack timeout");
             spin = 0;
         }
 
