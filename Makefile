@@ -90,7 +90,7 @@ KERNEL_OBJS = \
 	kernel/interrupt/exception.o \
 	$(ARCH_DIR)/interrupt/interrupt.o \
 	kernel/interrupt/irq_return.o \
-	kernel/interrupt/gic.o \
+	$(ARCH_DIR)/interrupt/gic.o \
 	kernel/interrupt/timer.o \
 	$(ARCH_DIR)/syscall/syscall.o \
 	kernel/syscalls/syscalls.o \

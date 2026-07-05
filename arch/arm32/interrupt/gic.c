@@ -5,8 +5,8 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/interrupt/gic.c
- * Layer: Kernel / interrupts and exceptions
+ * File: arch/arm32/interrupt/gic.c
+ * Layer: ARM32 / GICv2 interrupt controller
  *
  * Responsibilities:
  * - Handle IRQs, timer ticks, aborts, and crash diagnostics.

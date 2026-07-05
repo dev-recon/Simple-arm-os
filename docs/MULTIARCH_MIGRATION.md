@@ -78,6 +78,7 @@ Done so far:
 
 - moved ARM32 boot assembly to `arch/arm32/boot/boot.S`;
 - moved ARM32 IRQ entry assembly to `arch/arm32/interrupt/interrupt.S`;
+- moved ARM32 GICv2 controller code to `arch/arm32/interrupt/gic.c`;
 - moved ARM32 syscall entry assembly to `arch/arm32/syscall/syscall.S`;
 - moved ARM32 context-switch assembly to `arch/arm32/task/task_switch.S`;
 - moved ARM32 PSCI/secondary CPU bring-up to `arch/arm32/smp/smp.c`;
