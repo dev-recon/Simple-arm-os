@@ -38,10 +38,10 @@ void undefined_instruction_handler(void) {
      * lr_und = adresse instruction fautive + 4.
      * lr_svc/sp_svc (banques, virt ext A15) = etat SVC au moment du saut. */
     uint32_t lr, spsr, lr_svc, sp_svc;
-    asm volatile("mov %0, lr" : "=r"(lr));
-    asm volatile("mrs %0, spsr" : "=r"(spsr));
-    asm volatile("mrs %0, lr_svc" : "=r"(lr_svc));
-    asm volatile("mrs %0, sp_svc" : "=r"(sp_svc));
+    lr = arm_current_lr();
+    spsr = get_spsr();
+    lr_svc = arm_read_banked_lr_svc();
+    sp_svc = arm_read_banked_sp_svc();
 
     kprintf("=== UNDEFINED INSTRUCTION ===\n");
     kprintf("UND LR: 0x%08X (PC fautif=0x%08X), SPSR: 0x%08X\n", lr, lr - 4, spsr);
@@ -182,9 +182,9 @@ void prefetch_abort_handler(void) {
     uint32_t lr_svc, sp_svc, spsr_svc;
     unsigned long log_flags;
 
-    __asm__ volatile("mrs %0, lr_svc" : "=r"(lr_svc));
-    __asm__ volatile("mrs %0, sp_svc" : "=r"(sp_svc));
-    __asm__ volatile("mrs %0, spsr" : "=r"(spsr_svc));
+    lr_svc = arm_read_banked_lr_svc();
+    sp_svc = arm_read_banked_sp_svc();
+    spsr_svc = get_spsr();
 
     spin_lock_irqsave(&exception_log_lock, &log_flags);
 
@@ -250,13 +250,7 @@ void prefetch_abort_handler(void) {
 
 /* ATS1CPR: translate VA as privileged read; PAR returns PA or fault status */
 static inline uint32_t ats1cpr(uint32_t va){
-    uint32_t par;
-    asm volatile(
-        "mcr p15,0,%1,c7,c8,0\n"   /* ATS1CPR */
-        "isb\n"
-        "mrc p15,0,%0,c7,c4,0\n"   /* PAR */
-        : "=r"(par) : "r"(va) : "memory");
-    return par;
+    return arm_translate_privileged_read_par((vaddr_t)va);
 }
 
 static const char* dfsr_string(uint32_t dfsr) {
@@ -1077,13 +1071,7 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
 
 /* ATS1CPR: translate VA as privileged read; PAR returns PA or fault status */
 static inline uint32_t ats1cpr2(uint32_t va){
-    uint32_t par;
-    asm volatile(
-        "mcr p15,0,%1,c7,c8,0\n"   /* ATS1CPR */
-        "isb\n"
-        "mrc p15,0,%0,c7,c4,0\n"   /* PAR */
-        : "=r"(par) : "r"(va) : "memory");
-    return par;
+    return arm_translate_privileged_read_par((vaddr_t)va);
 }
 
 static inline bool spsr_thumb2(uint32_t spsr){ return (spsr & (1u<<5)) != 0; }

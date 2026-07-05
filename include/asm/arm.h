@@ -288,6 +288,20 @@ INLINE uint32_t get_spsr(void)
     return spsr;
 }
 
+INLINE vaddr_t arm_read_banked_lr_svc(void)
+{
+    vaddr_t lr_svc;
+    __asm__ volatile("mrs %0, lr_svc" : "=r"(lr_svc));
+    return lr_svc;
+}
+
+INLINE vaddr_t arm_read_banked_sp_svc(void)
+{
+    vaddr_t sp_svc;
+    __asm__ volatile("mrs %0, sp_svc" : "=r"(sp_svc));
+    return sp_svc;
+}
+
 INLINE void set_spsr(uint32_t spsr)
 {
     __asm__ volatile("msr spsr_cxsf, %0" : : "r"(spsr));
@@ -524,6 +538,21 @@ INLINE uint32_t get_ifar(void)
     uint32_t ifar;
     __asm__ volatile("mrc p15, 0, %0, c6, c0, 2" : "=r"(ifar));
     return ifar;
+}
+
+INLINE uint32_t arm_translate_privileged_read_par(vaddr_t va)
+{
+    uint32_t par;
+
+    __asm__ volatile(
+        "mcr p15,0,%1,c7,c8,0\n"
+        "isb\n"
+        "mrc p15,0,%0,c7,c4,0\n"
+        : "=r"(par)
+        : "r"(va)
+        : "memory");
+
+    return par;
 }
 
 INLINE uint32_t get_dfsr(void)
