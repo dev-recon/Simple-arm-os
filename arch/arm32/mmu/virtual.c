@@ -5,8 +5,8 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/memory/virtual.c
- * Layer: Kernel / memory management
+ * File: arch/arm32/mmu/virtual.c
+ * Layer: ARM32 / user virtual memory and page-table mappings
  *
  * Responsibilities:
  * - Manage physical pages, virtual address spaces, MMU mappings, and ASIDs.

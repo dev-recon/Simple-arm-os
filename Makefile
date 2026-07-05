@@ -55,7 +55,7 @@ KERNEL_OBJS = \
 	kernel/internals/ls_process.o \
 	kernel/memory/helpers.o \
 	kernel/memory/physical.o \
-	kernel/memory/virtual.o \
+	$(ARCH_DIR)/mmu/virtual.o \
 	$(ARCH_DIR)/mmu/mmu.o \
 	$(ARCH_DIR)/mmu/tlb.o \
 	kernel/memory/kmalloc.o \

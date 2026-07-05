@@ -63,7 +63,7 @@ Kernel entry and architecture:
 Memory:
 
 - `arch/arm32/mmu/mmu.c`
-- `kernel/memory/virtual.c`
+- `arch/arm32/mmu/virtual.c`
 - `kernel/memory/physical.c`
 - `kernel/memory/kmalloc.c`
 - `include/kernel/memory.h`
