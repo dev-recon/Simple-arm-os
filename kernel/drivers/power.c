@@ -26,9 +26,8 @@
 #include <kernel/signal.h>
 #include <kernel/timer.h>
 #include <kernel/smp.h>
-#include <asm/arm.h>
+#include <kernel/arch_power.h>
 
-#define PSCI_0_2_FN_SYSTEM_OFF 0x84000008u
 #define SHUTDOWN_TERM_GRACE_MS 200
 #define SHUTDOWN_KILL_GRACE_MS 100
 #define SHUTDOWN_SMP_PARK_GRACE_MS 1000
@@ -215,27 +214,10 @@ static void shutdown_park_secondary_cpus(void)
         kprintf("Shutdown: secondary CPUs parked\n");
 }
 
-static void psci_system_off(void) __attribute__((noreturn));
-
-static void psci_system_off(void)
-{
-    uint32_t function_id;
-
-    (void)arm_disable_irq_fiq_save();
-    data_sync_barrier();
-    instruction_sync_barrier();
-
-    function_id = arm_hvc_call(PSCI_0_2_FN_SYSTEM_OFF, 0, 0, 0);
-    KERROR("PSCI SYSTEM_OFF returned: 0x%08X\n", function_id);
-    for (;;) {
-        wait_for_interrupt();
-    }
-}
-
 void kernel_poweroff(void)
 {
     if (shutdown_in_progress) {
-        psci_system_off();
+        arch_system_off();
     }
 
     shutdown_in_progress = true;
@@ -246,8 +228,8 @@ void kernel_poweroff(void)
     shutdown_drivers();
     disable_interrupts();
     kprintf("Shutdown: interrupts disabled\n");
-    kprintf("Shutdown: entering PSCI SYSTEM_OFF\n");
-    psci_system_off();
+    kprintf("Shutdown: entering platform poweroff\n");
+    arch_system_off();
     __builtin_unreachable();
 }
 
