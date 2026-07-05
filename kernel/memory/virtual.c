@@ -746,12 +746,6 @@ int handle_lazy_anon_fault(vaddr_t fault_addr, bool is_write)
     return 0;
 }
 
-static inline void clean_dcache_line(void *addr)
-{
-    asm volatile(
-        "mcr p15, 0, %0, c7, c10, 1" ::"r"(addr) : "memory");
-}
-
 /* Nouvelle fonction: Switch vers un espace d'adressage avec ASID */
 void switch_to_vm_space(vm_space_t *vm)
 {
