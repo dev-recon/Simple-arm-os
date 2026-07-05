@@ -89,7 +89,7 @@ KERNEL_OBJS = \
 	kernel/drivers/virtio_block.o \
 	$(ARCH_DIR)/interrupt/exception.o \
 	$(ARCH_DIR)/interrupt/interrupt.o \
-	kernel/interrupt/irq_return.o \
+	$(ARCH_DIR)/interrupt/irq_return.o \
 	$(ARCH_DIR)/interrupt/gic.o \
 	$(ARCH_DIR)/timer/timer.o \
 	$(ARCH_DIR)/syscall/syscall.o \

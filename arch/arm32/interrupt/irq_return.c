@@ -5,8 +5,8 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/interrupt/irq_return.c
- * Layer: Kernel / interrupts and scheduler boundary
+ * File: arch/arm32/interrupt/irq_return.c
+ * Layer: ARM32 / IRQ return and scheduler boundary
  *
  * Responsibilities:
  * - Bridge IRQ exit to the normal "return to user" work path.
