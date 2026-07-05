@@ -159,6 +159,8 @@ Immediate goals:
   offsets.
 - Keep FDT parsing centralized instead of adding more hardcoded QEMU addresses.
 - Do not create a speculative HAL before a second concrete target exists.
+- Track the active migration sequence in
+  [`docs/MULTIARCH_MIGRATION.md`](MULTIARCH_MIGRATION.md).
 
 First milestone: implemented.
 - Generated assembly offsets.

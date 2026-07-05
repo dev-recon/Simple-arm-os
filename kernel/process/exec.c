@@ -25,6 +25,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/file.h>
 #include <kernel/string.h>
+#include <asm/arm.h>
 
 
 /* Forward declarations de toutes les fonctions statiques */
@@ -176,9 +177,10 @@ int load_elf_segments(inode_t* inode, elf32_ehdr_t* elf_header, vm_space_t* vm)
 }
 
 static inline void flush_instructions(void){
-    asm volatile("dsb ish");          // données visibles
-    asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0)); // IC IALLU (ou IVAU par ligne)
-    asm volatile("dsb ish; isb");
+    data_sync_barrier_inner_shareable();  /* make freshly loaded text visible */
+    flush_icache();
+    data_sync_barrier_inner_shareable();
+    instruction_sync_barrier();
 }
 
 int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
@@ -275,11 +277,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
             // juste après le read() réussi dans temp_vaddr
             uintptr_t start = (temp_vaddr) & ~63u;
             uintptr_t end   = (temp_vaddr + PAGE_SIZE + 63u) & ~63u;
-            for (uintptr_t p = start; p < end; p += 64) {
-                //asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(p) : "memory"); // DCCMVAC
-                asm volatile("mcr p15,0,%0,c7,c6,1" :: "r"(p) : "memory"); // DCIMVAC
-            }
-            asm volatile("dsb ish" ::: "memory");
+            invalidate_dcache_range((vaddr_t)start, (vaddr_t)end);
 
             dcache_clean_by_va((void*)temp_vaddr, PAGE_SIZE);
 
@@ -362,8 +360,7 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
         invalidate_dcache_by_mva((void *)page_vaddr, PAGE_SIZE); // DCIMVAC + DSB
 
         if (vma_flags & VMA_EXEC) {
-            asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0)); // ICIALLU
-            asm volatile("dsb ish; isb");
+            flush_instructions();
         }
 
         //uint8_t* check2 = (uint8_t*)map_temp_page((uint32_t)phys_page);

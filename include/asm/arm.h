@@ -86,6 +86,11 @@ INLINE void send_event(void)
     __asm__ volatile("sev" ::: "memory");
 }
 
+INLINE void cpu_relax(void)
+{
+    __asm__ volatile("yield" ::: "memory");
+}
+
 /* Memory barriers optimisees pour Cortex-A15 */
 INLINE void data_sync_barrier(void) 
 {
@@ -100,6 +105,16 @@ INLINE void data_sync_barrier_read(void)
 INLINE void data_sync_barrier_write(void) 
 {
     __asm__ volatile("dsb st" ::: "memory");
+}
+
+INLINE void data_sync_barrier_inner_shareable(void)
+{
+    __asm__ volatile("dsb ish" ::: "memory");
+}
+
+INLINE void data_sync_barrier_inner_shareable_write(void)
+{
+    __asm__ volatile("dsb ishst" ::: "memory");
 }
 
 INLINE void instruction_sync_barrier(void) 
@@ -120,6 +135,11 @@ INLINE void data_memory_barrier_read(void)
 INLINE void data_memory_barrier_write(void) 
 {
     __asm__ volatile("dmb st" ::: "memory");
+}
+
+INLINE void data_memory_barrier_inner_shareable(void)
+{
+    __asm__ volatile("dmb ish" ::: "memory");
 }
 
 /* CPU mode switching helpers */

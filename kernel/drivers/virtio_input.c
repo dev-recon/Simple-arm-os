@@ -390,10 +390,10 @@ static void input_post_desc(uint16_t id)
     clean_invalidate_dcache_by_mva(&input.events[id], sizeof(input.events[id]));
     avail->ring[idx % input.vq.qsize] = id;
     clean_dcache_by_mva((void *)input.vq.va_avail, input.vq.avail_size);
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
     avail->idx = idx + 1;
     clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
-    asm volatile("dsb ishst" ::: "memory");
+    data_sync_barrier_inner_shareable_write();
 }
 
 static void input_post_all(void)
@@ -416,7 +416,7 @@ void virtio_input_irq_handler(void)
 
     invalidate_dcache_by_mva((void *)input.vq.va_used,
         sizeof(struct vring_used) + input.vq.qsize * sizeof(struct vring_used_elem));
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
 
     struct vring_used *used = input_used_ptr(&input.vq);
     while (input.vq.last_used_idx != used->idx) {

@@ -231,10 +231,10 @@ static int gpu_wait_used(uint16_t prev_used)
     while ((get_cntpct() - start) < timeout_ticks) {
         invalidate_dcache_by_mva((void *)(uintptr_t)gpu.vq.va_used,
             sizeof(struct vring_used) + gpu.vq.qsize * sizeof(struct vring_used_elem));
-        asm volatile("dmb ish" ::: "memory");
+        data_memory_barrier_inner_shareable();
         if (gpu_used_ptr(&gpu.vq)->idx != prev_used)
             return 0;
-        asm volatile("yield" ::: "memory");
+        cpu_relax();
     }
 
     return -1;
@@ -269,7 +269,7 @@ static int gpu_acquire(void)
         if (task)
             yield();
         else
-            asm volatile("yield" ::: "memory");
+            cpu_relax();
     }
 }
 
@@ -322,17 +322,17 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
     clean_dcache_by_mva((void *)gpu.vq.va_desc, sizeof(struct vring_desc) * gpu.vq.qsize);
     clean_dcache_by_mva(cmd, cmd_len);
     clean_invalidate_dcache_by_mva(resp, resp_len);
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
 
     uint16_t prev_used = gpu.vq.last_used_idx;
     struct vring_avail *avail = gpu_avail_ptr(&gpu.vq);
     uint16_t old_idx = avail->idx;
     avail->ring[old_idx % gpu.vq.qsize] = d0;
     clean_dcache_by_mva((void *)gpu.vq.va_avail, gpu.vq.avail_size);
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
     avail->idx = old_idx + 1;
     clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
-    asm volatile("dsb ishst" ::: "memory");
+    data_sync_barrier_inner_shareable_write();
 
     mmio_write32(gpu.mmio, VIRTIO_MMIO_QUEUE_NOTIFY, 0);
 

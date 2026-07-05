@@ -94,7 +94,7 @@ static void virtio_blk_acquire(void)
          * spinlock while another request is in flight; wait cooperatively.
          */
         if (!task) {
-            asm volatile("yield" ::: "memory");
+            cpu_relax();
             continue;
         }
 
@@ -430,13 +430,6 @@ static inline struct vring_used *vq_used_ptr(vq_legacy_t *vq) {
     return (struct vring_used *)((uint8_t *)(uintptr_t)vq->va_used);
 }
 
-/* Lit le compteur physique 64-bit du generic timer ARM (toujours actif sur A15). */
-static inline uint64_t vblk_cntpct(void) {
-    uint32_t lo, hi;
-    asm volatile("mrrc p15, 0, %0, %1, c14" : "=r"(lo), "=r"(hi));
-    return ((uint64_t)hi << 32) | lo;
-}
-
 void virtio_block_irq_handler(void)
 {
     unsigned long flags;
@@ -466,7 +459,7 @@ void virtio_block_irq_handler(void)
      */
     invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
         sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
 
     if (vq_used_ptr(vq)->idx == prev_used_idx)
         return;
@@ -495,7 +488,7 @@ static bool virtio_blk_used_advanced(vq_legacy_t *vq, uint16_t prev_idx)
 {
     invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
         sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
 
     return vq_used_ptr(vq)->idx != prev_idx;
 }
@@ -510,7 +503,7 @@ static void virtio_blk_prepare_wait(vq_legacy_t *vq, uint16_t prev_idx)
     virtio_blk_pending.prev_used_idx = prev_idx;
     virtio_blk_pending.vq = vq;
     virtio_blk_pending.waiter = task_current_local();
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
     spin_unlock_irqrestore(&virtio_blk_lock, flags);
 }
 
@@ -524,7 +517,7 @@ static void virtio_blk_finish_wait(void)
     virtio_blk_pending.prev_used_idx = 0;
     virtio_blk_pending.vq = NULL;
     virtio_blk_pending.waiter = NULL;
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
     spin_unlock_irqrestore(&virtio_blk_lock, flags);
 }
 
@@ -546,24 +539,24 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
     const uint32_t spin_budget = 512;
     uint32_t freq;
     uint32_t spins = 0;
-    asm volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(freq));
+    freq = get_cntfrq();
     if (freq == 0) freq = 62500000; /* 62.5 MHz défaut QEMU */
 
     uint64_t timeout_ticks = (uint64_t)timeout_ms * (uint64_t)(freq / 1000);
-    uint64_t t0 = vblk_cntpct();
+    uint64_t t0 = get_cntpct();
     uint32_t wake_deadline = get_system_ticks() + 2;
 
     while (1) {
         if (virtio_blk_wait_completed() || virtio_blk_used_advanced(vq, prev_idx))
             return 0;
 
-        if ((vblk_cntpct() - t0) >= timeout_ticks) {
+        if ((get_cntpct() - t0) >= timeout_ticks) {
             KERROR("virtio_blk: timeout waiting used ring\n");
             return -1;
         }
 
         if (spins++ < spin_budget) {
-            asm volatile("yield" ::: "memory");
+            cpu_relax();
             continue;
         }
         spins = 0;
@@ -641,7 +634,7 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
 
     /* --- Flush descriptors ENTIER (important) --- */
     clean_dcache_by_mva((void *)vq->va_desc, sizeof(struct vring_desc) * vq->qsize); /* ou au moins 3*16 */
-    asm volatile("dmb ish" ::: "memory"); /* ensure desc visible */
+    data_memory_barrier_inner_shareable(); /* ensure desc visible */
 
     /* DMA ownership:
      * - header is read by the device
@@ -655,7 +648,7 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
         virtio_dma_to_device(data_va, data_len);
     }
     virtio_dma_from_device(status_va, 1);
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
 
     /* --- Publier avail entry de façon sûre --- */
     uint16_t prev_used = vq->last_used_idx;
@@ -667,18 +660,18 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
 
     /* flush ring slot (ou entire avail) */
     clean_dcache_by_mva((void *)vq->va_avail, vq->avail_size);
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
 
     /* incrément idx */
     vq_avail_ptr(vq)->idx = old_idx + 1;
     clean_dcache_by_mva((void *)&vq_avail_ptr(vq)->idx, sizeof(vq_avail_ptr(vq)->idx));
-    asm volatile("dsb ishst" ::: "memory");
+    data_sync_barrier_inner_shareable_write();
 
     /* debug post-publish: re-read desc fields (après flush so they reflect final memory) */
     mmio_write32(mmio_base, VIRTIO_MMIO_QUEUE_NOTIFY, 0);
 
-    asm volatile("dsb ishst" ::: "memory");
-    asm volatile("isb" ::: "memory");
+    data_sync_barrier_inner_shareable_write();
+    instruction_sync_barrier();
 
     /* wait for completion by polling used.idx (blocking) */
     if (wait_for_used(vq, prev_used, timeout_ms) != 0) {
@@ -761,7 +754,7 @@ static int virtio_blk_submit_flush(vq_legacy_t *vq,
     clean_dcache_by_mva((void *)vq->va_desc, sizeof(struct vring_desc) * vq->qsize);
     virtio_dma_to_device(hdr, sizeof(struct virtio_blk_req));
     virtio_dma_from_device(status_va, 1);
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
 
     uint16_t prev_used = vq->last_used_idx;
     virtio_blk_prepare_wait(vq, prev_used);
@@ -769,14 +762,15 @@ static int virtio_blk_submit_flush(vq_legacy_t *vq,
     uint16_t old_idx = vq_avail_ptr(vq)->idx;
     vq_avail_ptr(vq)->ring[old_idx % vq->qsize] = d0;
     clean_dcache_by_mva((void *)vq->va_avail, vq->avail_size);
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
 
     vq_avail_ptr(vq)->idx = old_idx + 1;
     clean_dcache_by_mva((void *)&vq_avail_ptr(vq)->idx, sizeof(vq_avail_ptr(vq)->idx));
-    asm volatile("dsb ishst" ::: "memory");
+    data_sync_barrier_inner_shareable_write();
 
     mmio_write32(mmio_base, VIRTIO_MMIO_QUEUE_NOTIFY, 0);
-    asm volatile("dsb ishst; isb" ::: "memory");
+    data_sync_barrier_inner_shareable_write();
+    instruction_sync_barrier();
 
     if (wait_for_used(vq, prev_used, timeout_ms) != 0) {
         virtio_blk_finish_wait();
@@ -1043,7 +1037,8 @@ void virtio_blk_shutdown(void)
 
     virtio_blk_ack_interrupts(virtio_mmio_base);
     mmio_write32(virtio_mmio_base, VIRTIO_MMIO_STATUS, 0);
-    asm volatile("dsb sy; isb" ::: "memory");
+    data_sync_barrier();
+    instruction_sync_barrier();
 }
 
 uint32_t virtio_blk_get_irq(void)
