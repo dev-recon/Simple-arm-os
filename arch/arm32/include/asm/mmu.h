@@ -5,7 +5,7 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: include/asm/mmu.h
+ * File: arch/arm32/include/asm/mmu.h
  * Layer: Kernel / ARMv7-A MMU interface
  *
  * Responsibilities:

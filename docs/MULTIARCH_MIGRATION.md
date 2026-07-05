@@ -14,7 +14,7 @@ Good migration steps:
 
 - replace ambiguous address values with `paddr_t`, `vaddr_t`, and `pfn_t`;
 - move direct CP15, barrier, cache, timer, and exception details behind
-  `include/asm/` helpers;
+  architecture-local `<asm/...>` helpers;
 - keep generated `asm-offsets` as the only source of truth for C/ASM structure
   offsets;
 - keep FDT discovery centralized;
@@ -38,8 +38,8 @@ Done in this branch:
   - inner-shareable data memory barrier;
   - inner-shareable data sync barrier;
   - inner-shareable write data sync barrier.
-- Converted selected non-architecture code to use `include/asm/arm.h` instead
-  of inline assembly:
+- Converted selected non-architecture code to use `<asm/arm.h>` instead of
+  inline assembly:
   - VirtIO block;
   - VirtIO GPU;
   - VirtIO input;
@@ -81,8 +81,9 @@ Done so far:
 - moved ARM32 syscall entry assembly to `arch/arm32/syscall/syscall.S`;
 - moved ARM32 context-switch assembly to `arch/arm32/task/task_switch.S`;
 - moved generated assembly-offset source to `arch/arm32/asm-offsets.c`;
+- moved ARM32 architecture headers to `arch/arm32/include/asm`;
 - taught the top-level `Makefile` to build these ARM32 architecture objects
-  from `arch/arm32`.
+  from `arch/arm32` and to search architecture headers first.
 
 Kernel code that should remain architecture-neutral:
 

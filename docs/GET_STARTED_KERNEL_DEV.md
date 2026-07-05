@@ -67,7 +67,7 @@ Memory:
 - `kernel/memory/physical.c`
 - `kernel/memory/kmalloc.c`
 - `include/kernel/memory.h`
-- `include/asm/mmu.h`
+- `arch/arm32/include/asm/mmu.h`
 
 Processes and scheduler:
 

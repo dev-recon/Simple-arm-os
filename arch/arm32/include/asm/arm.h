@@ -5,7 +5,7 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: include/asm/arm.h
+ * File: arch/arm32/include/asm/arm.h
  * Layer: Kernel / ARMv7-A architecture interface
  *
  * Responsibilities:

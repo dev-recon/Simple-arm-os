@@ -969,7 +969,7 @@ architecture port. The useful groundwork is now in place:
 - generated assembly offsets for C structures consumed from ARM assembly;
 - `paddr_t`, `vaddr_t`, and `pfn_t` names for address categories;
 - a shared FDT parser used by platform/device discovery;
-- more ARM-specific helpers isolated behind `include/asm/`;
+- more ARM-specific helpers isolated under `arch/arm32/include/asm/`;
 - clearer documentation of boot identity, explicit RAM direct-map, and MMIO
   assumptions.
 

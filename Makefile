@@ -10,6 +10,7 @@ QEMU ?= qemu-system-arm
 SMP_CPUS ?= 1
 BUILD_DIR = build
 ARCH_DIR = arch/arm32
+ARCH_INCLUDE = $(ARCH_DIR)/include
 ASM_OFFSETS_SRC = $(ARCH_DIR)/asm-offsets.c
 ASM_OFFSETS_S = $(BUILD_DIR)/asm-offsets.s
 ASM_OFFSETS_H = $(BUILD_DIR)/generated/asm-offsets.h
@@ -23,7 +24,7 @@ MATH_FLAGS = -fno-builtin-div -fno-builtin-mod
 ARM_MATH_FLAGS = -mno-unaligned-access
 
 # Flags de compilation
-ASFLAGS = -g -Iinclude -I$(BUILD_DIR)/generated
+ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated
 
 CFLAGS = -std=gnu99 $(ARCH_FLAGS) $(FPU_FLAGS) $(MATH_FLAGS) $(ARM_MATH_FLAGS) \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
@@ -31,6 +32,7 @@ CFLAGS = -std=gnu99 $(ARCH_FLAGS) $(FPU_FLAGS) $(MATH_FLAGS) $(ARM_MATH_FLAGS) \
          -fno-builtin -fstack-protector -Wno-unused-function \
          -MMD -MP \
          -fno-pic -fno-pie \
+         -I$(ARCH_INCLUDE) \
          -Iinclude \
          -DARMV7A_KERNEL
 # Flags du linker

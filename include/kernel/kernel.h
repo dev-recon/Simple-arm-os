@@ -515,7 +515,7 @@ void print_cpu_mode(void);
 #define STDERR_FILENO           2
 
 
-/* ARM privileged register/cache helpers live in include/asm/arm.h. */
+/* ARM privileged register/cache helpers are exposed through <asm/arm.h>. */
 
 #define offsetof(type, member) ((size_t)&((type*)0)->member)
 
