@@ -87,7 +87,7 @@ KERNEL_OBJS = \
 	kernel/drivers/ramfs.o \
 	kernel/drivers/tar_parser_ramfs.o \
 	kernel/drivers/virtio_block.o \
-	kernel/interrupt/exception.o \
+	$(ARCH_DIR)/interrupt/exception.o \
 	$(ARCH_DIR)/interrupt/interrupt.o \
 	kernel/interrupt/irq_return.o \
 	$(ARCH_DIR)/interrupt/gic.o \

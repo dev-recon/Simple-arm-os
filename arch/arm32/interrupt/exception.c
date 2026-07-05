@@ -5,8 +5,8 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/interrupt/exception.c
- * Layer: Kernel / interrupts and exceptions
+ * File: arch/arm32/interrupt/exception.c
+ * Layer: ARM32 / exceptions and crash diagnostics
  *
  * Responsibilities:
  * - Handle IRQs, timer ticks, aborts, and crash diagnostics.

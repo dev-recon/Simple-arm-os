@@ -78,6 +78,8 @@ Done so far:
 
 - moved ARM32 boot assembly to `arch/arm32/boot/boot.S`;
 - moved ARM32 IRQ entry assembly to `arch/arm32/interrupt/interrupt.S`;
+- moved ARM32 exception/fault diagnostics to
+  `arch/arm32/interrupt/exception.c`;
 - moved ARM32 GICv2 controller code to `arch/arm32/interrupt/gic.c`;
 - moved ARM32 generic timer code to `arch/arm32/timer/timer.c`;
 - moved ARM32 short-descriptor MMU/ASID code to `arch/arm32/mmu/mmu.c`;
