@@ -176,7 +176,7 @@ static void tlb_wait_remote_ack(uint32_t target_mask, uint32_t generation)
             spin = 0;
         }
 
-        __asm__ volatile("nop");
+        cpu_relax();
     }
 }
 
