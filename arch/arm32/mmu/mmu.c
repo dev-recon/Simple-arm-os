@@ -5,8 +5,8 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/memory/mmu.c
- * Layer: Kernel / memory management
+ * File: arch/arm32/mmu/mmu.c
+ * Layer: ARM32 / short-descriptor MMU and ASID management
  *
  * Responsibilities:
  * - Manage physical pages, virtual address spaces, MMU mappings, and ASIDs.
