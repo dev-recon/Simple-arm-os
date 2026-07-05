@@ -52,16 +52,6 @@ void undefined_instruction_handler(void) {
     while(1);
 }
 
-/* void prefetch_abort_handler(void) {
-    kprintf("=== PREFETCH ABORT ===\n");
-    uint32_t lr, spsr, ifar;
-    asm volatile("mov %0, lr" : "=r"(lr));
-    asm volatile("mrs %0, spsr" : "=r"(spsr));
-    asm volatile("mrc p15, 0, %0, c6, c0, 2" : "=r"(ifar)); // IFAR
-    kprintf("PABT LR: 0x%08X, SPSR: 0x%08X, IFAR: 0x%08X\n", lr, spsr, ifar);
-    while(1);
-} */
-
 static inline uint32_t ifsr_status5(uint32_t ifsr) {
     return (ifsr & 0xF) | ((ifsr >> 6) & 0x10); // [3:0] + bit10→bit4
 }
