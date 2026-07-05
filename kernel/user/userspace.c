@@ -66,6 +66,12 @@ static inline pgdir_cpu_t user_pgdir_cpu_view(pgdir_t pgdir)
     return (pgdir_cpu_t)pgdir;
 }
 
+static inline void user_flush_page_table_entry(const void *entry)
+{
+    dc_clean_mva((void *)entry);
+    data_sync_barrier_inner_shareable_write();
+}
+
 int unmap_user_page(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid)
 {
     uint32_t l1_index;
@@ -93,8 +99,7 @@ int unmap_user_page(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid)
     }
 
     l2_table[l2_index] = 0;
-    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(&l2_table[l2_index]) : "memory");
-    asm volatile("dsb ishst" ::: "memory");
+    user_flush_page_table_entry(&l2_table[l2_index]);
     invalidate_tlb_page_asid(vaddr, asid);
 
     for (uint32_t i = 0; i < 256; i++) {
@@ -104,8 +109,7 @@ int unmap_user_page(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid)
     }
 
     *l1_entry = 0;
-    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(l1_entry) : "memory");
-    asm volatile("dsb ishst" ::: "memory");
+    user_flush_page_table_entry(l1_entry);
     invalidate_tlb_page_asid(vaddr, asid);
     free_page((void*)l2_phys);
     return 0;
