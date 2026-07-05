@@ -1305,18 +1305,13 @@ void switch_to_idle_stack(void)
     new_sp &= ~7;  /* Alignement 8-bytes */
     
     /* CRITIQUE: Switcher vers la pile idle */
-    __asm__ volatile(
-        "mov sp, %0  \n"     /* Charger le nouveau SP */
-        :
-        : "r"(new_sp)
-        : "memory"
-    );
+    arm_set_sp(new_sp);
     
     /* Mettre à jour le SP d'idle */
     idle_task->context.sp = new_sp;
     
     /* Vérification */
-    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+    current_sp = arm_current_sp();
     
     if (current_sp < task_stack_addr(idle_task->stack_base) ||
         current_sp >= task_stack_addr(idle_task->stack_top)) {
@@ -1956,7 +1951,7 @@ void debug_idle_corruption_source(void)
     
     /* Obtenir la trace de la pile */
     uint32_t lr;
-    __asm__ volatile("mov %0, lr" : "=r"(lr));
+    lr = arm_current_lr();
     
     KERROR("IDLE CORRUPTION DETECTED!\n");
     KERROR("  Called from: 0x%08X\n", lr);
@@ -2442,7 +2437,7 @@ void schedule(void)
     current = task_current_local();
     scheduler_scan_waiters(current);
 
-    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+    current_sp = arm_current_sp();
     save_current_context = current->state != TASK_ZOMBIE &&
                            current->state != TASK_TERMINATED;
 
@@ -2486,7 +2481,7 @@ void schedule_to(task_t *next_task)
     current = task_current_local();
     scheduler_scan_waiters(current);
 
-    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+    current_sp = arm_current_sp();
     save_current_context = current->state != TASK_ZOMBIE &&
                            current->state != TASK_TERMINATED;
 

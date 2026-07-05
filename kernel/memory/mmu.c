@@ -1317,8 +1317,7 @@ void debug_kernel_stack_integrity(const char* location)
     extern uint32_t __stack_bottom, __stack_top;
     task_t *task = task_current_local();
     
-    vaddr_t current_sp;
-    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+    vaddr_t current_sp = arm_current_sp();
     
     KDEBUG("=== STACK CHECK [%s] ===\n", location);
     
@@ -1429,7 +1428,7 @@ void check_memory_corruption(void)
 void dump_kernel_stack(int depth)
 {
     vaddr_t current_sp;
-    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+    current_sp = arm_current_sp();
     
     KDEBUG("=== KERNEL STACK DUMP ===\n");
     KDEBUG("SP: 0x%08X\n", current_sp);
@@ -1461,6 +1460,6 @@ void setup_svc_stack(void) {
     vaddr_t svc_sp = ((vaddr_t)(uintptr_t)&__svc_stack_top) & ~7u;
     KINFO("Configuring SVC stack at 0x%08X\n", svc_sp);
     
-    __asm__ volatile("mov sp, %0" : : "r"(svc_sp));
+    arm_set_sp(svc_sp);
     KINFO("SVC stack configured successfully\n");
 }

@@ -671,8 +671,7 @@ int sys_fork(void)
     task_t* parent = task_current_local();
     task_t* child;
 
-    uint32_t return_address;
-    __asm__ volatile("mov %0, lr" : "=r"(return_address));
+    uint32_t return_address = arm_current_lr();
 
     uint32_t spsr = read_spsr();
     uint32_t caller_mode = spsr & 0x1f;   // 0x10 = USR

@@ -145,6 +145,25 @@ INLINE void compiler_barrier(void)
     __asm__ volatile("" ::: "memory");
 }
 
+INLINE vaddr_t arm_current_sp(void)
+{
+    vaddr_t sp;
+    __asm__ volatile("mov %0, sp" : "=r"(sp));
+    return sp;
+}
+
+INLINE vaddr_t arm_current_lr(void)
+{
+    vaddr_t lr;
+    __asm__ volatile("mov %0, lr" : "=r"(lr));
+    return lr;
+}
+
+INLINE void arm_set_sp(vaddr_t sp)
+{
+    __asm__ volatile("mov sp, %0" : : "r"(sp) : "memory");
+}
+
 INLINE uint32_t arm_hvc_call(uint32_t function_id, uint32_t arg0, uint32_t arg1, uint32_t arg2)
 {
     register uint32_t r0 __asm__("r0") = function_id;
