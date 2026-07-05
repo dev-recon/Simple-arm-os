@@ -5,8 +5,8 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/user/userspace.c
- * Layer: Kernel / user execution support
+ * File: arch/arm32/user/userspace.c
+ * Layer: ARM32 / user ABI and user mapping support
  *
  * Responsibilities:
  * - Prepare and validate transitions into user programs.

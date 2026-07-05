@@ -97,7 +97,7 @@ KERNEL_OBJS = \
 	kernel/syscalls/file.o \
 	kernel/syscalls/shm.o \
 	kernel/syscalls/process_syscalls.o \
-	kernel/user/userspace.o
+	$(ARCH_DIR)/user/userspace.o
 
 # Tous les objets
 ALL_OBJS = $(KERNEL_OBJS) $(LIB_OBJ) $(TASK_OBJS)
