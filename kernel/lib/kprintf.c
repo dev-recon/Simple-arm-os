@@ -36,6 +36,7 @@ static char kmsg_buf[KMSG_BUF_SIZE];
 static uint32_t kmsg_head = 0;
 static uint32_t kmsg_count = 0;
 static DEFINE_SPINLOCK(kmsg_lock);
+static DEFINE_SPINLOCK(kprintf_lock);
 
 static void kmsg_putc(char c)
 {
@@ -91,6 +92,35 @@ static void kprintf_emit_char(char c)
 }
 
 #define putchar_kernel(c) kprintf_emit_char(c)
+
+static void kprintf_emit_string(const char *s)
+{
+    if (!s)
+        s = "(null)";
+    while (*s)
+        putchar_kernel(*s++);
+}
+
+static int kprintf_vlocked(const char *format, va_list args)
+{
+    char safe_buffer[1024];
+    unsigned int buf_pos = 0;
+    const char* p = format;
+
+    if (!format) {
+        kprintf_emit_string("(null format)");
+        return 0;
+    }
+
+    while (*p && buf_pos < (sizeof(safe_buffer) - 1)) {
+        /* Keep logs printable even when a corrupted string reaches kprintf. */
+        safe_buffer[buf_pos++] = ((unsigned char)*p > 127) ? '?' : *p;
+        p++;
+    }
+
+    safe_buffer[buf_pos] = '\0';
+    return kvprintf(safe_buffer, args);
+}
 
 /* Fonctions utilitaires internes */
 static int itoa_local(long val, char *str) {
@@ -411,33 +441,15 @@ int kvprintf(const char *format, va_list args) {
 /* Fonction principale kprintf */
 int kprintf(const char *format, ...) {
     va_list args;
+    unsigned long flags;
+    int result;
+
     va_start(args, format);
 
-       if (!format) {
-        uart_puts("(null format)");
-        return 0;
-    }
-    
-    /* Buffer temporaire pour assembler la chaine */
-    static char safe_buffer[1024];
-    unsigned int buf_pos = 0;
-    const char* p = format;
-    
-    while (*p && buf_pos < (sizeof(safe_buffer) - 1)) {
-        /* Filtrer les caracteres non-ASCII des la source */
-        if ((unsigned char)*p > 127) {
-            if (buf_pos < sizeof(safe_buffer) - 1) {
-                safe_buffer[buf_pos++] = '?';
-            }
-        } else {
-            safe_buffer[buf_pos++] = *p;
-        }
-        p++;
-    }
-    
-    safe_buffer[buf_pos] = '\0'; 
+    spin_lock_irqsave(&kprintf_lock, &flags);
+    result = kprintf_vlocked(format, args);
+    spin_unlock_irqrestore(&kprintf_lock, flags);
 
-    int result = kvprintf(safe_buffer, args);
     va_end(args);
     return result;
 }
@@ -450,8 +462,11 @@ void kboot_statusf(const char* status, const char* format, ...)
     if (!status || !format)
         return;
 
+    unsigned long flags;
+    spin_lock_irqsave(&kprintf_lock, &flags);
+
     va_start(args, format);
-    label_len = kvprintf(format, args);
+    label_len = kprintf_vlocked(format, args);
     va_end(args);
 
     while (label_len < 56) {
@@ -459,7 +474,11 @@ void kboot_statusf(const char* status, const char* format, ...)
         label_len++;
     }
 
-    kprintf(" %s\n", status);
+    putchar_kernel(' ');
+    kprintf_emit_string(status);
+    putchar_kernel('\n');
+
+    spin_unlock_irqrestore(&kprintf_lock, flags);
 }
 
 /* Fonctions de gestion du debug */

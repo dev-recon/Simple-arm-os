@@ -22,51 +22,11 @@
 .global current_task
 .global task_context_save_complete
 
-/* ---------------- task_context_t offsets ---------------- */
-    .equ TASK_CONTEXT_OFF,    48      /* offsetof(task_t, context), guarded in task.c */
-    .equ CTX_R0,              0      /* r0 */
-    .equ CTX_R1,              4
-    .equ CTX_R2,              8
-    .equ CTX_R3,             12
-    .equ CTX_R4,             16
-    .equ CTX_R5,             20
-    .equ CTX_R6,             24
-    .equ CTX_R7,             28
-    .equ CTX_R8,             32
-    .equ CTX_R9,             36
-    .equ CTX_R10,            40
-    .equ CTX_R11,            44
-    .equ CTX_R12,            48
-    .equ CTX_SP,             52
-    .equ CTX_LR,             56
-    .equ CTX_PC,             60
-    .equ CTX_CPSR,           64
-    .equ CTX_FIRST,          68      /* is_first_run */
-    .equ CTX_TTBR0,          72
-    .equ CTX_ASID,           76
-    .equ CTX_SPSR,           80      /* spsr_svc, if used */
-    .equ CTX_RET_TO_USER,    84      /* returns_to_user */
-    .equ CTX_USR_R0,         88
-    .equ CTX_USR_R1,         92
-    .equ CTX_USR_R2,         96
-    .equ CTX_USR_R3,        100
-    .equ CTX_USR_R4,        104
-    .equ CTX_USR_R5,        108
-    .equ CTX_USR_R6,        112
-    .equ CTX_USR_R7,        116
-    .equ CTX_USR_R8,        120
-    .equ CTX_USR_R9,        124
-    .equ CTX_USR_R10,       128
-    .equ CTX_USR_R11,       132
-    .equ CTX_USR_R12,       136
-    .equ CTX_USR_SP,        140
-    .equ CTX_USR_LR,        144
-    .equ CTX_USR_PC,        148
-    .equ CTX_USR_CPSR,      152
-    .equ CTX_SVC_SP_TOP,    156
-    .equ CTX_SVC_SP,        160
-    .equ CTX_SVC_LR_SAVED,  164
-    .equ CTX_SIZE,          168
+/*
+ * Generated from kernel/asm-offsets.c. Keep task_context_t layout changes in C;
+ * assembly consumes the generated constants.
+ */
+.include "asm-offsets.h"
 
 
 /*
@@ -345,5 +305,5 @@ __first_run_user:
 .section .rodata
 task_switch_info:
     .ascii "ARM32 Task Switch v1.0 - Cortex-A15 Optimized\0"
-    .ascii "Context size: 68 bytes\0"
+    .ascii "Context size: generated from task_context_t\0"
     .ascii "Supports: Full context save/restore\0"

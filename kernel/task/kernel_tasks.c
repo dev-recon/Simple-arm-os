@@ -138,7 +138,7 @@ void system_monitor_task(void* arg)
     (void)arg;
     
     /* Verification de la stack des le debut */
-    uint32_t current_sp;
+    vaddr_t current_sp;
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
     //KINFO("System monitor task started, SP=0x%08X\n", current_sp);
     
@@ -380,7 +380,7 @@ void minimal_test_func(void* arg)
         KINFO("- Test task iteration %d\n", i);
         
         /* Test de l'integrite de la stack */
-        uint32_t current_sp;
+        vaddr_t current_sp;
         __asm__ volatile("mov %0, sp" : "=r"(current_sp));
         KINFO("- Current SP in task: 0x%08X\n", current_sp);
         

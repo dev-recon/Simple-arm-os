@@ -44,12 +44,12 @@
 #define CONTEXTIDR_ASID_MASK ASID_MASK
 
 /* Page directories séparés avec adresses fixes alignées 16KB */
-static uint32_t kernel_page_dir[4096] __attribute__((section(".data"), aligned(16384)));  /* TTBR1 */
-static uint32_t kernel_ttbr0[4096] __attribute__((section(".data"), aligned(16384)));  /* TTBR1 */; /* TTBR0 */
+static l1_entry_t kernel_page_dir[4096] __attribute__((section(".data"), aligned(16384)));  /* TTBR1 */
+static l1_entry_t kernel_ttbr0[4096] __attribute__((section(".data"), aligned(16384)));  /* TTBR1 */; /* TTBR0 */
 
 /* Pointeurs globaux */
-uint32_t* kernel_pgdir = kernel_page_dir;   /* TTBR1 - Espace noyau */
-uint32_t* ttbr0_pgdir = kernel_ttbr0;   /* TTBR0 - Espace noyau */
+pgdir_cpu_t kernel_pgdir = kernel_page_dir;   /* TTBR1 - Espace noyau */
+pgdir_cpu_t ttbr0_pgdir = kernel_ttbr0;   /* TTBR0 - Espace noyau */
 
 /* Gestion ASID */
 static uint32_t current_asid = ASID_KERNEL;
@@ -67,12 +67,12 @@ uint32_t get_current_asid(void);
 static void setup_ttbr_split(void);
 static void setup_kernel_space(void);
 static void setup_user_template(void);
-static void map_kernel_mmio_alias(uint32_t vaddr, uint32_t paddr);
-static bool is_valid_vaddr(uint32_t vaddr);
-uint32_t allocate_l2_page(bool is_kernel);
-void check_address_content(uint32_t phys_addr, const char* step);
-static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
-                                   uint32_t phys_addr, uint32_t vma_flags,
+static void map_kernel_mmio_alias(vaddr_t vaddr, paddr_t paddr);
+static bool is_valid_vaddr(vaddr_t vaddr);
+paddr_t allocate_l2_page(bool is_kernel);
+void check_address_content(paddr_t phys_addr, const char* step);
+static int map_user_page_with_perm(pgdir_t pgdir, vaddr_t vaddr,
+                                   paddr_t phys_addr, uint32_t vma_flags,
                                    uint32_t asid, bool writable);
 
 static inline uint32_t asid_hw(uint32_t asid)
@@ -93,6 +93,18 @@ static inline uint32_t asid_make(uint32_t generation, uint32_t hw_asid)
 static inline bool asid_hw_reserved(uint32_t hw_asid)
 {
     return hw_asid == 0 || hw_asid == ASID_KERNEL;
+}
+
+static inline pgdir_cpu_t pgdir_cpu_view(pgdir_t pgdir)
+{
+    vaddr_t addr = (vaddr_t)pgdir;
+
+    if (virt_in_direct_map(addr))
+        return (pgdir_cpu_t)pgdir;
+    if (phys_in_direct_map((paddr_t)addr))
+        return (pgdir_cpu_t)phys_to_virt((paddr_t)addr);
+
+    return (pgdir_cpu_t)pgdir;
 }
 
 static void asid_reserve_special(void)
@@ -136,7 +148,7 @@ static uint32_t user_page_flags(uint32_t vma_flags, bool writable)
     return page_flags;
 }
 
-uint32_t* get_user_pte(uint32_t* pgdir, uint32_t vaddr)
+pte_ptr_t get_user_pte(pgdir_t pgdir, vaddr_t vaddr)
 {
     if (!pgdir || !is_valid_vaddr(vaddr) || vaddr >= 0x40000000 ||
         (vaddr & (PAGE_SIZE - 1))) {
@@ -145,20 +157,21 @@ uint32_t* get_user_pte(uint32_t* pgdir, uint32_t vaddr)
 
     uint32_t l1_index = get_L1_index(vaddr);
     uint32_t l2_index = L2_INDEX(vaddr);
-    uint32_t l1_entry = pgdir[l1_index];
+    pgdir_cpu_t pgdir_v = pgdir_cpu_view(pgdir);
+    l1_entry_t l1_entry = pgdir_v[l1_index];
 
     if ((l1_entry & 0x3) != 0x1) {
         return NULL;
     }
 
-    uint32_t* l2_table = (uint32_t *)(l1_entry & 0xFFFFFC00);
+    l2_table_t l2_table = (l2_table_t)phys_to_virt((paddr_t)(l1_entry & 0xFFFFFC00));
     return &l2_table[l2_index];
 }
 
-static int update_user_pte(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr,
+static int update_user_pte(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr,
                            uint32_t vma_flags, uint32_t asid, bool writable)
 {
-    uint32_t* pte = get_user_pte(pgdir, vaddr);
+    pte_ptr_t pte = get_user_pte(pgdir, vaddr);
     if (!pte || ((*pte & PTE_TYPE_MASK) == PTE_TYPE_FAULT)) {
         return -ENOENT;
     }
@@ -196,16 +209,9 @@ void setup_kernel_asid_context(void)
     //    panic("Cannot allocate physical page for TTBR0 table");
    // }
     
-    //uint32_t ttbr0_phys_addr = (uint32_t)ttbr0_phys_page;
-    
-    //KDEBUG("TTBR0 table physical address: 0x%08X\n", ttbr0_phys_addr);
-    
     /* Vérifier l'alignement 4KB requis pour les tables de pages ARM */
     //if (ttbr0_phys_addr & 0xFFF) {
          /* Forcer l'alignement si nécessaire */
-        //uint32_t aligned_addr = (ttbr0_phys_addr + 0xFFF) & ~0xFFF;
-        //uint32_t aligned_addr = (ttbr0_phys_addr + 0x3FFF) & ~0x3FFF;
-
         //KDEBUG("  Forced alignment: 0x%08X -> 0x%08X\n", ttbr0_phys_addr, aligned_addr);
         
         /* Vérifier que l'adresse alignée est dans la zone allouée */
@@ -292,7 +298,7 @@ void setup_kernel_asid_context(void)
     KDEBUG("  Ready to handle userspace virtual addresses < 0x40000000\n");
 }
 
-void dump_l1( uint32_t va) {
+void dump_l1(vaddr_t va) {
     //uint32_t N = 2; // tu l'as déjà
     //uint32_t split = get_split_boundary();
     uint32_t idx = get_L1_index(va);
@@ -309,7 +315,7 @@ void dump_l1( uint32_t va) {
 uint32_t get_optimal_ttbcr_n(void)
 {
     extern uint32_t __start;
-    uint32_t kernel_start = (uint32_t)&__start;
+    vaddr_t kernel_start = (vaddr_t)(uintptr_t)&__start;
     
     // Déterminer le split optimal basé sur où se trouve le noyau
     if (kernel_start >= 0xC0000000) return 2;  // N=2: split 3GB (noyau à 3GB+)
@@ -321,7 +327,7 @@ uint32_t get_optimal_ttbcr_n(void)
 }
 
 
-uint32_t get_split_boundary(void)
+vaddr_t get_split_boundary(void)
 {
     int n = 2;
     switch(n) {
@@ -583,7 +589,7 @@ KDEBUG("All checks passed, proceeding with MMU activation...\n");
 
 
 
-static void map_kernel_mmio_alias(uint32_t vaddr, uint32_t paddr)
+static void map_kernel_mmio_alias(vaddr_t vaddr, paddr_t paddr)
 {
     uint32_t index = get_L1_index(vaddr);
 
@@ -608,12 +614,14 @@ static void map_kernel_mmio_alias(uint32_t vaddr, uint32_t paddr)
 
 static void setup_kernel_space(void)
 {
-    uint32_t split_boundary = get_split_boundary();  // 0x40000000 avec N=2
+    vaddr_t split_boundary = get_split_boundary();  // 0x40000000 avec N=2
     uint64_t ram_end = (uint64_t)VIRT_RAM_START + get_kernel_memory_size();
     if (ram_end > 0x100000000ULL) {
         ram_end = 0x100000000ULL;
     }
     uint32_t mapped_sections = 0;
+    uint32_t mapped_identity = 0;
+    uint32_t mapped_direct = 0;
     uint32_t mapped_low = 0;
     uint32_t mapped_devices = 0;
 
@@ -631,7 +639,7 @@ static void setup_kernel_space(void)
 
 
     // 1. Mapper TOUTE la zone basse (0-1GB) en identity mapping dans TTBR0
-     for (uint32_t addr = 0; addr < split_boundary; addr += 0x100000) {
+     for (vaddr_t addr = 0; addr < split_boundary; addr += 0x100000) {
         uint32_t index = get_L1_index(addr);  // Index 0-1023
         //kernel_page_dir[index] = addr | 0xC0E;
         ttbr0_pgdir[index] = addr | 0xC0E;
@@ -641,7 +649,7 @@ static void setup_kernel_space(void)
     KINFO("Mapped low memory (TTBR0): 0x0 - 0x40000000 - %u sections\n", mapped_low);
 
     /* Map device space */
-    for (uint32_t addr = DEVICE_START; addr < DEVICE_END; addr += 0x100000) {
+    for (paddr_t addr = DEVICE_START; addr < DEVICE_END; addr += 0x100000) {
 
         uint32_t index = get_L1_index(addr);
         
@@ -672,32 +680,65 @@ static void setup_kernel_space(void)
 
     KINFO("Mapped devices sections (TTBR0-TTBR1): 0x0 - 0x40000000 - %u sections\n", mapped_devices);
     
-    /* Map kernel/RAM space - seulement les sections >= split_boundary pour TTBR1 */
-    for (uint64_t addr64 = split_boundary; addr64 < ram_end; addr64 += 0x100000) {
-        uint32_t addr = (uint32_t)addr64;
+    /*
+     * Keep only a small identity window for the current low-linked kernel and
+     * early boot metadata.  General RAM is accessed through the direct map
+     * below; do not extend this back to all RAM.
+     */
+    uint64_t identity_end = KERNEL_BOOT_IDENTITY_END;
+    if (identity_end > ram_end) {
+        identity_end = ram_end;
+    }
 
-                // TTBR1 pointe sur &kernel_page_dir[1024], donc :
-        // - Index 0 de TTBR1 = kernel_page_dir[1024] = adresse 0x40000000
-        // - Index 1 de TTBR1 = kernel_page_dir[1025] = adresse 0x40100000
+    for (uint64_t addr64 = split_boundary; addr64 < identity_end; addr64 += 0x100000) {
+        vaddr_t addr = (vaddr_t)addr64;
         uint32_t ttbr1_index = get_L1_index(addr);
 
-        /* Skip la zone réservée aux mappings temporaires */
-        if (addr >= TEMP_MAPPING_START && addr < TEMP_MAPPING_END) {
-            continue;
-        }
-       
-        kernel_page_dir[ttbr1_index] = addr |           
+        kernel_page_dir[ttbr1_index] = addr |
                         0x00000002 |      /* Section bit */
                         0x00000C00 |      /* AP[11:10] = 11 (Kernel RW) */
                         0x00000004 |      /* C - Cacheable */
                         0x00000008;       /* B - Bufferable */
 
+        mapped_identity++;
+        mapped_sections++;
+    }
+
+    /*
+     * Explicit RAM direct map:
+     *   KERNEL_DIRECT_MAP_BASE + (paddr - VIRT_RAM_START) -> paddr
+     */
+    uint64_t direct_phys_end = ram_end;
+    uint64_t direct_max_phys = (uint64_t)VIRT_RAM_START + KERNEL_DIRECT_MAP_SIZE;
+    if (direct_phys_end > direct_max_phys) {
+        direct_phys_end = direct_max_phys;
+        KWARN("MMU: direct map truncated RAM above 0x%08X\n", (uint32_t)direct_phys_end);
+    }
+
+    for (uint64_t paddr64 = VIRT_RAM_START; paddr64 < direct_phys_end; paddr64 += 0x100000) {
+        paddr_t paddr = (paddr_t)paddr64;
+        vaddr_t vaddr = phys_to_virt(paddr);
+        uint32_t ttbr1_index = get_L1_index(vaddr);
+
+        if (vaddr >= TEMP_MAPPING_START && vaddr < TEMP_MAPPING_END) {
+            continue;
+        }
+
+        kernel_page_dir[ttbr1_index] = paddr |
+                        0x00000002 |      /* Section bit */
+                        0x00000C00 |      /* AP[11:10] = 11 (Kernel RW) */
+                        0x00000010 |      /* XN: direct-map RAM is data */
+                        0x00000004 |      /* C - Cacheable */
+                        0x00000008;       /* B - Bufferable */
+
+        mapped_direct++;
         mapped_sections++;
     }
     
-    //kprintf("MMU: Kernel RAM sections mapped: %u\n", mapped_sections);
-
-    KINFO("MMU: Kernel RAM sections mapped before temp area: %u\n", mapped_sections);
+    KINFO("MMU: Boot identity RAM sections mapped: %u (0x%08X-0x%08X)\n",
+          mapped_identity, split_boundary, (uint32_t)identity_end);
+    KINFO("MMU: Direct-map RAM sections mapped: %u (VA 0x%08X-0x%08X)\n",
+          mapped_direct, KERNEL_DIRECT_MAP_BASE, KERNEL_DIRECT_MAP_END);
 
     /*
      * Alias MMIO prives dans TTBR1. Ils sont additifs pour l'instant:
@@ -722,11 +763,12 @@ static void setup_ttbr_split(void)
 {
     /* Configuration TTBCR pour split à 2GB */
     uint32_t ttbcr =  get_optimal_ttbcr_n();  /* N=1: 2GB split */
-    uint32_t boundary = get_split_boundary();
+    vaddr_t boundary = get_split_boundary();
 
     KINFO("MMU: Auto-detected split N=%u, boundary=0x%08X\n", ttbcr, boundary);
     KINFO("MMU: Kernel at 0x%08X -> TTBR%u space\n", 
-        (uint32_t)&__start, ((uint32_t)&__start >= boundary) ? 1 : 0);
+        (vaddr_t)(uintptr_t)&__start,
+        ((vaddr_t)(uintptr_t)&__start >= boundary) ? 1 : 0);
     
     //kprintf("MMU: Configuring TTBCR for 2GB split (N=%d)\n", TTBCR_N_SPLIT_2GB);
     
@@ -887,11 +929,11 @@ uint32_t get_current_asid(void)
 #define TTBR_S     (1u<<1)
 #define TTBR_RGN_WBWA (0b01u<<3)     // RGN[4:3]=01
 #define TTBR_IRGN_WBWA (1u<<6)       // IRGN[6]=1, IRGN[0]=0 → 01
-static inline uint32_t ttbr_attr_wbwa_share(uint32_t base){
+static inline uint32_t ttbr_attr_wbwa_share(paddr_t base){
     return (base & 0xFFFFC000u) | TTBR_S | TTBR_RGN_WBWA | TTBR_IRGN_WBWA;
 }
 
-void switch_address_space(uint32_t* pgdir)
+void switch_address_space(pgdir_t pgdir)
 {
     if (!pgdir) {
         KERROR("switch_address_space: NULL pgdir\n");
@@ -907,7 +949,7 @@ void switch_address_space(uint32_t* pgdir)
     //KDEBUG("");    // FIX IT
     
     // Charger TTBR0 (base + attributs WBWA + Shareable)
-    uint32_t ttbr0 = ttbr_attr_wbwa_share((uint32_t)pgdir);
+    uint32_t ttbr0 = ttbr_attr_wbwa_share((paddr_t)pgdir);
 
     /* Changer seulement TTBR0 */
     set_ttbr0(ttbr0);
@@ -915,7 +957,7 @@ void switch_address_space(uint32_t* pgdir)
 }
 
 /* Nouvelle fonction pour switch avec ASID */
-void switch_address_space_with_asid(uint32_t* pgdir, uint32_t asid)
+void switch_address_space_with_asid(pgdir_t pgdir, uint32_t asid)
 {
     if (!pgdir) {
         KERROR("switch_address_space_with_asid: NULL pgdir\n");
@@ -968,15 +1010,20 @@ uint32_t vm_get_current_asid(void)
 }
 
 /* Reste des fonctions inchangées... */
-static bool is_valid_vaddr(uint32_t vaddr)
+static bool is_valid_vaddr(vaddr_t vaddr)
 {
-    /* RAM kernel/user pour machine virt */
-    if (vaddr >= VIRT_RAM_START && vaddr < (uint32_t)VIRT_RAM_END) {
+    /* Current low-linked kernel and early boot metadata identity window. */
+    if (vaddr >= VIRT_RAM_START && vaddr < KERNEL_BOOT_IDENTITY_END) {
+        return true;
+    }
+
+    /* Kernel direct-map RAM window. */
+    if (virt_in_direct_map(vaddr)) {
         return true;
     }
     
     /* Devices/peripherals pour machine virt */
-    if (vaddr >= DEVICE_START && vaddr < (uint32_t)DEVICE_END) {
+    if (vaddr >= DEVICE_START && vaddr < DEVICE_END) {
         return true;
     }
 
@@ -1000,7 +1047,7 @@ void map_user_stack(void)
     
     /* Lire le TTBR0 actuel (espace utilisateur) */
     uint32_t ttbr0 = get_ttbr0();
-    uint32_t* page_dir = (uint32_t*)(ttbr0 & 0xFFFFC000);
+    pgdir_cpu_t page_dir = pgdir_cpu_view((pgdir_t)(ttbr0 & 0xFFFFC000));
     
     if (!page_dir) {
         KERROR("MMU: No valid user page directory\n");
@@ -1009,7 +1056,7 @@ void map_user_stack(void)
     
     /* Mapper la pile utilisateur section par section (1MB each) dans TTBR0 */
     uint32_t mapped_stack = 0;
-    for (uint32_t addr = USER_STACK_BOTTOM; addr < USER_STACK_TOP; addr += 0x100000) {
+    for (vaddr_t addr = USER_STACK_BOTTOM; addr < USER_STACK_TOP; addr += 0x100000) {
         /* Vérifier que c'est dans l'espace TTBR0 (<2GB) */
         if (addr >= 0x40000000) {
             KERROR("MMU: User stack address in kernel space: 0x%08X\n", addr);
@@ -1019,7 +1066,7 @@ void map_user_stack(void)
         uint32_t index = get_L1_index(addr);
         
         /* Calculer l'adresse physique dans la RAM basse */
-        uint32_t phys_addr = VIRT_RAM_START + 0x10000000 + (addr - USER_STACK_BOTTOM);
+        paddr_t phys_addr = VIRT_RAM_START + 0x10000000 + (addr - USER_STACK_BOTTOM);
         
         /* Creer l'entree de section pour utilisateur */
         page_dir[index] = phys_addr |          /* Physical address */
@@ -1038,7 +1085,7 @@ void map_user_stack(void)
 }
 
 /* Fonctions inchangées du code original... */
-uint32_t allocate_l2_page(bool is_kernel) {
+paddr_t allocate_l2_page(bool is_kernel) {
     // Allouer une nouvelle table L2
     void* l2_page = NULL ;
     (void)is_kernel;
@@ -1059,7 +1106,7 @@ uint32_t allocate_l2_page(bool is_kernel) {
     //check_address_content(0x48212000, "In allocate_l2_page, before map_temp_page");
     
     // Mapper temporairement pour initialiser
-    uint32_t l2_temp = map_temp_page((uint32_t)l2_page);
+    vaddr_t l2_temp = map_temp_page((paddr_t)l2_page);
     //uint32_t l2_temp = (uint32_t)l2_page;
     if (l2_temp == 0) {
         KERROR("map_user_page: Failed to map L2 table temporarily\n");
@@ -1075,36 +1122,36 @@ uint32_t allocate_l2_page(bool is_kernel) {
     
     //KDEBUG("map_user_page: Created L2 table at phys 0x%08X\n", l2_page);
 
-    return (uint32_t)l2_page;
+    return (paddr_t)l2_page;
 }
 
-void check_address_content(uint32_t phys_addr, const char* step) {
+void check_address_content(paddr_t phys_addr, const char* step) {
     KDEBUG("check_address_content [%s]: ***********************************************************************\n", step);
-    uint8_t* check = (uint8_t*)map_temp_page((uint32_t)phys_addr);
+    uint8_t* check = (uint8_t*)map_temp_page(phys_addr);
     KDEBUG("check_address_content: %02X %02X %02X %02X\n", check[0], check[1], check[2], check[3]);
     hexdump(check,8);
     unmap_temp_page(check);
     KDEBUG("check_address_content [%s]: ***********************************************************************\n", step);
 }
 
-int map_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid)
+int map_user_page(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid)
 {
     return map_user_page_with_perm(pgdir, vaddr, phys_addr, vma_flags, asid, true);
 }
 
-int map_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid)
+int map_user_page_readonly(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid)
 {
     return map_user_page_with_perm(pgdir, vaddr, phys_addr, vma_flags, asid, false);
 }
 
-int remap_user_page(uint32_t* pgdir, uint32_t vaddr, uint32_t phys_addr, uint32_t vma_flags, uint32_t asid)
+int remap_user_page(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid)
 {
     return update_user_pte(pgdir, vaddr, phys_addr, vma_flags, asid, true);
 }
 
-int set_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
+int set_user_page_readonly(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid)
 {
-    uint32_t* pte = get_user_pte(pgdir, vaddr);
+    pte_ptr_t pte = get_user_pte(pgdir, vaddr);
     if (!pte || ((*pte & PTE_TYPE_MASK) == PTE_TYPE_FAULT)) {
         return -ENOENT;
     }
@@ -1116,9 +1163,9 @@ int set_user_page_readonly(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
     return 0;
 }
 
-int set_user_page_writable(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
+int set_user_page_writable(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid)
 {
-    uint32_t* pte = get_user_pte(pgdir, vaddr);
+    pte_ptr_t pte = get_user_pte(pgdir, vaddr);
     if (!pte || ((*pte & PTE_TYPE_MASK) == PTE_TYPE_FAULT)) {
         return -ENOENT;
     }
@@ -1130,8 +1177,8 @@ int set_user_page_writable(uint32_t* pgdir, uint32_t vaddr, uint32_t asid)
     return 0;
 }
 
-static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
-                                   uint32_t phys_addr, uint32_t vma_flags,
+static int map_user_page_with_perm(pgdir_t pgdir, vaddr_t vaddr,
+                                   paddr_t phys_addr, uint32_t vma_flags,
                                    uint32_t asid, bool writable)
 {
     if (!pgdir || !is_valid_vaddr(vaddr)) {
@@ -1158,15 +1205,17 @@ static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
 
     uint32_t l1_index = get_L1_index(vaddr);
     uint32_t l2_index = L2_INDEX(vaddr);
-    uint32_t* l1_entry = &pgdir[l1_index];
+    pgdir_cpu_t pgdir_v = pgdir_cpu_view(pgdir);
+    l1_entry_t* l1_entry = &pgdir_v[l1_index];
     uint32_t l1_type = *l1_entry & 0x3;
-    uint32_t* l2_table;
+    l2_table_t l2_table;
 
     if (l1_type == 0x0) {
-        uint32_t l2_page = (uint32_t)allocate_page();
+        paddr_t l2_page = (paddr_t)allocate_page();
         if (!l2_page) {
             return -ENOMEM;
         }
+        memset((void *)phys_to_virt(l2_page), 0, PAGE_SIZE);
         *l1_entry = (l2_page & 0xFFFFFC00) | 0x01;
         asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(l1_entry) : "memory"); // DCCMVAC
         asm volatile("dsb ishst" ::: "memory");
@@ -1180,10 +1229,10 @@ static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
         return -EINVAL;
     }
 
-    l2_table = (uint32_t *)(*l1_entry & 0xFFFFFC00);
+    l2_table = (l2_table_t)phys_to_virt((paddr_t)(*l1_entry & 0xFFFFFC00));
     uint32_t existing_entry = l2_table[l2_index];
     if ((existing_entry & 0x3) != 0) {
-        uint32_t existing_paddr = existing_entry & 0xFFFFF000;
+        paddr_t existing_paddr = existing_entry & 0xFFFFF000;
         if (existing_paddr == phys_addr) {
             return 0;
         }
@@ -1205,11 +1254,11 @@ static int map_user_page_with_perm(uint32_t* pgdir, uint32_t vaddr,
     return 0;
 }
 
-uint32_t get_L1_index(uint32_t vaddr){
+uint32_t get_L1_index(vaddr_t vaddr){
     return vaddr >= get_split_boundary() ? KERNEL_L1_INDEX(vaddr) : vaddr >> 20 ; 
 }
 
-uint32_t get_physical_address(uint32_t* pgdir, uint32_t vaddr) {
+paddr_t get_physical_address(pgdir_t pgdir, vaddr_t vaddr) {
     return get_phys_addr_from_pgdir(pgdir, vaddr);
 }
 
@@ -1219,12 +1268,12 @@ void invalidate_tlb_all(void)
     tlb_shootdown_all();
 }
 
-void invalidate_tlb_page(uint32_t vaddr)
+void invalidate_tlb_page(vaddr_t vaddr)
 {
     tlb_shootdown_page(vaddr);
 }
 
-void invalidate_tlb_page_asid(uint32_t vaddr, uint32_t asid)
+void invalidate_tlb_page_asid(vaddr_t vaddr, uint32_t asid)
 {
     tlb_shootdown_page_asid(vaddr, asid);
 }
@@ -1247,12 +1296,12 @@ void set_ttbr0(uint32_t ttbr0)
     __asm__ volatile("isb");
 }
 
-uint32_t* get_kernel_pgdir(void)
+pgdir_cpu_t get_kernel_pgdir(void)
 {
     return kernel_pgdir;
 }
 
-uint32_t* get_kernel_ttbr0(void)
+pgdir_cpu_t get_kernel_ttbr0(void)
 {
     return ttbr0_pgdir;
 }
@@ -1362,7 +1411,7 @@ void debug_kernel_stack_integrity(const char* location)
     extern uint32_t __stack_bottom, __stack_top;
     task_t *task = task_current_local();
     
-    uint32_t current_sp;
+    vaddr_t current_sp;
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
     
     KDEBUG("=== STACK CHECK [%s] ===\n", location);
@@ -1370,8 +1419,8 @@ void debug_kernel_stack_integrity(const char* location)
     // Detecter si on est dans une pile de tache
     bool in_task_stack = false;
     if (task && task->stack_base) {
-        uint32_t task_stack_bottom = (uint32_t)task->stack_base;
-        uint32_t task_stack_top = task_stack_bottom + task->stack_size;
+        vaddr_t task_stack_bottom = (vaddr_t)(uintptr_t)task->stack_base;
+        vaddr_t task_stack_top = task_stack_bottom + task->stack_size;
         
         if (current_sp >= task_stack_bottom && current_sp <= task_stack_top) {
             in_task_stack = true;
@@ -1383,8 +1432,8 @@ void debug_kernel_stack_integrity(const char* location)
                    task->stack_size, task->stack_size / 1024);
             KDEBUG("Current SP:        0x%08X\n", current_sp);
             
-            uint32_t used = task_stack_top - current_sp;
-            uint32_t free = current_sp - task_stack_bottom;
+            uint32_t used = (uint32_t)(task_stack_top - current_sp);
+            uint32_t free = (uint32_t)(current_sp - task_stack_bottom);
             KDEBUG("OK SP in valid TASK range\n");
             KDEBUG("   Stack used:  %u bytes\n", used);
             KDEBUG("   Stack free:  %u bytes\n", free);
@@ -1399,9 +1448,9 @@ void debug_kernel_stack_integrity(const char* location)
     
     if (!in_task_stack) {
         // Verification pile kernel principale
-        uint32_t stack_bottom = (uint32_t)&__stack_bottom;
-        uint32_t stack_top = (uint32_t)&__stack_top;
-        uint32_t stack_size = stack_top - stack_bottom;
+        vaddr_t stack_bottom = (vaddr_t)(uintptr_t)&__stack_bottom;
+        vaddr_t stack_top = (vaddr_t)(uintptr_t)&__stack_top;
+        uint32_t stack_size = (uint32_t)(stack_top - stack_bottom);
         
         KDEBUG("CONTEXT: Kernel main stack\n");
         KDEBUG("Kernel stack bottom: 0x%08X\n", stack_bottom);
@@ -1411,13 +1460,13 @@ void debug_kernel_stack_integrity(const char* location)
         
         if (current_sp < stack_bottom) {
             KERROR("KO SP UNDERFLOW! SP below kernel stack bottom\n");
-            KERROR("   Underflow by: %u bytes\n", stack_bottom - current_sp);
+            KERROR("   Underflow by: %u bytes\n", (uint32_t)(stack_bottom - current_sp));
         } else if (current_sp >= stack_top) {
             KERROR("KO SP OVERFLOW! SP above kernel stack top\n"); 
-            KERROR("   Overflow by: %u bytes\n", current_sp - stack_top);
+            KERROR("   Overflow by: %u bytes\n", (uint32_t)(current_sp - stack_top));
         } else {
-            uint32_t used = stack_top - current_sp;
-            uint32_t free = current_sp - stack_bottom;
+            uint32_t used = (uint32_t)(stack_top - current_sp);
+            uint32_t free = (uint32_t)(current_sp - stack_bottom);
             KDEBUG("OK SP in valid KERNEL range\n");
             KDEBUG("   Stack used:  %u bytes\n", used);
             KDEBUG("   Stack free:  %u bytes\n", free);
@@ -1435,19 +1484,23 @@ void check_memory_corruption(void)
 {
     extern uint32_t __start, __end;
     extern uint32_t __bss_start, __bss_end;
+    vaddr_t kernel_start = (vaddr_t)(uintptr_t)&__start;
+    vaddr_t kernel_end = (vaddr_t)(uintptr_t)&__end;
+    vaddr_t bss_start = (vaddr_t)(uintptr_t)&__bss_start;
+    vaddr_t bss_end = (vaddr_t)(uintptr_t)&__bss_end;
     
     KDEBUG("=== MEMORY LAYOUT CHECK ===\n");
-    KDEBUG("Kernel start:  0x%08X\n", (uint32_t)&__start);
-    KDEBUG("Kernel end:    0x%08X\n", (uint32_t)&__end);
-    KDEBUG("BSS start:     0x%08X\n", (uint32_t)&__bss_start);
-    KDEBUG("BSS end:       0x%08X\n", (uint32_t)&__bss_end);
+    KDEBUG("Kernel start:  0x%08X\n", kernel_start);
+    KDEBUG("Kernel end:    0x%08X\n", kernel_end);
+    KDEBUG("BSS start:     0x%08X\n", bss_start);
+    KDEBUG("BSS end:       0x%08X\n", bss_end);
     
     /* Verifier que les adresses sont coherentes */
-    if ((uint32_t)&__start > (uint32_t)&__end) {
+    if (kernel_start > kernel_end) {
         KERROR("KO Kernel start > end!\n");
     }
     
-    if ((uint32_t)&__bss_start > (uint32_t)&__bss_end) {
+    if (bss_start > bss_end) {
         KERROR("KO BSS start > end!\n");
     }
     
@@ -1460,15 +1513,16 @@ void check_memory_corruption(void)
     extern size_t heap_size;
     
     if (heap_base) {
-        KDEBUG("Heap base:     0x%08X\n", (uint32_t)heap_base);
+        vaddr_t heap_start = (vaddr_t)(uintptr_t)heap_base;
+        KDEBUG("Heap base:     0x%08X\n", heap_start);
         KDEBUG("Heap size:     %u bytes\n", heap_size);
-        KDEBUG("Heap end:      0x%08X\n", (uint32_t)heap_base + heap_size);
+        KDEBUG("Heap end:      0x%08X\n", heap_start + heap_size);
     }
 }
 
 void dump_kernel_stack(int depth)
 {
-    uint32_t current_sp;
+    vaddr_t current_sp;
     __asm__ volatile("mov %0, sp" : "=r"(current_sp));
     
     KDEBUG("=== KERNEL STACK DUMP ===\n");
@@ -1477,10 +1531,10 @@ void dump_kernel_stack(int depth)
     uint32_t* stack_ptr = (uint32_t*)current_sp;
     
     for (int i = 0; i < depth && i < 16; i++) {
-        if ((uint32_t)(stack_ptr + i) >= 0x40000000 && 
-            (uint32_t)(stack_ptr + i) < 0x50000000) {
+        vaddr_t addr = (vaddr_t)(uintptr_t)(stack_ptr + i);
+        if (IS_KERNEL_ADDR(addr)) {
             KDEBUG("[SP+%02d] 0x%08X: 0x%08X\n", 
-                   i * 4, (uint32_t)(stack_ptr + i), stack_ptr[i]);
+                   i * 4, addr, stack_ptr[i]);
         } else {
             KDEBUG("[SP+%02d] INVALID ADDRESS\n", i * 4);
             break;
@@ -1499,7 +1553,7 @@ void setup_svc_stack(void) {
         return;
     }
     
-    uint32_t svc_sp = (uint32_t)&__svc_stack_top & ~7;
+    vaddr_t svc_sp = ((vaddr_t)(uintptr_t)&__svc_stack_top) & ~7u;
     KINFO("Configuring SVC stack at 0x%08X\n", svc_sp);
     
     __asm__ volatile("mov sp, %0" : : "r"(svc_sp));

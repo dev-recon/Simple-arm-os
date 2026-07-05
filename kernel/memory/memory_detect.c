@@ -22,15 +22,6 @@
 #include <kernel/debug_print.h>
 #include <kernel/kernel.h>
 
-
-
-static inline uint32_t fdt32_to_cpu(uint32_t x) {
-    return __builtin_bswap32(x);
-}
-
-/* Variable globale pour stocker l'adresse DTB */
-extern uint32_t dtb_address;
-
 uint32_t kernel_memory_size = 0;
 
 /* Fonctions de detection */
@@ -38,8 +29,8 @@ static uint32_t detect_memory_from_dtb(void* dtb_ptr);
 static cpu_memory_info_t get_cpu_memory_info(void);
 static void print_cpu_memory_features(void);
 static uint32_t detect_memory_intelligent(void);
-static uint32_t probe_memory_range(uint32_t start, uint32_t end);
-static bool test_memory_block(uint32_t addr, uint32_t size);
+static uint32_t probe_memory_range(paddr_t start, paddr_t end);
+static bool test_memory_block(paddr_t addr, uint32_t size);
 
 /* Stub pour compilation si necessaire */
 void init_memory_detection(void)
@@ -47,128 +38,9 @@ void init_memory_detection(void)
     KDEBUG("Memory detection initialized for machine virt\n");
 }
 
-bool fdt_node_matches(const char* node_name, const char* prefix) {
-    size_t len = strlen(prefix);
-    return (strncmp(node_name, prefix, len) == 0 &&
-            (node_name[len] == '@' || node_name[len] == '\0'));
-}
-
 uint32_t get_kernel_memory_size(void){
     return kernel_memory_size;
 }
-
-void* fdt_find_node_by_name(void* dtb_ptr, const char* node_name) {
-    struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
-    uint8_t* struct_block = (uint8_t*)dtb_ptr + fdt32_to_cpu(fdt->off_dt_struct);
-
-    uint32_t* token = (uint32_t*)struct_block;
-
-    while (1) {
-        uint32_t tag = fdt32_to_cpu(*token++);
-        switch (tag) {
-            case FDT_BEGIN_NODE: {
-                const char* name = (const char*)token;
-                size_t len = strlen(name);
-                KDEBUG("fdt_find_node_by_name: node %s\n", name);
-                if (fdt_node_matches(name, node_name)) {
-                    KDEBUG("fdt_find_node_by_name: node %s\n", name);
-                    return (void*)(token - 1);  // retour sur le tag FDT_BEGIN_NODE
-                }
-                token += (len + 4) / 4;
-                break;
-            }
-            case FDT_PROP: {
-                uint32_t len = fdt32_to_cpu(*token++);
-                token++;  // skip name_offset
-                token += (len + 3) / 4;
-                break;
-            }
-            case FDT_END_NODE:
-                break;
-            case FDT_NOP:
-                break;
-            case FDT_END:
-                return NULL;
-            default:
-                return NULL;
-        }
-    }
-}
-
-bool fdt_device_present(void* dtb_ptr, const char* partial_name) {
-    struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
-    uint8_t* struct_block = (uint8_t*)dtb_ptr + fdt32_to_cpu(fdt->off_dt_struct);
-
-    uint32_t* token = (uint32_t*)struct_block;
-
-    while (1) {
-        uint32_t tag = fdt32_to_cpu(*token++);
-        switch (tag) {
-            case FDT_BEGIN_NODE: {
-                const char* name = (const char*)token;
-                size_t len = strlen(name);
-                if (strstr(name, partial_name) != NULL) {
-                    return true;
-                }
-                token += (len + 4) / 4;
-                break;
-            }
-            case FDT_PROP: {
-                uint32_t len = fdt32_to_cpu(*token++);
-                token++;  // name_off
-                token += (len + 3) / 4;
-                break;
-            }
-            case FDT_END_NODE:
-                break;
-            case FDT_NOP:
-                break;
-            case FDT_END:
-                return false;
-            default:
-                return false;
-        }
-    }
-}
-
-void* fdt_get_property(void* dtb_ptr, void* node_ptr, const char* property_name, uint32_t* out_len) {
-    struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
-    uint8_t* strings_block = (uint8_t*)dtb_ptr + __builtin_bswap32(fdt->off_dt_strings);
-
-    uint32_t* token = (uint32_t*)node_ptr;
-    token++;  // Skip FDT_BEGIN_NODE tag
-    const char* node_name = (const char*)token;
-    token += (strlen(node_name) + 4) / 4;
-
-    while (1) {
-        uint32_t tag = __builtin_bswap32(*token++);
-        switch (tag) {
-            case FDT_PROP: {
-                uint32_t len = __builtin_bswap32(*token++);
-                uint32_t name_off = __builtin_bswap32(*token++);
-
-                const char* name = (const char*)(strings_block + name_off);
-                if (strcmp(name, property_name) == 0) {
-                    if (out_len) *out_len = len;
-                    return (void*)token;
-                }
-
-                token += (len + 3) / 4;
-                break;
-            }
-            case FDT_END_NODE:
-                return NULL;
-            case FDT_NOP:
-                break;
-            case FDT_END:
-                return NULL;
-            default:
-                return NULL;
-        }
-    }
-}
-
-
 
 /* Fonction principale exportee */
 uint32_t detect_memory(void)
@@ -217,28 +89,28 @@ static uint32_t detect_memory_from_dtb(void* dtb_ptr)
     struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
     
     /* Verifier la signature DTB */
-    if (__builtin_bswap32(fdt->magic) != 0xd00dfeed) {
+    if (!fdt_check_header(dtb_ptr)) {
         KDEBUG("Invalid DTB magic: 0x%08x\n", fdt->magic);
         return 0;
     }
     
     KINFO("Valid DTB found at %p\n", dtb_ptr);
-    KINFO("DTB size: %ld bytes\n", __builtin_bswap32(fdt->totalsize));
+    KINFO("DTB size: %u bytes\n", fdt32_to_cpu(fdt->totalsize));
 
     void* node = fdt_find_node_by_name(dtb_ptr, "memory");
     if (node) {
         uint32_t len;
         uint32_t* reg = (uint32_t*)fdt_get_property(dtb_ptr, node, "reg", &len);
         if (reg) {
-            uint64_t base64 = ((uint64_t)__builtin_bswap32(reg[0]) << 32) | __builtin_bswap32(reg[1]);
-            uint64_t size64 = ((uint64_t)__builtin_bswap32(reg[2]) << 32) | __builtin_bswap32(reg[3]);
+            uint64_t base64 = ((uint64_t)fdt32_to_cpu(reg[0]) << 32) | fdt32_to_cpu(reg[1]);
+            uint64_t size64 = ((uint64_t)fdt32_to_cpu(reg[2]) << 32) | fdt32_to_cpu(reg[3]);
 
             if ((base64 >> 32) != 0 || (size64 >> 32) != 0) {
                 KERROR("64-bit memory range not supported on ARMv7: base=0x%llx, size=0x%llx\n", base64, size64);
                 return -1;
             }
 
-            uint32_t base = (uint32_t)(base64 & 0xFFFFFFFF);
+            paddr_t base = (paddr_t)(base64 & 0xFFFFFFFF);
             uint32_t size = (uint32_t)(size64 & 0xFFFFFFFF);
 
             KINFO("Memory region: base=0x%08X, size=0x%08X\n", base, size);
@@ -313,7 +185,7 @@ static uint32_t detect_memory_intelligent(void)
     uint32_t max_detected = 0;
     
     for (i = 0; i < 3; i++) {
-        uint32_t end_addr = ranges[i].start + (ranges[i].size_mb * 1024 * 1024);
+        paddr_t end_addr = (paddr_t)ranges[i].start + (ranges[i].size_mb * 1024 * 1024);
         
         KDEBUG("Testing %s range: 0x%08X-0x%08X (%u MB)\n",
                 ranges[i].name, ranges[i].start, end_addr, ranges[i].size_mb);
@@ -347,15 +219,15 @@ static uint32_t detect_memory_intelligent(void)
     return max_detected;
 }
 
-static uint32_t probe_memory_range(uint32_t start, uint32_t end)
+static uint32_t probe_memory_range(paddr_t start, paddr_t end)
 {
     uint32_t total_size = 0;
-    uint32_t addr;
+    paddr_t addr;
     
     KDEBUG("Probing memory from 0x%08X to 0x%08X\n", start, end);
     
     /* Commencer juste apres le kernel pour eviter de corrompre le code en cours */
-    uint32_t safe_start = MAX(start, KERNEL_END + 0x100000); /* 1MB apres le kernel */
+    paddr_t safe_start = MAX(start, (paddr_t)KERNEL_END + 0x100000); /* 1MB apres le kernel */
     
     /* Tester par blocs de 16MB mais s'arreter AVANT de depasser */
     for (addr = safe_start; addr + 0x1000000 <= end; addr += 0x1000000) {
@@ -383,7 +255,7 @@ static uint32_t probe_memory_range(uint32_t start, uint32_t end)
     return total_size;
 }
 
-static bool test_memory_block(uint32_t addr, uint32_t size)
+static bool test_memory_block(paddr_t addr, uint32_t size)
 {
     /* eviter la zone kernel pour machine virt - utiliser les constantes */
     if (addr >= KERNEL_START && addr < KERNEL_END) {
@@ -400,8 +272,8 @@ static bool test_memory_block(uint32_t addr, uint32_t size)
     int i;
     
     for (i = 0; i < 4; i++) {
-        uint32_t test_addr = addr + test_offsets[i];
-        volatile uint32_t* ptr = (volatile uint32_t*)test_addr;
+        paddr_t test_addr = addr + test_offsets[i];
+        volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)test_addr;
         uint32_t original;
         
         /* Protection contre les exceptions - test simple */

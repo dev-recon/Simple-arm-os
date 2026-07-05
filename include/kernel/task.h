@@ -60,6 +60,7 @@ typedef struct kernel_lifecycle_stats {
     uint32_t zombies_reaped;
     uint32_t failed_forks;
     uint32_t scheduler_refused;
+    uint32_t scheduler_critical_repaired;
     uint32_t ready_queue_refused;
     uint32_t stack_pages_allocated;
     uint32_t stack_pages_freed;
@@ -68,6 +69,8 @@ typedef struct kernel_lifecycle_stats {
     uint32_t blocked_signal_wakeups;
     uint32_t tty_stale_waiters;
     uint32_t fs_wait_timeouts;
+    uint32_t sleep_deadline_wakeups;
+    uint32_t sleep_overshoots;
 } kernel_lifecycle_stats_t;
 
 extern volatile kernel_lifecycle_stats_t kernel_lifecycle_stats;
@@ -86,6 +89,7 @@ typedef enum sched_trace_event_type {
     SCHED_TRACE_READY_REFUSE_DEAD,
     SCHED_TRACE_READY_REFUSE_CORRUPT,
     SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING,
+    SCHED_TRACE_SLEEP_OVERSHOOT,
 } sched_trace_event_type_t;
 
 typedef struct sched_trace_event {
@@ -379,8 +383,8 @@ typedef struct {
     signal_state_t signals;
     
     /* Signal stack */
-    uint32_t signal_stack_base;
-    uint32_t signal_stack_size;
+    vaddr_t signal_stack_base;
+    size_t signal_stack_size;
 
     /* === AJOUT : Contexte waitpid === */
     /* Ces champs permettent de sauvegarder le contexte lors d'un blocage dans waitpid */
@@ -413,6 +417,7 @@ typedef struct task {
     void* stack_base;                       /* Base de la stack */
     void* stack_top;                        /* Sommet de la stack */
     uint32_t stack_size;                    /* Taille de la stack */
+    void* stack_phys_base;                  /* Physical base used to free stack pages */
     
     /* Fonction d'entree */
     void (*entry_point)(void* arg);         /* Point d'entree */
@@ -574,7 +579,7 @@ extern void get_and_save_usr_context(task_t* t);
      t->context.usr_r[i] = r0..r12 user (cf. wrapper SVC)
 */
 
-#define TASK_CONTEXT_OFF = offsetof(task_t, context);
+#define TASK_CONTEXT_OFF offsetof(task_t, context)
 
 /* Ajout des fonctions de gestion des interruptions ARM */
 static inline uint32_t disable_interrupts_save(void)

@@ -87,7 +87,7 @@ typedef struct {
     uint32_t l2_desc;
     int has_l2;
     uint32_t l1_index, l2_index;
-    uint32_t l1_base, l2_base;
+    paddr_t l1_base, l2_base;
 } pte_probe_t;
 
 typedef struct {
@@ -114,11 +114,11 @@ void dump_rtusr_snapshot(void) {
     uart_puts("\n");
 }
 
-static pte_probe_t probe_pte(uint32_t ttbr0, uint32_t va) {
+static pte_probe_t probe_pte(paddr_t ttbr0, vaddr_t va) {
     pte_probe_t p = {0};
-    uint32_t l1_base = ttbr0 & ~0x3FFFu;      // TTBR0 short-desc: 16KB align
+    paddr_t l1_base = ttbr0 & ~0x3FFFu;       // TTBR0 short-desc: 16KB align
     uint32_t l1_index = (va >> 20) & 0xFFF;   // 4KB entries, 1MB per entry
-    uint32_t *l1 = (uint32_t*)l1_base;
+    uint32_t *l1 = (uint32_t*)phys_to_virt(l1_base);
     uint32_t l1d = l1[l1_index];
 
     p.l1_base = l1_base;
@@ -131,9 +131,9 @@ static pte_probe_t probe_pte(uint32_t ttbr0, uint32_t va) {
         p.has_l2 = 0;
     } else if (l1_type == 0x1) {
         // Coarse page table -> L2
-        uint32_t l2_base = l1d & ~0x3FFu;     // bits [31:10]
+        paddr_t l2_base = l1d & ~0x3FFu;      // bits [31:10]
         uint32_t l2_index = (va >> 12) & 0xFF;
-        uint32_t *l2 = (uint32_t*)l2_base;
+        uint32_t *l2 = (uint32_t*)phys_to_virt(l2_base);
         uint32_t l2d = l2[l2_index];
         p.has_l2 = 1;
         p.l2_base = l2_base;
@@ -281,7 +281,7 @@ static inline bool exception_from_user(uint32_t spsr)
     return (spsr & ARM_CPSR_MODE) == ARM_MODE_USR;
 }
 
-static inline uint32_t pick_ttbr(uint32_t va, uint32_t ttbcr);
+static inline paddr_t pick_ttbr(vaddr_t va, uint32_t ttbcr);
 
 typedef struct {
     uint32_t spsr_abt;
@@ -298,24 +298,24 @@ typedef struct {
 #define COREDUMP_WORD_COUNT 8
 
 typedef struct {
-    uint32_t va;
-    uint32_t phys;
+    vaddr_t va;
+    paddr_t phys;
     uint32_t value;
     bool mapped;
 } coredump_word_t;
 
 typedef struct {
-    uint32_t va;
+    vaddr_t va;
     uint32_t ttbr;
     uint32_t ttbcr;
-    uint32_t l1_addr;
+    paddr_t l1_addr;
     uint32_t l1_desc;
-    uint32_t l2_base;
-    uint32_t l2_addr;
+    paddr_t l2_base;
+    paddr_t l2_addr;
     uint32_t l2_desc;
-    uint32_t section_pa;
+    paddr_t section_pa;
     uint32_t domain;
-    uint32_t l2_pa;
+    paddr_t l2_pa;
     uint32_t ap2;
     uint32_t ap;
     uint32_t xn;
@@ -356,9 +356,9 @@ static uint32_t coredump_count;
 static uint32_t coredump_seq;
 static task_t* coredumpd_task;
 
-static bool user_va_to_phys(task_t* task, uint32_t va, uint32_t* phys_out)
+static bool user_va_to_phys(task_t* task, vaddr_t va, paddr_t* phys_out)
 {
-    uint32_t phys;
+    paddr_t phys;
 
     if (!task || task->type != TASK_TYPE_PROCESS || !task->process ||
         !task->process->vm || !task->process->vm->pgdir) {
@@ -378,13 +378,13 @@ static bool user_va_to_phys(task_t* task, uint32_t va, uint32_t* phys_out)
     return true;
 }
 
-static void coredump_capture_words(coredump_word_t* words, task_t* task, uint32_t center)
+static void coredump_capture_words(coredump_word_t* words, task_t* task, vaddr_t center)
 {
-    uint32_t start = center >= 16 ? (center - 16) & ~3u : 0;
+    vaddr_t start = center >= 16 ? (center - 16) & ~3u : 0;
 
     for (uint32_t i = 0; i < COREDUMP_WORD_COUNT; i++) {
-        uint32_t va = start + i * 4;
-        uint32_t phys = 0;
+        vaddr_t va = start + i * 4;
+        paddr_t phys = 0;
 
         words[i].va = va;
         words[i].phys = 0;
@@ -393,26 +393,27 @@ static void coredump_capture_words(coredump_word_t* words, task_t* task, uint32_
 
         if (user_va_to_phys(task, va, &phys)) {
             words[i].phys = phys;
-            words[i].value = *(volatile uint32_t*)phys;
+            words[i].value = *(volatile uint32_t*)phys_to_virt(phys);
             words[i].mapped = true;
         }
     }
 }
 
-static void coredump_capture_walk(coredump_walk_t* walk, uint32_t va)
+static void coredump_capture_walk(coredump_walk_t* walk, vaddr_t va)
 {
     uint32_t ttbcr = get_ttbcr();
-    uint32_t ttbr  = pick_ttbr(va, ttbcr);
-    uint32_t l1_base = ttbr & ~0x3FFFu;
+    paddr_t ttbr  = pick_ttbr(va, ttbcr);
+    paddr_t l1_base = ttbr & ~0x3FFFu;
     uint32_t l1_idx  = (va >> 20) & 0xFFF;
-    uint32_t *l1_ptr = (uint32_t*)(l1_base + 4*l1_idx);
+    paddr_t l1_addr = l1_base + 4 * l1_idx;
+    uint32_t *l1_ptr = (uint32_t*)phys_to_virt(l1_addr);
     uint32_t l1 = *l1_ptr;
 
     memset(walk, 0, sizeof(*walk));
     walk->va = va;
     walk->ttbr = ttbr;
     walk->ttbcr = ttbcr;
-    walk->l1_addr = (uint32_t)l1_ptr;
+    walk->l1_addr = l1_addr;
     walk->l1_desc = l1;
 
     if ((l1 & 3) == 2) {
@@ -423,15 +424,16 @@ static void coredump_capture_walk(coredump_walk_t* walk, uint32_t va)
     }
 
     if ((l1 & 3) == 1) {
-        uint32_t l2_base = l1 & ~0x3FFu;
+        paddr_t l2_base = l1 & ~0x3FFu;
         uint32_t l2_idx  = (va >> 12) & 0xFF;
-        uint32_t *l2_ptr = (uint32_t*)(l2_base + 4*l2_idx);
+        paddr_t l2_addr = l2_base + 4 * l2_idx;
+        uint32_t *l2_ptr = (uint32_t*)phys_to_virt(l2_addr);
         uint32_t l2 = *l2_ptr;
         uint32_t l2_type = l2 & 3;
 
         walk->kind = 1;
         walk->l2_base = l2_base;
-        walk->l2_addr = (uint32_t)l2_ptr;
+        walk->l2_addr = l2_addr;
         walk->l2_desc = l2;
 
         if ((l2_type & 2) == 0) {
@@ -794,22 +796,22 @@ static user_fault_snapshot_t* user_fault_build_snapshot_on_svc_stack(task_t* tas
                                                                      const char* dump_path,
                                                                      uint32_t* svc_sp_out)
 {
-    uint32_t top;
-    uint32_t sp;
+    vaddr_t top;
+    vaddr_t sp;
     user_fault_snapshot_t* snap;
 
     if (!task || !task->stack_base || !task->stack_top) {
         return NULL;
     }
 
-    top = task->context.svc_sp_top ? task->context.svc_sp_top : (uint32_t)task->stack_top;
+    top = task->context.svc_sp_top ? (vaddr_t)task->context.svc_sp_top : (vaddr_t)(uintptr_t)task->stack_top;
     sp = (top - 512 - sizeof(user_fault_snapshot_t)) & ~7u;
 
-    if (sp <= (uint32_t)task->stack_base || sp >= (uint32_t)task->stack_top) {
+    if (sp <= (vaddr_t)(uintptr_t)task->stack_base || sp >= (vaddr_t)(uintptr_t)task->stack_top) {
         return NULL;
     }
 
-    snap = (user_fault_snapshot_t*)sp;
+    snap = (user_fault_snapshot_t*)(uintptr_t)sp;
     snap->spsr_abt = spsr_abt;
     snap->dfar = dfar;
     snap->dfsr = dfsr;
@@ -863,7 +865,7 @@ static void handle_user_fault_on_svc_stack(user_fault_snapshot_t* snap)
  * kernel stack for current_task.
  */
 __attribute__((noreturn, naked))
-static void user_fault_enter_svc_stack(user_fault_snapshot_t* snap, uint32_t svc_sp)
+static void user_fault_enter_svc_stack(user_fault_snapshot_t* snap, vaddr_t svc_sp)
 {
     (void)snap;
     (void)svc_sp;
@@ -878,24 +880,25 @@ static void user_fault_enter_svc_stack(user_fault_snapshot_t* snap, uint32_t svc
     );
 }
 
-static inline uint32_t pick_ttbr(uint32_t va, uint32_t ttbcr) {
+static inline paddr_t pick_ttbr(vaddr_t va, uint32_t ttbcr) {
     uint32_t N = ttbcr & 7;               /* split */
     if (N == 0) return get_ttbr0();
     uint32_t top = va >> (32-N);
     return top ? get_ttbr1() : get_ttbr0();
 }
 
-static void dump_l1_l2(uint32_t va) {
+static void dump_l1_l2(vaddr_t va) {
     uint32_t ttbcr = get_ttbcr();
-    uint32_t ttbr  = pick_ttbr(va, ttbcr);
-    uint32_t l1_base = ttbr & ~0x3FFFu;   /* 16KB aligned */
+    paddr_t ttbr  = pick_ttbr(va, ttbcr);
+    paddr_t l1_base = ttbr & ~0x3FFFu;   /* 16KB aligned */
     uint32_t l1_idx  = (va >> 20) & 0xFFF;
-    uint32_t *l1_ptr = (uint32_t*)(l1_base + 4*l1_idx);
+    paddr_t l1_addr = l1_base + 4 * l1_idx;
+    uint32_t *l1_ptr = (uint32_t*)phys_to_virt(l1_addr);
     uint32_t l1 = *l1_ptr;
 
     uart_puts("TTBR="); uart_put_hex(ttbr);
     uart_puts(" TTBCR="); uart_put_hex(ttbcr);
-    uart_puts(" L1@"); uart_put_hex((uint32_t)l1_ptr);
+    uart_puts(" L1@"); uart_put_hex(l1_addr);
     uart_puts(" = "); uart_put_hex(l1); uart_puts("\n");
 
     uint32_t l1_type = l1 & 3;
@@ -908,13 +911,14 @@ static void dump_l1_l2(uint32_t va) {
         return;
     }
     if (l1_type == 1 /*coarse L2 table*/) {
-        uint32_t l2_base = l1 & ~0x3FFu;        /* 1KB aligned */
+        paddr_t l2_base = l1 & ~0x3FFu;        /* 1KB aligned */
         uint32_t l2_idx  = (va >> 12) & 0xFF;
-        uint32_t *l2_ptr = (uint32_t*)(l2_base + 4*l2_idx);
+        paddr_t l2_addr = l2_base + 4 * l2_idx;
+        uint32_t *l2_ptr = (uint32_t*)phys_to_virt(l2_addr);
         uint32_t l2 = *l2_ptr;
 
         uart_puts("  L1: COARSE L2 @"); uart_put_hex(l2_base);
-        uart_puts("  L2@"); uart_put_hex((uint32_t)l2_ptr);
+        uart_puts("  L2@"); uart_put_hex(l2_addr);
         uart_puts(" = "); uart_put_hex(l2); uart_puts("\n");
 
         uint32_t l2_type = l2 & 3;
@@ -994,7 +998,7 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
      */
     fault_pc = lr_abt - (spsr_thumb(spsr_abt) ? 4u : 8u);
     if (exception_from_user(spsr_abt)) {
-        uint32_t svc_sp = 0;
+        vaddr_t svc_sp = 0;
         char dump_path[32];
         bool coredump_queued;
         user_fault_snapshot_t* snap;
@@ -1034,7 +1038,7 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
     /* Un petit dump de l’instruction fautive si mappée */
     uint32_t par = ats1cpr(fault_pc);
     if ((par & 1) == 0) {
-        uint32_t phys = (par & 0xFFFFF000) | (fault_pc & 0xFFF);
+        paddr_t phys = (par & 0xFFFFF000) | (fault_pc & 0xFFF);
         uart_puts("PC->PAR OK, phys="); uart_put_hex(phys); uart_puts("\n");
     } else {
         uart_puts("PC->PAR FAULT fs="); uart_put_hex((par >> 1) & 0x3F); uart_puts("\n");
@@ -1043,7 +1047,7 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
     /* Traduction de DFAR via PAR: confirme la cause réelle */
     par = ats1cpr(dfar);
     if ((par & 1) == 0) {
-        uint32_t phys = (par & 0xFFFFF000) | (dfar & 0xFFF);
+        paddr_t phys = (par & 0xFFFFF000) | (dfar & 0xFFF);
         uart_puts("DFAR->PAR OK, phys="); uart_put_hex(phys); uart_puts("\n");
     } else {
         uart_puts("DFAR->PAR FAULT fs="); uart_put_hex((par >> 1) & 0x3F); uart_puts("\n");
@@ -1111,7 +1115,7 @@ void data_abort_c_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint3
     /* Un petit dump de l’instruction fautive si mappée */
     uint32_t par = ats1cpr(fault_pc);
     if ((par & 1) == 0) {
-        uint32_t phys = (par & 0xFFFFF000) | (fault_pc & 0xFFF);
+        paddr_t phys = (par & 0xFFFFF000) | (fault_pc & 0xFFF);
         uart_puts("PC->PAR OK, phys="); uart_put_hex(phys); uart_puts("\n");
     } else {
         uart_puts("PC->PAR FAULT fs="); uart_put_hex((par >> 1) & 0x3F); uart_puts("\n");
@@ -1120,7 +1124,7 @@ void data_abort_c_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint3
     /* Traduction de DFAR via PAR: confirme la cause réelle */
     par = ats1cpr(dfar);
     if ((par & 1) == 0) {
-        uint32_t phys = (par & 0xFFFFF000) | (dfar & 0xFFF);
+        paddr_t phys = (par & 0xFFFFF000) | (dfar & 0xFFF);
         uart_puts("DFAR->PAR OK, phys="); uart_put_hex(phys); uart_puts("\n");
     } else {
         uart_puts("DFAR->PAR FAULT fs="); uart_put_hex((par >> 1) & 0x3F); uart_puts("\n");

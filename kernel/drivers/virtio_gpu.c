@@ -52,6 +52,10 @@
 #define VIRTIO_GPU_VQ_SIZE                     8
 #define VIRTIO_GPU_TIMEOUT_MS                  1000
 
+/* VirtIO MMIO interrupt status bits. */
+#define VIRTIO_GPU_INT_USED_RING               0x1u
+#define VIRTIO_GPU_INT_CONFIG                  0x2u
+
 typedef struct {
     uint32_t x;
     uint32_t y;
@@ -121,7 +125,7 @@ typedef struct {
 } __attribute__((packed)) virtio_gpu_resource_flush_t;
 
 typedef struct {
-    uint32_t phys;
+    paddr_t phys;
     uint32_t irq;
     volatile uint32_t *mmio;
     vq_legacy_t vq;
@@ -134,11 +138,6 @@ static virtio_gpu_state_t gpu = {0};
 static spinlock_t gpu_lock = SPINLOCK_INIT("virtio_gpu");
 static volatile bool gpu_busy = false;
 static task_t *gpu_owner = NULL;
-
-static inline uint32_t fdt32_to_cpu_gpu(uint32_t x)
-{
-    return __builtin_bswap32(x);
-}
 
 static struct vring_desc *gpu_desc_ptr(vq_legacy_t *vq, unsigned i)
 {
@@ -156,14 +155,14 @@ static struct vring_used *gpu_used_ptr(vq_legacy_t *vq)
     return (struct vring_used *)((uint8_t *)(uintptr_t)vq->va_used);
 }
 
-static void *gpu_alloc_dma_pages(size_t npages, uint32_t *out_pa)
+static void *gpu_alloc_dma_pages(size_t npages, paddr_t *out_pa)
 {
-    uint32_t pa = (uint32_t)allocate_pages(npages);
+    paddr_t pa = (paddr_t)allocate_pages(npages);
     if (!pa)
         return NULL;
     if (out_pa)
         *out_pa = pa;
-    return (void *)pa;
+    return (void *)phys_to_virt(pa);
 }
 
 static bool gpu_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
@@ -175,7 +174,7 @@ static bool gpu_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
                      ALIGN_UP(avail_sz, 2) +
                      ALIGN_UP(used_sz, VQ_ALIGN);
     size_t npages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint32_t pa_base = 0;
+    paddr_t pa_base = 0;
     uint8_t *va_base = gpu_alloc_dma_pages(npages, &pa_base);
     uint32_t off = 0;
 
@@ -208,80 +207,16 @@ static bool gpu_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
     return true;
 }
 
-static bool gpu_decode_reg(const uint32_t *reg, uint32_t len, uint32_t *out_phys)
+static bool gpu_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq)
 {
-    if (!reg || !out_phys)
-        return false;
-    if (len >= 16) {
-        if (fdt32_to_cpu_gpu(reg[0]) != 0)
-            return false;
-        *out_phys = fdt32_to_cpu_gpu(reg[1]);
-        return true;
-    }
-    if (len >= 8) {
-        *out_phys = fdt32_to_cpu_gpu(reg[0]);
-        return true;
-    }
-    return false;
-}
+    paddr_t phys = 0;
+    bool edge = true;
 
-static bool gpu_probe_from_dtb(uint32_t *out_phys, uint32_t *out_irq)
-{
-    void *dtb_ptr = (void *)dtb_address;
-    if (!dtb_ptr || !out_phys || !out_irq)
+    if (!fdt_find_virtio_mmio_device(VIRTIO_ID_GPU, &phys, out_irq, &edge))
         return false;
 
-    struct fdt_header *fdt = (struct fdt_header *)dtb_ptr;
-    if (fdt32_to_cpu_gpu(fdt->magic) != FDT_MAGIC)
-        return false;
-
-    uint8_t *struct_block = (uint8_t *)dtb_ptr + fdt32_to_cpu_gpu(fdt->off_dt_struct);
-    uint32_t *token = (uint32_t *)struct_block;
-
-    while (1) {
-        uint32_t tag = fdt32_to_cpu_gpu(*token++);
-        switch (tag) {
-        case FDT_BEGIN_NODE: {
-            void *node_ptr = (void *)(token - 1);
-            const char *name = (const char *)token;
-            size_t len = strlen(name);
-            token += (len + 4) / 4;
-
-            if (!fdt_node_matches(name, "virtio_mmio"))
-                break;
-
-            uint32_t reg_len = 0;
-            uint32_t *reg = (uint32_t *)fdt_get_property(dtb_ptr, node_ptr, "reg", &reg_len);
-            uint32_t phys = 0;
-            if (!gpu_decode_reg(reg, reg_len, &phys))
-                break;
-
-            volatile uint32_t *base = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
-            if (mmio_read32(base, VIRTIO_MMIO_MAGIC) != 0x74726976)
-                break;
-            if (mmio_read32(base, VIRTIO_MMIO_DEVICE_ID) != VIRTIO_ID_GPU)
-                break;
-
-            uint32_t index = (phys - VIRT_VIRTIO_BASE) / VIRT_VIRTIO_SIZE;
-            *out_phys = phys;
-            *out_irq = VIRT_VIRTIO_IRQ(index);
-            return true;
-        }
-        case FDT_PROP: {
-            uint32_t prop_len = fdt32_to_cpu_gpu(*token++);
-            token++;
-            token += (prop_len + 3) / 4;
-            break;
-        }
-        case FDT_END_NODE:
-        case FDT_NOP:
-            break;
-        case FDT_END:
-            return false;
-        default:
-            return false;
-        }
-    }
+    *out_phys = phys;
+    return true;
 }
 
 static int gpu_wait_used(uint16_t prev_used)
@@ -374,12 +309,12 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
 
     memset(resp, 0, resp_len);
 
-    desc0->addr = (uint64_t)(uint32_t)cmd;
+    desc0->addr = (uint64_t)virt_to_phys((vaddr_t)cmd);
     desc0->len = cmd_len;
     desc0->flags = VRING_DESC_F_NEXT;
     desc0->next = d1;
 
-    desc1->addr = (uint64_t)(uint32_t)resp;
+    desc1->addr = (uint64_t)virt_to_phys((vaddr_t)resp);
     desc1->len = resp_len;
     desc1->flags = VRING_DESC_F_WRITE;
     desc1->next = 0;
@@ -419,9 +354,15 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
 
     gpu.vq.last_used_idx = used->idx;
     invalidate_dcache_by_mva(resp, resp_len);
+
+    /*
+     * Only acknowledge the used-ring bit here. Acking the whole status word
+     * would silently consume config-change events (QEMU window resize),
+     * which virtio_gpu_check_resize() polls for separately.
+     */
     uint32_t irq_status = mmio_read32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_STATUS);
-    if (irq_status)
-        mmio_write32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_ACK, irq_status);
+    if (irq_status & VIRTIO_GPU_INT_USED_RING)
+        mmio_write32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_ACK, VIRTIO_GPU_INT_USED_RING);
     ret = 0;
 
 out:
@@ -492,7 +433,7 @@ static int gpu_attach_backing(void)
     gpu_fill_hdr(&req.cmd.hdr, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING);
     req.cmd.resource_id = VIRTIO_GPU_RESOURCE_ID;
     req.cmd.nr_entries = 1;
-    req.entry.addr = (uint64_t)(uint32_t)framebuffer_base;
+    req.entry.addr = (uint64_t)framebuffer_phys;
     req.entry.length = gpu.framebuffer_size;
     req.entry.padding = 0;
 
@@ -557,6 +498,39 @@ int virtio_gpu_flush_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t heigh
 int virtio_gpu_flush(void)
 {
     return virtio_gpu_flush_rect(0, 0, FB_WIDTH, FB_HEIGHT);
+}
+
+/*
+ * Poll and handle a display configuration change (QEMU window resize).
+ *
+ * The scanout resolution stays fixed at FB_WIDTHxFB_HEIGHT (the host scales
+ * the window); what a resize can disturb is the host-side scanout state.
+ * Re-asserting the scanout prepares the next full repaint. Must be called from
+ * task context (displayd): it submits synchronous GPU commands.
+ *
+ * Returns true when a config change was seen and handled; the caller should
+ * mark the whole framebuffer dirty so the next frame repaints everything.
+ */
+bool virtio_gpu_check_resize(void)
+{
+    uint32_t irq_status;
+
+    if (!gpu.initialized)
+        return false;
+
+    irq_status = mmio_read32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_STATUS);
+    if (!(irq_status & VIRTIO_GPU_INT_CONFIG))
+        return false;
+
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_ACK, VIRTIO_GPU_INT_CONFIG);
+
+    gpu_get_display_info();
+    if (gpu_set_scanout() < 0) {
+        KERROR("virtio_gpu: scanout re-assert failed after resize\n");
+        return false;
+    }
+
+    return true;
 }
 
 static void gpu_draw_text_px(uint32_t x, uint32_t y, const char *s,
@@ -646,7 +620,7 @@ bool virtio_gpu_is_initialized(void)
 
 bool virtio_gpu_init(void)
 {
-    uint32_t phys = 0;
+    paddr_t phys = 0;
     uint32_t irq = 0;
 
     memset(&gpu, 0, sizeof(gpu));

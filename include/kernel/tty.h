@@ -139,6 +139,12 @@ struct tty_struct {
     int last_signal_delivered;
     
     spinlock_t lock;
+    /*
+     * Serializes logical writes. The main lock protects ring-buffer state;
+     * this one keeps concurrent writers from interleaving a normal line one
+     * byte at a time on SMP.
+     */
+    spinlock_t write_lock;
 };
 
 /* c_iflag */

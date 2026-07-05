@@ -63,8 +63,10 @@ Important invariants:
 
 Counters to watch:
 
-- `sched-refuse`: currently non-zero under heavy stress. This should be split
-  later into real schedule refusals vs stale critical-section repairs.
+- `sched-refuse`: real scheduler entry refusals. This must stay explainable.
+- `sched-crit`: stale critical-section flag repairs. Any non-zero value means
+  a caller attempted to enter the scheduler while the per-CPU critical-section
+  guard was still set; investigate the source instead of treating it as normal.
 - `unintr-timeout`: should stay low and not increase while the system is idle.
 
 Keep the 1 ms quantum while hardening the kernel. It exposes races and critical
@@ -104,6 +106,24 @@ lps
 
 Until that matrix is boring, the release statement remains: stable on
 `SMP_CPUS=1`, SMP bring-up experimental.
+
+SMP shutdown invariant:
+
+- `/sbin/shutdown` must terminate user processes first, then park scheduler
+  participation on secondary CPUs before VFS sync/unmount and PSCI
+  `SYSTEM_OFF`.
+- Parked secondary CPUs keep interrupts enabled and wait in WFI so they can
+  still acknowledge kernel-scope TLB shootdowns during final cleanup.
+
+TLB shootdown invariants:
+
+- A CPU that publishes a TLB shootdown must wait for all targeted CPUs to ACK.
+  Continuing after a missed ACK is memory corruption by design.
+- Do not initiate TLB shootdown while holding `task_lock`; the remote CPU may
+  need scheduler/task state to reach or leave an interrupt-safe point. If a
+  future debug lock-owner facility exists, assert this rule there.
+- If a target CPU stops acknowledging after repeated SGI re-emissions, panic
+  instead of spinning forever.
 
 ## Notes From Scheduler Debt Fairness
 

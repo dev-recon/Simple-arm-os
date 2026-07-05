@@ -136,11 +136,11 @@ typedef enum { VIO_OK = 0, VIO_ERR = -1 } vio_ret_t;
 
 /* On étend ton vq_legacy_t pour tracking simpliste */
 typedef struct {
-    /* adresses physiques (guest physical) — 32 bits sur ARM 32 */
-    uint32_t pa_base;    /* base phys du vq (aligné queue_align) */
-    uint32_t pa_desc;
-    uint32_t pa_avail;
-    uint32_t pa_used;
+    /* Guest physical addresses used by the device DMA engine. */
+    paddr_t pa_base;
+    paddr_t pa_desc;
+    paddr_t pa_avail;
+    paddr_t pa_used;
 
     /* pointeurs virtuels utilisés par le kernel (uintptr_t pour être explicite) */
     uintptr_t va_base;
@@ -219,7 +219,7 @@ bool virtio_block_read_sector(uint32_t lba, uint8_t* buffer);
 bool virtio_block_write_sector(uint32_t lba, const uint8_t* buffer);
 void virtio_block_irq_handler(void);
 void virtio_block_comprehensive_test(void);
-bool virtio_blk_init_legacy(uint32_t base_addr);
+bool virtio_blk_init_legacy(vaddr_t base_addr);
 void read_sector0_and_print(void);
 int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer);
 int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer);

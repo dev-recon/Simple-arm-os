@@ -25,11 +25,13 @@
 #include <kernel/vfs.h>
 #include <kernel/signal.h>
 #include <kernel/timer.h>
+#include <kernel/smp.h>
 #include <asm/arm.h>
 
 #define PSCI_0_2_FN_SYSTEM_OFF 0x84000008u
 #define SHUTDOWN_TERM_GRACE_MS 200
 #define SHUTDOWN_KILL_GRACE_MS 100
+#define SHUTDOWN_SMP_PARK_GRACE_MS 1000
 
 static volatile bool shutdown_in_progress = false;
 
@@ -190,6 +192,29 @@ static void shutdown_drivers(void)
     kprintf("Shutdown: block device stopped\n");
 }
 
+static void shutdown_park_secondary_cpus(void)
+{
+    uint32_t deadline;
+
+    if (smp_possible_cpu_count() <= 1)
+        return;
+
+    kprintf("Shutdown: parking secondary CPUs\n");
+    smp_request_shutdown_park_secondary_cpus();
+
+    deadline = get_system_ticks() +
+               (SHUTDOWN_SMP_PARK_GRACE_MS * TIMER_FREQ + 999) / 1000;
+    while (!smp_shutdown_secondary_cpus_parked() &&
+           get_system_ticks() < deadline) {
+        task_sleep_ms(10);
+    }
+
+    if (!smp_shutdown_secondary_cpus_parked())
+        KERROR("Shutdown: secondary CPU park timeout\n");
+    else
+        kprintf("Shutdown: secondary CPUs parked\n");
+}
+
 static void psci_system_off(void) __attribute__((noreturn));
 
 static void psci_system_off(void)
@@ -221,6 +246,7 @@ void kernel_poweroff(void)
     kprintf("System shutdown requested\n");
 
     shutdown_processes();
+    shutdown_park_secondary_cpus();
     shutdown_drivers();
     disable_interrupts();
     kprintf("Shutdown: interrupts disabled\n");

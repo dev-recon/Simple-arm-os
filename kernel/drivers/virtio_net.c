@@ -165,7 +165,7 @@ typedef struct net_socket {
 } net_socket_t;
 
 typedef struct {
-    uint32_t phys;
+    paddr_t phys;
     uint32_t irq;
     volatile uint32_t *mmio;
     vq_legacy_t rx_vq;
@@ -215,11 +215,6 @@ typedef struct {
 } virtio_net_state_t;
 
 static virtio_net_state_t net = {0};
-
-static inline uint32_t fdt32_to_cpu_net(uint32_t x)
-{
-    return __builtin_bswap32(x);
-}
 
 static inline uint16_t net_bswap16(uint16_t x)
 {
@@ -329,8 +324,8 @@ static bool net_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
                      ALIGN_UP(avail_sz, 2) +
                      ALIGN_UP(used_sz, VQ_ALIGN);
     size_t npages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint32_t pa_base = (uint32_t)allocate_pages(npages);
-    uint8_t *va_base = (uint8_t *)pa_base;
+    paddr_t pa_base = (paddr_t)allocate_pages(npages);
+    uint8_t *va_base = pa_base ? (uint8_t *)phys_to_virt(pa_base) : NULL;
     uint32_t off = 0;
 
     if (!va_base)
@@ -362,61 +357,7 @@ static bool net_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
     return true;
 }
 
-static bool net_decode_reg(const uint32_t *reg, uint32_t len, uint32_t *out_phys)
-{
-    if (!reg || !out_phys)
-        return false;
-
-    if (len >= 16) {
-        if (fdt32_to_cpu_net(reg[0]) != 0)
-            return false;
-        *out_phys = fdt32_to_cpu_net(reg[1]);
-        return true;
-    }
-
-    if (len >= 8) {
-        *out_phys = fdt32_to_cpu_net(reg[0]);
-        return true;
-    }
-
-    return false;
-}
-
-static bool net_decode_interrupts(const uint32_t *intr, uint32_t len,
-                                  uint32_t *out_irq, bool *out_edge)
-{
-    if (!intr || !out_irq || len < 4)
-        return false;
-
-    if (len >= 12) {
-        uint32_t type = fdt32_to_cpu_net(intr[0]);
-        uint32_t irq = fdt32_to_cpu_net(intr[1]);
-        uint32_t flags = fdt32_to_cpu_net(intr[2]);
-
-        if (type == 0) {
-            /* GIC binding: SPI cell contains INTID - 32. */
-            *out_irq = irq + 32;
-            if (out_edge)
-                *out_edge = (flags == 1 || flags == 2);
-            return true;
-        }
-
-        if (type == 1) {
-            /* PPI cell contains INTID - 16. Not expected for virtio-mmio. */
-            *out_irq = irq + 16;
-            if (out_edge)
-                *out_edge = (flags == 1 || flags == 2);
-            return true;
-        }
-    }
-
-    *out_irq = fdt32_to_cpu_net(intr[0]);
-    if (out_edge)
-        *out_edge = true;
-    return true;
-}
-
-static bool net_irq_from_mmio(uint32_t phys, uint32_t *out_irq)
+static bool net_irq_from_mmio(paddr_t phys, uint32_t *out_irq)
 {
     if (!out_irq)
         return false;
@@ -430,79 +371,20 @@ static bool net_irq_from_mmio(uint32_t phys, uint32_t *out_irq)
     return true;
 }
 
-static bool net_probe_from_dtb(uint32_t *out_phys, uint32_t *out_irq, bool *out_edge)
+static bool net_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq, bool *out_edge)
 {
-    void *dtb_ptr = (void *)dtb_address;
-    if (!dtb_ptr || !out_phys || !out_irq)
+    paddr_t phys = 0;
+
+    if (!fdt_find_virtio_mmio_device(VIRTIO_ID_NETWORK, &phys, out_irq, out_edge))
         return false;
 
-    struct fdt_header *fdt = (struct fdt_header *)dtb_ptr;
-    if (fdt32_to_cpu_net(fdt->magic) != FDT_MAGIC)
-        return false;
-
-    uint8_t *struct_block = (uint8_t *)dtb_ptr + fdt32_to_cpu_net(fdt->off_dt_struct);
-    uint32_t *token = (uint32_t *)struct_block;
-
-    while (1) {
-        uint32_t tag = fdt32_to_cpu_net(*token++);
-        switch (tag) {
-        case FDT_BEGIN_NODE: {
-            void *node_ptr = (void *)(token - 1);
-            const char *name = (const char *)token;
-            size_t len = strlen(name);
-            token += (len + 4) / 4;
-
-            if (!fdt_node_matches(name, "virtio_mmio"))
-                break;
-
-            uint32_t reg_len = 0;
-            uint32_t *reg = (uint32_t *)fdt_get_property(dtb_ptr, node_ptr, "reg", &reg_len);
-            uint32_t phys = 0;
-            if (!net_decode_reg(reg, reg_len, &phys))
-                break;
-
-            volatile uint32_t *base = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
-            if (mmio_read32(base, VIRTIO_MMIO_MAGIC) != 0x74726976)
-                break;
-            if (mmio_read32(base, VIRTIO_MMIO_DEVICE_ID) != VIRTIO_ID_NETWORK)
-                break;
-
-            uint32_t index_irq = VIRT_VIRTIO_IRQ((phys - VIRT_VIRTIO_BASE) / VIRT_VIRTIO_SIZE);
-            uint32_t irq = index_irq;
-            bool edge = true;
-            uint32_t intr_len = 0;
-            uint32_t *intr = (uint32_t *)fdt_get_property(dtb_ptr, node_ptr,
-                                                          "interrupts",
-                                                          &intr_len);
-            if (!net_decode_interrupts(intr, intr_len, &irq, &edge))
-                irq = index_irq;
-
-            *out_phys = phys;
-            *out_irq = irq;
-            if (out_edge)
-                *out_edge = edge;
-            return true;
-        }
-        case FDT_PROP: {
-            uint32_t prop_len = fdt32_to_cpu_net(*token++);
-            token++;
-            token += (prop_len + 3) / 4;
-            break;
-        }
-        case FDT_END_NODE:
-        case FDT_NOP:
-            break;
-        case FDT_END:
-            return false;
-        default:
-            return false;
-        }
-    }
+    *out_phys = phys;
+    return true;
 }
 
-static bool net_probe_fallback(uint32_t *out_phys, uint32_t *out_irq, bool *out_edge)
+static bool net_probe_fallback(paddr_t *out_phys, uint32_t *out_irq, bool *out_edge)
 {
-    uint32_t phys = VIRT_VIRTIO_NET;
+    paddr_t phys = VIRT_VIRTIO_NET;
     volatile uint32_t *base = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
 
     if (!out_phys || !out_irq)
@@ -575,7 +457,7 @@ static bool net_rx_queue_init(void)
 
     for (uint16_t i = 0; i < qsize; i++) {
         struct vring_desc *desc = net_desc_ptr(&net.rx_vq, i);
-        desc->addr = (uint64_t)(uint32_t)&net.rx_bufs[i];
+        desc->addr = (uint64_t)virt_to_phys((vaddr_t)&net.rx_bufs[i]);
         desc->len = sizeof(net.rx_bufs[i]);
         /* Device writes complete virtio-net frames into RX descriptors. */
         desc->flags = VRING_DESC_F_WRITE;
@@ -610,7 +492,7 @@ static bool net_tx_queue_init(void)
 
     for (uint16_t i = 0; i < qsize; i++) {
         struct vring_desc *desc = net_desc_ptr(&net.tx_vq, i);
-        desc->addr = (uint64_t)(uint32_t)&net.tx_bufs[i];
+        desc->addr = (uint64_t)virt_to_phys((vaddr_t)&net.tx_bufs[i]);
         desc->len = 0;
         desc->flags = 0;
         desc->next = 0;
@@ -680,7 +562,7 @@ static int net_send_frame(const uint8_t *frame, uint32_t frame_len)
     memcpy(buf + sizeof(virtio_net_hdr_t), frame, frame_len);
 
     struct vring_desc *desc = net_desc_ptr(&net.tx_vq, (unsigned)id);
-    desc->addr = (uint64_t)(uint32_t)buf;
+    desc->addr = (uint64_t)virt_to_phys((vaddr_t)buf);
     desc->len = sizeof(virtio_net_hdr_t) + frame_len;
     desc->flags = 0;
     desc->next = 0;
@@ -1665,7 +1547,7 @@ file_t* create_net_echo_device_file(const char* name, int flags)
 
 bool virtio_net_init(void)
 {
-    uint32_t phys = 0;
+    paddr_t phys = 0;
     uint32_t irq = 0;
     bool edge = true;
     uint32_t features;

@@ -211,15 +211,17 @@ static uint32_t proc_vm_virtual_kb(vm_space_t* vm)
 static uint32_t proc_vm_rss_kb(vm_space_t* vm)
 {
     uint32_t pages = 0;
+    pgdir_cpu_t pgdir_v;
 
     if (!vm || !vm->pgdir) return 0;
+    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
 
     for (uint32_t i = 0; i < 1024; i++) {
-        uint32_t l1_entry = vm->pgdir[i];
+        l1_entry_t l1_entry = pgdir_v[i];
         if ((l1_entry & 0x3) != 0x1)
             continue;
 
-        uint32_t* l2_table = (uint32_t*)(l1_entry & 0xFFFFFC00);
+        l2_table_t l2_table = (l2_table_t)phys_to_virt((paddr_t)(l1_entry & 0xFFFFFC00));
         for (uint32_t j = 0; j < 256; j++) {
             if ((l2_table[j] & 0x3) != 0)
                 pages++;
@@ -232,11 +234,13 @@ static uint32_t proc_vm_rss_kb(vm_space_t* vm)
 static uint32_t proc_vm_l2_tables(vm_space_t* vm)
 {
     uint32_t count = 0;
+    pgdir_cpu_t pgdir_v;
 
     if (!vm || !vm->pgdir) return 0;
+    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
 
     for (uint32_t i = 0; i < 1024; i++) {
-        if ((vm->pgdir[i] & 0x3) == 0x1)
+        if ((pgdir_v[i] & 0x3) == 0x1)
             count++;
     }
 
@@ -946,6 +950,7 @@ static const char* proc_sched_event_name(uint32_t event)
         case SCHED_TRACE_READY_REFUSE_DEAD: return "ready_refuse_dead";
         case SCHED_TRACE_READY_REFUSE_CORRUPT: return "ready_refuse_corrupt";
         case SCHED_TRACE_READY_REFUSE_REMOTE_RUNNING: return "ready_refuse_remote_running";
+        case SCHED_TRACE_SLEEP_OVERSHOOT: return "sleep_overshoot";
         default: return "unknown";
     }
 }
@@ -1501,12 +1506,16 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
                 phys_free);
     proc_append(buf, cap, len, "forkfail %u\n", kernel_lifecycle_stats.failed_forks);
     proc_append(buf, cap, len, "sched_refuse %u\n", kernel_lifecycle_stats.scheduler_refused);
+    proc_append(buf, cap, len, "sched_crit_repair %u\n",
+                kernel_lifecycle_stats.scheduler_critical_repaired);
     proc_append(buf, cap, len, "ready_refuse %u\n", kernel_lifecycle_stats.ready_queue_refused);
     proc_append(buf, cap, len, "asid_rollovers %u\n", kernel_lifecycle_stats.asid_rollovers);
     proc_append(buf, cap, len, "state_set %u\n", kernel_lifecycle_stats.state_sync_repairs);
     proc_append(buf, cap, len, "signal_wake %u\n", kernel_lifecycle_stats.blocked_signal_wakeups);
     proc_append(buf, cap, len, "tty_stale %u\n", kernel_lifecycle_stats.tty_stale_waiters);
     proc_append(buf, cap, len, "fs_wait_timeout %u\n", kernel_lifecycle_stats.fs_wait_timeouts);
+    proc_append(buf, cap, len, "sleep_deadline %u\n", kernel_lifecycle_stats.sleep_deadline_wakeups);
+    proc_append(buf, cap, len, "sleep_overshoot %u\n", kernel_lifecycle_stats.sleep_overshoots);
     proc_append(buf, cap, len, "tty_tx %u %u %u %u\n",
                 tty_tx_enqueued,
                 tty_tx_drained,

@@ -105,7 +105,7 @@ int sys_read(int fd, void* buf, size_t count)
      * prevents a partially unmapped user buffer from aborting the kernel
      * inside a filesystem or driver memcpy().
      */
-    if (IS_KERNEL_ADDR((uint32_t)buf)) {
+    if (IS_KERNEL_ADDR((vaddr_t)(uintptr_t)buf)) {
         result = file->f_op->read(file, buf, count);
         return (int)result;
     }
@@ -133,32 +133,34 @@ int sys_write(int fd, const void* buf, size_t count)
     file_t* file;
     ssize_t result = 0;
     void *kbuf = NULL;
-    const void *write_buf = buf;
-    
+    size_t chunk_cap;
+    size_t done = 0;
+
     if (count == 0) return 0;
     if (!buf) return -EFAULT;
 
     if (fd < 0 || fd >= MAX_FILES) return -EBADF;
     if (!task || !task->process) return -EBADF;
-    
+
     file = task->process->files[fd];
     if (!file) return -EBADF;
     if (!can_write(file)) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
 
-    if (IS_KERNEL_ADDR((uint32_t)buf)) {
-        write_buf = buf;
-    } else {
-        kbuf = kmalloc(count);
-        if (!kbuf) return -ENOMEM;
-
-        if (copy_from_user(kbuf, buf, count) < 0) {
-            kfree(kbuf);
-            return -EFAULT;
-        }
-
-        write_buf = kbuf;
+    if (IS_KERNEL_ADDR((vaddr_t)(uintptr_t)buf)) {
+        result = file->f_op->write(file, buf, count);
+        return (int)result;
     }
+
+    /*
+     * Bound the user bounce buffer like sys_read(). A raw kmalloc(count) lets
+     * one user write consume an arbitrary fraction of kernel heap; chunking
+     * keeps memory pressure predictable while preserving partial-write
+     * semantics.
+     */
+    chunk_cap = count < SYSCALL_IO_BOUNCE_SIZE ? count : SYSCALL_IO_BOUNCE_SIZE;
+    kbuf = kmalloc(chunk_cap);
+    if (!kbuf) return -ENOMEM;
 
     /*
      * Filesystem writes may block on backend locks or VirtIO completion.
@@ -167,11 +169,36 @@ int sys_write(int fd, const void* buf, size_t count)
      * flag across a write makes a legitimate ext2 wait look like a scheduler
      * violation.
      */
-    result = file->f_op->write(file, write_buf, count);
+    while (done < count) {
+        size_t chunk = count - done;
 
-    if (kbuf) kfree(kbuf);
+        if (chunk > chunk_cap)
+            chunk = chunk_cap;
 
-    return (int)result;
+        if (copy_from_user(kbuf, (const uint8_t*)buf + done, chunk) < 0) {
+            if (done == 0) {
+                kfree(kbuf);
+                return -EFAULT;
+            }
+            break;
+        }
+
+        result = file->f_op->write(file, kbuf, chunk);
+        if (result < 0) {
+            if (done == 0) {
+                kfree(kbuf);
+                return (int)result;
+            }
+            break;
+        }
+
+        done += (size_t)result;
+        if ((size_t)result < chunk)
+            break;              /* Short write: return the partial count. */
+    }
+
+    kfree(kbuf);
+    return (int)done;
 }
 
 static int truncate_file_inode(inode_t *inode, const char *name)
@@ -1186,7 +1213,8 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         return -EINVAL;
     }
 
-    if (!IS_KERNEL_ADDR((uint32_t)dirp) && kernel_count > SYSCALL_IO_BOUNCE_SIZE)
+    if (!IS_KERNEL_ADDR((vaddr_t)(uintptr_t)dirp) &&
+        kernel_count > SYSCALL_IO_BOUNCE_SIZE)
         kernel_count = SYSCALL_IO_BOUNCE_SIZE;
     
     //KDEBUG("Reading entries from %s fd=%d\n", file->name, fd);
@@ -1199,7 +1227,7 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         return -ENOSYS;
     }
 
-    if (IS_KERNEL_ADDR((uint32_t)dirp)) {
+    if (IS_KERNEL_ADDR((vaddr_t)(uintptr_t)dirp)) {
         buf_ptr = (char *)dirp;
     } else {
         kbuf = kmalloc(kernel_count);

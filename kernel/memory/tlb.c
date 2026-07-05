@@ -21,6 +21,7 @@
 
 #include <kernel/tlb.h>
 #include <kernel/smp.h>
+#include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/interrupt.h>
 #include <kernel/memory.h>
@@ -43,12 +44,13 @@ typedef enum {
 
 static volatile uint32_t shootdown_generation;
 static volatile uint32_t shootdown_kind;
-static volatile uint32_t shootdown_vaddr;
+static volatile vaddr_t shootdown_vaddr;
 static volatile uint32_t shootdown_asid;
 static volatile uint32_t shootdown_cpu_ack[ARMOS_MAX_CPUS];
 static spinlock_t shootdown_lock = SPINLOCK_INIT("tlb_shootdown");
 
 #define TLB_SHOOTDOWN_WARN_SPINS 5000000u
+#define TLB_SHOOTDOWN_PANIC_REPORTS 256u
 
 static bool tlb_request_is_kernel_scope(tlb_request_kind_t kind, uint32_t asid)
 {
@@ -101,7 +103,7 @@ static uint32_t tlb_remote_target_mask(tlb_request_kind_t kind, uint32_t asid)
     return mask;
 }
 
-static void tlb_flush_local(tlb_request_kind_t kind, uint32_t vaddr, uint32_t asid)
+static void tlb_flush_local(tlb_request_kind_t kind, vaddr_t vaddr, uint32_t asid)
 {
     switch (kind) {
         case TLB_REQ_ALL:
@@ -169,6 +171,8 @@ static void tlb_wait_remote_ack(uint32_t target_mask, uint32_t generation)
                       generation, pending);
             }
             gic_send_sgi(pending, IRQ_SGI_TLB_SHOOTDOWN);
+            if (slow_reports >= TLB_SHOOTDOWN_PANIC_REPORTS)
+                panic("TLB shootdown ack timeout");
             spin = 0;
         }
 
@@ -176,7 +180,7 @@ static void tlb_wait_remote_ack(uint32_t target_mask, uint32_t generation)
     }
 }
 
-static void tlb_shootdown_common(tlb_request_kind_t kind, uint32_t vaddr, uint32_t asid)
+static void tlb_shootdown_common(tlb_request_kind_t kind, vaddr_t vaddr, uint32_t asid)
 {
     uint32_t target_mask;
     uint32_t generation;
@@ -216,7 +220,7 @@ void tlb_handle_remote_ipi(uint32_t cpu_id)
 {
     uint32_t generation;
     tlb_request_kind_t kind;
-    uint32_t vaddr;
+    vaddr_t vaddr;
     uint32_t asid;
 
     if (cpu_id >= ARMOS_MAX_CPUS)
@@ -254,12 +258,12 @@ void tlb_shootdown_all(void)
     tlb_shootdown_common(TLB_REQ_ALL, 0, 0);
 }
 
-void tlb_shootdown_page(uint32_t vaddr)
+void tlb_shootdown_page(vaddr_t vaddr)
 {
     tlb_shootdown_common(TLB_REQ_PAGE, vaddr, 0);
 }
 
-void tlb_shootdown_page_asid(uint32_t vaddr, uint32_t asid)
+void tlb_shootdown_page_asid(vaddr_t vaddr, uint32_t asid)
 {
     tlb_shootdown_common(TLB_REQ_PAGE_ASID, vaddr, asid);
 }

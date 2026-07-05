@@ -19,6 +19,8 @@
 #ifndef _ASM_ARM_H
 #define _ASM_ARM_H
 
+#include <kernel/types.h>
+
 /* ARM32 specific definitions */
 #define ARM_MODE_USR    0x10
 #define ARM_MODE_FIQ    0x11
@@ -180,18 +182,18 @@ INLINE void flush_cache_all(void)
     instruction_sync_barrier();
 }
 
-INLINE void clean_dcache_range(uint32_t start, uint32_t end)
+INLINE void clean_dcache_range(vaddr_t start, vaddr_t end)
 {
-    uint32_t addr;
+    vaddr_t addr;
     for (addr = start & ~63; addr < end; addr += 64) {
         __asm__ volatile("mcr p15, 0, %0, c7, c10, 1" : : "r"(addr));
     }
     data_sync_barrier();
 }
 
-INLINE void invalidate_dcache_range(uint32_t start, uint32_t end)
+INLINE void invalidate_dcache_range(vaddr_t start, vaddr_t end)
 {
-    uint32_t addr;
+    vaddr_t addr;
     for (addr = start & ~63; addr < end; addr += 64) {
         __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" : : "r"(addr));
     }
@@ -206,7 +208,7 @@ INLINE void flush_tlb(void)
     instruction_sync_barrier();
 }
 
-INLINE void flush_tlb_page(uint32_t addr)
+INLINE void flush_tlb_page(vaddr_t addr)
 {
     __asm__ volatile("mcr p15, 0, %0, c8, c7, 1" : : "r"(addr));
     data_sync_barrier();

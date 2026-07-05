@@ -20,12 +20,13 @@
 #include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/spinlock.h>
+#include <asm/arm.h>
 
 
 physical_allocator_t phys_alloc;
 
 static buddy_block_t* free_lists[MAX_ORDER + 1];
-uint32_t buddy_base = 0;
+paddr_t buddy_base = 0;
 struct page_info *page_infos;
 static spinlock_t buddy_lock = SPINLOCK_INIT("buddy");
 
@@ -43,9 +44,14 @@ static void account_buddy_alloc(size_t pages);
 static void account_buddy_free(size_t pages);
 //static void reserve_mmu_pages(void);
 
+static bool mmu_is_enabled(void)
+{
+    return (get_sctlr() & SCTLR_M) != 0;
+}
+
 void* early_alloc(uint32_t size, uint32_t align) {
     // Aligner l’adresse de départ
-    uint32_t alloc_base = ALIGN_UP(buddy_base, align);
+    paddr_t alloc_base = ALIGN_UP(buddy_base, align);
 
     // Avancer le pointeur
     buddy_base = ALIGN_UP(alloc_base + size, PAGE_SIZE);
@@ -60,7 +66,7 @@ void buddy_init()
 
     // Trouve une région libre juste après le kernel (et DTB)
     void* page_info_region = early_alloc(page_info_size,8);
-    void* page_info_ = (void* )ALIGN_UP((uint32_t)page_info_region,8);
+    void* page_info_ = (void*)ALIGN_UP((uintptr_t)page_info_region, 8);
 
     // Zéro-initialise
     memset(page_info_, 0, page_info_size);
@@ -78,7 +84,7 @@ void buddy_init()
     block->next = NULL;
     free_lists[MAX_ORDER] = block;
     uint32_t mem_size = detect_memory();
-    uint32_t ram_end = VIRT_RAM_START + mem_size;
+    paddr_t ram_end = VIRT_RAM_START + mem_size;
     uint32_t buddy_pages = (ram_end - buddy_base) / PAGE_SIZE;
 
     KINFO("[MEM] Buddy Allocator configuration:\n");
@@ -109,7 +115,7 @@ static uintptr_t buddy_of(uintptr_t addr, int order)
 
 void* buddy_alloc(size_t num_block) {
 
-    uint32_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
+    paddr_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
     unsigned long flags;
 
@@ -143,7 +149,7 @@ void* buddy_alloc(size_t num_block) {
         }
 
         if (run_length == num_block) {
-            uint32_t addr = buddy_base + run_start * PAGE_SIZE;
+            paddr_t addr = buddy_base + run_start * PAGE_SIZE;
 
             // Marque les pages comme utilisées
             for (size_t j = 0; j < num_block; ++j) {
@@ -157,7 +163,15 @@ void* buddy_alloc(size_t num_block) {
 
             spin_unlock_irqrestore(&buddy_lock, flags);
 
-            memset((void *)addr, 0, num_block * PAGE_SIZE);
+            void *zero_addr = (void *)addr;
+            if (mmu_is_enabled()) {
+                if (!phys_in_direct_map(addr)) {
+                    KERROR("buddy_alloc: phys 0x%08X outside direct map\n", addr);
+                    return (void *)addr;
+                }
+                zero_addr = (void *)phys_to_virt(addr);
+            }
+            memset(zero_addr, 0, num_block * PAGE_SIZE);
             //kprintf("Found block at 0x%08X\n", addr);
             //kprintf("page_infos[%d].used = %u\n", run_start, page_infos[run_start].used);
             //kprintf("page_infos[%d].start = 0x%08X\n", run_start, page_infos[run_start].start);
@@ -176,9 +190,9 @@ static void buddy_free_locked(void* ptr) {
     uint32_t caller;
     __asm__ volatile("mov %0, lr" : "=r"(caller));
 
-    uint32_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
+    paddr_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
-    uint32_t addr = (uint32_t)ptr;
+    paddr_t addr = (paddr_t)ptr;
 
     if (!ptr || (addr & (PAGE_SIZE - 1)) || addr < buddy_base || addr >= ram_end) {
         //kprintf("[ERROR] buddy_free: invalid ptr 0x%08X caller=0x%08X\n", addr, caller);
@@ -198,7 +212,7 @@ static void buddy_free_locked(void* ptr) {
         return;
     }
 
-    uint32_t start_addr = page_infos[index].start;
+    paddr_t start_addr = page_infos[index].start;
     if (start_addr != addr) {
         index = (start_addr - buddy_base) / PAGE_SIZE;
         //kprintf("PTR is not at the start of the allocated region\n");
@@ -228,8 +242,8 @@ void buddy_free(void* ptr) {
 
 static struct page_info* buddy_page_info(void* ptr)
 {
-    uint32_t addr = (uint32_t)ptr;
-    uint32_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
+    paddr_t addr = (paddr_t)ptr;
+    paddr_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
     uint32_t index;
 
@@ -298,7 +312,7 @@ uint16_t page_ref_dec(void* page_addr)
 
 bool init_memory(void)
 {
-    uint32_t mem_start = VIRT_RAM_START;
+    paddr_t mem_start = VIRT_RAM_START;
     uint32_t mem_size = detect_memory();    // UNCOMMENT FOR PROD
 
     // GDB DEBUG BLOCK - COMMENT FOR PROD
@@ -315,8 +329,8 @@ bool init_memory(void)
     extern uint8_t* heap_base;
     extern size_t heap_size;
     
-    uint32_t heap_start = (uint32_t)heap_base;
-    uint32_t heap_end = heap_start + heap_size;
+    paddr_t heap_start = (paddr_t)heap_base;
+    paddr_t heap_end = heap_start + heap_size;
     
     /* Si le heap est dans la RAM detectee, reduire la RAM allouable */
     if (heap_start >= mem_start && heap_start < mem_start + mem_size) {
@@ -336,7 +350,7 @@ bool init_memory(void)
     KINFO("[MEM] RAM: 0x%08X - 0x%08X (%u MB)\n", 
             mem_start, mem_start + mem_size, mem_size / (1024*1024));
 
-    uint32_t bitmap_start = mem_start;
+    paddr_t bitmap_start = mem_start;
     
     phys_alloc.start_addr = bitmap_start + (phys_alloc.bitmap_pages * PAGE_SIZE);;
     phys_alloc.total_pages = mem_size / PAGE_SIZE;
@@ -356,10 +370,10 @@ bool init_memory(void)
     KINFO("[MEM]   Bitmap words: %u\n", bitmap_size_words);
     KINFO("[MEM]   Bitmap bytes: %u\n", bitmap_size_bytes);
     KINFO("[MEM]   Bitmap pages: %u\n", phys_alloc.bitmap_pages);
-    KINFO("[MEM]   Bitmap address: 0x%08X\n", (uint32_t)phys_alloc.bitmap);
+    KINFO("[MEM]   Bitmap address: 0x%08X\n", (paddr_t)phys_alloc.bitmap);
     
     /* Verifier que le bitmap ne depasse pas la RAM */
-    if ((uint32_t)phys_alloc.bitmap + bitmap_size_bytes > mem_start + mem_size) {
+    if ((paddr_t)phys_alloc.bitmap + bitmap_size_bytes > mem_start + mem_size) {
         KERROR("[MEM] Bitmap would extend beyond RAM!\n");
         return false;
     }
@@ -411,26 +425,30 @@ static void reserve_kernel_pages(void)
     extern uint32_t __data_start, __data_end;
     extern uint32_t __bss_start, __bss_end;
     
-    uint32_t kernel_start = (uint32_t)&__start;
-    uint32_t kernel_end = (uint32_t)&__end;
-    uint32_t kernel_size = (uint32_t)&__kernel_size;
+    paddr_t kernel_start = (paddr_t)(uintptr_t)&__start;
+    paddr_t kernel_end = (paddr_t)(uintptr_t)&__end;
+    size_t kernel_size = (size_t)(uintptr_t)&__kernel_size;
+    paddr_t text_start = (paddr_t)(uintptr_t)&__text_start;
+    paddr_t text_end = (paddr_t)(uintptr_t)&__text_end;
+    paddr_t data_start = (paddr_t)(uintptr_t)&__data_start;
+    paddr_t data_end = (paddr_t)(uintptr_t)&__data_end;
+    paddr_t bss_start = (paddr_t)(uintptr_t)&__bss_start;
+    paddr_t bss_end = (paddr_t)(uintptr_t)&__bss_end;
     
     KINFO("[MEM] Kernel layout from linker:\n");
     KINFO("[MEM]   Kernel start:  0x%08X\n", kernel_start);
     KINFO("[MEM]   Kernel end:    0x%08X\n", kernel_end);
-    KINFO("[MEM]   Kernel size:   %u bytes (%u KB)\n", kernel_size, kernel_size / 1024);
+    KINFO("[MEM]   Kernel size:   %u bytes (%u KB)\n",
+          (uint32_t)kernel_size, (uint32_t)(kernel_size / 1024));
     
     /* Afficher les sections detaillees */
     KINFO("[MEM] Kernel sections:\n");
     KINFO("[MEM]   .text:  0x%08X - 0x%08X (%u bytes)\n", 
-            (uint32_t)&__text_start, (uint32_t)&__text_end,
-            (uint32_t)&__text_end - (uint32_t)&__text_start);
+            text_start, text_end, (uint32_t)(text_end - text_start));
     KINFO("[MEM]   .data:  0x%08X - 0x%08X (%u bytes)\n", 
-            (uint32_t)&__data_start, (uint32_t)&__data_end,
-            (uint32_t)&__data_end - (uint32_t)&__data_start);
+            data_start, data_end, (uint32_t)(data_end - data_start));
     KINFO("[MEM]   .bss:   0x%08X - 0x%08X (%u bytes)\n", 
-            (uint32_t)&__bss_start, (uint32_t)&__bss_end,
-            (uint32_t)&__bss_end - (uint32_t)&__bss_start);
+            bss_start, bss_end, (uint32_t)(bss_end - bss_start));
     
     /* Verifications de securite */
     if (kernel_start < phys_alloc.start_addr) {
@@ -439,7 +457,7 @@ static void reserve_kernel_pages(void)
         return;
     }
     
-    uint32_t ram_end = phys_alloc.start_addr + phys_alloc.total_pages * PAGE_SIZE;
+    paddr_t ram_end = phys_alloc.start_addr + phys_alloc.total_pages * PAGE_SIZE;
     if (kernel_end > ram_end) {
         KERROR("[MEM] Kernel extends beyond RAM!\n");
         KINFO("[MEM]   Kernel end: 0x%08X, RAM end: 0x%08X\n", kernel_end, ram_end);
@@ -447,8 +465,8 @@ static void reserve_kernel_pages(void)
     }
     
     /* Reserver depuis le debut de la RAM jusqu'a la fin du kernel */
-    uint32_t kernel_start_page = phys_alloc.start_addr;  /* Debut de la RAM */
-    uint32_t kernel_end_page = ALIGN_UP(kernel_end, PAGE_SIZE);
+    paddr_t kernel_start_page = phys_alloc.start_addr;  /* Debut de la RAM */
+    paddr_t kernel_end_page = ALIGN_UP(kernel_end, PAGE_SIZE);
     
     KINFO("[MEM] Reserving from start of RAM to end of kernel:\n");
     KINFO("[MEM]   Start page: 0x%08X\n", kernel_start_page);
@@ -460,7 +478,7 @@ static void reserve_kernel_pages(void)
     
     /* Reserver les pages */
     uint32_t pages_reserved = 0;
-    uint32_t addr;
+    paddr_t addr;
     
     for (addr = kernel_start_page; addr < kernel_end_page; addr += PAGE_SIZE) {
         uint32_t page_index = (addr - phys_alloc.start_addr) / PAGE_SIZE;
@@ -485,9 +503,9 @@ static void reserve_dtb_pages(void)
     /* Utiliser les symboles du linker script */
     extern uint32_t dtb_address;
     
-    uint32_t dtb_start = dtb_address;
+    paddr_t dtb_start = dtb_address;
     uint32_t dtb_size = (uint32_t)0x100000;
-    uint32_t dtb_end = (uint32_t)dtb_start + dtb_size;
+    paddr_t dtb_end = dtb_start + dtb_size;
 
     
     KINFO("[MEM] DTB layout from QEMU:\n");
@@ -502,7 +520,7 @@ static void reserve_dtb_pages(void)
         return;
     }
     
-    uint32_t ram_end = phys_alloc.start_addr + phys_alloc.total_pages * PAGE_SIZE;
+    paddr_t ram_end = phys_alloc.start_addr + phys_alloc.total_pages * PAGE_SIZE;
     if (dtb_end > ram_end) {
         KERROR("[MEM] Kernel extends beyond RAM!\n");
         KINFO("[MEM]   Kernel end: 0x%08X, RAM end: 0x%08X\n", dtb_end, ram_end);
@@ -510,8 +528,8 @@ static void reserve_dtb_pages(void)
     }
     
     /* Reserver depuis le debut de la RAM jusqu'a la fin du kernel */
-    uint32_t dtb_start_page = dtb_start;  /* Debut de la DTB */
-    uint32_t dtb_end_page = ALIGN_UP(dtb_end, PAGE_SIZE);
+    paddr_t dtb_start_page = dtb_start;  /* Debut de la DTB */
+    paddr_t dtb_end_page = ALIGN_UP(dtb_end, PAGE_SIZE);
     buddy_base = ALIGN_UP(dtb_end_page + PAGE_SIZE, PAGE_SIZE) ; 
     
     KINFO("[MEM] Reserving from start of DTB to end of DTB:\n");
@@ -525,7 +543,7 @@ static void reserve_dtb_pages(void)
     
     /* Reserver les pages */
     uint32_t pages_reserved = 0;
-    uint32_t addr;
+    paddr_t addr;
     
     for (addr = dtb_start_page; addr < dtb_end_page; addr += PAGE_SIZE) {
         uint32_t page_index = (addr - phys_alloc.start_addr) / PAGE_SIZE;
@@ -548,14 +566,14 @@ static void reserve_bitmap_pages(void)
 {
     KINFO("[MEM] Reserving bitmap pages...\n");
     
-    uint32_t bitmap_start = (uint32_t)phys_alloc.bitmap;
-    uint32_t bitmap_end = bitmap_start + (phys_alloc.bitmap_pages * PAGE_SIZE);
+    paddr_t bitmap_start = (paddr_t)phys_alloc.bitmap;
+    paddr_t bitmap_end = bitmap_start + (phys_alloc.bitmap_pages * PAGE_SIZE);
     
     KINFO("[MEM] Bitmap region: 0x%08X - 0x%08X (%u pages)\n",
             bitmap_start, bitmap_end, phys_alloc.bitmap_pages);
     
     uint32_t pages_reserved = 0;
-    uint32_t addr;
+    paddr_t addr;
     
     for (addr = bitmap_start; addr < bitmap_end; addr += PAGE_SIZE) {
         uint32_t page_index = (addr - phys_alloc.start_addr) / PAGE_SIZE;
@@ -583,8 +601,8 @@ static void reserve_heap_pages(void)
         return;
     }
     
-    uint32_t heap_start = (uint32_t)heap_base;
-    uint32_t heap_end = heap_start + heap_size;
+    paddr_t heap_start = (paddr_t)heap_base;
+    paddr_t heap_end = heap_start + heap_size;
     
     KINFO("[MEM] === HEAP RESERVATION ===\n");
     KINFO("[MEM]   Heap start: 0x%08X\n", heap_start);
@@ -592,7 +610,7 @@ static void reserve_heap_pages(void)
     KINFO("[MEM]   Heap size:  %u MB\n", heap_size / (1024*1024));
     
     uint32_t reserved_count = 0;
-    for (uint32_t addr = heap_start; addr < heap_end; addr += PAGE_SIZE) {
+    for (paddr_t addr = heap_start; addr < heap_end; addr += PAGE_SIZE) {
         uint32_t page_index = (addr - phys_alloc.start_addr) / PAGE_SIZE;
         
         if (page_index >= phys_alloc.total_pages) {

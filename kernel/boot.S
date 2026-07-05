@@ -304,9 +304,13 @@ halt_secondary_cpu:
     mov r3, #1
     lsl r3, r3, r0
     ldr r1, =smp_seen_mask
-    ldr r2, [r1]
+1:
+    ldrex r2, [r1]
     orr r2, r2, r3
-    str r2, [r1]
+    strex r4, r2, [r1]
+    cmp r4, #0
+    bne 1b
+    dmb
 
     /* Mark the CPU as parked in the explicit SMP state table. */
     ldr r1, =smp_cpu_infos

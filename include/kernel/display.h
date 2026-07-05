@@ -30,9 +30,10 @@
 #define FB_SIZE         (FB_WIDTH * FB_HEIGHT * (FB_BPP / 8))  /* ~3MB */
 
 /* FB_BASE sera alloue dynamiquement en RAM */
-extern uint8_t* framebuffer_base;  /* Pointeur global vers le framebuffer */
+extern uint8_t* framebuffer_base;  /* CPU virtual pointer to the framebuffer */
+extern paddr_t framebuffer_phys;   /* Physical/DMA address of framebuffer_base */
 
-#define FB_BASE         ((uint32_t)framebuffer_base)
+#define FB_BASE         ((vaddr_t)(uintptr_t)framebuffer_base)
 
 typedef struct {
     uint32_t width;

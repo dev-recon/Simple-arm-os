@@ -25,8 +25,31 @@
 #include <kernel/virtio_gpu.h>
 #include <kernel/timer.h>
 #include <kernel/task.h>
+#include <kernel/spinlock.h>
+
+/* displayd frame period: ~60 Hz coalesces bursts into one GPU flush. */
+#define DISPLAYD_FRAME_MS 16
+
+/*
+ * displayd is short-lived work but latency-sensitive: if it stays at normal
+ * user priority, CPU stress can starve graphical refresh while tty0 remains
+ * perfectly alive. Give it a modest kernel priority and let task_sleep_ms()
+ * keep its CPU cost bounded.
+ */
+#define DISPLAYD_PRIORITY 5
 
 static display_state_t display = {0};
+
+/*
+ * Dirty rectangle shared between producers and the flusher.
+ *
+ * Producers (TTY drain in IRQ context, console writes on any CPU) only render
+ * into the framebuffer and extend this rectangle under dirty_lock. Once
+ * displayd is running it is the only GPU submitter: no VirtIO command is ever
+ * issued from IRQ context, and a burst of output costs a single frame flush.
+ */
+static spinlock_t dirty_lock = SPINLOCK_INIT("fb_dirty");
+static volatile bool displayd_running = false;
 static bool framebuffer_dirty = false;
 static uint32_t dirty_x0;
 static uint32_t dirty_y0;
@@ -35,6 +58,7 @@ static uint32_t dirty_y1;
 
 /* Variable globale pour le framebuffer */
 uint8_t* framebuffer_base = NULL;
+paddr_t framebuffer_phys = 0;
 
 #define CONSOLE_MAX_COLS 160
 #define CONSOLE_MAX_ROWS 64
@@ -121,6 +145,8 @@ static void console_reset_attrs(void)
 static void framebuffer_mark_dirty(uint32_t x, uint32_t y,
                                    uint32_t width, uint32_t height)
 {
+    unsigned long flags;
+
     if (!framebuffer_base || width == 0 || height == 0)
         return;
 
@@ -131,23 +157,24 @@ static void framebuffer_mark_dirty(uint32_t x, uint32_t y,
     if (y + height > display.height)
         height = display.height - y;
 
+    spin_lock_irqsave(&dirty_lock, &flags);
     if (!framebuffer_dirty) {
         dirty_x0 = x;
         dirty_y0 = y;
         dirty_x1 = x + width;
         dirty_y1 = y + height;
         framebuffer_dirty = true;
-        return;
+    } else {
+        if (x < dirty_x0)
+            dirty_x0 = x;
+        if (y < dirty_y0)
+            dirty_y0 = y;
+        if (x + width > dirty_x1)
+            dirty_x1 = x + width;
+        if (y + height > dirty_y1)
+            dirty_y1 = y + height;
     }
-
-    if (x < dirty_x0)
-        dirty_x0 = x;
-    if (y < dirty_y0)
-        dirty_y0 = y;
-    if (x + width > dirty_x1)
-        dirty_x1 = x + width;
-    if (y + height > dirty_y1)
-        dirty_y1 = y + height;
+    spin_unlock_irqrestore(&dirty_lock, flags);
 }
 
 static void framebuffer_flush_dirty(void)
@@ -191,13 +218,23 @@ static void framebuffer_flush_dirty(void)
         cursor_drawn_y = display.cursor_y;
     }
 
-    if (!framebuffer_dirty)
-        return;
+    uint32_t x0, y0, x1, y1;
+    unsigned long flags;
 
-    virtio_gpu_flush_rect(dirty_x0, dirty_y0,
-                          dirty_x1 - dirty_x0,
-                          dirty_y1 - dirty_y0);
+    spin_lock_irqsave(&dirty_lock, &flags);
+    if (!framebuffer_dirty) {
+        spin_unlock_irqrestore(&dirty_lock, flags);
+        return;
+    }
+    x0 = dirty_x0;
+    y0 = dirty_y0;
+    x1 = dirty_x1;
+    y1 = dirty_y1;
     framebuffer_dirty = false;
+    spin_unlock_irqrestore(&dirty_lock, flags);
+
+    /* Submit outside the lock: the GPU round trip is the slow part. */
+    virtio_gpu_flush_rect(x0, y0, x1 - x0, y1 - y0);
 }
 
 void display_cursor_tick(void)
@@ -213,17 +250,42 @@ void display_cursor_tick(void)
 
     cursor_blink_last_tick = now;
     cursor_blink_on = !cursor_blink_on;
-    framebuffer_flush_dirty();
+    /* displayd flushes right after this tick; no dedicated flush needed. */
+}
+
+/*
+ * Request a screen update after rendering.
+ *
+ * Once displayd runs it is the sole GPU submitter: producers only extend the
+ * dirty rectangle and the next ~16 ms frame flush picks it up. Before the
+ * daemon starts (early boot), flush synchronously so boot messages stay
+ * visible even if the system never reaches the scheduler.
+ */
+static void display_request_flush(void)
+{
+    if (!displayd_running)
+        framebuffer_flush_dirty();
 }
 
 static void displayd_main(void *arg)
 {
     (void)arg;
 
+    displayd_running = true;
+
     while (1) {
-        task_sleep_ms(100);
+        task_sleep_ms(DISPLAYD_FRAME_MS);
+
+        /*
+         * QEMU window resizes raise a virtio-gpu config change. Re-assert
+         * the scanout and repaint everything so no stale region survives.
+         */
+        if (virtio_gpu_check_resize())
+            framebuffer_mark_dirty(0, 0, display.width, display.height);
+
         display_process_scrollback_request();
         display_cursor_tick();
+        framebuffer_flush_dirty();
     }
 }
 
@@ -236,7 +298,7 @@ int display_start_daemon(void)
         return 0;
 
     displayd_task = task_create_process("displayd", displayd_main, NULL,
-                                        20, TASK_TYPE_KERNEL);
+                                        DISPLAYD_PRIORITY, TASK_TYPE_KERNEL);
     if (!displayd_task)
         return -ENOMEM;
 
@@ -364,7 +426,7 @@ static void console_render_scrollback(void)
     }
 
     framebuffer_mark_dirty(0, 0, display.width, display.height);
-    framebuffer_flush_dirty();
+    display_request_flush();
 }
 
 static void console_scrollback_reset_view(void)
@@ -809,15 +871,15 @@ void init_display(void)
     uint32_t pages_needed = (fb_size + PAGE_SIZE - 1) / PAGE_SIZE;
     KINFO("Pages needed: %u\n", pages_needed);
     
-    framebuffer_base = (uint8_t*)allocate_pages(pages_needed);
-    if (!framebuffer_base) {
+    framebuffer_phys = (paddr_t)allocate_pages(pages_needed);
+    if (!framebuffer_phys) {
         KERROR("Failed to allocate framebuffer memory\n");
         return;
     }
+    framebuffer_base = (uint8_t*)phys_to_virt(framebuffer_phys);
     
-    KINFO("Framebuffer allocated at: 0x%08X\n", (uint32_t)framebuffer_base);
-    
-    /* Le framebuffer est en RAM, donc deja mappe - pas besoin de mapping MMU */
+    KINFO("Framebuffer allocated at: phys=0x%08X virt=0x%08X\n",
+          framebuffer_phys, (vaddr_t)(uintptr_t)framebuffer_base);
     
     display.width = FB_WIDTH;
     display.height = FB_HEIGHT;
@@ -855,8 +917,9 @@ void init_display(void)
         KERROR("   Written: 0x12345678, Read: 0x%08X\n", read_back);
         
         /* Liberer la memoire en cas d'echec */
-        free_pages(framebuffer_base, pages_needed);
+        free_pages((void*)framebuffer_phys, pages_needed);
         framebuffer_base = NULL;
+        framebuffer_phys = 0;
     }
 }
 
@@ -1078,8 +1141,8 @@ ssize_t framebuffer_write(file_t* file, const void* buffer, size_t count)
         console_putchar(data[i]);
     }
 
-    framebuffer_flush_dirty();
-    
+    display_request_flush();
+
     return count;
 }
 
@@ -1108,7 +1171,7 @@ static void framebuffer_tty_putc(char c)
         return;
 
     console_putchar(c);
-    framebuffer_flush_dirty();
+    display_request_flush();
 }
 
 static bool framebuffer_tty_try_putc(char c)
@@ -1127,13 +1190,20 @@ static void framebuffer_tty_puts(const char *s)
 
     while (*s)
         console_putchar(*s++);
-    framebuffer_flush_dirty();
+    display_request_flush();
 }
 
 static void framebuffer_tty_set_tx_irq_enabled(bool enabled)
 {
+    /*
+     * The UART backend uses this hook to toggle its TX interrupt; the
+     * framebuffer used it to flush at end-of-drain, which submitted GPU
+     * commands from the timer IRQ. displayd now owns frame flushing, so
+     * the TTY drain must not touch the GPU at all. Early boot output is
+     * still flushed synchronously through display_request_flush().
+     */
     (void)enabled;
-    framebuffer_flush_dirty();
+    display_request_flush();
 }
 
 static bool framebuffer_tty_has_data(void)

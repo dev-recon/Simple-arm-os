@@ -229,6 +229,7 @@ static void tty_init_one(struct tty_struct *tty, int id)
     tty->winsize_ypixel = 0;
     
     init_spinlock(&tty->lock);
+    init_spinlock(&tty->write_lock);
 }
 
 void tty_init(void) {
@@ -1148,6 +1149,7 @@ static void tty_drain_output_limited_to(struct tty_struct *tty, uint32_t budget)
 static ssize_t tty_write_to(struct tty_struct *tty, const char *buf, size_t count) {
     uint32_t oflag;
     unsigned long flags;
+    unsigned long write_flags;
     size_t written = 0;
 
     if (!tty)
@@ -1156,6 +1158,8 @@ static ssize_t tty_write_to(struct tty_struct *tty, const char *buf, size_t coun
     spin_lock_irqsave(&tty->lock, &flags);
     oflag = tty->termios.c_oflag;
     spin_unlock_irqrestore(&tty->lock, flags);
+
+    spin_lock_irqsave(&tty->write_lock, &write_flags);
 
     for (size_t i = 0; i < count; i++) {
         if ((oflag & OPOST) && (oflag & ONLCR) && buf[i] == '\n') {
@@ -1173,11 +1177,15 @@ static ssize_t tty_write_to(struct tty_struct *tty, const char *buf, size_t coun
                 spin_unlock_irqrestore(&tty->lock, flags);
                 tty_drain_output_limited_to(tty, TTY_TX_DRAIN_BUDGET);
                 task_t *task = task_current_local();
-                if (task && has_pending_signals(task))
+                if (task && has_pending_signals(task)) {
+                    spin_unlock_irqrestore(&tty->write_lock, write_flags);
                     return written > 0 ? (ssize_t)written : (ssize_t)-EINTR;
-                if (task)
+                }
+                if (task) {
+                    spin_unlock_irqrestore(&tty->write_lock, write_flags);
                     yield();
-                else {
+                    spin_lock_irqsave(&tty->write_lock, &write_flags);
+                } else {
                     tty_backend_putc_to(tty, '\r');
                     break;
                 }
@@ -1198,11 +1206,15 @@ static ssize_t tty_write_to(struct tty_struct *tty, const char *buf, size_t coun
             spin_unlock_irqrestore(&tty->lock, flags);
             tty_drain_output_limited_to(tty, TTY_TX_DRAIN_BUDGET);
             task_t *task = task_current_local();
-            if (task && has_pending_signals(task))
+            if (task && has_pending_signals(task)) {
+                spin_unlock_irqrestore(&tty->write_lock, write_flags);
                 return written > 0 ? (ssize_t)written : (ssize_t)-EINTR;
-            if (task)
+            }
+            if (task) {
+                spin_unlock_irqrestore(&tty->write_lock, write_flags);
                 yield();
-            else {
+                spin_lock_irqsave(&tty->write_lock, &write_flags);
+            } else {
                 tty_backend_putc_to(tty, buf[i]);
                 break;
             }
@@ -1210,6 +1222,7 @@ static ssize_t tty_write_to(struct tty_struct *tty, const char *buf, size_t coun
         written++;
     }
     tty_drain_output_limited_to(tty, TTY_OUTPUT_BUF_SIZE);
+    spin_unlock_irqrestore(&tty->write_lock, write_flags);
     return (ssize_t)written;
 }
 

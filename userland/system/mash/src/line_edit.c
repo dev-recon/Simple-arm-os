@@ -812,6 +812,7 @@ char* shell_read_line(void) {
     input_buffer[len] = '\0';
     if (len > 0) {
         shell_history_add(input_buffer);
+        shell_history_save();
     }
     return input_buffer;
 }

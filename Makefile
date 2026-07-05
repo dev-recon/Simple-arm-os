@@ -8,6 +8,10 @@ OBJCOPY = $(CROSS_COMPILE)objcopy
 OBJDUMP = $(CROSS_COMPILE)objdump
 QEMU ?= qemu-system-arm
 SMP_CPUS ?= 1
+BUILD_DIR = build
+ASM_OFFSETS_SRC = kernel/asm-offsets.c
+ASM_OFFSETS_S = $(BUILD_DIR)/asm-offsets.s
+ASM_OFFSETS_H = $(BUILD_DIR)/generated/asm-offsets.h
 
 ARCH_FLAGS = -mcpu=cortex-a15 -marm
 FPU_FLAGS = -mfpu=neon-vfpv4 -mfloat-abi=soft
@@ -18,7 +22,7 @@ MATH_FLAGS = -fno-builtin-div -fno-builtin-mod
 ARM_MATH_FLAGS = -mno-unaligned-access
 
 # Flags de compilation
-ASFLAGS = -g -Iinclude
+ASFLAGS = -g -Iinclude -I$(BUILD_DIR)/generated
 
 CFLAGS = -std=gnu99 $(ARCH_FLAGS) $(FPU_FLAGS) $(MATH_FLAGS) $(ARM_MATH_FLAGS) \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
@@ -39,7 +43,7 @@ TASK_OBJS = kernel/task/task.o \
             kernel/sync/spinlock.o
 
 # Objets de la bibliotheque
-LIB_OBJ = kernel/lib/kprintf.o kernel/lib/string.o kernel/lib/font_meslo_12x24.o kernel/lib/font_meslo_10x20.o kernel/lib/font_meslo_8x16.o kernel/lib/font_spleen_8x16.o kernel/lib/font_spleen_12x24.o kernel/lib/font_vga_8x16.o kernel/lib/divmod.o kernel/lib/debug_print.o kernel/lib/math.o
+LIB_OBJ = kernel/lib/kprintf.o kernel/lib/string.o kernel/lib/fdt.o kernel/lib/font_meslo_12x24.o kernel/lib/font_meslo_10x20.o kernel/lib/font_meslo_8x16.o kernel/lib/font_spleen_8x16.o kernel/lib/font_spleen_12x24.o kernel/lib/font_vga_8x16.o kernel/lib/divmod.o kernel/lib/debug_print.o kernel/lib/math.o
 
 # Objets du noyau
 KERNEL_OBJS = \
@@ -142,7 +146,20 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-%.o: %.S
+$(ASM_OFFSETS_H): $(ASM_OFFSETS_SRC) include/kernel/task.h
+	@mkdir -p $(BUILD_DIR) $(dir $@)
+	$(CC) $(CFLAGS) -S $(ASM_OFFSETS_SRC) -o $(ASM_OFFSETS_S)
+	@awk '/->/ { \
+		line=$$0; \
+		sub(/^.*->/, "", line); \
+		gsub(/"/, "", line); \
+		split(line, f, " "); \
+		value=f[2]; \
+		sub(/^#/, "", value); \
+		printf ".equ %-24s %s\n", f[1] ",", value; \
+	}' $(ASM_OFFSETS_S) > $@
+
+%.o: %.S $(ASM_OFFSETS_H)
 	$(AS) $(ASFLAGS) $< -o $@
 
 # Partition FAT32 montee sous /mnt. Elle reste volontairement minimale :
@@ -388,7 +405,7 @@ boot-disk: $(KERNEL_BIN) $(USERFS_DIR)
 	@echo "Bootable disk created as boot_$(DISK_IMG)"
 
 clean:
-	rm -f $(ALL_OBJS) $(DEPFILES) $(KERNEL_ELF) $(KERNEL_BIN)
+	rm -f $(ALL_OBJS) $(DEPFILES) $(KERNEL_ELF) $(KERNEL_BIN) $(ASM_OFFSETS_S) $(ASM_OFFSETS_H)
 
 clean-all: clean
 	rm -f $(DISK_IMG) boot_$(DISK_IMG)

@@ -712,11 +712,11 @@ void debug_src_pointer_issue(const fat32_raw_sector_t* raw)
     kprintf("=== DEBUGGING SRC POINTER ===\n");
     
     /* Test 1: Verifier raw */
-    kprintf("raw = 0x%08X\n", (uint32_t)raw);
+    kprintf("raw = 0x%08X\n", (vaddr_t)(uintptr_t)raw);
     
     /* Test 2: Verifier raw->data SANS arithmetique */
     const uint8_t* src = raw->data;
-    kprintf("src = 0x%08X\n", (uint32_t)src);
+    kprintf("src = 0x%08X\n", (vaddr_t)(uintptr_t)src);
     
     /* Test 3: Verifier que src est valide AVANT arithmetique */
     kprintf("Testing src validity...\n");
@@ -734,10 +734,10 @@ void debug_src_pointer_issue(const fat32_raw_sector_t* raw)
     /* Test arithmetique simple */
     kprintf("About to test pointer arithmetic...\n");
     const uint8_t* test_ptr = src + 1;  /* Peut crasher ICI */
-    kprintf("src + 1 = 0x%08X\n", (uint32_t)test_ptr);
+    kprintf("src + 1 = 0x%08X\n", (vaddr_t)(uintptr_t)test_ptr);
     
     const uint8_t* test_ptr11 = src + 11;  /* Peut crasher ICI */
-    kprintf("src + 11 = 0x%08X\n", (uint32_t)test_ptr11);
+    kprintf("src + 11 = 0x%08X\n", (vaddr_t)(uintptr_t)test_ptr11);
     
     kprintf("=== END DEBUG ===\n");
 }
@@ -755,10 +755,10 @@ bool validate_src_pointer(const fat32_raw_sector_t* raw)
         kprintf("KO raw is NULL\n");
         return false;
     }
-    kprintf("OK raw is valid: 0x%08X\n", (uint32_t)raw);
+    kprintf("OK raw is valid: 0x%08X\n", (vaddr_t)(uintptr_t)raw);
     
     /* Verification 2: Adresse raw dans la plage valide */
-    uint32_t raw_addr = (uint32_t)raw;
+    vaddr_t raw_addr = (vaddr_t)(uintptr_t)raw;
     if (raw_addr < 0x60000000 || raw_addr > 0x80000000) {
         kprintf("KO raw outside valid memory: 0x%08X\n", raw_addr);
         return false;
@@ -776,10 +776,10 @@ bool validate_src_pointer(const fat32_raw_sector_t* raw)
         : "memory"
     );
     
-    kprintf("src (raw->data) = 0x%08X\n", (uint32_t)src);
+    kprintf("src (raw->data) = 0x%08X\n", (vaddr_t)(uintptr_t)src);
     
     /* Verification 4: src dans la plage valide */
-    uint32_t src_addr = (uint32_t)src;
+    vaddr_t src_addr = (vaddr_t)(uintptr_t)src;
     if (src_addr < 0x60000000 || src_addr > 0x80000000) {
         kprintf("KO src outside valid memory: 0x%08X\n", src_addr);
         return false;
