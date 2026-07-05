@@ -123,49 +123,47 @@ for this layout. Some older comments and helper names still mention other split
 sizes; treat those as historical unless the runtime register setup says
 otherwise.
 
-### Kernel Direct Map
+### Kernel RAM Mappings
 
-Kernel RAM is still direct-mapped:
+Kernel RAM is no longer documented as a global `VA == PA` contract. The ARM32
+port now has two distinct kernel-side RAM mappings:
 
 ```text
-kernel virtual address == physical RAM address
+boot identity window:
+  VA 0x40000000..KERNEL_BOOT_IDENTITY_END -> same physical address
+
+explicit RAM direct-map window:
+  VA KERNEL_DIRECT_MAP_BASE..KERNEL_DIRECT_MAP_END
+  -> PA VIRT_RAM_START..corresponding RAM end
 ```
 
-The QEMU `virt` RAM base is `0x40000000`, and kernel/RAM sections at and above
-that address are mapped through `TTBR1` with the same virtual and physical
+The boot identity window exists so the low-linked kernel image and early boot
+metadata keep working while the final split address space is installed. It is a
+compatibility window, not a general allocator, DMA, or driver contract.
+
+General RAM access should be expressed through typed physical and virtual
+addresses:
+
+```c
+paddr_t frame = ...;
+void *kva = (void *)phys_to_virt(frame);
+```
+
+User page tables receive physical frame addresses. Kernel code that needs to
+touch those frames should use the kernel alias returned by `phys_to_virt()`.
+Conversely, `virt_to_phys()` is the explicit boundary when a kernel alias has to
+be handed to page-table or DMA-facing code.
+
+Some legacy allocator APIs still expose physical-looking values as `void *`
+while the type cleanup continues. Treat those values as physical frames unless
+the code has explicitly converted them to a kernel virtual address. Do not add
+new code that depends on arbitrary RAM being dereferenceable at the same numeric
 address.
 
-This is a deliberate simplifying contract used throughout the kernel:
-
-- the buddy allocator returns addresses in kernel RAM;
-- those returned addresses can be dereferenced directly by the kernel;
-- the same numeric address is often used as the physical frame address inserted
-  into user page tables;
-- block drivers and low-level memory code assume RAM pages are directly
-  reachable by the kernel.
-
-Example pattern:
-
-```c
-void *page = allocate_page();
-map_user_page(vm->pgdir, user_vaddr, (uint32_t)page, flags, vm->asid);
-```
-
-This works because `page` is both a valid kernel pointer and the physical RAM
-address of the frame.
-
-Do not replace this with arbitrary virtual mappings without first introducing
-explicit translation helpers such as:
-
-```c
-phys_to_kva(pa)
-kva_to_phys(va)
-is_kernel_direct_map(va)
-```
-
-The direct map is simple and fast on QEMU `virt`, but it is also a portability
-boundary. Raspberry Pi, AArch64, high memory, stricter DMA, or non-identity
-kernel mappings would require making this contract explicit everywhere.
+The explicit direct map is simple and fast on QEMU `virt`, but it is also a
+portability boundary. Raspberry Pi, AArch64, high memory, stricter DMA, or
+non-identity kernel mappings require keeping `paddr_t`, `vaddr_t`,
+`phys_to_virt()`, and `virt_to_phys()` honest.
 
 ### User Address Spaces
 
@@ -208,7 +206,8 @@ not physical addresses and must never be trusted by the kernel without
 `TTBR1`:
 
 - global kernel mapping;
-- direct-mapped kernel RAM;
+- low boot identity window for the linked kernel image;
+- explicit RAM direct-map aliases for general physical memory;
 - kernel text/data/bss/stacks;
 - kernel temporary mappings;
 - private MMIO aliases;
@@ -236,12 +235,13 @@ After that point, contributors should reason in terms of:
 
 ```text
 user pointer      -> TTBR0, process-local, must be copied/validated
-kernel pointer    -> TTBR1, global, direct-map or kernel alias
+kernel pointer    -> TTBR1, global, boot identity/direct-map/MMIO/temp alias
 physical address  -> frame/device address inserted into descriptors or MMIO
 ```
 
-Do not treat these three categories as interchangeable, even though direct-map
-RAM currently makes some numeric values equal.
+Do not treat these three categories as interchangeable. The low boot identity
+window can make some early kernel addresses numerically equal to physical
+addresses, but that is a compatibility detail, not the general memory model.
 
 ### Page Table Shape
 
@@ -369,10 +369,10 @@ Contributors should follow these rules:
 
 1. User virtual addresses must be below the split boundary.
 2. Kernel pointers must not be accepted from userland.
-3. A value returned by `allocate_page()` is currently a kernel direct-map
-   pointer and a physical frame address.
-4. User page table entries should receive physical frame addresses, not random
-   kernel virtual addresses outside the direct map.
+3. Allocator pages are physical frames first; convert with `phys_to_virt()`
+   before dereferencing them as kernel memory outside the boot identity window.
+4. User page table entries should receive physical frame addresses, not kernel
+   virtual aliases.
 5. On changes to user PTEs, invalidate the relevant TLB entry with the correct
    ASID.
 6. Do not map MMIO into user `TTBR0` unless a real device-user ABI is being
@@ -394,9 +394,9 @@ Important regions include:
 - copy-on-write fork mappings.
 
 The fork path creates a child address space with its own `TTBR0`. Copy-on-write
-state is tracked through page permissions and page fault handling. Kernel RAM
-identity mapping makes it possible for the kernel to copy and inspect physical
-frames directly, but the user-visible mappings remain process-local.
+state is tracked through page permissions and page fault handling. When the
+kernel needs to copy or inspect a physical frame, it uses the kernel RAM alias
+from `phys_to_virt()`. The user-visible mappings remain process-local.
 
 ## Context Switching And Syscalls
 
@@ -726,8 +726,8 @@ int blk_write_sector(uint64_t lba, void *buffer);
 
 Contributor rules:
 
-1. Keep VirtIO request buffers in kernel direct-map RAM unless DMA translation
-   is introduced explicitly.
+1. Keep VirtIO request buffers in RAM that has a stable kernel alias via
+   `phys_to_virt()` unless DMA translation is introduced explicitly.
 2. Do not hold unrelated filesystem locks while waiting for VirtIO completion.
 3. Always clear pending wait state after request completion, timeout, or error.
 4. Treat timeout as device failure and avoid silently reusing a bad queue.
@@ -970,18 +970,23 @@ architecture port. The useful groundwork is now in place:
 - `paddr_t`, `vaddr_t`, and `pfn_t` names for address categories;
 - a shared FDT parser used by platform/device discovery;
 - more ARM-specific helpers isolated behind `include/asm/`;
-- clearer documentation of direct-map and MMIO assumptions.
+- clearer documentation of boot identity, explicit RAM direct-map, and MMIO
+  assumptions.
 
 The current architecture is still intentionally practical for QEMU `virt`. The
 main assumptions to revisit for another board or architecture are:
 
 - RAM starts at `0x40000000`;
-- kernel RAM is directly mapped as `VA == PA`;
+- the current ARM32 boot keeps a low identity window for the linked kernel
+  image and early metadata;
+- general RAM is reached through the explicit direct-map window, not by assuming
+  arbitrary `VA == PA`;
 - device MMIO addresses match QEMU `virt`;
 - ARMv7 short-descriptor page tables are used;
 - the split boundary is `0x40000000`;
 - the kernel runs 32-bit ARM, not AArch64;
-- DMA-capable buffers are reachable through the direct map.
+- DMA-capable buffers are physical frames whose CPU alias is obtained through
+  `phys_to_virt()`.
 
 Before porting, continue the type cleanup and introduce explicit
 physical/virtual conversion helpers wherever a value can cross between these

@@ -31,19 +31,23 @@ Memory model:
 
 - `TTBR0`: per-process user mappings below `0x40000000`
 - `TTBR1`: global kernel mappings above `0x40000000`
-- kernel RAM is currently direct-mapped: kernel VA == physical address
+- low boot identity window: the linked kernel image and early metadata remain
+  reachable at their physical addresses during/after MMU bring-up
+- explicit RAM direct-map window: general physical RAM is reached through
+  `phys_to_virt()` / `virt_to_phys()`
 - userland is not identity-mapped
 - ASIDs are used for user TLB entries
 
 Important consequence:
 
 ```text
-allocate_page() returns a kernel direct-map pointer that is also used as the
-physical frame address today.
+Treat allocator results and page-table inputs as physical frames unless the code
+has explicitly converted them to kernel virtual addresses.
 ```
 
-Do not blur user pointers, kernel pointers, and physical addresses. They may
-sometimes have equal numeric values, but they are different concepts.
+Do not blur user pointers, kernel pointers, and physical addresses. The boot
+identity window can make some low kernel addresses numerically equal to physical
+addresses, but that is not the general RAM contract.
 
 ## Source Map
 
@@ -445,7 +449,8 @@ Before touching mappings:
 - invalidate TLB after PTE updates;
 - handle ASID rollover as a normal path;
 - never expose MMIO to user mappings accidentally;
-- preserve the kernel direct-map assumption unless intentionally refactoring it.
+- use `paddr_t`, `vaddr_t`, `phys_to_virt()`, and `virt_to_phys()` at every
+  physical/virtual boundary instead of relying on numeric address equality.
 
 Crash dumps are your friend. A data abort with page-table walk output usually
 tells you whether the failure is a user mapping, kernel mapping, stale ASID, or
