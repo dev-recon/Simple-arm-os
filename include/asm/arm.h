@@ -61,6 +61,31 @@ INLINE void disable_interrupts(void)
     __asm__ volatile("cpsid i" ::: "memory");
 }
 
+INLINE uint32_t arm_disable_irq_save(void)
+{
+    uint32_t cpsr;
+
+    __asm__ volatile(
+        "mrs %0, cpsr\n"
+        "cpsid i"
+        : "=r"(cpsr)
+        :
+        : "memory");
+
+    return cpsr;
+}
+
+INLINE void arm_restore_irq_mask(uint32_t saved_flags, uint32_t mask)
+{
+    uint32_t cpsr_now;
+    uint32_t to_write;
+
+    __asm__ volatile("mrs %0, cpsr" : "=r"(cpsr_now));
+
+    to_write = (cpsr_now & ~mask) | (saved_flags & mask);
+    __asm__ volatile("msr cpsr_c, %0" : : "r"(to_write) : "memory");
+}
+
 INLINE void enable_fiq(void) 
 {
     __asm__ volatile("cpsie f" ::: "memory");
@@ -94,6 +119,37 @@ INLINE void send_event(void)
 INLINE void cpu_relax(void)
 {
     __asm__ volatile("yield" ::: "memory");
+}
+
+INLINE int arm_spin_try_acquire(volatile uint32_t *locked)
+{
+    uint32_t old;
+    uint32_t status;
+
+    /*
+     * ARMv7 exclusive monitor sequence:
+     * - LDREX observes the current lock word.
+     * - If it is zero, STREX tries to store one.
+     * - STREX succeeds only if no other CPU modified the word meanwhile.
+     *
+     * CLREX is used on the already-locked path so this CPU does not keep a
+     * stale exclusive reservation while it goes into WFE.
+     */
+    __asm__ volatile(
+        "ldrex  %0, [%2]\n"
+        "cmp    %0, #0\n"
+        "bne    1f\n"
+        "strex  %1, %3, [%2]\n"
+        "b      2f\n"
+        "1:\n"
+        "clrex\n"
+        "mov    %1, #1\n"
+        "2:\n"
+        : "=&r"(old), "=&r"(status)
+        : "r"(locked), "r"(1U)
+        : "cc", "memory");
+
+    return old == 0 && status == 0;
 }
 
 /* Memory barriers optimisees pour Cortex-A15 */

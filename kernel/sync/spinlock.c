@@ -24,33 +24,7 @@
 
 static inline int spin_atomic_try_acquire(volatile uint32_t* locked)
 {
-    uint32_t old;
-    uint32_t status;
-
-    /*
-     * ARMv7 exclusive monitor sequence:
-     * - LDREX observes the current lock word.
-     * - If it is zero, STREX tries to store one.
-     * - STREX succeeds only if no other CPU modified the word meanwhile.
-     *
-     * CLREX is used on the already-locked path so this CPU does not keep a
-     * stale exclusive reservation while it goes into WFE.
-     */
-    __asm__ volatile(
-        "ldrex  %0, [%2]\n"
-        "cmp    %0, #0\n"
-        "bne    1f\n"
-        "strex  %1, %3, [%2]\n"
-        "b      2f\n"
-        "1:\n"
-        "clrex\n"
-        "mov    %1, #1\n"
-        "2:\n"
-        : "=&r"(old), "=&r"(status)
-        : "r"(locked), "r"(1U)
-        : "cc", "memory");
-
-    return old == 0 && status == 0;
+    return arm_spin_try_acquire(locked);
 }
 
 void init_spinlock(spinlock_t* lock)
@@ -133,15 +107,7 @@ void spin_lock_irqsave(spinlock_t* lock, unsigned long* flags)
     if (!lock || !flags) return;
 
     const unsigned long IF_MASK = 0xC0UL; /* bits 7 (I) et 6 (F) */
-    unsigned long cpsr;
-
-    __asm__ volatile(
-        "mrs %0, cpsr\n\t"
-        "cpsid i"
-        : "=r" (cpsr)
-        :
-        : "memory"
-    );
+    unsigned long cpsr = arm_disable_irq_save();
 
     *flags = cpsr & IF_MASK;
     spin_lock(lock);
@@ -153,20 +119,8 @@ void spin_unlock_irqrestore(spinlock_t* lock, unsigned long flags)
     
     spin_unlock(lock);
 
-    unsigned long cpsr_now, to_write;
-
-    __asm__ volatile("mrs %0, cpsr" : "=r"(cpsr_now) );
-
     const unsigned long IF_MASK = 0xC0UL; /* bits 7 (I) et 6 (F) */
-
-    to_write = (cpsr_now & ~IF_MASK) | (flags & IF_MASK);
-
-    __asm__ volatile(
-        "msr cpsr_c, %0"
-        :
-        : "r" (to_write)
-        : "memory"
-    );
+    arm_restore_irq_mask(flags, IF_MASK);
 }
 
 int spin_is_locked(spinlock_t* lock)
