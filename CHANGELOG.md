@@ -2,6 +2,73 @@
 
 ## Unreleased
 
+- No unreleased changes yet.
+
+## ArmOS v0.6 - 2026-07-05
+
+ArmOS v0.6 consolidates the SMP, multi-arch preparation, filesystem hardening,
+and terminal-userland work into `main`. The release keeps the public stable
+runtime contract on `SMP_CPUS=1`, while making the multi-CPU profile much more
+useful for developer stress testing.
+
+### Highlights
+
+- Merged the SMP bring-up line into `main` with the current stability contract:
+  `SMP_CPUS=1` is the release-stable profile, `SMP_CPUS>1` is an advanced
+  developer stress profile.
+- Added multi-arch phase-0 foundations:
+  - generated `asm-offsets` for C/ASM context structure offsets;
+  - `paddr_t`, `vaddr_t`, and `pfn_t` address type groundwork;
+  - a shared in-kernel FDT parser;
+  - cleaner split between ARM helpers and portable kernel code.
+- Hardened storage and VFS paths:
+  - real MBR-partitioned `disk.img`;
+  - 512 MB ext2 root filesystem;
+  - stronger ext2 block mapping and `sys_write` bounce behavior;
+  - improved shutdown/sync diagnostics.
+- Added optional ncurses and nano bundles:
+  - `tools/build_ncurses.sh`;
+  - `tools/build_nano.sh`;
+  - custom `TERM=armos` terminfo entry;
+  - `cursestest` as a small ncurses validation program;
+  - tiny static GNU nano under `/opt/nano/bin` when enabled.
+- Extended newlib/TCC compatibility for larger userland ports, including more
+  directory, resource, terminal, and program-name glue.
+- Kept native TinyCC as the end-user compiler path while preserving GCC/newlib
+  as the contributor and release build path.
+- Updated boot and `uname` version strings to `ArmOS 0.6 armv7l`.
+
+### Build Flags
+
+Default local builds include the native TinyCC bundle. ncurses and nano are
+optional build artifacts:
+
+```sh
+./build.sh
+BUILD_NCURSES=1 BUILD_NANO=1 ./build.sh
+```
+
+The generated `/opt/tcc`, `/opt/ncurses`, and `/opt/nano` contents are staged
+into the disk image but are not committed to Git as generated binaries.
+
+### Supported Emulator
+
+ArmOS v0.6 keeps QEMU 10.0.2 as the reference emulator. QEMU 11.0.1 has been
+smoke-tested, but its macOS/Cocoa graphical window scaling differs from 10.0.2.
+
+### Known Limitations
+
+- SMP is substantially more capable but still not the public stable contract.
+- The graphical console remains optional; UART `tty0` is the recovery path.
+- ncurses/nano are early ports and should be validated with `cursestest`,
+  `nano`, `kilo`, `top`, and `ttytest` before relying on them for larger work.
+- The multi-arch work is groundwork, not an AArch64/Raspberry Pi port yet.
+
+## ArmOS v0.4-v0.5 Internal Milestones
+
+The public tag jumps from v0.3 to v0.6 because several internal stabilization
+streams landed together:
+
 ### SMP Bring-Up
 
 - Added active SMP hardening work around task ownership, scheduler state,

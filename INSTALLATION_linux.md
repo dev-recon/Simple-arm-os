@@ -4,14 +4,14 @@ This guide sets up ArmOS on Linux. Debian and Ubuntu are the primary reference
 distributions for now.
 
 ArmOS targets an ARMv7-A Cortex-A15 kernel running on QEMU `virt`.
-The supported v0.3 reference emulator is QEMU 10.0.2. Other QEMU versions may
+The supported v0.6 reference emulator is QEMU 10.0.2. Other QEMU versions may
 work, but 10.0.2 is the version to use when reproducing release behavior.
 
 ## Disk Layout
 
 The default generated disk layout is:
 
-- `ext2.img`: primary root filesystem, mounted as `/`
+- `ext2.img`: 512 MB primary root filesystem, mounted as `/`
 - `fat32.img`: secondary compatibility filesystem, mounted as `/mnt`
 - `disk.img`: MBR at sector 0, ext2 as partition 1, FAT32 as partition 2
 
@@ -158,7 +158,7 @@ BUILD_NEWLIB=1 NEWLIB_SYSROOT=/path/to/arm-none-eabi ./run.sh
 
 ## 6. Native TinyCC And Shipped Sources
 
-ArmOS v0.3 can build small C programs from inside the running system. This is
+ArmOS v0.6 can build small C programs from inside the running system. This is
 for end-user programming and experiments inside ArmOS; the project itself still
 uses the macOS/Linux cross toolchain for kernel work, stabilization, and release
 builds.
@@ -191,7 +191,19 @@ tcc /usr/src/armos/userland/coreutils/src/ls.c -o /tmp/ls-tcc
 Set `BUILD_TCC=0` when running `build.sh` or `run.sh` if you want to skip the
 native TinyCC bundle during local development.
 
-## 7. Common Problems
+## 7. Optional ncurses And nano
+
+ArmOS v0.6 can also stage static ncurses and nano bundles:
+
+```sh
+BUILD_NCURSES=1 BUILD_NANO=1 ./build.sh
+```
+
+This installs generated bundles under `/opt/ncurses` and `/opt/nano`, plus
+`/usr/bin/cursestest` for a small runtime smoke test. These directories are
+generated artifacts and are not committed to Git.
+
+## 8. Common Problems
 
 ### `arm-none-eabi-gcc: command not found`
 

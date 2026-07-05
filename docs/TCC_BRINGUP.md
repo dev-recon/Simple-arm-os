@@ -123,7 +123,7 @@ headers.
 
 ## Sources Installed In ArmOS
 
-ArmOS v0.3 deliberately installs userland sources into the generated root
+ArmOS deliberately installs userland sources into the generated root
 filesystem:
 
 ```text

@@ -209,7 +209,7 @@ void kernel_main(void)
     bogo_x100 = boot_bogomips_x100(timer_freq);
 
     KBOOT("\n");
-    KBOOT(KBOOT_COLOR_INFO "ArmOS 0.3 armv7l" KBOOT_COLOR_RESET "\n");
+    KBOOT(KBOOT_COLOR_INFO "ArmOS 0.6 armv7l" KBOOT_COLOR_RESET "\n");
     KBOOT_OKF("CPU: ARM Cortex-A15 @ QEMU virt");
     KBOOT_OKF("Calibrating delay loop... %u.%02u BogoMIPS",
                 bogo_x100 / 100, bogo_x100 % 100);

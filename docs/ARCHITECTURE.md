@@ -512,28 +512,34 @@ This is one of the most important invariants in the kernel.
 
 The ARM generic timer drives periodic scheduling.
 
-The timer interrupt updates kernel time and may request rescheduling. The
-current safe-preemption model is deliberately conservative: the IRQ marks the
-current CPU as needing reschedule, and the actual context switch happens at
-kernel-safe points such as syscall return, explicit `yield()`, sleep/wait paths,
-or other scheduler entries. ArmOS does not yet switch directly from IRQ mode
-back into a different user task after interrupting a pure userland hot loop.
+The timer interrupt updates kernel time and may request rescheduling. ArmOS now
+has two safe-preemption paths:
+
+- normal kernel-safe scheduler points such as syscall return, explicit
+  `yield()`, sleep/wait paths, and other scheduler entries;
+- an IRQ return-to-user slow path that captures the interrupted user frame,
+  switches to a scheduler-safe SVC continuation, runs pending return-to-user
+  work such as signal delivery and preemption, then restores the user frame.
+
+The second path is what lets a CPU-bound user process be preempted even when it
+does not voluntarily enter the kernel. It is deliberately narrow: it only runs
+when returning from IRQ to user mode and when the current CPU is not inside a
+kernel critical section.
 
 Practical model:
 
 - the timer IRQ should keep its own work short;
 - it may set a reschedule flag;
-- syscall return paths and scheduler-safe points honor that request;
+- syscall return paths, scheduler-safe points, and IRQ return-to-user honor
+  that request;
 - sleeping tasks are woken when their deadline expires;
 - long critical sections should avoid keeping interrupts disabled longer than
   necessary.
 
-This distinction matters during scheduler testing. A CPU-bound user process
-that never enters the kernel is not yet preempted solely by the timer IRQ. Full
-IRQ-return preemption will require a dedicated ARM exception-return path that
-saves the interrupted user register frame, switches on a scheduler-safe SVC
-stack, and later restores the user banked registers without corrupting the SVC
-stack invariants.
+This distinction matters during scheduler testing. IRQ return-to-user
+preemption must preserve the same invariant as syscall return: user registers,
+banked user `SP/LR`, `SPSR`, `TTBR0`, ASID, and the task's SVC stack state must
+remain coherent if the task is resumed on a different CPU after `yield()`.
 
 The scheduler quantum is a tuning parameter, but it is also a stress tool. A
 short quantum exposes missing critical sections and context-save bugs quickly.
@@ -548,6 +554,9 @@ Contributor rules:
 4. Any code that yields in kernel mode must preserve the kernel call chain.
 5. Treat `nanosleep`, TTY reads, pipe waits, and VirtIO waits as preemption
    test cases.
+6. If `task_context_t` changes, regenerate and review `build/generated/asm-offsets.h`;
+   syscall, task-switch, and IRQ return-to-user assembly all depend on those
+   generated offsets.
 
 ## TTY And Console Model
 
@@ -954,8 +963,17 @@ specific legacy investigation requires otherwise.
 
 ## Portability Notes
 
-The current architecture is intentionally practical for QEMU `virt`. The main
-assumptions to revisit for another board or architecture are:
+The v0.6 tree contains the first multi-arch preparation pass, not a second
+architecture port. The useful groundwork is now in place:
+
+- generated assembly offsets for C structures consumed from ARM assembly;
+- `paddr_t`, `vaddr_t`, and `pfn_t` names for address categories;
+- a shared FDT parser used by platform/device discovery;
+- more ARM-specific helpers isolated behind `include/asm/`;
+- clearer documentation of direct-map and MMIO assumptions.
+
+The current architecture is still intentionally practical for QEMU `virt`. The
+main assumptions to revisit for another board or architecture are:
 
 - RAM starts at `0x40000000`;
 - kernel RAM is directly mapped as `VA == PA`;
@@ -965,9 +983,20 @@ assumptions to revisit for another board or architecture are:
 - the kernel runs 32-bit ARM, not AArch64;
 - DMA-capable buffers are reachable through the direct map.
 
-Before porting, introduce explicit physical/virtual conversion helpers and
-audit all places where a `uint32_t` is used interchangeably as a physical
-address, kernel pointer, or user virtual address.
+Before porting, continue the type cleanup and introduce explicit
+physical/virtual conversion helpers wherever a value can cross between these
+domains:
+
+```text
+physical address  -> paddr_t
+kernel pointer    -> vaddr_t / void *
+user pointer      -> vaddr_t copied through usercopy helpers
+page frame number -> pfn_t
+```
+
+Do not build a speculative portability layer before the second concrete port.
+The intended next branch is a new multi-arch branch based on the v0.6 `main`
+baseline, where the interfaces can emerge from a real second target.
 
 ## Known Cleanup Targets
 

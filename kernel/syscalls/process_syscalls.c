@@ -996,8 +996,8 @@ int sys_uname(struct utsname_kernel *name)
     memset(&local, 0, sizeof(local));
     strcpy(local.sysname, "ArmOS");
     strcpy(local.nodename, "armos");
-    strcpy(local.release, "0.3");
-    strcpy(local.version, "ArmOS 0.3 armv7l");
+    strcpy(local.release, "0.6");
+    strcpy(local.version, "ArmOS 0.6 armv7l");
     strcpy(local.machine, "armv7l");
 
     return copy_to_user(name, &local, sizeof(local)) < 0 ? -EFAULT : 0;

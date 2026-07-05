@@ -1,8 +1,23 @@
 # ArmOS Roadmap
 
-This roadmap tracks the seven Linux-1.0-inspired workstreams currently active in
+This roadmap tracks the Linux-1.0-inspired workstreams currently active in
 ArmOS. The goal is not to clone Linux line by line, but to converge toward the
-same useful Unix contracts while keeping the kernel understandable and debuggable.
+same useful Unix contracts while keeping the kernel understandable and
+debuggable.
+
+## v0.6 Baseline
+
+The v0.6 baseline is:
+
+- stable public profile: `SMP_CPUS=1`;
+- developer stress profile: `SMP_CPUS>1`;
+- UART `tty0` is the required recovery console;
+- optional graphical `tty1` remains additive;
+- ext2 root is 512 MB inside a real MBR-partitioned `disk.img`;
+- newlib is the supported libc;
+- TinyCC is the native end-user compiler path;
+- ncurses and nano are optional generated bundles;
+- multi-arch work has phase-0 foundations but no second architecture yet.
 
 ## 1. Unix Permissions
 
@@ -71,6 +86,8 @@ First milestone:
   `ENABLE_TCC=1` is set.
 - Native TCC can compile and run `hello.c`, and can compile/link the ArmOS kilo
   source as a first non-trivial interactive program.
+- Optional ncurses/nano build scripts exist and should become part of a regular
+  terminal UI validation profile.
 
 ## 5. VFS And ext2 Hardening
 
@@ -113,3 +130,37 @@ Immediate goals:
 
 First milestone:
 - Preserve tty0 user shell and optional tty1 root shell startup behavior.
+
+## 8. Terminal UI Stack
+
+Status: early but usable.
+
+Immediate goals:
+- Keep `TERM=armos` honest: terminfo should declare only ANSI capabilities that
+  the console backend really implements.
+- Use `cursestest`, `nano`, `kilo`, `top`, and `ttytest --interactive-*` as the
+  terminal UI regression set.
+- Keep ncurses/nano optional until build time and runtime behavior are boring.
+- Preserve UART `tty0` behavior before every graphical or curses-related change.
+
+First milestone: implemented.
+- Static ncurses cross-build with compiled fallback terminfo.
+- Tiny GNU nano cross-build staged under `/opt/nano/bin`.
+
+## 9. Multi-Arch Preparation
+
+Status: phase 0 landed.
+
+Immediate goals:
+- Restart the next multi-arch branch from the v0.6 `main` baseline.
+- Continue replacing ambiguous address values with `paddr_t`, `vaddr_t`, and
+  `pfn_t`.
+- Keep generated `asm-offsets` as the only source of truth for C/ASM structure
+  offsets.
+- Keep FDT parsing centralized instead of adding more hardcoded QEMU addresses.
+- Do not create a speculative HAL before a second concrete target exists.
+
+First milestone: implemented.
+- Generated assembly offsets.
+- Shared FDT parser.
+- Address-type groundwork.

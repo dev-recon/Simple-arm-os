@@ -315,7 +315,7 @@ This keeps imported tools separate from native ArmOS core utilities.
 
 ## Native Programming Inside ArmOS
 
-ArmOS v0.3 installs a source snapshot into the root filesystem:
+ArmOS installs a source snapshot into the root filesystem:
 
 ```text
 /usr/src/armos/userland

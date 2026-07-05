@@ -16,6 +16,22 @@ MMU, VFS, block I/O or process lifecycle code.
 
 ## Current Stress Baseline
 
+### v0.6 Release Contract
+
+ArmOS v0.6 is published with this stability statement:
+
+- `SMP_CPUS=1` is the stable public runtime profile.
+- `SMP_CPUS>1` is a developer stress profile. It is useful and much more robust
+  than earlier bring-up work, but it is not the public support contract yet.
+- UART `tty0` is the mandatory recovery console in every boot mode.
+- VirtIO-GPU `tty1`, ncurses, and nano are optional layers that must never make
+  `boot.sh`/`tty0` unusable.
+- Generated native tool bundles under `/opt/tcc`, `/opt/ncurses`, and
+  `/opt/nano` are build artifacts, not Git-tracked source of truth.
+
+Before promoting SMP to stable, repeat the mixed stress matrix below until it
+is boring across multiple runs and shutdown paths.
+
 Configuration:
 
 - Platform: QEMU virt, ARM Cortex-A15

@@ -13,9 +13,10 @@ ArmOS is not Linux, and it is not production-ready. The goal is to keep the
 system small enough to understand while still implementing real operating
 system mechanisms.
 
-## ArmOS v0.3 Milestone
+## ArmOS v0.6 Milestone
 
-ArmOS v0.3 is a major userland autonomy milestone.
+ArmOS v0.6 is the first release where ArmOS starts to feel like a small,
+self-contained Unix lab rather than only a kernel bring-up project.
 
 The development workflow for the operating system itself remains deliberately
 conservative: kernel, filesystem, drivers, release images, and stabilization
@@ -23,19 +24,27 @@ work are still built from macOS or Linux with the host ARM cross toolchain
 (`arm-none-eabi-gcc`, newlib, Makefiles, and the project scripts). This is the
 supported path for contributors.
 
-What changes in v0.3 is what ArmOS can do for its own users once it is already
-running. The generated root filesystem now ships:
+What changed since the early native-userland milestone is the amount of real
+Unix surface available once ArmOS is already running. The generated root
+filesystem now ships:
 
 - a native TinyCC toolchain exposed through `/usr/bin/tcc`
 - the TinyCC runtime bundle under `/opt/tcc`
 - a source snapshot under `/usr/src/armos/userland`
 - enough newlib syscall glue to compile and run small C user programs directly
   from inside `mash`
+- optional static ncurses support with a custom `TERM=armos` terminfo entry
+- optional GNU nano support, cross-built as a small static ArmOS user program
+- a 512 MB ext2 root filesystem inside an MBR-partitioned `disk.img`
+- a more disciplined kernel portability foundation: generated assembly offsets,
+  `paddr_t` / `vaddr_t` address types, and a shared FDT parser
+- active SMP hardening that is useful for development stress, while keeping the
+  public runtime contract conservative
 
-That means an ArmOS user can boot the system, open a source file with `kilo`,
-compile it with `tcc`, and run the resulting binary without returning to the
-host machine. It is not yet a replacement for the project build system, but it
-is the first step toward a self-hosted-feeling Unix environment.
+That means an ArmOS user can boot the system, edit C code with `kilo` or
+`nano`, compile it with `tcc`, and run the resulting binary without returning
+to the host machine. It is not yet a replacement for the project build system,
+but it is now a credible end-user programming environment.
 
 ## Current Status
 
@@ -44,17 +53,24 @@ ArmOS currently provides:
 - ARMv7-A kernel running on QEMU `virt` / Cortex-A15
 - MMU enabled with split TTBR0/TTBR1 address spaces
 - ASID support and ASID rollover handling
+- typed physical/virtual address groundwork (`paddr_t`, `vaddr_t`, `pfn_t`)
+- generated assembly offsets for fragile C/ASM context structures
+- small in-kernel FDT parser used by platform/device discovery paths
 - Kernel tasks and user processes
 - Per-task kernel stacks
 - Context switching across user and kernel execution paths
 - Timer-driven scheduling
+- experimental SMP bring-up with per-CPU state and diagnostics
 - `fork`, `execve`, `waitpid`, `exit`
 - Copy-on-write process memory
+- anonymous `mmap` / `munmap` groundwork for user mappings
 - Signals and basic job control
 - Pipes, file descriptors, `dup`, `dup2`
 - Ext2 root filesystem with read/write support
+- MBR-partitioned disk image with a 512 MB ext2 root partition
 - FAT32 compatibility mount
 - VirtIO block device support
+- VirtIO net diagnostic/echo bring-up
 - `/proc` virtual filesystem
 - UART-backed rescue console/TTY on `tty0`
 - Optional VirtIO-GPU graphical console/TTY on `tty1`
@@ -65,6 +81,7 @@ ArmOS currently provides:
   directly inside ArmOS through the `/usr/bin/tcc` wrapper
 - Userland source snapshot installed under `/usr/src/armos`, so ArmOS users can
   inspect, edit, and rebuild small programs from inside the running system
+- Optional ncurses and nano bundles for terminal UI experiments
 - Core utilities such as `cat`, `echo`, `pwd`, `ls`, `cp`, `mv`, `rm`,
   `mkdir`, `rmdir`, `touch`, `sleep`, `kill`, `ps`, `stat`, `head`,
   `grep`, `sed`, `sort`, `uniq`, `wc`, and `which`
@@ -76,7 +93,7 @@ ArmOS currently provides:
 Current supported platform:
 
 - QEMU `virt`
-- QEMU 10.0.2 is the supported v0.3 reference emulator
+- QEMU 10.0.2 is the supported v0.6 reference emulator
 - QEMU 11.0.1 has been smoke-tested, but its macOS/Cocoa graphical window
   scaling differs from 10.0.2
 - ARM Cortex-A15
@@ -102,10 +119,10 @@ SMP_CPUS=1 ./boot.sh
 ```
 
 The kernel contains active SMP bring-up work for multi-CPU QEMU runs, including
-per-CPU scheduler state, SMP diagnostics, and TLB shootdown experiments.
-However, `SMP_CPUS>1` is still considered an experimental developer mode. It is
-useful for finding races and validating future scheduler/MMU work, but it is
-not the documented stable configuration for end users or public releases yet.
+per-CPU scheduler state, TLB shootdown rendezvous, shutdown parking, and stress
+diagnostics. `SMP_CPUS>1` is now useful and increasingly robust for developers,
+but the public release contract remains `SMP_CPUS=1` until the full mixed stress
+matrix is boring across repeated runs.
 
 Future targets may include Raspberry Pi boards or an AArch64 port, but the
 current development platform is QEMU `virt`.
@@ -126,6 +143,8 @@ Typical layout:
   experiments
 - `/bin` for core utilities, `/sbin` for system programs, `/usr/bin` for
   ArmOS user programs, and `/opt/<program>/bin` for imported external tools
+- `/opt/tcc`, `/opt/ncurses`, and `/opt/nano` for optional generated tool
+  bundles when those build flags are enabled
 
 Ext2 supports normal files, directories, links, permissions, and writable
 operations used by the current userland. FAT32 remains useful as a compatibility
@@ -142,7 +161,7 @@ work should use the newlib path.
 The shell, `mash`, supports interactive commands, external programs, pipes,
 redirections, background jobs, scripts, and basic job control.
 
-ArmOS v0.3 also ships a userland source snapshot in the root filesystem:
+ArmOS ships a userland source snapshot in the root filesystem:
 
 ```text
 /usr/src/armos/userland
@@ -161,6 +180,16 @@ Example inside `mash`:
 tcc /usr/src/armos/userland/coreutils/src/ls.c -o /tmp/ls-tcc
 /tmp/ls-tcc /proc
 ```
+
+Optional terminal UI packages can be staged during a build:
+
+```sh
+BUILD_NCURSES=1 BUILD_NANO=1 ./build.sh
+```
+
+This installs ncurses under `/opt/ncurses`, a small `cursestest` program under
+`/usr/bin`, and nano under `/opt/nano/bin`. The generated bundles are build
+artifacts and are not tracked in Git.
 
 ## Stability
 
@@ -186,6 +215,7 @@ Known areas still under investigation include:
 
 - graphical console polish such as resize, richer scrollback, and copy/paste
 - procfs transient entries during fork/exit storms
+- SMP promotion from developer mode to release-stable mode
 - cleanup of old debug code and unused kernel paths
 
 ## Building And Running
@@ -245,6 +275,7 @@ Planned cleanup work includes:
 - lowering warning noise
 - shrinking kernel size
 - isolating architecture-specific ARM32 code more cleanly
+- restarting the multi-arch branch from the V0.6 baseline
 
 ## Roadmap
 
@@ -254,12 +285,11 @@ Near-term work:
 - improve shell/userland polish
 - continue procfs cleanup
 - reduce dead code and warnings
+- stabilize the optional ncurses/nano path
+- automate the mixed SMP stress matrix
 
 Medium-term ideas:
 
-- port a small `kilo`-style terminal editor
-- experiment with reduced ncurses
-- eventually try `nano`
 - improve POSIX compatibility for larger userland packages
 - evaluate AArch64 and Raspberry Pi ports
 

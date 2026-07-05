@@ -6,6 +6,11 @@ decisions.
 
 ## Near-Term Stability
 
+- Release baseline: v0.6 keeps `SMP_CPUS=1` as the stable public profile.
+  `SMP_CPUS>1` is valuable for developer stress and is much more mature than
+  earlier bring-up work, but it is not promoted as the public contract yet.
+- Keep UART `tty0` as the mandatory recovery path. Graphical `tty1`, ncurses,
+  nano, and future console work must remain additive.
 - Keep validating the long-idle TTY/read wakeup fix with longer soak tests.
   The previous hang after idle input has been addressed in the TTY/job-control
   path and validated in short idle runs, but one-hour-plus runs should remain
@@ -66,194 +71,63 @@ Approach:
 
 ## TTY And Terminal
 
-Goal: keep UART/QEMU as the practical transport for now, but expose a cleaner
-Unix-like TTY model to userland.
+Goal: keep UART/QEMU as the recovery transport, while supporting credible
+full-screen terminal programs through the shared TTY core.
+
+Current v0.6 state:
+
+- `tty0` is UART-backed and must remain a complete rescue console.
+- `tty1` is optional VirtIO-GPU plus VirtIO input.
+- `termios`, canonical/raw mode, VMIN/VTIME, job control, terminal signals,
+  `/dev/tty`, `/dev/tty0`, `/dev/tty1`, `/dev/console`, and `/dev/null` exist.
+- `kilo`, `top`, `cursestest`, and the early nano port are the practical
+  terminal regression programs.
 
 Priority order:
 
 1. Keep long-idle TTY/read wakeups under soak-test coverage.
-2. Add minimal termios support:
-   - `tcgetattr`;
-   - `tcsetattr`;
-   - `ICANON`;
-   - `ECHO`;
-   - `ISIG`;
-   - `OPOST`;
-   - `ONLCR`.
-3. Complete terminal-generated signals:
-   - `Ctrl+C` -> `SIGINT`;
-   - `Ctrl+\` -> `SIGQUIT`;
-   - `Ctrl+Z` -> `SIGTSTP`;
-   - `SIGCONT` resumes stopped jobs cleanly.
-4. Strengthen foreground process group handling:
-   - `tcgetpgrp`;
-   - `tcsetpgrp`;
-   - stale foreground group detection;
-   - background TTY read/write policy.
-5. Clean up device nodes:
-   - `/dev/tty`;
-   - `/dev/tty0`;
-   - `/dev/console`;
-   - `isatty()`;
-   - `ttyname()`.
-6. Improve interactive line editing in `mash`:
-   - robust redraw;
-   - history navigation;
-   - faster tab completion;
-   - mid-line editing;
-   - prompt redraw when background jobs finish.
-7. Add raw/non-canonical mode for full-screen tools.
+2. Preserve raw/non-canonical behavior under `ttytest --interactive-*`.
+3. Keep graphical console redraw/flush stable under CPU and I/O load.
+4. Add richer scrollback/copy behavior only after the base path stays boring.
+5. Keep `TERM=armos` aligned with the ANSI sequences the kernel actually
+   implements.
 
 ## Userland Commands
 
-### `ps` split
+- Keep the POSIX-like `ps` as the normal command and `lps` as the ArmOS
+  diagnostic view.
+- Keep `top`, `lps`, `/proc/sched`, and `/proc/smp` aligned so scheduler
+  diagnostics tell the same story.
+- Keep expanding script-friendly commands only when their behavior is clear and
+  testable.
 
-- Rename the current detailed ArmOS diagnostic `ps` to `lps`.
-- Add a compact POSIX-like `ps` default format:
+## Full-Screen Editors And Curses
 
-```text
-  PID TTY           TIME CMD
- 2152 ttys000    0:01.22 -zsh
- 2171 ttys000    0:00.01 -zsh
-```
+Status: kilo is usable, ncurses/nano are early optional ports.
 
-Rationale:
+Current state:
 
-- The current `ps` is useful for kernel debugging but too verbose for the
-  expected Unix default.
-- `lps` keeps the ArmOS-specific diagnostic view available.
-- `lps` does not appear to conflict with a common POSIX command name.
+- `kilo` is the small always-available editor and remains the best interactive
+  TTY regression tool.
+- ncurses can be cross-built as a static bundle with compiled fallback terminfo.
+- nano can be cross-built in a small static configuration and staged under
+  `/opt/nano/bin`.
 
-## Kilo Editor Roadmap
+Next steps:
 
-Goal: make ArmOS capable of running a small full-screen terminal editor before
-attempting heavier ncurses/nano work. `kilo` is the preferred first target
-because it is a compact C editor that talks directly to the terminal with
-`read()`, `write()`, and ANSI/VT100 escape sequences.
-
-### Phase 0: Source Audit
-
-- Keep a local review copy of upstream `kilo`.
-- Identify assumptions that differ from ArmOS:
-  - POSIX termios availability;
-  - `ioctl(TIOCGWINSZ)` / window size;
-  - non-blocking or raw terminal reads;
-  - `errno` coverage;
-  - file open/truncate/write behavior;
-  - `malloc`, `realloc`, and line-buffer growth behavior.
-- Decide whether the first port is:
-  - an imported `kilo` with small compatibility patches; or
-  - a tiny in-tree `aedit`/`kilo-armos` fork using the same design.
-
-Done when:
-
-- The syscall/libc gaps are listed.
-- The first porting strategy is selected.
-
-### Phase 1: Minimal Termios/TTY Contract
-
-Implement enough terminal behavior for fullscreen tools:
-
-- `tcgetattr()` and `tcsetattr()` wrappers through newlib.
-- `ICANON` off for raw/non-canonical input.
-- `ECHO` off.
-- `ISIG` behavior defined while raw mode is active.
-- `VMIN` / `VTIME` minimal semantics, even if initially simplified.
-- Output post-processing policy:
-  - preserve `\r` vs `\n` behavior on the serial console;
-  - keep `ONLCR` behavior explicit.
-- Restore terminal settings when a process exits or receives a terminating
-  signal, where practical.
-
-Done when:
-
-- A test program can enter raw mode, read one byte at a time, print key codes,
-  and restore normal shell behavior on exit.
-- `Ctrl+C` policy in raw mode is documented and tested.
-
-### Phase 2: ANSI/VT100 Screen Basics
-
-Support the terminal escape sequences needed by `kilo`:
-
-- clear screen;
-- cursor movement;
-- hide/show cursor;
-- clear line;
-- basic color passthrough;
-- query cursor position if feasible.
-
-ArmOS can continue to rely on the QEMU host terminal for actual rendering. The
-kernel does not need a framebuffer terminal for this phase.
-
-Done when:
-
-- A userland demo can redraw a full-screen buffer without corrupting the shell
-  prompt after exit.
-- Arrow keys, Home/End if supported, Backspace/Delete, Enter, and printable
-  characters are decoded consistently.
-
-### Phase 3: File Editing MVP
-
-Port the smallest useful subset:
-
-- open a text file;
-- display file contents;
-- move cursor;
-- insert printable characters;
-- Backspace/Delete;
-- save with truncation/rewrite;
-- quit cleanly.
-
-Useful first command name:
-
-- `kilo` if close to upstream behavior;
-- `aedit` if it is an ArmOS-specific adaptation.
-
-Done when:
-
-- `kilo /tmp/test.txt` can edit and save a file.
-- The file survives reboot when stored on ext2.
-- Returning to `mash` leaves the terminal usable.
-
-### Phase 4: Robustness Pass
-
-Use the editor to stress interactive kernel/userland paths:
-
-- repeated open/save cycles;
-- editing files larger than one page;
-- malloc/realloc growth and shrink;
-- interrupted editor with `Ctrl+C` / signal;
-- background job output while editor is foreground;
-- terminal resize fallback when no window-size syscall exists.
-
-Done when:
-
-- No shell prompt corruption after repeated editor exits.
-- No file truncation corruption.
-- No leaked foreground process group or stuck TTY state.
-- `lps` and `/proc` counters remain sane after editor stress.
-
-### Phase 5: Path Toward Nano/Ncurses
-
-Only after the kilo path is stable:
-
-- add a minimal window-size API (`ioctl(TIOCGWINSZ)` or equivalent);
-- evaluate a reduced termcap/terminfo strategy;
-- attempt a small ncurses build with one terminal type first;
-- use `nano` as a maturity target, not as the first editor port.
-
-Notes:
-
-- `kilo` is the practical bridge between the current shell and a real editor.
-- A working small editor will expose TTY bugs faster than synthetic tests.
-- The first editor does not need to be perfectly POSIX; it needs to be small,
-  inspectable, and brutal on the terminal path.
+1. Keep `cursestest` small and ruthless: arrows, colors, resize query, and
+   timeout behavior.
+2. Validate nano on both UART `tty0` and graphical `tty1`.
+3. Avoid declaring broad ncurses compatibility until more programs than nano
+   have run.
+4. Keep generated ncurses/nano bundles out of Git; commit scripts and source
+   notes, not built artifacts.
 
 ## Newlib Direction
 
 - New userland work should prefer the newlib-based toolchain path.
-- Keep the old libc and old binaries available as a compatibility fallback for
-  now, but avoid double-maintaining commands that are actively modified.
+- The old libc and old binaries are archived under `userland/legacy/`; do not
+  double-maintain commands there.
 - Keep newlib binaries isolated enough that failures can be compared against
   older binaries during bring-up.
 
@@ -269,8 +143,9 @@ Notes:
 
 Potential future package targets after TTY/raw mode and newlib mature:
 
-- `kilo`-style editor or in-tree small editor.
-- Reduced `ncurses`.
-- `nano`.
-- `tcc` for native compilation experiments.
-- Later, larger POSIX tools once syscall and libc gaps are clearer.
+- more ncurses programs beyond nano;
+- richer shell/script utilities;
+- TCC-hosted userland experiments inside ArmOS;
+- larger POSIX tools once syscall and libc gaps are clearer;
+- eventually a second concrete platform/architecture branch based on the v0.6
+  baseline, not on speculative abstractions.
