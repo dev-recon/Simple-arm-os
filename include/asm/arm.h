@@ -263,6 +263,34 @@ INLINE uint32_t arm_read_midr(void)
     return midr;
 }
 
+INLINE uint32_t arm_read_ctr(void)
+{
+    uint32_t ctr;
+    __asm__ volatile("mrc p15, 0, %0, c0, c0, 1" : "=r"(ctr));
+    return ctr;
+}
+
+INLINE uint32_t arm_read_tlbtr(void)
+{
+    uint32_t tlbtr;
+    __asm__ volatile("mrc p15, 0, %0, c0, c0, 3" : "=r"(tlbtr));
+    return tlbtr;
+}
+
+INLINE uint32_t arm_read_dfr0(void)
+{
+    uint32_t dfr0;
+    __asm__ volatile("mrc p15, 0, %0, c0, c1, 2" : "=r"(dfr0));
+    return dfr0;
+}
+
+INLINE uint32_t arm_read_mmfr0(void)
+{
+    uint32_t mmfr0;
+    __asm__ volatile("mrc p15, 0, %0, c0, c1, 4" : "=r"(mmfr0));
+    return mmfr0;
+}
+
 INLINE uint32_t get_cpu_id(void)
 {
     return arm_read_mpidr() & 0x3;

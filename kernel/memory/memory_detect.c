@@ -21,6 +21,7 @@
 #include <kernel/memory.h>
 #include <kernel/debug_print.h>
 #include <kernel/kernel.h>
+#include <asm/arm.h>
 
 uint32_t kernel_memory_size = 0;
 
@@ -130,16 +131,16 @@ static cpu_memory_info_t get_cpu_memory_info(void)
     cpu_memory_info_t info;
     
     /* Cache Type Register */
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 1" : "=r"(info.cache_info));
+    info.cache_info = arm_read_ctr();
     
     /* TLB Type Register */
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 3" : "=r"(info.tlb_info));
+    info.tlb_info = arm_read_tlbtr();
     
     /* Memory Model Feature Register 0 */
-    __asm__ volatile("mrc p15, 0, %0, c0, c1, 4" : "=r"(info.memory_model));
+    info.memory_model = arm_read_mmfr0();
     
     /* Debug Feature Register 0 */
-    __asm__ volatile("mrc p15, 0, %0, c0, c1, 2" : "=r"(info.debug_features));
+    info.debug_features = arm_read_dfr0();
     
     return info;
 }
