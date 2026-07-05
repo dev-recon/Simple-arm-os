@@ -286,11 +286,24 @@ INLINE void sctlr_set_smp(void)
     data_sync_barrier();
 }
 
-/* 
+/*
  * NOTE: get_ttbr0, set_ttbr0, invalidate_tlb_all, invalidate_tlb_page
- * sont declarees dans memory.h et implementees dans mmu.c
- * pour eviter les conflits entre inline et non-inline
+ * are public memory-management APIs. The low-level CP15 accessors stay here
+ * so generic MMU code can call named architecture primitives.
  */
+
+INLINE uint32_t arm_read_ttbr0(void)
+{
+    uint32_t ttbr0;
+    __asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(ttbr0));
+    return ttbr0;
+}
+
+INLINE void arm_write_ttbr0(uint32_t ttbr0)
+{
+    __asm__ volatile("mcr p15, 0, %0, c2, c0, 0" : : "r"(ttbr0));
+    instruction_sync_barrier();
+}
 
 INLINE uint32_t get_lr(void)
 {

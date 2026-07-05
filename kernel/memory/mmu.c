@@ -449,20 +449,20 @@ bool setup_mmu(void)
     ttbr1_value = (uint32_t)kernel_page_dir;
     
     // Écriture des TTBR
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 0" :: "r"(ttbr0_value));  // TTBR0
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 1" :: "r"(ttbr1_value));  // TTBR1
+    set_ttbr0(ttbr0_value);
+    set_ttbr1(ttbr1_value);
 
     // TTBCR : N = 2 (split à 0x40000000), EAE = 0 (format court)
     uint32_t ttbcr = 0x2; //0x2;
     ttbcr_value = ttbcr;
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 2" :: "r"(ttbcr_value));
+    set_ttbcr(ttbcr_value);
 
-    __asm__ volatile("dsb");
-    __asm__ volatile("isb");
+    data_sync_barrier();
+    instruction_sync_barrier();
 
 // Vérifier immédiatement
 uint32_t ttbcr_check;
-__asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr_check));
+ttbcr_check = get_ttbcr();
 KDEBUG("TTBCR written: 0x%08X, read back: 0x%08X\n", ttbcr_value, ttbcr_check);
 
 if (ttbcr_check != ttbcr_value) {
@@ -473,18 +473,16 @@ if (ttbcr_check != ttbcr_value) {
 }
 
     // Synchronisation
-    __asm__ volatile("dsb");
-    __asm__ volatile("isb");
+    data_sync_barrier();
+    instruction_sync_barrier();
 
     /* === Invalider TLB et caches === */
-    __asm__ volatile("mcr p15, 0, %0, c8, c7, 0" :: "r"(0));  // Invalidate TLB
-    __asm__ volatile("mcr p15, 0, %0, c7, c7, 0" :: "r"(0));  // Invalidate caches
-    __asm__ volatile("dsb");
-    __asm__ volatile("isb");
+    tlb_flush_all();
+    flush_cache_all();
 
     /* === DACR (Domain Access Control) === */
     uint32_t dacr = 0x55555555;
-    __asm__ volatile("mcr p15, 0, %0, c3, c0, 0" :: "r"(dacr));
+    set_dacr(dacr);
 
     /* === Lire et modifier SCTLR === */
     uint32_t sctlr = 0;
@@ -515,11 +513,11 @@ if (ttbcr_check != ttbcr_value) {
         while (1);
     }
 
-    // 2. Vérifier les registres TTBR
+// 2. Vérifier les registres TTBR
 uint32_t check_ttbr0, check_ttbr1, check_ttbcr;
-__asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(check_ttbr0));
-__asm__ volatile("mrc p15, 0, %0, c2, c0, 1" : "=r"(check_ttbr1));
-__asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(check_ttbcr));
+check_ttbr0 = get_ttbr0();
+check_ttbr1 = get_ttbr1();
+check_ttbcr = get_ttbcr();
 
 KDEBUG("TTBR0 reg: 0x%08X (expected: 0x%08X)\n", check_ttbr0, ttbr0_value);
 KDEBUG("TTBR1 reg: 0x%08X (expected: 0x%08X)\n", check_ttbr1, ttbr1_value);
@@ -545,9 +543,9 @@ if ((uint32_t)kernel_page_dir & 0x3FFF) {
 KDEBUG("All checks passed, proceeding with MMU activation...\n");
 
     /* === Activer la MMU === */
-    __asm__ volatile("mcr p15, 0, %0, c1, c0, 0" :: "r"(sctlr));
-    __asm__ volatile("dsb");
-    __asm__ volatile("isb");
+    set_sctlr(sctlr);
+    data_sync_barrier();
+    instruction_sync_barrier();
 
     KDEBUG("MMU ACTIVATED .....\n");
 
@@ -555,7 +553,7 @@ KDEBUG("All checks passed, proceeding with MMU activation...\n");
     
     /* Verify MMU is enabled */
     uint32_t sctlr_final;
-    __asm__ volatile("mrc p15, 0, %0, c1, c0, 0" : "=r"(sctlr_final));
+    sctlr_final = get_sctlr();
     debug_print_hex("MMU: Final SCTLR = ", sctlr_final);
 
     // Reconfigurer VBAR apres MMU ON
@@ -772,22 +770,22 @@ static void setup_ttbr_split(void)
     //kprintf("MMU: Configuring TTBCR for 2GB split (N=%d)\n", TTBCR_N_SPLIT_2GB);
     
     /* Set TTBR0 (processus utilisateur - 0-2GB) - NULL au boot */
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 0" : : "r"(0x00000000));
+    set_ttbr0(0x00000000);
     
     /* Set TTBR1 (noyau - 2GB-4GB) */  
     uint32_t ttbr1 = ((uint32_t)kernel_page_dir) | (0b00 << 0) | (1 << 1); // IRGN=0b00 (WBWA), S=0, RGN=0
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 1" : : "r"(ttbr1));
+    set_ttbr1(ttbr1);
     
     /* Set TTBCR */
     ttbcr &= ~(1 << 31);   // EAE = 0 : format court
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 2" : : "r"(ttbcr));
-    __asm__ volatile("isb");
+    set_ttbcr(ttbcr);
+    instruction_sync_barrier();
 
     /* Verify configuration */
     uint32_t ttbr0_check, ttbr1_check, ttbcr_check;
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(ttbr0_check));
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 1" : "=r"(ttbr1_check));
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr_check));
+    ttbr0_check = get_ttbr0();
+    ttbr1_check = get_ttbr1();
+    ttbcr_check = get_ttbcr();
     
     KDEBUG("MMU: TTBR0 = 0x%08X\n", ttbr0_check);
     KDEBUG("MMU: TTBR1 = 0x%08X\n", ttbr1_check);
@@ -1276,15 +1274,12 @@ void invalidate_tlb_asid(uint32_t asid)
 
 uint32_t get_ttbr0(void)
 {
-    uint32_t ttbr0;
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(ttbr0));
-    return ttbr0;
+    return arm_read_ttbr0();
 }
 
 void set_ttbr0(uint32_t ttbr0)
 {
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 0" : : "r"(ttbr0));
-    __asm__ volatile("isb");
+    arm_write_ttbr0(ttbr0);
 }
 
 pgdir_cpu_t get_kernel_pgdir(void)
