@@ -128,12 +128,8 @@ static bool asid_cookie_valid(uint32_t asid)
 
 static void flush_all_tlb_local(void)
 {
-    uint32_t zero = 0;
-
     data_sync_barrier();
-    __asm__ volatile("mcr p15, 0, %0, c8, c7, 0" :: "r"(zero) : "memory");
-    data_sync_barrier();
-    instruction_sync_barrier();
+    tlb_flush_all();
 }
 
 static uint32_t user_page_flags(uint32_t vma_flags, bool writable)
@@ -146,6 +142,12 @@ static uint32_t user_page_flags(uint32_t vma_flags, bool writable)
     }
 
     return page_flags;
+}
+
+static inline void clean_pte_for_mmu(const void *pte)
+{
+    dc_clean_mva((void *)pte);
+    data_sync_barrier_inner_shareable_write();
 }
 
 pte_ptr_t get_user_pte(pgdir_t pgdir, vaddr_t vaddr)
@@ -177,12 +179,10 @@ static int update_user_pte(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr,
     }
 
     *pte = (phys_addr & PTE_SMALL_BASE) | user_page_flags(vma_flags, writable);
-    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
-    asm volatile("dsb ishst" ::: "memory");
+    clean_pte_for_mmu(pte);
     tlb_shootdown_page_asid(vaddr, asid);
     if (vma_flags & VMA_EXEC) {
-        asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0));
-        asm volatile("dsb ish; isb" ::: "memory");
+        sync_icache_for_exec();
     }
 
     return 0;
@@ -374,8 +374,7 @@ static uint32_t detect_available_ram_for_mmu(void)
 }
 
 void configure_alignment_policy(void) {
-    uint32_t sctlr;
-    __asm__ volatile("mrc p15, 0, %0, c1, c0, 0" : "=r" (sctlr));
+    uint32_t sctlr = get_sctlr();
     
     KINFO("Current SCTLR = 0x%08X\n", sctlr);
     KINFO("Alignment checking: %s\n", (sctlr & (1<<1)) ? "ENABLED" : "DISABLED");
@@ -383,9 +382,9 @@ void configure_alignment_policy(void) {
     // Desactiver l'alignement strict
     sctlr &= ~(1 << 1);  // Clear A bit
     
-    __asm__ volatile("mcr p15, 0, %0, c1, c0, 0" : : "r" (sctlr));
-    __asm__ volatile("dsb");
-    __asm__ volatile("isb");
+    set_sctlr(sctlr);
+    data_sync_barrier();
+    instruction_sync_barrier();
     
     KINFO("Alignment checking disabled OK\n");
 }
@@ -411,7 +410,7 @@ void check_endianness() {
 
     // Vérification spécifique ARM
     uint32_t cpsr;
-    __asm__ volatile("mrs %0, cpsr" : "=r"(cpsr));
+    cpsr = read_cpsr();
     bool ee_bit = (cpsr & (1 << 9)) != 0;
     KINFO("  CPSR Endian Exception bit: %s\n", 
             ee_bit ? "SET (Big Endian)" : "CLEAR (Little Endian)");
@@ -849,10 +848,7 @@ static void free_asid(uint32_t asid)
         asid_slot_generation[hw_asid] = 0;
         
         /* Invalider les entrées TLB pour cet ASID */
-        __asm__ volatile("mcr p15, 0, %0, c8, c7, 2" : : "r"(hw_asid));  /* TLBIASID */
-        //asm volatile("mcr p15, 0, %0, c8, c7, 0" :: "r"(0));  // TLBIALL
-        data_sync_barrier();
-        instruction_sync_barrier();
+        tlb_flush_by_asid(hw_asid);
     }
 }
 
@@ -1157,8 +1153,7 @@ int set_user_page_readonly(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid)
     }
 
     *pte = (*pte & ~PTE_AP_MASK) | PTE_AP_RW_RO;
-    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
-    asm volatile("dsb ishst" ::: "memory");
+    clean_pte_for_mmu(pte);
     tlb_shootdown_page_asid(vaddr, asid);
     return 0;
 }
@@ -1171,8 +1166,7 @@ int set_user_page_writable(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid)
     }
 
     *pte = (*pte & ~PTE_AP_MASK) | PTE_AP_RW_RW;
-    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(pte) : "memory");
-    asm volatile("dsb ishst" ::: "memory");
+    clean_pte_for_mmu(pte);
     tlb_shootdown_page_asid(vaddr, asid);
     return 0;
 }
@@ -1217,8 +1211,7 @@ static int map_user_page_with_perm(pgdir_t pgdir, vaddr_t vaddr,
         }
         memset((void *)phys_to_virt(l2_page), 0, PAGE_SIZE);
         *l1_entry = (l2_page & 0xFFFFFC00) | 0x01;
-        asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(l1_entry) : "memory"); // DCCMVAC
-        asm volatile("dsb ishst" ::: "memory");
+        clean_pte_for_mmu(l1_entry);
         tlb_shootdown_page_asid(vaddr, asid);
     } else if (l1_type == 0x2) {
         KERROR("map_user_page: refusing L1 section at user vaddr 0x%08X\n", vaddr);
@@ -1244,12 +1237,10 @@ static int map_user_page_with_perm(pgdir_t pgdir, vaddr_t vaddr,
     uint32_t page_flags = user_page_flags(vma_flags, writable);
 
     l2_table[l2_index] = (phys_addr & 0xFFFFF000) | page_flags;
-    asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(&l2_table[l2_index]) : "memory");
-    asm volatile("dsb ishst" ::: "memory");
+    clean_pte_for_mmu(&l2_table[l2_index]);
     tlb_shootdown_page_asid(vaddr, asid);
     if (vma_flags & VMA_EXEC) {
-        asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0)); // ICIALLU
-        asm volatile("dsb ish; isb" ::: "memory");
+        sync_icache_for_exec();
     }
     return 0;
 }
