@@ -25,10 +25,11 @@
 #include <kernel/smp.h>
 #include <kernel/task.h>
 #include <kernel/timer.h>
+#include <asm/arm.h>
 
 static inline void irq_return_enable_interrupts(void)
 {
-    __asm__ volatile("cpsie i" ::: "memory");
+    enable_interrupts();
 }
 
 /*

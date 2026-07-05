@@ -854,7 +854,7 @@ static void handle_user_fault_on_svc_stack(user_fault_snapshot_t* snap)
     }
 
     while (1) {
-        __asm__ volatile("wfi");
+        wait_for_interrupt();
     }
 }
 
