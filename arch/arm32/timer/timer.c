@@ -5,8 +5,8 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/interrupt/timer.c
- * Layer: Kernel / interrupts and exceptions
+ * File: arch/arm32/timer/timer.c
+ * Layer: ARM32 / generic timer and clock source
  *
  * Responsibilities:
  * - Handle IRQs, timer ticks, aborts, and crash diagnostics.
