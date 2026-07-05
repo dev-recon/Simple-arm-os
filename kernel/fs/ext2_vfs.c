@@ -539,7 +539,22 @@ static int ext2_write_block(uint32_t block, void* buf)
     return ret;
 }
 
-static int ext2_read_superblock(ext2_superblock_t* out)
+/*
+ * Pinned superblock copy.
+ *
+ * Without this cache, every block or inode allocation re-read the superblock
+ * from disk (outside the block cache, because it lives at byte offset 1024)
+ * and wrote it back synchronously. That is two VirtIO I/O operations per
+ * allocation just for free counters. After mount, updates now modify this RAM
+ * copy, mark it dirty, and ext2_sync() writes it back before flushing the
+ * device. After an unclean shutdown the superblock counters may lag behind the
+ * group bitmaps; ext2_check() detects that mismatch but does not repair it yet.
+ */
+static ext2_superblock_t ext2_sb_cache;
+static bool ext2_sb_cached;
+static bool ext2_sb_cache_dirty;
+
+static int ext2_read_superblock_disk(ext2_superblock_t* out)
 {
     if (!out) return -1;
 
@@ -554,7 +569,7 @@ static int ext2_read_superblock(ext2_superblock_t* out)
     return ret;
 }
 
-static int ext2_write_superblock(const ext2_superblock_t* in)
+static int ext2_write_superblock_disk(const ext2_superblock_t* in)
 {
     if (!in) return -1;
 
@@ -576,6 +591,32 @@ static int ext2_write_superblock(const ext2_superblock_t* in)
     return ret;
 }
 
+static int ext2_read_superblock(ext2_superblock_t* out)
+{
+    if (!out) return -1;
+
+    if (ext2_sb_cached) {
+        *out = ext2_sb_cache;
+        return 0;
+    }
+
+    return ext2_read_superblock_disk(out);
+}
+
+static int ext2_write_superblock(const ext2_superblock_t* in)
+{
+    if (!in) return -1;
+
+    if (ext2_sb_cached) {
+        ext2_sb_cache = *in;
+        ext2_sb_cache_dirty = true;
+        ext2_mark_dirty();
+        return 0;
+    }
+
+    return ext2_write_superblock_disk(in);
+}
+
 int ext2_sync(void)
 {
     int ret = 0;
@@ -585,6 +626,17 @@ int ext2_sync(void)
 
     ext2_op_acquire();
     ext2_stats.syncs++;
+
+    /* Write the pinned superblock before asking the device to flush. */
+    if (ext2_sb_cache_dirty) {
+        if (ext2_write_superblock_disk(&ext2_sb_cache) < 0) {
+            ext2_stats.sync_errors++;
+            ext2_op_release();
+            return -EIO;
+        }
+        ext2_sb_cache_dirty = false;
+    }
+
     if (ext2_dirty) {
         ret = virtio_blk_flush();
         if (ret < 0) {
@@ -1312,71 +1364,141 @@ out:
     return ret;
 }
 
-/* Resolve logical block index → physical block number. */
-static uint32_t ext2_get_block_at(ext2_inode_t* di, uint32_t idx)
+/*
+ * Logical block mapping cursor.
+ *
+ * read()/readdir() walk consecutive logical block indexes that often share the
+ * same single- or double-indirect table block. The cursor keeps the last table
+ * block loaded so the hot loop does not re-read and copy a full metadata block
+ * for every data block. Buffers are allocated lazily and must be released with
+ * ext2_map_cursor_release().
+ */
+typedef struct ext2_map_cursor {
+    uint32_t table_no;   /* Leaf table block currently loaded in table[]; 0 means none. */
+    uint32_t dbl_no;     /* Double-indirect table block loaded in dbl[]; 0 means none. */
+    uint32_t* table;
+    uint32_t* dbl;
+} ext2_map_cursor_t;
+
+static void ext2_map_cursor_init(ext2_map_cursor_t* cur)
+{
+    cur->table_no = 0;
+    cur->dbl_no = 0;
+    cur->table = NULL;
+    cur->dbl = NULL;
+}
+
+static void ext2_map_cursor_release(ext2_map_cursor_t* cur)
+{
+    if (cur->table) kfree(cur->table);
+    if (cur->dbl) kfree(cur->dbl);
+    ext2_map_cursor_init(cur);
+}
+
+static int ext2_map_cursor_load(uint32_t block_no, uint32_t* loaded_no,
+                                uint32_t** buf)
+{
+    if (*loaded_no == block_no && *buf)
+        return 0;
+
+    if (!*buf) {
+        *buf = kmalloc(ext2_fs.block_size);
+        if (!*buf)
+            return -ENOMEM;
+    }
+
+    if (ext2_read_block(block_no, *buf) < 0) {
+        *loaded_no = 0;
+        return -EIO;
+    }
+
+    *loaded_no = block_no;
+    return 0;
+}
+
+/*
+ * Resolve a logical block index into an on-disk block number.
+ *
+ * Returns 0 with *out_blk == 0 for a sparse hole; that is not an error.
+ * Returns < 0 when resolution itself fails (memory pressure or I/O). Callers
+ * must not treat that case as a hole, otherwise read paths could silently serve
+ * zeroes instead of reporting that real data could not be reached.
+ */
+static int ext2_map_block_cursor(ext2_inode_t* di, uint32_t idx,
+                                 uint32_t* out_blk, ext2_map_cursor_t* cur)
 {
     uint32_t ptrs_per_block = ext2_ptrs_per_block();
+    int ret;
 
-    if (idx < 12)
-        return di->i_block[idx];
+    if (!di || !out_blk || !cur)
+        return -EINVAL;
+
+    *out_blk = 0;
+
+    if (idx < 12) {
+        *out_blk = di->i_block[idx];
+        return 0;
+    }
 
     idx -= 12;
     if (idx < ptrs_per_block) {
-        if (di->i_block[12] == 0) return 0;
-
-        uint32_t* indirect = kmalloc(ext2_fs.block_size);
-        if (!indirect) return 0;
-        if (ext2_read_block(di->i_block[12], indirect) < 0) {
-            kfree(indirect);
+        if (di->i_block[12] == 0)
             return 0;
-        }
-        uint32_t blk = indirect[idx];
-        kfree(indirect);
-        return blk;
+
+        ret = ext2_map_cursor_load(di->i_block[12], &cur->table_no, &cur->table);
+        if (ret < 0)
+            return ret;
+
+        *out_blk = cur->table[idx];
+        return 0;
     }
 
     idx -= ptrs_per_block;
-    if (idx >= ptrs_per_block * ptrs_per_block) return 0;
-    if (di->i_block[13] == 0) return 0;
-
-    uint32_t* dbl = kmalloc(ext2_fs.block_size);
-    uint32_t* indirect = kmalloc(ext2_fs.block_size);
-    if (!dbl || !indirect) {
-        if (dbl) kfree(dbl);
-        if (indirect) kfree(indirect);
+    if (idx >= ptrs_per_block * ptrs_per_block)
         return 0;
-    }
-
-    if (ext2_read_block(di->i_block[13], dbl) < 0) {
-        kfree(dbl);
-        kfree(indirect);
+    if (di->i_block[13] == 0)
         return 0;
-    }
+
+    ret = ext2_map_cursor_load(di->i_block[13], &cur->dbl_no, &cur->dbl);
+    if (ret < 0)
+        return ret;
 
     uint32_t first = idx / ptrs_per_block;
     uint32_t second = idx % ptrs_per_block;
-    if (dbl[first] == 0) {
-        kfree(dbl);
-        kfree(indirect);
+    if (cur->dbl[first] == 0)
         return 0;
-    }
 
-    if (ext2_read_block(dbl[first], indirect) < 0) {
-        kfree(dbl);
-        kfree(indirect);
-        return 0;
-    }
+    ret = ext2_map_cursor_load(cur->dbl[first], &cur->table_no, &cur->table);
+    if (ret < 0)
+        return ret;
 
-    uint32_t blk = indirect[second];
-    kfree(dbl);
-    kfree(indirect);
-    return blk;
+    *out_blk = cur->table[second];
+    return 0;
+}
+
+/* Cursor-less variant for isolated calls outside hot sequential loops. */
+static int ext2_map_block(ext2_inode_t* di, uint32_t idx, uint32_t* out_blk)
+{
+    ext2_map_cursor_t cur;
+    int ret;
+
+    ext2_map_cursor_init(&cur);
+    ret = ext2_map_block_cursor(di, idx, out_blk, &cur);
+    ext2_map_cursor_release(&cur);
+    return ret;
 }
 
 static uint32_t ext2_get_or_alloc_block_at(ext2_inode_t* di, uint32_t idx, bool* allocated)
 {
-    uint32_t block = ext2_get_block_at(di, idx);
+    uint32_t block = 0;
     uint32_t ptrs_per_block = ext2_ptrs_per_block();
+
+    /*
+     * A mapping failure must not be confused with a sparse hole: allocating a
+     * replacement over an existing referenced block would orphan data.
+     */
+    if (ext2_map_block(di, idx, &block) < 0)
+        return 0;
 
     if (block != 0)
         return block;
@@ -1575,7 +1697,12 @@ static int ext2_add_dir_entry(inode_t* dir, uint32_t ino, const char* name, uint
     uint32_t used_blocks = (di.i_size + ext2_fs.block_size - 1) / ext2_fs.block_size;
 
     for (uint32_t idx = 0; idx < max_blocks; idx++) {
-        uint32_t blk = ext2_get_block_at(&di, idx);
+        uint32_t blk = 0;
+
+        if (ext2_map_block(&di, idx, &blk) < 0) {
+            kfree(blkbuf);
+            return -EIO;
+        }
 
         if (blk == 0 || idx >= used_blocks) {
             blk = ext2_get_or_alloc_block_at(&di, idx, NULL);
@@ -1899,7 +2026,12 @@ static int ext2_readlink_inode_unlocked(inode_t* inode, char* buf, size_t bufsiz
         uint32_t blk_idx = copied / ext2_fs.block_size;
         uint32_t blk_off = copied % ext2_fs.block_size;
         uint32_t chunk = ext2_fs.block_size - blk_off;
-        uint32_t blk = ext2_get_block_at(&di, blk_idx);
+        uint32_t blk = 0;
+
+        if (ext2_map_block(&di, blk_idx, &blk) < 0) {
+            kfree(blkbuf);
+            return -EIO;
+        }
 
         if (chunk > wanted - copied)
             chunk = wanted - copied;
@@ -2037,8 +2169,11 @@ static inode_t* ext2_inode_lookup(inode_t* dir, const char* name)
     uint32_t idx;
 
     for (idx = 0; idx < ext2_max_supported_file_blocks(); idx++) {
-        uint32_t blk = ext2_get_block_at(&disk, idx);
-        if (blk == 0) break;
+        uint32_t blk = 0;
+
+        /* Mapping errors make lookup fail cleanly instead of faking a hole. */
+        if (ext2_map_block(&disk, idx, &blk) < 0 || blk == 0)
+            break;
 
         if (ext2_read_block(blk, blkbuf) < 0) break;
 
@@ -2092,7 +2227,12 @@ static int ext2_remove_dir_entry(inode_t* dir, const char* name)
     if (!blkbuf) return -ENOMEM;
 
     for (uint32_t idx = 0; idx < ext2_max_supported_file_blocks(); idx++) {
-        uint32_t blk = ext2_get_block_at(&disk, idx);
+        uint32_t blk = 0;
+
+        if (ext2_map_block(&disk, idx, &blk) < 0) {
+            kfree(blkbuf);
+            return -EIO;
+        }
         if (blk == 0) break;
 
         if (ext2_read_block(blk, blkbuf) < 0) {
@@ -2143,7 +2283,17 @@ static bool ext2_directory_is_empty(inode_t* dir)
     if (!blkbuf) return false;
 
     for (uint32_t idx = 0; idx < ext2_max_supported_file_blocks(); idx++) {
-        uint32_t blk = ext2_get_block_at(&disk, idx);
+        uint32_t blk = 0;
+
+        /*
+         * On mapping errors, report the directory as non-empty so rmdir()
+         * refuses it. The opposite would allow deleting a populated directory
+         * just because an I/O error hid its entries.
+         */
+        if (ext2_map_block(&disk, idx, &blk) < 0) {
+            kfree(blkbuf);
+            return false;
+        }
         if (blk == 0) break;
 
         if (ext2_read_block(blk, blkbuf) < 0) {
@@ -2184,7 +2334,12 @@ static int ext2_update_dotdot(inode_t* dir, uint32_t new_parent_ino)
     if (!blkbuf) return -ENOMEM;
 
     for (uint32_t idx = 0; idx < ext2_max_supported_file_blocks(); idx++) {
-        uint32_t blk = ext2_get_block_at(&disk, idx);
+        uint32_t blk = 0;
+
+        if (ext2_map_block(&disk, idx, &blk) < 0) {
+            kfree(blkbuf);
+            return -EIO;
+        }
         if (blk == 0) break;
 
         if (ext2_read_block(blk, blkbuf) < 0) {
@@ -2807,7 +2962,12 @@ static int ext2_file_truncate_unlocked(file_t* file, off_t length)
 
     uint32_t tail = new_size % ext2_fs.block_size;
     if (tail != 0) {
-        uint32_t blk = ext2_get_block_at(di, new_size / ext2_fs.block_size);
+        uint32_t blk = 0;
+
+        if (ext2_map_block(di, new_size / ext2_fs.block_size, &blk) < 0) {
+            ret = -EIO;
+            goto out;
+        }
         if (blk != 0) {
             uint8_t* blkbuf = kmalloc(ext2_fs.block_size);
             if (!blkbuf) {
@@ -2899,11 +3059,29 @@ static ssize_t ext2_file_read_unlocked(file_t* file, void* buffer, size_t count)
 
     ssize_t  total = 0;
     uint8_t* dst   = (uint8_t*)buffer;
+    ext2_map_cursor_t cur;
+
+    /*
+     * Consecutive data blocks share indirect tables. Keeping the last resolved
+     * table in this cursor avoids one block-sized allocation/copy per data
+     * block while streaming through a file.
+     */
+    ext2_map_cursor_init(&cur);
 
     while (count > 0) {
         uint32_t blk_idx = file->offset / ext2_fs.block_size;
         uint32_t blk_off = file->offset % ext2_fs.block_size;
-        uint32_t blk     = ext2_get_block_at(di, blk_idx);
+        uint32_t blk     = 0;
+
+        if (ext2_map_block_cursor(di, blk_idx, &blk, &cur) < 0) {
+            /*
+             * Memory or I/O errors while resolving metadata are not sparse
+             * holes. Returning zero-filled data here would hide corruption or
+             * backend failures behind a successful read().
+             */
+            total = total ? total : -EIO;
+            break;
+        }
 
         uint32_t chunk = ext2_fs.block_size - blk_off;
         if (chunk > (uint32_t)count) chunk = (uint32_t)count;
@@ -2924,6 +3102,7 @@ static ssize_t ext2_file_read_unlocked(file_t* file, void* buffer, size_t count)
         count        -= chunk;
     }
 
+    ext2_map_cursor_release(&cur);
     kfree(blkbuf);
     return total;
 }
@@ -2950,20 +3129,32 @@ static ssize_t ext2_file_write(file_t* file, const void* buffer, size_t count)
     while (count > 0) {
         uint32_t blk_idx = file->offset / ext2_fs.block_size;
         uint32_t blk_off = file->offset % ext2_fs.block_size;
-        uint32_t blk = ext2_get_or_alloc_block_at(di, blk_idx, &allocated_block);
+        uint32_t blk;
+
+        allocated_block = false;
+        blk = ext2_get_or_alloc_block_at(di, blk_idx, &allocated_block);
 
         if (blk == 0) {
             total = total ? total : -ENOSPC;
             break;
         }
 
-        if (ext2_read_block(blk, blkbuf) < 0) {
+        uint32_t chunk = ext2_fs.block_size - blk_off;
+        if (chunk > (uint32_t)count) chunk = (uint32_t)count;
+
+        /*
+         * Read-modify-write is only needed for partial writes to an existing
+         * block. Fully overwritten blocks do not need a read, and newly
+         * allocated blocks are zeroed on disk, so a local memset is equivalent.
+         */
+        if (chunk == ext2_fs.block_size) {
+            /* Full overwrite: blkbuf will be filled by memcpy below. */
+        } else if (allocated_block) {
+            memset(blkbuf, 0, ext2_fs.block_size);
+        } else if (ext2_read_block(blk, blkbuf) < 0) {
             total = total ? total : -EIO;
             break;
         }
-
-        uint32_t chunk = ext2_fs.block_size - blk_off;
-        if (chunk > (uint32_t)count) chunk = (uint32_t)count;
 
         memcpy(blkbuf + blk_off, src, chunk);
 
@@ -3050,7 +3241,12 @@ static int ext2_dir_readdir_unlocked(file_t* file, dirent_t* dirent)
     while (file->offset < dir_size) {
         uint32_t blk_idx = file->offset / ext2_fs.block_size;
         uint32_t blk_off = file->offset % ext2_fs.block_size;
-        uint32_t blk     = ext2_get_block_at(di, blk_idx);
+        uint32_t blk     = 0;
+
+        if (ext2_map_block(di, blk_idx, &blk) < 0) {
+            kfree(blkbuf);
+            return -EIO;
+        }
 
         if (blk == 0) { file->offset = dir_size; break; }
 
@@ -3192,6 +3388,14 @@ inode_t* ext2_mount(uint64_t lba_start)
     ext2_stats.inodes_per_group = ext2_fs.inodes_per_group;
     ext2_stats.blocks_per_group = ext2_fs.blocks_per_group;
     ext2_block_cache_reset();
+
+    /*
+     * Pin the validated superblock: after mount, all reads and writes go
+     * through this RAM copy, which ext2_sync() writes back to disk.
+     */
+    ext2_sb_cache = *sb;
+    ext2_sb_cached = true;
+    ext2_sb_cache_dirty = false;
 
     KINFO("[EXT2] Mounted: block_size=%u inodes_per_group=%u inode_size=%u gdesc_block=%u\n",
           ext2_fs.block_size, ext2_fs.inodes_per_group,
