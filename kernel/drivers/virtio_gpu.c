@@ -52,6 +52,10 @@
 #define VIRTIO_GPU_VQ_SIZE                     8
 #define VIRTIO_GPU_TIMEOUT_MS                  1000
 
+/* VirtIO MMIO interrupt status bits. */
+#define VIRTIO_GPU_INT_USED_RING               0x1u
+#define VIRTIO_GPU_INT_CONFIG                  0x2u
+
 typedef struct {
     uint32_t x;
     uint32_t y;
@@ -350,9 +354,15 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
 
     gpu.vq.last_used_idx = used->idx;
     invalidate_dcache_by_mva(resp, resp_len);
+
+    /*
+     * Only acknowledge the used-ring bit here. Acking the whole status word
+     * would silently consume config-change events (QEMU window resize),
+     * which virtio_gpu_check_resize() polls for separately.
+     */
     uint32_t irq_status = mmio_read32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_STATUS);
-    if (irq_status)
-        mmio_write32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_ACK, irq_status);
+    if (irq_status & VIRTIO_GPU_INT_USED_RING)
+        mmio_write32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_ACK, VIRTIO_GPU_INT_USED_RING);
     ret = 0;
 
 out:
@@ -488,6 +498,39 @@ int virtio_gpu_flush_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t heigh
 int virtio_gpu_flush(void)
 {
     return virtio_gpu_flush_rect(0, 0, FB_WIDTH, FB_HEIGHT);
+}
+
+/*
+ * Poll and handle a display configuration change (QEMU window resize).
+ *
+ * The scanout resolution stays fixed at FB_WIDTHxFB_HEIGHT (the host scales
+ * the window); what a resize can disturb is the host-side scanout state.
+ * Re-asserting the scanout prepares the next full repaint. Must be called from
+ * task context (displayd): it submits synchronous GPU commands.
+ *
+ * Returns true when a config change was seen and handled; the caller should
+ * mark the whole framebuffer dirty so the next frame repaints everything.
+ */
+bool virtio_gpu_check_resize(void)
+{
+    uint32_t irq_status;
+
+    if (!gpu.initialized)
+        return false;
+
+    irq_status = mmio_read32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_STATUS);
+    if (!(irq_status & VIRTIO_GPU_INT_CONFIG))
+        return false;
+
+    mmio_write32(gpu.mmio, VIRTIO_MMIO_INTERRUPT_ACK, VIRTIO_GPU_INT_CONFIG);
+
+    gpu_get_display_info();
+    if (gpu_set_scanout() < 0) {
+        KERROR("virtio_gpu: scanout re-assert failed after resize\n");
+        return false;
+    }
+
+    return true;
 }
 
 static void gpu_draw_text_px(uint32_t x, uint32_t y, const char *s,
