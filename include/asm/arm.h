@@ -235,6 +235,16 @@ INLINE void flush_tlb_page(vaddr_t addr)
     instruction_sync_barrier();
 }
 
+INLINE void tlb_flush_all_debug(void)
+{
+    __asm__ volatile("dsb ish; mcr p15,0,%0,c8,c3,0; dsb ish; isb" :: "r"(0) : "memory");
+}
+
+INLINE void dc_clean_mva(void *va)
+{
+    __asm__ volatile("mcr p15,0,%0,c7,c10,1" :: "r"(va) : "memory");
+}
+
 /* Branch predictor operations */
 INLINE void flush_branch_predictor(void)
 {
@@ -254,6 +264,21 @@ INLINE void set_sctlr(uint32_t sctlr)
 {
     __asm__ volatile("mcr p15, 0, %0, c1, c0, 0" : : "r"(sctlr));
     instruction_sync_barrier();
+}
+
+INLINE int sctlr_smp_enabled(void)
+{
+    uint32_t sctlr = get_sctlr();
+    return (sctlr >> 6) & 1;
+}
+
+INLINE void sctlr_set_smp(void)
+{
+    uint32_t sctlr = get_sctlr();
+    sctlr |= (1u << 6);
+    __asm__ volatile("mcr p15,0,%0,c1,c0,0" :: "r"(sctlr) : "memory");
+    instruction_sync_barrier();
+    data_sync_barrier();
 }
 
 /* 
@@ -483,6 +508,99 @@ INLINE void set_csselr(uint32_t csselr)
     instruction_sync_barrier();
 }
 
+INLINE uint32_t dcache_line_size_bytes(void)
+{
+    uint32_t ccsidr;
+    uint32_t line_sz_enc;
+    uint32_t line_bytes;
+
+    set_csselr(0);
+    ccsidr = get_ccsidr();
+
+    line_sz_enc = ccsidr & 0x7;
+    line_bytes = 1u << (line_sz_enc + 4u);
+    if (line_bytes == 0 || line_bytes > 256)
+        line_bytes = 64;
+    return line_bytes;
+}
+
+INLINE void dcache_clean_by_va(void *va, size_t len)
+{
+    uintptr_t p = (uintptr_t)va & ~63u;
+    uintptr_t end = ((uintptr_t)va + len + 63u) & ~63u;
+
+    for (; p < end; p += 64)
+        __asm__ volatile("mcr p15, 0, %0, c7, c10, 1" :: "r"(p) : "memory");
+    data_sync_barrier_inner_shareable();
+}
+
+INLINE void sync_icache_for_exec(void)
+{
+    flush_icache();
+    data_sync_barrier_inner_shareable();
+    instruction_sync_barrier();
+}
+
+INLINE int ats1cpr_probe(uint32_t va, uint32_t *pa_out, uint32_t *par_out)
+{
+    uint32_t par;
+
+    __asm__ volatile("mcr p15,0,%0,c7,c8,0" :: "r"(va));
+    __asm__ volatile("mrc p15,0,%0,c7,c4,0" : "=r"(par));
+    if (par_out)
+        *par_out = par;
+    if (par & 1)
+        return 0;
+    if (pa_out)
+        *pa_out = (par & 0xFFFFF000u) | (va & 0xFFFu);
+    return 1;
+}
+
+INLINE void clean_dcache_by_mva(const void *addr, size_t size)
+{
+    if (size == 0)
+        return;
+
+    uint32_t line = dcache_line_size_bytes();
+    uintptr_t start = ((uintptr_t)addr) & ~(uintptr_t)(line - 1u);
+    uintptr_t end = ((uintptr_t)addr + size + line - 1u) & ~(uintptr_t)(line - 1u);
+
+    data_sync_barrier_inner_shareable();
+    for (uintptr_t p = start; p < end; p += line)
+        __asm__ volatile("mcr p15, 0, %0, c7, c10, 1" :: "r"(p) : "memory");
+    data_sync_barrier_inner_shareable();
+}
+
+INLINE void invalidate_dcache_by_mva(const void *addr, size_t size)
+{
+    if (size == 0)
+        return;
+
+    uint32_t line = dcache_line_size_bytes();
+    uintptr_t start = ((uintptr_t)addr) & ~(uintptr_t)(line - 1u);
+    uintptr_t end = ((uintptr_t)addr + size + line - 1u) & ~(uintptr_t)(line - 1u);
+
+    data_sync_barrier_inner_shareable();
+    for (uintptr_t p = start; p < end; p += line)
+        __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" :: "r"(p) : "memory");
+    data_sync_barrier_inner_shareable();
+}
+
+INLINE void clean_invalidate_dcache_by_mva(const void *addr, size_t size)
+{
+    if (size == 0)
+        return;
+
+    uint32_t line = dcache_line_size_bytes();
+    uintptr_t start = ((uintptr_t)addr) & ~(uintptr_t)(line - 1u);
+    uintptr_t end = ((uintptr_t)addr + size + line - 1u) & ~(uintptr_t)(line - 1u);
+
+    data_sync_barrier_inner_shareable();
+    for (uintptr_t p = start; p < end; p += line)
+        __asm__ volatile("mcr p15, 0, %0, c7, c14, 1" :: "r"(p) : "memory");
+    data_sync_barrier_inner_shareable();
+}
+
 /* Context ID register */
 INLINE uint32_t get_contextidr(void)
 {
@@ -595,6 +713,57 @@ INLINE uint32_t get_cpu_mode(void)
 {
     uint32_t cpu_mode = get_cpsr();
     return cpu_mode & 0x1F;  
+}
+
+INLINE uint32_t read_sp_usr(void)
+{
+    uint32_t sp;
+    __asm__ volatile(
+        "cps #0x1F\n"
+        "mov %0, sp\n"
+        "cps #0x13\n"
+        : "=r"(sp) :: "memory", "cc");
+    return sp;
+}
+
+INLINE void write_sp_usr(uint32_t sp)
+{
+    __asm__ volatile(
+        "cps #0x1F\n"
+        "mov sp, %0\n"
+        "cps #0x13\n"
+        :: "r"(sp) : "memory", "cc");
+}
+
+INLINE uint32_t read_spsr(void)
+{
+    return get_spsr();
+}
+
+INLINE uint32_t read_cpsr(void)
+{
+    return get_cpsr();
+}
+
+INLINE uint32_t read_spsr_svc(void)
+{
+    return get_spsr();
+}
+
+INLINE uint32_t read_lr_svc(void)
+{
+    return get_lr();
+}
+
+INLINE uint32_t read_lr_usr(void)
+{
+    uint32_t lr;
+    __asm__ volatile(
+        "cps #0x1F\n"
+        "mov %0, lr\n"
+        "cps #0x13\n"
+        : "=r"(lr) :: "memory", "cc");
+    return lr;
 }
 
 
