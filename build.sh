@@ -7,6 +7,8 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARCH="${ARCH:-arm-none-eabi-}"
 BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 BUILD_TCC="${BUILD_TCC:-1}"
+BUILD_NCURSES="${BUILD_NCURSES:-0}"
+BUILD_NANO="${BUILD_NANO:-0}"
 DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
 NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$DEFAULT_NEWLIB_SYSROOT}"
 
@@ -57,6 +59,23 @@ if [ "$BUILD_TCC" = "1" ]; then
     echo "=== Building native TinyCC bundle ==="
     ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_tcc_native.sh
     rsync -a build/tcc-native/bundle/opt/tcc/ userfs/opt/tcc/
+fi
+
+if [ "$BUILD_NCURSES" = "1" ]; then
+    echo "=== Building ncurses bundle ==="
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_ncurses.sh
+    rsync -a build/ncurses/bundle/ userfs/
+fi
+
+if [ "$BUILD_NANO" = "1" ]; then
+    echo "=== Building nano bundle ==="
+    if [ "$BUILD_NCURSES" != "1" ] && [ ! -f userfs/opt/ncurses/lib/libncurses.a ]; then
+        echo "Error: nano requires the ncurses bundle in userfs/opt/ncurses" >&2
+        echo "Hint: rerun with BUILD_NCURSES=1 BUILD_NANO=1" >&2
+        exit 1
+    fi
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_nano.sh
+    rsync -a build/nano/bundle/ userfs/
 fi
 
 echo "=== Rebuilding kernel ==="

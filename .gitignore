@@ -27,6 +27,8 @@ userfs/usr/bin/
 userfs/legacy/bin-libc/
 userfs/opt/*/bin/*
 userfs/opt/tcc/
+userfs/opt/ncurses/
+userfs/opt/nano/
 userland/*/*.o
 userland/nl-*
 userland/legacy/homegrown-libc/**/*.o

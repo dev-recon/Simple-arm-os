@@ -16,6 +16,10 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#ifndef NAME_MAX
+#define NAME_MAX 255
+#endif
+
 struct linux_dirent {
     uint32_t d_ino;
     uint32_t d_off;
@@ -34,7 +38,21 @@ struct linux_dirent {
 #define DT_SOCK    12
 #define DT_WHT     14
 
+struct dirent {
+    uint32_t d_ino;
+    uint32_t d_off;
+    uint16_t d_reclen;
+    uint8_t  d_type;
+    char     d_name[NAME_MAX + 1];
+};
+
+typedef struct __dirstream DIR;
+
 int getdents(int fd, void *dirp, size_t count);
+DIR *opendir(const char *name);
+struct dirent *readdir(DIR *dirp);
+void rewinddir(DIR *dirp);
+int closedir(DIR *dirp);
+int dirfd(DIR *dirp);
 
 #endif
-
