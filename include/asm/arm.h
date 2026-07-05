@@ -247,19 +247,30 @@ INLINE void set_spsr(uint32_t spsr)
     __asm__ volatile("msr spsr_cxsf, %0" : : "r"(spsr));
 }
 
-/* CPU identification pour Cortex-A15 */
+/* CPU identification registers. Keep raw reads here; higher layers decide
+ * whether they need the full register value or a decoded logical CPU id. */
+INLINE uint32_t arm_read_mpidr(void)
+{
+    uint32_t mpidr;
+    __asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(mpidr));
+    return mpidr;
+}
+
+INLINE uint32_t arm_read_midr(void)
+{
+    uint32_t midr;
+    __asm__ volatile("mrc p15, 0, %0, c0, c0, 0" : "=r"(midr));
+    return midr;
+}
+
 INLINE uint32_t get_cpu_id(void)
 {
-    uint32_t cpu_id;
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(cpu_id));
-    return cpu_id & 0x3;  /* CPU ID dans les bits 1:0 */
+    return arm_read_mpidr() & 0x3;
 }
 
 INLINE uint32_t get_main_id(void)
 {
-    uint32_t main_id;
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 0" : "=r"(main_id));
-    return main_id;
+    return arm_read_midr();
 }
 
 /* Cache operations pour Cortex-A15 */

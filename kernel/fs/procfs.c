@@ -301,16 +301,12 @@ static pid_t proc_current_pid(void)
 
 static uint32_t proc_read_midr(void)
 {
-    uint32_t id;
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 0" : "=r"(id));
-    return id;
+    return arm_read_midr();
 }
 
 static uint32_t proc_read_mpidr(void)
 {
-    uint32_t id;
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(id));
-    return id;
+    return arm_read_mpidr();
 }
 
 static void proc_append(char* buf, size_t cap, size_t* len, const char* fmt, ...)
