@@ -35,7 +35,7 @@
 #include <kernel/syscalls.h>
 #include <kernel/smp.h>
 #include <kernel/tlb.h>
-#include <asm/arm.h>
+#include <kernel/arch_cpu.h>
 
 extern uint32_t task_count;
 extern task_t* task_list_head;
@@ -297,16 +297,6 @@ static pid_t proc_current_pid(void)
     if (task && task->process)
         return task->process->pid;
     return 0;
-}
-
-static uint32_t proc_read_midr(void)
-{
-    return arm_read_midr();
-}
-
-static uint32_t proc_read_mpidr(void)
-{
-    return arm_read_mpidr();
 }
 
 static void proc_append(char* buf, size_t cap, size_t* len, const char* fmt, ...)
@@ -674,17 +664,21 @@ static void proc_fill_mounts(char* buf, size_t cap, size_t* len)
 
 static void proc_fill_cpuinfo(char* buf, size_t cap, size_t* len)
 {
+    arch_cpuinfo_t cpuinfo;
+
+    arch_get_cpuinfo(&cpuinfo);
+
     proc_append(buf, cap, len, "processor\t: 0\n");
-    proc_append(buf, cap, len, "model name\t: ARM Cortex-A15 @ QEMU virt\n");
+    proc_append(buf, cap, len, "model name\t: %s\n", cpuinfo.model_name);
     proc_append(buf, cap, len, "BogoMIPS\t: 125.00\n");
-    proc_append(buf, cap, len, "Features\t: swp half thumb fastmult vfp edsp neon vfpv4 tls\n");
-    proc_append(buf, cap, len, "CPU implementer\t: 0x%02x\n", (proc_read_midr() >> 24) & 0xff);
-    proc_append(buf, cap, len, "CPU architecture: 7\n");
-    proc_append(buf, cap, len, "CPU part\t: 0x%03x\n", (proc_read_midr() >> 4) & 0xfff);
-    proc_append(buf, cap, len, "CPU revision\t: %u\n", proc_read_midr() & 0xf);
-    proc_append(buf, cap, len, "Hardware\t: ArmOS QEMU virt\n");
+    proc_append(buf, cap, len, "Features\t: %s\n", cpuinfo.features);
+    proc_append(buf, cap, len, "CPU implementer\t: 0x%02x\n", cpuinfo.implementer);
+    proc_append(buf, cap, len, "CPU architecture: %u\n", cpuinfo.architecture);
+    proc_append(buf, cap, len, "CPU part\t: 0x%03x\n", cpuinfo.part);
+    proc_append(buf, cap, len, "CPU revision\t: %u\n", cpuinfo.revision);
+    proc_append(buf, cap, len, "Hardware\t: %s\n", cpuinfo.hardware);
     proc_append(buf, cap, len, "Revision\t: 0000\n");
-    proc_append(buf, cap, len, "MPIDR\t\t: 0x%08x\n", proc_read_mpidr());
+    proc_append(buf, cap, len, "MPIDR\t\t: 0x%08x\n", cpuinfo.mpidr);
 }
 
 static void proc_fill_smp(char* buf, size_t cap, size_t* len)

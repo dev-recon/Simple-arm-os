@@ -52,6 +52,7 @@ LIB_OBJ = kernel/lib/kprintf.o kernel/lib/string.o kernel/lib/fdt.o kernel/lib/f
 KERNEL_OBJS = \
 	$(ARCH_DIR)/boot/boot.o \
 	kernel/main.o \
+	$(ARCH_DIR)/cpu/cpu.o \
 	kernel/internals/ls_process.o \
 	kernel/memory/helpers.o \
 	kernel/memory/physical.o \
