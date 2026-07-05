@@ -260,7 +260,7 @@ static void ext2_op_acquire(void)
             return;
 
         if (!task) {
-            asm volatile("yield" ::: "memory");
+            cpu_relax();
             continue;
         }
 
@@ -338,7 +338,7 @@ static void ext2_cache_acquire(void)
             return;
 
         if (!task) {
-            asm volatile("yield" ::: "memory");
+            cpu_relax();
             continue;
         }
 

@@ -87,7 +87,8 @@ DEFINE_SPINLOCK(uart_lock);
 void uart_use_kernel_mmio_alias(void)
 {
     uart_mmio_base = KERNEL_MMIO_UART_BASE;
-    __asm__ volatile("dsb; isb" ::: "memory");
+    data_sync_barrier();
+    instruction_sync_barrier();
 }
 
 /*

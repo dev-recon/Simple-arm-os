@@ -421,10 +421,10 @@ static void net_rx_post_desc(uint16_t id)
     clean_invalidate_dcache_by_mva(&net.rx_bufs[id], sizeof(net.rx_bufs[id]));
     avail->ring[idx % net.rx_vq.qsize] = id;
     clean_dcache_by_mva((void *)net.rx_vq.va_avail, net.rx_vq.avail_size);
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
     avail->idx = idx + 1;
     clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
-    asm volatile("dsb ishst" ::: "memory");
+    data_sync_barrier_inner_shareable_write();
 }
 
 static void net_rx_post_all(void)
@@ -513,7 +513,7 @@ static void net_tx_process_used(void)
 
     invalidate_dcache_by_mva((void *)vq->va_used,
         sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
 
     struct vring_used *used = net_used_ptr(vq);
     while (vq->last_used_idx != used->idx) {
@@ -573,10 +573,10 @@ static int net_send_frame(const uint8_t *frame, uint32_t frame_len)
     uint16_t idx = avail->idx;
     avail->ring[idx % net.tx_vq.qsize] = (uint16_t)id;
     clean_dcache_by_mva((void *)net.tx_vq.va_avail, net.tx_vq.avail_size);
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
     avail->idx = idx + 1;
     clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
-    asm volatile("dsb ishst" ::: "memory");
+    data_sync_barrier_inner_shareable_write();
 
     net.tx_packets++;
     net.tx_bytes += frame_len;
@@ -1387,7 +1387,7 @@ static void net_rx_process_used(void)
 
     invalidate_dcache_by_mva((void *)vq->va_used,
         sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
-    asm volatile("dmb ish" ::: "memory");
+    data_memory_barrier_inner_shareable();
 
     struct vring_used *used = net_used_ptr(vq);
     while (vq->last_used_idx != used->idx) {
