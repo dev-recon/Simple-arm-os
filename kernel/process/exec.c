@@ -22,10 +22,10 @@
 #include <kernel/vfs.h>
 #include <kernel/kernel.h>
 #include <kernel/elf32.h>
+#include <kernel/arch_exec.h>
 #include <kernel/kprintf.h>
 #include <kernel/file.h>
 #include <kernel/string.h>
-#include <asm/arm.h>
 
 
 /* Forward declarations de toutes les fonctions statiques */
@@ -112,9 +112,9 @@ bool validate_elf_header(elf32_ehdr_t* header)
     
     //KDEBUG("Check 32-bit little-endian OK\n");
 
-    /* Check executable ARM */
+    /* Check executable for the active architecture. */
     if (header->e_type != 2 ||      /* ET_EXEC */
-        header->e_machine != 40) {  /* EM_ARM */
+        !arch_validate_elf_header(header)) {
         return false;
     }
 
@@ -174,13 +174,6 @@ int load_elf_segments(inode_t* inode, elf32_ehdr_t* elf_header, vm_space_t* vm)
     
     kfree(phdrs);
     return 0;
-}
-
-static inline void flush_instructions(void){
-    data_sync_barrier_inner_shareable();  /* make freshly loaded text visible */
-    flush_icache();
-    data_sync_barrier_inner_shareable();
-    instruction_sync_barrier();
 }
 
 int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
@@ -355,13 +348,8 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
         //uint32_t temp = get_physical_address(vm->pgdir, page_vaddr);
         //hexdump((void*)temp, (size_t)0x800);
 
-        flush_instructions();
-
-        invalidate_dcache_by_mva((void *)page_vaddr, PAGE_SIZE); // DCIMVAC + DSB
-
-        if (vma_flags & VMA_EXEC) {
-            flush_instructions();
-        }
+        arch_sync_loaded_user_page(page_vaddr, PAGE_SIZE,
+                                   (vma_flags & VMA_EXEC) != 0);
 
         //uint8_t* check2 = (uint8_t*)map_temp_page((uint32_t)phys_page);
         //KDEBUG("Check N2 page after map_user_page: %02X %02X %02X %02X\n", check2[0], check2[1], check2[2], check2[3]);

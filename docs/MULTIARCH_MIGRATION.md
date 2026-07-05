@@ -98,6 +98,9 @@ Done so far:
 - moved ARM32 PSCI/secondary CPU bring-up to `arch/arm32/smp/smp.c`;
 - moved ARM32 PSCI `SYSTEM_OFF` to `arch/arm32/power/psci.c`, behind the
   narrow `arch_system_off()` hook used by generic shutdown;
+- moved ARM32 exec machine validation and user-code cache maintenance to
+  `arch/arm32/process/exec.c`, behind narrow hooks used by the generic ELF
+  loader;
 - moved generated assembly-offset source to `arch/arm32/asm-offsets.c`;
 - moved ARM32 architecture headers to `arch/arm32/include/asm`;
 - taught the top-level `Makefile` to build these ARM32 architecture objects

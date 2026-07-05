@@ -64,6 +64,7 @@ KERNEL_OBJS = \
 	kernel/process/fork.o \
 	kernel/process/exec.o \
 	kernel/process/signal.o \
+	$(ARCH_DIR)/process/exec.o \
 	kernel/fs/vfs.o \
 	kernel/fs/mount.o \
 	kernel/fs/fat32.o \
