@@ -71,6 +71,11 @@ INLINE void disable_fiq(void)
     __asm__ volatile("cpsid f" ::: "memory");
 }
 
+INLINE void enable_async_abort_irq_fiq(void)
+{
+    __asm__ volatile("cpsie aif" ::: "memory");
+}
+
 INLINE void wait_for_interrupt(void) 
 {
     __asm__ volatile("wfi" ::: "memory");
@@ -382,6 +387,14 @@ INLINE uint64_t get_cntpct(void)
     return ((uint64_t)high << 32) | low;
 }
 
+INLINE uint64_t get_cntvct(void)
+{
+    uint64_t val;
+    instruction_sync_barrier();
+    __asm__ volatile("mrrc p15, 1, %Q0, %R0, c14" : "=r"(val));
+    return val;
+}
+
 INLINE uint32_t get_cntp_ctl(void)
 {
     uint32_t ctl;
@@ -418,6 +431,13 @@ INLINE void set_cntp_cval(uint64_t cval)
     uint32_t low = (uint32_t)cval;
     uint32_t high = (uint32_t)(cval >> 32);
     __asm__ volatile("mcrr p15, 2, %0, %1, c14" : : "r"(low), "r"(high));
+}
+
+INLINE void set_cntv_cval(uint64_t cval)
+{
+    __asm__ volatile("mcrr p15, 3, %Q0, %R0, c14" :: "r"(cval));
+    data_sync_barrier();
+    instruction_sync_barrier();
 }
 
 /* Performance monitoring pour Cortex-A15 */

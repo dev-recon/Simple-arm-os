@@ -80,7 +80,7 @@ static uint32_t timer_program_next_tick(uint32_t timer_freq)
     timer_next_compare[cpu] = next;
     timer_set_compare(next);
 
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(1u));
+    set_cntp_ctl(CNTP_CTL_ENABLE);
     return elapsed_ticks;
 }
 
@@ -108,9 +108,8 @@ void init_timer_software(void)
     extern int kprintf(const char *format, ...);
     KINFO("[TIMER] Initializing SOFTWARE timer (no IRQ)...\n");
     
-    /* Lire la fréquence du timer ARM Generic Timer */
-    uint32_t timer_freq;
-    __asm__ volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(timer_freq));
+    /* Lire la frequence du timer ARM Generic Timer */
+    uint32_t timer_freq = get_cntfrq();
     
     if (timer_freq == 0) {
         timer_freq = 62500000;  /* 62.5MHz par défaut QEMU */
@@ -191,9 +190,9 @@ void trigger_timer_interrupt(void)
     uint64_t current = get_timer_count();
     uint32_t target = (uint32_t)current + 200;
     
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(0));  /* Disable */
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" :: "r"(target));  /* Set */
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(1));  /* Enable */
+    set_cntp_ctl(0);  /* Disable */
+    set_cntp_tval(target);  /* Set */
+    set_cntp_ctl(CNTP_CTL_ENABLE);  /* Enable */
     
     KINFO("[TIMER] Timer interrupt scheduled in 200 ticks\n");
 }
@@ -201,7 +200,7 @@ void trigger_timer_interrupt(void)
 void timer_set_timeout(uint64_t timeout_ticks)
 {
     /* Desactiver le timer */
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(0));
+    set_cntp_ctl(0);
     
     uint32_t cpu = smp_processor_id();
     uint64_t current = get_timer_count();
@@ -213,7 +212,7 @@ void timer_set_timeout(uint64_t timeout_ticks)
     timer_set_compare(compare);
     
     /* Reactiver le timer */
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(1));
+    set_cntp_ctl(CNTP_CTL_ENABLE);
 }
 
 void timer_init_local_cpu(void)
@@ -227,7 +226,7 @@ void timer_init_local_cpu(void)
      * CP15 timer registers; the caller must enable the matching GIC PPI for
      * that CPU before expecting IRQ delivery.
      */
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
+    set_cntp_ctl(timer_ctrl);
     if (cpu < ARMOS_MAX_CPUS)
         timer_next_compare[cpu] = 0;
     timer_program_next_tick(timer_freq);
@@ -240,8 +239,7 @@ void init_timer(void)
     KINFO("[TIMER] Starting ARM Generic Timer initialization...\n");
     
     /* 1. Lire la frequence du timer */
-    uint32_t timer_freq;
-    __asm__ volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(timer_freq));
+    uint32_t timer_freq = get_cntfrq();
     
     if (timer_freq == 0) {
         KWARN("[TIMER] Timer frequency is 0, using default 62.5MHz\n");
@@ -267,7 +265,7 @@ void init_timer(void)
     gic_enable_irq_kernel(VIRT_TIMER_NS_EL1_IRQ);  // IRQ 30
     
     /* 5. Activer les interruptions au niveau CPU */
-    __asm__ volatile("cpsie i" ::: "memory");
+    enable_interrupts();
     
     KINFO("[TIMER] Timer initialization complete OK\n");
 }
@@ -278,12 +276,11 @@ void timer_irq_handler(void)
     uint32_t elapsed_ticks;
 
     /* 1. Acquitter l'interruption ARM Generic Timer */
-    uint32_t timer_ctrl;
-    __asm__ volatile("mrc p15, 0, %0, c14, c2, 1" : "=r"(timer_ctrl));
+    uint32_t timer_ctrl = get_cntp_ctl();
     
     /* Clear l'interrupt status */
     timer_ctrl |= 0x4;  /* Set ISTATUS bit */
-    __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" :: "r"(timer_ctrl));
+    set_cntp_ctl(timer_ctrl);
 
     gic_ack_irq_kernel(IRQ_TIMER);
     
@@ -358,7 +355,7 @@ uint32_t get_timer_frequency(void)
     uint32_t freq = 0;
     
     /* Lire la frequence du timer generique ARM */
-    __asm__ volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(freq));
+    freq = get_cntfrq();
     
     if (freq == 0) {
         /* Valeur par defaut pour QEMU machine virt */
@@ -371,12 +368,8 @@ uint32_t get_timer_frequency(void)
 /* Fonction pour obtenir le compte du timer */
 uint64_t get_timer_count(void)
 {
-    uint32_t low, high;
-    
     /* Lire le compteur 64-bit du timer */
-    __asm__ volatile("mrrc p15, 0, %0, %1, c14" : "=r"(low), "=r"(high));
-    
-    return ((uint64_t)high << 32) | low;
+    return get_cntpct();
 }
 
 /* Fonction pour obtenir le nombre de ticks systeme */
@@ -408,8 +401,7 @@ void debug_timer_state(void)
     KINFO("[TIMER] === TIMER STATE DEBUG ===\n");
     
     /* Lire le registre de controle */
-    uint32_t timer_ctrl;
-    __asm__ volatile("mrc p15, 0, %0, c14, c2, 1" : "=r"(timer_ctrl));
+    uint32_t timer_ctrl = get_cntp_ctl();
     
     KINFO("[TIMER] Control register: 0x%08X\n", timer_ctrl);
     KINFO("[TIMER]   Enable: %s\n", (timer_ctrl & 0x1) ? "YES" : "NO");
@@ -417,8 +409,7 @@ void debug_timer_state(void)
     KINFO("[TIMER]   Status: %s\n", (timer_ctrl & 0x4) ? "PENDING" : "CLEAR");
     
     /* Lire la valeur de comparaison */
-    uint32_t timer_value;
-    __asm__ volatile("mrc p15, 0, %0, c14, c2, 0" : "=r"(timer_value));
+    uint32_t timer_value = get_cntp_tval();
     KINFO("[TIMER] Compare value: %u\n", timer_value);
     
     /* Lire le compteur actuel */

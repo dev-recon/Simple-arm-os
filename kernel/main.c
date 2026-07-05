@@ -103,26 +103,18 @@ void kernel_main(void);
 static inline void disable_branch_predictor(void) {
     uint32_t sctlr;
 
-    // Lire SCTLR
-    asm volatile("mrc p15, 0, %0, c1, c0, 0" : "=r"(sctlr));
-
-    // Clear bit Z (bit 11)
+    /* Clear SCTLR.Z, then invalidate branch predictor state. */
+    sctlr = get_sctlr();
     sctlr &= ~(1 << 11);
-
-    // Écrire SCTLR modifié
-    asm volatile("mcr p15, 0, %0, c1, c0, 0" :: "r"(sctlr));
-
-    // Flush BPIALL (invalidate branch predictor state)
-    asm volatile("mcr p15, 0, %0, c7, c5, 6" :: "r"(0));
-    asm volatile("isb");
+    set_sctlr(sctlr);
+    flush_branch_predictor();
 }
 
 
 static uint32_t boot_timer_frequency(void)
 {
-    uint32_t timer_freq;
+    uint32_t timer_freq = get_cntfrq();
 
-    __asm__ volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(timer_freq));
     if (timer_freq == 0)
         timer_freq = 62500000;
 
@@ -200,7 +192,7 @@ void kernel_main(void)
     bool tty1_graphics_ready = false;
 
     /* Phase 0: etats du processeur */
-    __asm__ volatile ("cpsie aif");
+    enable_async_abort_irq_fiq();
 
     sctlr_set_smp();
     smp_init_boot_cpu();

@@ -474,19 +474,18 @@ void test_timer_irq_virt(void)
     kprintf("[TEST] === TESTING ARM GENERIC TIMER ===\n");
     
     /* Utiliser ARM Generic Timer au lieu de SP804 */
-    uint32_t freq;
-    __asm__ volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(freq));
+    uint32_t freq = get_cntfrq();
     
     if (freq > 0) {
         kprintf("[TEST] Generic Timer frequency: %u Hz\n", freq);
         
         /* Configurer timer pour 1 seconde */
         uint32_t tval = freq;  /* 1 seconde */
-        __asm__ volatile("mcr p15, 0, %0, c14, c2, 0" : : "r"(tval));
+        set_cntp_tval(tval);
         
         /* Activer timer */
         uint32_t ctl = 1;  /* Enable */
-        __asm__ volatile("mcr p15, 0, %0, c14, c2, 1" : : "r"(ctl));
+        set_cntp_ctl(ctl);
         
         /* Activer IRQ */
         enable_irq(VIRT_TIMER_NS_EL1_IRQ);
