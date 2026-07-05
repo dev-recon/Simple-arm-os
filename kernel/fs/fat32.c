@@ -768,13 +768,8 @@ bool validate_src_pointer(const fat32_raw_sector_t* raw)
     /* Verification 3: raw->data accessible */
     const uint8_t* src;
     
-    /* Acces TReS prudent a raw->data */
-    __asm__ volatile (
-        "ldr %0, [%1]\n"    /* Charger raw->data */
-        : "=r"(src)
-        : "r"(raw)
-        : "memory"
-    );
+    /* Access raw->data through C so the compiler owns the load semantics. */
+    src = raw->data;
     
     kprintf("src (raw->data) = 0x%08X\n", (vaddr_t)(uintptr_t)src);
     

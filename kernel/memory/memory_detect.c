@@ -278,7 +278,7 @@ static bool test_memory_block(paddr_t addr, uint32_t size)
         uint32_t original;
         
         /* Protection contre les exceptions - test simple */
-        __asm__ volatile("" ::: "memory");
+        compiler_barrier();
         
         /* Test de lecture simple d'abord */
         original = *ptr;
