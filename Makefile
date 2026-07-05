@@ -9,7 +9,8 @@ OBJDUMP = $(CROSS_COMPILE)objdump
 QEMU ?= qemu-system-arm
 SMP_CPUS ?= 1
 BUILD_DIR = build
-ASM_OFFSETS_SRC = kernel/asm-offsets.c
+ARCH_DIR = arch/arm32
+ASM_OFFSETS_SRC = $(ARCH_DIR)/asm-offsets.c
 ASM_OFFSETS_S = $(BUILD_DIR)/asm-offsets.s
 ASM_OFFSETS_H = $(BUILD_DIR)/generated/asm-offsets.h
 
@@ -36,7 +37,7 @@ CFLAGS = -std=gnu99 $(ARCH_FLAGS) $(FPU_FLAGS) $(MATH_FLAGS) $(ARM_MATH_FLAGS) \
 LDFLAGS = -T linker.ld -nostdlib -Map=kernel.map
 
 TASK_OBJS = kernel/task/task.o \
-            kernel/task/task_switch.o \
+            $(ARCH_DIR)/task/task_switch.o \
             kernel/task/task_test.o \
 			kernel/task/kernel_tasks.o \
             kernel/smp.o \
@@ -47,7 +48,7 @@ LIB_OBJ = kernel/lib/kprintf.o kernel/lib/string.o kernel/lib/fdt.o kernel/lib/f
 
 # Objets du noyau
 KERNEL_OBJS = \
-	kernel/boot.o \
+	$(ARCH_DIR)/boot/boot.o \
 	kernel/main.o \
 	kernel/internals/ls_process.o \
 	kernel/memory/helpers.o \
@@ -85,11 +86,11 @@ KERNEL_OBJS = \
 	kernel/drivers/tar_parser_ramfs.o \
 	kernel/drivers/virtio_block.o \
 	kernel/interrupt/exception.o \
-	kernel/interrupt/interrupt.o \
+	$(ARCH_DIR)/interrupt/interrupt.o \
 	kernel/interrupt/irq_return.o \
 	kernel/interrupt/gic.o \
 	kernel/interrupt/timer.o \
-	kernel/syscalls/syscall.o \
+	$(ARCH_DIR)/syscall/syscall.o \
 	kernel/syscalls/syscalls.o \
 	kernel/syscalls/file.o \
 	kernel/syscalls/shm.o \

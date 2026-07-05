@@ -29,7 +29,7 @@ Bad migration steps:
 
 ## Phase A - Mechanical Cleanup
 
-Status: in progress.
+Status: mostly complete for direct inline-assembly cleanup.
 
 Done in this branch:
 
@@ -44,12 +44,15 @@ Done in this branch:
   - VirtIO GPU;
   - VirtIO input;
   - ELF exec cache maintenance.
+- Routed MMU, ASID, VBAR, PSCI/HVC, current-task register, IRQ diagnostic
+  register, stack-register, and CPU wait operations through ARM helper APIs.
+- Removed stale task-switch debug assembly hooks from generic task code.
 
 Still to audit:
 
-- remaining direct `asm volatile` outside `include/asm/` and `.S` files;
-- CP15 reads/writes in MMU helper code;
-- PSCI calls in shutdown/SMP code;
+- expected architecture-local assembly only:
+  - `arch/arm32/asm-offsets.c`, which emits generated C/ASM offsets;
+  - the naked user-abort-to-SVC trampoline in the exception path;
 - ARM-specific timer helpers in generic-looking headers;
 - hardcoded ARM ELF checks before an AArch64 userland exists.
 
@@ -70,6 +73,16 @@ arch/arm32/
 
 This should be introduced gradually. A file moves only when its dependencies are
 clear and the ARM32 build still compiles after the move.
+
+Done so far:
+
+- moved ARM32 boot assembly to `arch/arm32/boot/boot.S`;
+- moved ARM32 IRQ entry assembly to `arch/arm32/interrupt/interrupt.S`;
+- moved ARM32 syscall entry assembly to `arch/arm32/syscall/syscall.S`;
+- moved ARM32 context-switch assembly to `arch/arm32/task/task_switch.S`;
+- moved generated assembly-offset source to `arch/arm32/asm-offsets.c`;
+- taught the top-level `Makefile` to build these ARM32 architecture objects
+  from `arch/arm32`.
 
 Kernel code that should remain architecture-neutral:
 

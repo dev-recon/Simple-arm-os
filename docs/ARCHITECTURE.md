@@ -12,8 +12,8 @@ an UART-backed rescue TTY, and an optional VirtIO-GPU graphical TTY.
 ## Boot And DTB Detection
 
 QEMU passes a Device Tree Blob (DTB/FDT) pointer to the kernel at boot. ArmOS
-saves that pointer very early in `kernel/boot.S`, before clearing `.bss`, into
-the global `dtb_address`.
+saves that pointer very early in `arch/arm32/boot/boot.S`, before clearing
+`.bss`, into the global `dtb_address`.
 
 Current boot contract:
 

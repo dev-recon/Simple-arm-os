@@ -33,7 +33,7 @@ static inline void irq_return_enable_interrupts(void)
 }
 
 /*
- * IRQ frame layout built by kernel/interrupt/interrupt.S:
+ * IRQ frame layout built by arch/arm32/interrupt/interrupt.S:
  *
  *   word 0      alignment padding
  *   word 1      saved SPSR, i.e. CPSR of the interrupted context

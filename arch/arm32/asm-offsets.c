@@ -5,7 +5,7 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/asm-offsets.c
+ * File: arch/arm32/asm-offsets.c
  * Layer: Kernel / build-time ABI generation
  *
  * Responsibilities:

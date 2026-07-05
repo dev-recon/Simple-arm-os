@@ -5,7 +5,7 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/interrupt/interrupt.S
+ * File: arch/arm32/interrupt/interrupt.S
  * Layer: Kernel / interrupts and exceptions
  *
  * Responsibilities:
@@ -37,7 +37,7 @@
     .equ IRQ_FRAME_SIZE,     64
 
 /*
- * Generated from kernel/asm-offsets.c. IRQ return-to-user shares the same
+ * Generated from arch/arm32/asm-offsets.c. IRQ return-to-user shares the same
  * task_context_t contract as syscall.S and task_switch.S.
  */
 .include "asm-offsets.h"

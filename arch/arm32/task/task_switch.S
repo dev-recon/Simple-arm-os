@@ -5,7 +5,7 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/task/task_switch.S
+ * File: arch/arm32/task/task_switch.S
  * Layer: Kernel / ARMv7-A context switching
  *
  * Responsibilities:
@@ -23,7 +23,7 @@
 .global task_context_save_complete
 
 /*
- * Generated from kernel/asm-offsets.c. Keep task_context_t layout changes in C;
+ * Generated from arch/arm32/asm-offsets.c. Keep task_context_t layout changes in C;
  * assembly consumes the generated constants.
  */
 .include "asm-offsets.h"

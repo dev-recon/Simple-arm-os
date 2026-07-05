@@ -5,7 +5,7 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/boot.S
+ * File: arch/arm32/boot/boot.S
  * Layer: Kernel / ARMv7-A boot assembly
  *
  * Responsibilities:

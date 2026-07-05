@@ -53,11 +53,12 @@ addresses, but that is not the general RAM contract.
 
 Kernel entry and architecture:
 
-- `kernel/boot.S`
+- `arch/arm32/boot/boot.S`
+- `arch/arm32/interrupt/interrupt.S`
+- `arch/arm32/task/task_switch.S`
+- `arch/arm32/syscall/syscall.S`
 - `kernel/main.c`
 - `kernel/interrupt/`
-- `kernel/task/task_switch.S`
-- `kernel/syscalls/syscall.S`
 
 Memory:
 

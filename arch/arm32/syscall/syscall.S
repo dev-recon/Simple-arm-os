@@ -5,7 +5,7 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/syscalls/syscall.S
+ * File: arch/arm32/syscall/syscall.S
  * Layer: Kernel / syscall entry assembly
  *
  * Responsibilities:
@@ -28,7 +28,7 @@
 .equ MAX_SYSCALLS,     512     /* Keep in sync with include/kernel/syscalls.h */
 
 /*
- * Generated from kernel/asm-offsets.c. The syscall path is extremely sensitive
+ * Generated from arch/arm32/asm-offsets.c. The syscall path is extremely sensitive
  * to task_context_t layout, so no field offset is hardcoded here.
  */
 .include "asm-offsets.h"
