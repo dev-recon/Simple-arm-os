@@ -217,6 +217,13 @@ INLINE void instruction_sync_barrier(void)
     __asm__ volatile("isb" ::: "memory");
 }
 
+INLINE void set_vbar(uint32_t vbar)
+{
+    __asm__ volatile("mcr p15, 0, %0, c12, c0, 0" :: "r"(vbar));
+    data_sync_barrier();
+    instruction_sync_barrier();
+}
+
 INLINE void data_memory_barrier(void) 
 {
     __asm__ volatile("dmb sy" ::: "memory");

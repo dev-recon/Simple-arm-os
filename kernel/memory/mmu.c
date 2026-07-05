@@ -558,12 +558,10 @@ KDEBUG("All checks passed, proceeding with MMU activation...\n");
 
     // Reconfigurer VBAR apres MMU ON
     uint32_t vbar_addr = (uint32_t)&vectors;
-    __asm__ volatile("mcr p15, 0, %0, c12, c0, 0" :: "r"(vbar_addr));
-    __asm__ volatile("dsb");
-    __asm__ volatile("isb");
+    set_vbar(vbar_addr);
 
     // Activer les exceptions
-    __asm__ volatile ("cpsie aif");
+    enable_async_abort_irq_fiq();
 
     // Desactive l'alignement
     configure_alignment_policy();
@@ -1454,8 +1452,7 @@ void setup_svc_stack(void) {
     extern uint32_t __svc_stack_top;
     
     // Vérifier que MMU est active
-    uint32_t sctlr;
-    __asm__ volatile("mrc p15, 0, %0, c1, c0, 0" : "=r"(sctlr));
+    uint32_t sctlr = get_sctlr();
     if (!(sctlr & 1)) {
         KERROR("Setting up SVC stack before MMU!\n");
         return;
