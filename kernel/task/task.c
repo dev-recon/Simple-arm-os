@@ -117,7 +117,7 @@ static task_t* task_current_from_cpu_register(void)
      * for the hot "who am I?" path. current_tasks[] remains useful for /proc
      * and cross-CPU diagnostics.
      */
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 4" : "=r"(task));
+    task = (task_t*)get_tpidrprw();
     return task_header_plausible(task) ? task : NULL;
 }
 
