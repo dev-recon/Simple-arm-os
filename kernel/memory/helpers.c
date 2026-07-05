@@ -122,47 +122,6 @@ static inline l2_entry_t pte_kernel_rw_xn(paddr_t pa){
     return (pa & 0xFFFFF000u) | L2_SMALL | L2_XN | L2_AP10(0b01) | ATTR_NORMAL_WBWA_S;
 }
 
-// TLBI: MVA, ALL ASIDs, IS (pour TTBR1/global)
-static inline void tlbimvaa_is(uint32_t va){
-    va &= ~0xFFFu;
-
-    //debug_mmu_state();
-
-    asm volatile(
-        "dsb ishst           \n"
-        "mcr p15, 0, %0, c8, c3, 3 \n"  // TLBI MVA, ALL ASID, IS
-        "dsb ish             \n"
-        "isb                 \n" :: "r"(va) : "memory");
-}
-
-
-static inline void tlb_inval_kernel_global(uint32_t va){
-    va &= ~0xFFFu;
-    if (sctlr_smp_enabled()){
-        asm volatile(
-            "dsb ishst             \n"
-            "mcr p15,0,%0,c8,c3,3  \n" // TLBI MVA, ALL-ASID, IS
-            "dsb ish               \n"
-            "isb                   \n" :: "r"(va) : "memory");
-    } else {
-        asm volatile(
-            "dsb ishst             \n"
-            "mcr p15,0,%0,c8,c7,3  \n" // TLBI MVA, ALL-ASID (local)
-            "dsb ish               \n"
-            "isb                   \n" :: "r"(va) : "memory");
-    }
-}
-
-
-// Modif PTE kernel + TLB maintenance
-static inline void tlb_barriers(void) { __asm__ volatile("dsb sy; isb" ::: "memory"); }
-static inline void clean_tlb(void)    { 
-    // TLBI pour la VA TEMP_MAP_VA (inval icache côté exec pas nécessaire ici)
-    // Sur beaucoup de ARMv7, tu peux faire un inval par MVA+ASID; ici, flush simple:
-    __asm__ volatile("dsb sy" ::: "memory");
-    __asm__ volatile("isb" ::: "memory");
-}
-
 static inline void* kernel_phys_ptr(paddr_t phys)
 {
     return (void*)((get_sctlr() & SCTLR_M) ? phys_to_virt(phys) : phys);
@@ -278,12 +237,12 @@ void dump_mmu_control_registers(void) {
     uint32_t ttbr0, ttbr1, ttbcr, dacr, contextidr, sctlr;
     
     // Lecture des registres MMU
-    asm volatile("mrc p15, 0, %0, c2, c0, 0" : "=r" (ttbr0));  // TTBR0
-    asm volatile("mrc p15, 0, %0, c2, c0, 1" : "=r" (ttbr1));  // TTBR1
-    asm volatile("mrc p15, 0, %0, c2, c0, 2" : "=r" (ttbcr));  // TTBCR
-    asm volatile("mrc p15, 0, %0, c3, c0, 0" : "=r" (dacr));   // DACR
-    asm volatile("mrc p15, 0, %0, c13, c0, 1" : "=r" (contextidr)); // CONTEXTIDR
-    asm volatile("mrc p15, 0, %0, c1, c0, 0" : "=r" (sctlr));  // SCTLR
+    ttbr0 = get_ttbr0();
+    ttbr1 = get_ttbr1();
+    ttbcr = get_ttbcr();
+    dacr = get_dacr();
+    contextidr = get_contextidr();
+    sctlr = get_sctlr();
     
     KDEBUG("=== MMU CONTROL REGISTERS ===\n");
     KDEBUG("TTBR0:      0x%08X (User space table base)\n", ttbr0);
@@ -874,17 +833,12 @@ vaddr_t map_temp_pages_contiguous(paddr_t phys_addr, int num_pages)
         void *pte_addr = &l2_table[l2_idx];
         //KDEBUG("map_temp_pages_contiguous: pte_addr 0x%08X\n", pte_addr);
 
-        asm volatile("mcr p15, 0, %0, c7, c10, 1" :: "r"(pte_addr) : "memory"); // DCCMVAC
-
-        // 2) Barrière avant TLBI
-        asm volatile("dsb ishst" ::: "memory");
+        dc_clean_mva(pte_addr);
+        data_sync_barrier_inner_shareable_write();
 
         // 3) Invalider la traduction du VA du slot temporaire (global TTBR1)
         //    - pour un mapping kernel/global, préfère MVA (touche global + non-global)
-        asm volatile("mcr p15, 0, %0, c8, c7, 1" :: "r"(page_va) : "memory"); // TLBI MVA
-
-        // 4) Barrières de fin
-        asm volatile("dsb ish; isb" ::: "memory");
+        tlb_flush_by_va(page_va);
     }
 
     //KDEBUG("map_temp_pages_contiguous: Invalidationg with tlbimvaa_is for %d pages\n", num_pages);
@@ -1782,9 +1736,7 @@ int check_page_permissions(pgdir_t pgdir, vaddr_t vaddr) {
 }
 
 uint32_t get_current_ttrb0(void){
-    uint32_t current_ttbr0;
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r" (current_ttbr0));
-    return current_ttbr0;
+    return get_ttbr0();
 }
 
 /**
@@ -1798,10 +1750,10 @@ void get_address_space_info(void)
 {
     uint32_t ttbr0, ttbr1, ttbcr, contextidr;
     
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(ttbr0));
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 1" : "=r"(ttbr1));
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr));
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 1" : "=r"(contextidr));
+    ttbr0 = get_ttbr0();
+    ttbr1 = get_ttbr1();
+    ttbcr = get_ttbcr();
+    contextidr = get_contextidr();
     
     uint32_t n = ttbcr_get_n(ttbcr);
     uint32_t asid = contextidr_get_asid(contextidr);
@@ -1829,9 +1781,9 @@ bool validate_split_ttbr_config(void)
     uint32_t ttbr0, ttbr1, ttbcr;
     bool valid = true;
     
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(ttbr0));
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 1" : "=r"(ttbr1));
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr));
+    ttbr0 = get_ttbr0();
+    ttbr1 = get_ttbr1();
+    ttbcr = get_ttbcr();
     
     KDEBUG("validate_split_ttbr_config: Validating configuration...\n");
     
@@ -2146,8 +2098,7 @@ vaddr_t map_temp_user_page_from_pgdir(pgdir_t pgdir, vaddr_t user_vaddr, uint32_
     }
     
     /* Optionnel: Invalider les entrées TLB pour cohérence */
-    asm volatile("mcr p15, 0, %0, c8, c7, 1" :: "r"(user_vaddr));  /* TLBIMVA */
-    data_memory_barrier();
+    tlb_flush_by_va(user_vaddr);
     
     KDEBUG("map_temp_user_page_from_pgdir: Mapped user 0x%08X (phys 0x%08X) to temp 0x%08X\n", 
            user_vaddr, phys_addr, temp_vaddr);
