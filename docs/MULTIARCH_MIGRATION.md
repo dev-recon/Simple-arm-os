@@ -80,6 +80,7 @@ Done so far:
 - moved ARM32 IRQ entry assembly to `arch/arm32/interrupt/interrupt.S`;
 - moved ARM32 syscall entry assembly to `arch/arm32/syscall/syscall.S`;
 - moved ARM32 context-switch assembly to `arch/arm32/task/task_switch.S`;
+- moved ARM32 PSCI/secondary CPU bring-up to `arch/arm32/smp/smp.c`;
 - moved generated assembly-offset source to `arch/arm32/asm-offsets.c`;
 - moved ARM32 architecture headers to `arch/arm32/include/asm`;
 - taught the top-level `Makefile` to build these ARM32 architecture objects

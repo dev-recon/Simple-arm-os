@@ -42,7 +42,7 @@ TASK_OBJS = kernel/task/task.o \
             $(ARCH_DIR)/task/task_switch.o \
             kernel/task/task_test.o \
 			kernel/task/kernel_tasks.o \
-            kernel/smp.o \
+            $(ARCH_DIR)/smp/smp.o \
             kernel/sync/spinlock.o
 
 # Objets de la bibliotheque

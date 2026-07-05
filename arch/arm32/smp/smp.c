@@ -5,8 +5,8 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/smp.c
- * Layer: Kernel / SMP coordination
+ * File: arch/arm32/smp/smp.c
+ * Layer: ARM32 / SMP coordination
  *
  * Responsibilities:
  * - Discover possible CPUs from the DTB.
