@@ -453,7 +453,8 @@ void ultra_simple_func(void* arg)
     task_destroy(NULL);  // Detruire la tache courante
     
     // Ne devrait jamais arriver ici
-    while(1) __asm__ volatile("wfe");
+    while (1)
+        wait_for_event();
     /* Terminaison immediate */
 }
 

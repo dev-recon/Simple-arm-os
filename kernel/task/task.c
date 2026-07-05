@@ -2582,7 +2582,8 @@ void sched_start(void)
     
     // On ne devrait jamais arriver ici
     KERROR("FATAL: Returned from sched_start!\n");
-    while (1) __asm__ volatile("wfe");
+    while (1)
+        wait_for_event();
 }
 
 
@@ -2909,8 +2910,8 @@ void idle_task_func(void* arg)
          * scan sleepers after each interrupt, but only enter the scheduler when
          * a real task became ready.
          */
-        __asm__ volatile("cpsie i" ::: "memory");
-        __asm__ volatile("wfi" ::: "memory");
+        enable_interrupts();
+        wait_for_interrupt();
         if (smp_shutdown_park_requested(cpu))
             secondary_idle_park_for_shutdown(cpu);
         scheduler_scan_waiters(task_current_local());
@@ -3486,7 +3487,7 @@ void task_sleep_ms(uint32_t ms)
     if (!scheduler_initialized) {
         volatile uint32_t total = ms * 1000;
         for (volatile uint32_t i = 0; i < total; i++)
-            __asm__ volatile("nop");
+            cpu_relax();
         return;
     }
 
