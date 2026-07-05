@@ -164,6 +164,36 @@ INLINE void arm_set_sp(vaddr_t sp)
     __asm__ volatile("mov sp, %0" : : "r"(sp) : "memory");
 }
 
+INLINE vaddr_t arm_current_pc_plus_16(void)
+{
+    vaddr_t pc;
+    __asm__ volatile("add %0, pc, #16" : "=r"(pc));
+    return pc;
+}
+
+INLINE void arm_read_user_sp_lr_from_irq(vaddr_t *usr_sp, vaddr_t *usr_lr)
+{
+    vaddr_t sp;
+    vaddr_t lr;
+
+    /*
+     * IRQ mode has its own banked SP/LR. Switch briefly to SYS mode to read
+     * the user register bank, then return to IRQ mode before the caller uses
+     * its active stack again.
+     */
+    __asm__ volatile(
+        "cps    #0x1F\n"
+        "mov    %0, sp\n"
+        "mov    %1, lr\n"
+        "cps    #0x12\n"
+        : "=r"(sp), "=r"(lr)
+        :
+        : "memory", "cc");
+
+    *usr_sp = sp;
+    *usr_lr = lr;
+}
+
 INLINE uint32_t arm_hvc_call(uint32_t function_id, uint32_t arg0, uint32_t arg1, uint32_t arg2)
 {
     register uint32_t r0 __asm__("r0") = function_id;

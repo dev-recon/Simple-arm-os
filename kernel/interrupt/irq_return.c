@@ -63,8 +63,8 @@ uint32_t irq_user_work_prepare(uint32_t* irq_frame)
 {
     task_t* task = task_current_local();
     uint32_t cpu = smp_processor_id();
-    uint32_t usr_sp;
-    uint32_t usr_lr;
+    vaddr_t usr_sp;
+    vaddr_t usr_lr;
 
     if (!irq_frame || !task || task->type != TASK_TYPE_PROCESS || !task->process)
         return 0;
@@ -91,19 +91,7 @@ uint32_t irq_user_work_prepare(uint32_t* irq_frame)
     task->context.usr_pc = irq_frame[IRQ_FRAME_PC];
     task->context.usr_cpsr = irq_frame[IRQ_FRAME_SPSR];
 
-    /*
-     * User SP/LR are banked away from IRQ mode. Switch briefly to SYS mode to
-     * read the user bank without touching memory, then return to IRQ mode before
-     * the compiler can use the active stack again.
-     */
-    __asm__ volatile(
-        "cps    #0x1F\n"
-        "mov    %0, sp\n"
-        "mov    %1, lr\n"
-        "cps    #0x12\n"
-        : "=r"(usr_sp), "=r"(usr_lr)
-        :
-        : "memory");
+    arm_read_user_sp_lr_from_irq(&usr_sp, &usr_lr);
     task->context.usr_sp = usr_sp;
     task->context.usr_lr = usr_lr;
     task->context.returns_to_user = 1;

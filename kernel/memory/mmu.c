@@ -497,8 +497,7 @@ if (ttbcr_check != ttbcr_value) {
 
     debug_print_hex("MMU: Cleaned SCTLR = ", sctlr);
 
-    uint32_t next_pc;
-    __asm__ volatile("add %0, pc, #16" : "=r"(next_pc));
+    vaddr_t next_pc = arm_current_pc_plus_16();
 
     debug_print_hex("MMU: Next PC = ", next_pc);
 

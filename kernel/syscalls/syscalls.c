@@ -1107,46 +1107,6 @@ int sys_wait4(pid_t pid, int* status, int options, struct rusage_kernel* rusage)
     return result;
 }
 
-static inline void get_usr_regs(uint32_t usr_r[13]) {
-    __asm__ volatile(
-        "stmia %0, {r0-r12}"
-        : //"=m" (*usr_r)   // sortie : écrit dans usr_r[0..12]
-        : "r" (usr_r)    // entrée : adresse du tableau
-        : "memory"
-    );
-}
-
-static inline void read_user_sp_lr(uint32_t *usp, uint32_t *ulr)
-{
-    __asm__ volatile(
-        "cps    #0x1F      \n"   /* SYSTEM */
-        "mov    %0, sp     \n"
-        "mov    %1, lr     \n"
-        "cps    #0x13      \n"   /* SVC */
-        : "=r"(*usp), "=r"(*ulr)
-        :
-        : "memory","cc"
-    );
-}
-
-void store_usr_regs(task_context_t *ctx, uint32_t usr_r[13]) {
-
-    ctx->r0 = usr_r[0];
-    ctx->r1 = usr_r[1];
-    ctx->r2 = usr_r[2];
-    ctx->r3 = usr_r[3];
-    ctx->r4 = usr_r[4];
-    ctx->r5 = usr_r[5];
-    ctx->r6 = usr_r[6];
-    ctx->r7 = usr_r[7];
-    ctx->r8 = usr_r[8];
-    ctx->r9 = usr_r[9];
-    ctx->r10 = usr_r[10];
-    ctx->r11 = usr_r[11];
-    ctx->r12 = usr_r[12];
-}
-
-
 void print_task_offsets(void) {
     KDEBUG("=== TASK STRUCTURE OFFSETS ===\n");
     KDEBUG("task_id: %zu\n", offsetof(task_t, task_id));
