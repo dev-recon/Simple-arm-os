@@ -758,8 +758,16 @@ INLINE uint32_t get_contextidr(void)
 
 INLINE void set_contextidr(uint32_t contextidr)
 {
-    __asm__ volatile("mcr p15, 0, %0, c13, c0, 1" : : "r"(contextidr));
-    instruction_sync_barrier();
+    __asm__ volatile(
+        "mcr p15, 0, %0, c13, c0, 1 \n"
+        "nop                        \n"
+        "nop                        \n"
+        "nop                        \n"
+        "nop                        \n"
+        "isb                        \n"
+        :
+        : "r"(contextidr)
+        : "memory");
 }
 
 /* Thread ID registers */

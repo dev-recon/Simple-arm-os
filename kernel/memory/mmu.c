@@ -852,17 +852,11 @@ static void free_asid(uint32_t asid)
 
 void set_current_asid(uint32_t asid)
 {
-    uint32_t contextidr;
+    uint32_t contextidr = asid;
     uint32_t hw_asid = asid_hw(asid);
     
     //KDEBUG("Setting up ASID %d\n", asid);
-    /* Lire le CONTEXTIDR actuel */
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 1" : "=r"(contextidr));
-
-    //KDEBUG("Current contextidr = 0x%08X\n", contextidr);
-    
     /* CONTEXTIDR[7:0] contient l'ASID matériel, le haut sert de génération. */
-    contextidr = asid;
     //KDEBUG("Setting up contextidr = 0x%08X\n", contextidr);
 
     /* NOUVEAU: Vérification de cohérence avant écriture */
@@ -880,24 +874,12 @@ void set_current_asid(uint32_t asid)
     
     /* Écriture sécurisée avec gestion d'erreur */
     //KDEBUG("About to write CONTEXTIDR = 0x%08X\n", contextidr);
-   
-    __asm__ volatile(
-        "mcr p15, 0, %0, c13, c0, 1 \n"
-        "nop                        \n"
-        "nop                        \n"
-        "nop                        \n"
-        "nop                        \n"
-        "isb                        \n"
-        :
-        : "r"(contextidr)
-        : "memory"
-    );
+    set_contextidr(contextidr);
 
     //KDEBUG("Wrote CONTEXTIDR = 0x%08X\n", contextidr);
     
     /* Vérification post-écriture */
-    uint32_t verify_contextidr;
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 1" : "=r"(verify_contextidr));
+    uint32_t verify_contextidr = get_contextidr();
     
     if ((verify_contextidr & CONTEXTIDR_ASID_MASK) != hw_asid) {
         KERROR("ASID write failed! Expected hw=%u cookie=%u, got %u\n",
@@ -913,9 +895,7 @@ void set_current_asid(uint32_t asid)
 
 uint32_t get_current_asid(void)
 {
-    uint32_t contextidr;
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 1" : "=r"(contextidr));
-    return contextidr;
+    return get_contextidr();
 }
 
 /* Fonctions publiques modifiées pour ASID */
@@ -1292,61 +1272,6 @@ pgdir_cpu_t get_kernel_ttbr0(void)
     return ttbr0_pgdir;
 }
 
-#if(0)
-uint32_t get_ttbr1(void)
-{
-    uint32_t ttbr1;
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 1" : "=r"(ttbr1));
-    return ttbr1;
-}
-
-void set_ttbr1(uint32_t ttbr1)
-{
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 1" : : "r"(ttbr1));
-    __asm__ volatile("isb");
-}
-
-/* Implémentations des fonctions CP15 pour éviter conflits avec arm.h */
-uint32_t get_ttbr1(void)
-{
-    uint32_t ttbr1;
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 1" : "=r"(ttbr1));
-    return ttbr1;
-}
-
-void set_ttbr1(uint32_t ttbr1)
-{
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 1" : : "r"(ttbr1));
-    __asm__ volatile("isb");
-}
-
-uint32_t get_ttbcr(void)
-{
-    uint32_t ttbcr;
-    __asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr));
-    return ttbcr;
-}
-
-void set_ttbcr(uint32_t ttbcr)
-{
-    __asm__ volatile("mcr p15, 0, %0, c2, c0, 2" : : "r"(ttbcr));
-    __asm__ volatile("isb");
-}
-
-uint32_t get_contextidr(void)
-{
-    uint32_t contextidr;
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 1" : "=r"(contextidr));
-    return contextidr;
-}
-
-void set_contextidr(uint32_t contextidr)
-{
-    __asm__ volatile("mcr p15, 0, %0, c13, c0, 1" : : "r"(contextidr));
-    __asm__ volatile("isb");
-}
-#endif
-
 /* Fonctions de debug mises à jour */
 void debug_mmu_state(void)
 {
@@ -1356,9 +1281,6 @@ void debug_mmu_state(void)
     uint32_t contextidr = get_contextidr() ;
     uint32_t sctlr = get_sctlr();
     uint32_t dacr = get_dacr();
-    
-    //__asm__ volatile("mrc p15, 0, %0, c2, c0, 2" : "=r"(ttbcr));
-    //__asm__ volatile("mrc p15, 0, %0, c13, c0, 1" : "=r"(contextidr));
     
     KDEBUG("=== MMU SPLIT TTBR STATE DEBUG ===\n");
     KDEBUG("kernel_page_dir:      %p\n", kernel_page_dir);
