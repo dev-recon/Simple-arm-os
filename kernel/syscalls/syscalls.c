@@ -402,8 +402,7 @@ void check_instruction(vaddr_t test_vaddr, paddr_t phys_addr, uint32_t instructi
 
 
     /* Lire depuis le pgdir actuel (maintenant 0x41538000) */
-    uint32_t current_ttbr0;
-    asm volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(current_ttbr0));
+    uint32_t current_ttbr0 = get_ttbr0();
     pgdir_cpu_t active_pgdir = (pgdir_cpu_t)phys_to_virt((paddr_t)(current_ttbr0 & ~0x7F));
 
     uint32_t l1_entry = active_pgdir[l1_index];
@@ -849,7 +848,7 @@ void sys_exit(int status)
     
     /* Boucle d'urgence pour eviter la corruption */
     while (1) {
-        __asm__ volatile("wfi");
+        wait_for_interrupt();
     }
 }
 
