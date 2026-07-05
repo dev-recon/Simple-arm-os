@@ -20,11 +20,11 @@
 #include <kernel/smp.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
-#include <asm/arm.h>
+#include <asm/spinlock.h>
 
 static inline int spin_atomic_try_acquire(volatile uint32_t* locked)
 {
-    return arm_spin_try_acquire(locked);
+    return arch_spin_try_acquire(locked);
 }
 
 void init_spinlock(spinlock_t* lock)
@@ -59,10 +59,10 @@ void spin_lock(spinlock_t* lock)
          * Do not burn the interconnect while another CPU owns the lock.
          * spin_unlock() emits SEV after releasing the word.
          */
-        wait_for_event();
+        arch_spin_wait();
     }
 
-    data_memory_barrier();
+    arch_spin_memory_barrier();
     lock->owner = smp_processor_id();
     lock->count++;
 }
@@ -82,10 +82,10 @@ void spin_unlock(spinlock_t* lock)
     }
 
     lock->owner = SPINLOCK_NO_OWNER;
-    data_memory_barrier();
+    arch_spin_memory_barrier();
     lock->locked = 0;
-    data_sync_barrier();
-    send_event();
+    arch_spin_post_unlock_barrier();
+    arch_spin_wake();
 }
 
 int spin_trylock(spinlock_t* lock)
@@ -93,7 +93,7 @@ int spin_trylock(spinlock_t* lock)
     if (!lock) return 0;
     
     if (spin_atomic_try_acquire(&lock->locked)) {
-        data_memory_barrier();
+        arch_spin_memory_barrier();
         lock->owner = smp_processor_id();
         lock->count++;
         return 1;
@@ -106,10 +106,7 @@ void spin_lock_irqsave(spinlock_t* lock, unsigned long* flags)
 {
     if (!lock || !flags) return;
 
-    const unsigned long IF_MASK = 0xC0UL; /* bits 7 (I) et 6 (F) */
-    unsigned long cpsr = arm_disable_irq_save();
-
-    *flags = cpsr & IF_MASK;
+    *flags = arch_spin_irq_save();
     spin_lock(lock);
 }
 
@@ -119,8 +116,7 @@ void spin_unlock_irqrestore(spinlock_t* lock, unsigned long flags)
     
     spin_unlock(lock);
 
-    const unsigned long IF_MASK = 0xC0UL; /* bits 7 (I) et 6 (F) */
-    arm_restore_irq_mask(flags, IF_MASK);
+    arch_spin_irq_restore(flags);
 }
 
 int spin_is_locked(spinlock_t* lock)

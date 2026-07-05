@@ -105,6 +105,9 @@ Done so far:
   loader;
 - moved generated assembly-offset source to `arch/arm32/asm-offsets.c`;
 - moved ARM32 architecture headers to `arch/arm32/include/asm`;
+- moved ARM32 spinlock instruction primitives to
+  `arch/arm32/include/asm/spinlock.h`, leaving generic lock policy in
+  `kernel/sync/spinlock.c`;
 - taught the top-level `Makefile` to build these ARM32 architecture objects
   from `arch/arm32` and to search architecture headers first.
 
