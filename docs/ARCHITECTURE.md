@@ -44,7 +44,7 @@ detection, not as a complete generic device model.
 
 ### Memory Detection From DTB
 
-`kernel/memory/memory_detect.c` first tries to read the `/memory` node and its
+`arch/arm32/memory/memory_detect.c` first tries to read the `/memory` node and its
 `reg` property. On QEMU `virt`, that gives the RAM base and size.
 
 Expected memory shape:

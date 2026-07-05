@@ -59,7 +59,7 @@ KERNEL_OBJS = \
 	$(ARCH_DIR)/mmu/mmu.o \
 	$(ARCH_DIR)/mmu/tlb.o \
 	kernel/memory/kmalloc.o \
-	kernel/memory/memory_detect.o \
+	$(ARCH_DIR)/memory/memory_detect.o \
 	kernel/process/process.o \
 	kernel/process/fork.o \
 	kernel/process/exec.o \

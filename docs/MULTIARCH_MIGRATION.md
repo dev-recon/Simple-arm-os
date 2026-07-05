@@ -91,6 +91,8 @@ Done so far:
   abstraction boundary.
 - moved the current ARM32 user ABI/copy/user-stack helpers to
   `arch/arm32/user/userspace.c`.
+- moved ARM32/QEMU-virt memory detection to
+  `arch/arm32/memory/memory_detect.c`.
 - moved ARM32 syscall entry assembly to `arch/arm32/syscall/syscall.S`;
 - moved ARM32 context-switch assembly to `arch/arm32/task/task_switch.S`;
 - moved ARM32 PSCI/secondary CPU bring-up to `arch/arm32/smp/smp.c`;
