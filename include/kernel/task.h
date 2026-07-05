@@ -23,6 +23,7 @@
 #include <kernel/memory.h>
 #include <kernel/spinlock.h>
 #include <kernel/kernel.h>
+#include <asm/arm.h>
 
 struct signal_state_t;
 struct file;
@@ -581,28 +582,14 @@ extern void get_and_save_usr_context(task_t* t);
 
 #define TASK_CONTEXT_OFF offsetof(task_t, context)
 
-/* Ajout des fonctions de gestion des interruptions ARM */
 static inline uint32_t disable_interrupts_save(void)
 {
-    uint32_t cpsr;
-    __asm__ volatile(
-        "mrs %0, cpsr\n"      /* Lire CPSR actuel */
-        "cpsid if"            /* Desactiver IRQ et FIQ */
-        : "=r" (cpsr)
-        :
-        : "memory"
-    );
-    return cpsr;
+    return arm_disable_irq_fiq_save();
 }
 
 static inline void restore_interrupts(uint32_t cpsr)
 {
-    __asm__ volatile(
-        "msr cpsr_c, %0"      /* Restaurer seulement les bits de controle */
-        :
-        : "r" (cpsr)
-        : "memory"
-    );
+    arm_restore_cpsr_control(cpsr);
 }
 
 #endif /* _KERNEL_TASK_H */

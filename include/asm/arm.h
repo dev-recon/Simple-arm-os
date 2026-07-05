@@ -75,6 +75,25 @@ INLINE uint32_t arm_disable_irq_save(void)
     return cpsr;
 }
 
+INLINE uint32_t arm_disable_irq_fiq_save(void)
+{
+    uint32_t cpsr;
+
+    __asm__ volatile(
+        "mrs %0, cpsr\n"
+        "cpsid if"
+        : "=r"(cpsr)
+        :
+        : "memory");
+
+    return cpsr;
+}
+
+INLINE void arm_restore_cpsr_control(uint32_t cpsr)
+{
+    __asm__ volatile("msr cpsr_c, %0" : : "r"(cpsr) : "memory");
+}
+
 INLINE void arm_restore_irq_mask(uint32_t saved_flags, uint32_t mask)
 {
     uint32_t cpsr_now;
