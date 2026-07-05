@@ -1,5 +1,6 @@
 # nl-mash startup environment
-export PATH=/bin:/usr/bin:/opt/kilo/bin
+export PATH=/bin:/usr/bin:/opt/kilo/bin:/opt/nano/bin
 export HOME=/home/user
 export USER=user
+export TERM=armos
 export PS1="mash$> "

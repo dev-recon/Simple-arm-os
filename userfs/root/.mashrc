@@ -1,5 +1,6 @@
 # root shell environment
-export PATH=/sbin:/bin:/usr/bin:/opt/kilo/bin
+export PATH=/sbin:/bin:/usr/bin:/opt/kilo/bin:/opt/nano/bin
 export HOME=/root
 export USER=root
+export TERM=armos
 export PS1="root# "

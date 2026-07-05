@@ -31,9 +31,16 @@ _start:
     ldr r3, =environ
     str r2, [r3]
 
+    push {r0-r2}
+    cmp r0, #0
+    beq 2f
+    ldr r0, [r1]
+    bl __armos_init_program_name
+2:
+    pop {r0-r2}
+
     bl main
     bl exit
 
 1:
     b 1b
-

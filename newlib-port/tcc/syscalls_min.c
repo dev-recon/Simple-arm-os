@@ -20,7 +20,11 @@
  */
 
 #include <errno.h>
+#include <dirent.h>
+#include <fcntl.h>
 #include <limits.h>
+#include <libgen.h>
+#include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -138,6 +142,14 @@ extern void sys_exit(int status);
 #define TTY_STTY_SET_FOREGROUND_PGID_FD 2
 #define TTY_GTTY_GET_FOREGROUND_PGID_FD 2
 
+struct __dirstream {
+    int fd;
+    size_t pos;
+    size_t len;
+    struct dirent current;
+    char buffer[4096];
+};
+
 struct os_sigaction {
     void (*sa_handler)(int);
     uint32_t sa_mask;
@@ -150,6 +162,10 @@ extern void __signal_return_trampoline(void);
 #ifndef PATH_MAX
 #define PATH_MAX 1024
 #endif
+
+#define ARMOS_OPEN_MAX 256
+
+static const char *program_name = "program";
 
 struct os_stat {
     uint32_t st_dev;
@@ -174,6 +190,215 @@ static int ret_errno(long ret)
         return -1;
     }
     return (int)ret;
+}
+
+void __armos_init_program_name(const char *argv0)
+{
+    const char *base;
+
+    if (!argv0 || !*argv0)
+        return;
+
+    base = strrchr(argv0, '/');
+    program_name = (base && base[1]) ? base + 1 : argv0;
+}
+
+const char *getprogname(void)
+{
+    return program_name;
+}
+
+int getdtablesize(void)
+{
+    return ARMOS_OPEN_MAX;
+}
+
+char *dirname(char *path)
+{
+    static char dot[] = ".";
+    char *end;
+    char *slash;
+
+    if (!path || !*path)
+        return dot;
+
+    end = path + strlen(path);
+    while (end > path + 1 && end[-1] == '/')
+        *--end = '\0';
+
+    slash = strrchr(path, '/');
+    if (!slash)
+        return dot;
+
+    if (slash == path) {
+        slash[1] = '\0';
+        return path;
+    }
+
+    while (slash > path && slash[-1] == '/')
+        slash--;
+    *slash = '\0';
+    return path;
+}
+
+static int passwd_fd = -1;
+static char passwd_line[512];
+static struct passwd passwd_entry;
+
+static char *passwd_next_field(char **cursor)
+{
+    char *start;
+    char *colon;
+
+    if (!cursor || !*cursor)
+        return NULL;
+
+    start = *cursor;
+    colon = strchr(start, ':');
+    if (colon) {
+        *colon = '\0';
+        *cursor = colon + 1;
+    } else {
+        *cursor = NULL;
+    }
+
+    return start;
+}
+
+static int passwd_read_line(char *buf, size_t buf_size)
+{
+    size_t pos = 0;
+    char ch;
+    long ret;
+    int saw_data = 0;
+
+    if (passwd_fd < 0 || buf_size == 0)
+        return 0;
+
+    for (;;) {
+        ret = sys_read(passwd_fd, &ch, 1);
+        if (ret < 0) {
+            errno = (int)-ret;
+            return -1;
+        }
+        if (ret == 0)
+            break;
+
+        saw_data = 1;
+        if (ch == '\n')
+            break;
+        if (pos + 1 < buf_size)
+            buf[pos++] = ch;
+    }
+
+    if (!saw_data)
+        return 0;
+
+    buf[pos] = '\0';
+    return 1;
+}
+
+static struct passwd *passwd_parse_line(char *line)
+{
+    char *cursor = line;
+    char *name = passwd_next_field(&cursor);
+    char *password = passwd_next_field(&cursor);
+    char *uid = passwd_next_field(&cursor);
+    char *gid = passwd_next_field(&cursor);
+    char *gecos = passwd_next_field(&cursor);
+    char *home = passwd_next_field(&cursor);
+    char *shell = passwd_next_field(&cursor);
+
+    if (!name || !password || !uid || !gid || !gecos || !home || !shell)
+        return NULL;
+
+    passwd_entry.pw_name = name;
+    passwd_entry.pw_passwd = password;
+    passwd_entry.pw_uid = (uid_t)strtoul(uid, NULL, 10);
+    passwd_entry.pw_gid = (gid_t)strtoul(gid, NULL, 10);
+    passwd_entry.pw_comment = gecos;
+    passwd_entry.pw_gecos = gecos;
+    passwd_entry.pw_dir = home;
+    passwd_entry.pw_shell = shell;
+    return &passwd_entry;
+}
+
+void setpwent(void)
+{
+    long ret;
+
+    if (passwd_fd >= 0) {
+        sys_lseek(passwd_fd, 0, SEEK_SET);
+        return;
+    }
+
+    ret = sys_open("/etc/passwd", O_RDONLY, 0);
+    if (ret < 0) {
+        errno = (int)-ret;
+        passwd_fd = -1;
+        return;
+    }
+    passwd_fd = (int)ret;
+}
+
+void endpwent(void)
+{
+    if (passwd_fd >= 0) {
+        sys_close(passwd_fd);
+        passwd_fd = -1;
+    }
+}
+
+struct passwd *getpwent(void)
+{
+    int ret;
+    struct passwd *entry;
+
+    if (passwd_fd < 0)
+        setpwent();
+    if (passwd_fd < 0)
+        return NULL;
+
+    while ((ret = passwd_read_line(passwd_line, sizeof(passwd_line))) > 0) {
+        entry = passwd_parse_line(passwd_line);
+        if (entry)
+            return entry;
+    }
+
+    return NULL;
+}
+
+struct passwd *getpwuid(uid_t uid)
+{
+    struct passwd *entry;
+
+    setpwent();
+    while ((entry = getpwent()) != NULL) {
+        if (entry->pw_uid == uid) {
+            endpwent();
+            return entry;
+        }
+    }
+    endpwent();
+    return NULL;
+}
+
+struct passwd *getpwnam(const char *name)
+{
+    struct passwd *entry;
+
+    if (!name)
+        return NULL;
+
+    setpwent();
+    while ((entry = getpwent()) != NULL) {
+        if (strcmp(entry->pw_name, name) == 0) {
+            endpwent();
+            return entry;
+        }
+    }
+    endpwent();
+    return NULL;
 }
 
 static void copy_stat(struct stat *dst, const struct os_stat *src)
@@ -943,6 +1168,100 @@ int getdents(int fd, void *dirp, size_t count)
     return ret_errno(sys_getdents(fd, dirp, count));
 }
 
+DIR *opendir(const char *name)
+{
+    DIR *dir;
+    int fd;
+
+    if (!name) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    fd = open(name, O_RDONLY | O_DIRECTORY);
+    if (fd < 0)
+        return NULL;
+
+    dir = calloc(1, sizeof(*dir));
+    if (!dir) {
+        close(fd);
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    dir->fd = fd;
+    return dir;
+}
+
+struct dirent *readdir(DIR *dirp)
+{
+    struct linux_dirent *raw;
+    size_t name_len;
+
+    if (!dirp) {
+        errno = EBADF;
+        return NULL;
+    }
+
+    for (;;) {
+        if (dirp->pos >= dirp->len) {
+            int n = getdents(dirp->fd, dirp->buffer, sizeof(dirp->buffer));
+            if (n <= 0)
+                return NULL;
+            dirp->pos = 0;
+            dirp->len = (size_t)n;
+        }
+
+        raw = (struct linux_dirent *)(dirp->buffer + dirp->pos);
+        if (raw->d_reclen == 0 || dirp->pos + raw->d_reclen > dirp->len) {
+            errno = EIO;
+            return NULL;
+        }
+        dirp->pos += raw->d_reclen;
+
+        dirp->current.d_ino = raw->d_ino;
+        dirp->current.d_off = raw->d_off;
+        dirp->current.d_reclen = raw->d_reclen;
+        dirp->current.d_type = raw->d_type;
+        name_len = strnlen(raw->d_name, NAME_MAX);
+        memcpy(dirp->current.d_name, raw->d_name, name_len);
+        dirp->current.d_name[name_len] = '\0';
+        return &dirp->current;
+    }
+}
+
+void rewinddir(DIR *dirp)
+{
+    if (!dirp)
+        return;
+    lseek(dirp->fd, 0, SEEK_SET);
+    dirp->pos = 0;
+    dirp->len = 0;
+}
+
+int closedir(DIR *dirp)
+{
+    int ret;
+
+    if (!dirp) {
+        errno = EBADF;
+        return -1;
+    }
+
+    ret = close(dirp->fd);
+    free(dirp);
+    return ret;
+}
+
+int dirfd(DIR *dirp)
+{
+    if (!dirp) {
+        errno = EBADF;
+        return -1;
+    }
+    return dirp->fd;
+}
+
 int select(int nfds, fd_set *readfds, fd_set *writefds,
            fd_set *exceptfds, struct timeval *timeout)
 {
@@ -1157,6 +1476,54 @@ int sigpending(sigset_t *set)
 int getrusage(int who, struct rusage *usage)
 {
     return ret_errno(sys_getrusage(who, usage));
+}
+
+int getrlimit(int resource, struct rlimit *rlim)
+{
+    if (!rlim) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    switch (resource) {
+    case RLIMIT_NOFILE:
+        rlim->rlim_cur = ARMOS_OPEN_MAX;
+        rlim->rlim_max = ARMOS_OPEN_MAX;
+        return 0;
+    case RLIMIT_STACK:
+    case RLIMIT_DATA:
+    case RLIMIT_AS:
+    case RLIMIT_RSS:
+    case RLIMIT_CORE:
+    case RLIMIT_CPU:
+    case RLIMIT_FSIZE:
+        rlim->rlim_cur = RLIM_INFINITY;
+        rlim->rlim_max = RLIM_INFINITY;
+        return 0;
+    default:
+        errno = EINVAL;
+        return -1;
+    }
+}
+
+int setrlimit(int resource, const struct rlimit *rlim)
+{
+    if (!rlim) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if (resource != RLIMIT_NOFILE) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (rlim->rlim_cur > ARMOS_OPEN_MAX || rlim->rlim_max > ARMOS_OPEN_MAX) {
+        errno = EPERM;
+        return -1;
+    }
+
+    return 0;
 }
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
