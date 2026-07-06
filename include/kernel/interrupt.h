@@ -26,8 +26,13 @@
 /* Legacy generic IRQ aliases. The concrete IDs are supplied by the platform. */
 #define IRQ_SGI_TLB_SHOOTDOWN ARMOS_PLATFORM_SGI_TLB_SHOOTDOWN_IRQ
 #define IRQ_TIMER             ARMOS_PLATFORM_TIMER_IRQ
+#define IRQ_UART              ARMOS_PLATFORM_UART_IRQ
 #define IRQ_KEYBOARD          ARMOS_PLATFORM_KEYBOARD_IRQ
 #define IRQ_ATA               ARMOS_PLATFORM_ATA_IRQ
+#define IRQ_VIRTIO_NET        ARMOS_PLATFORM_VIRTIO_NET_IRQ
+#define IRQ_VIRTIO_BLOCK      ARMOS_PLATFORM_VIRTIO_BLOCK_IRQ
+#define IRQ_VIRTIO_CONSOLE    ARMOS_PLATFORM_VIRTIO_CONSOLE_IRQ
+#define IRQ_VIRTIO_RNG        ARMOS_PLATFORM_VIRTIO_RNG_IRQ
 
 void enable_irq(uint32_t irq);
 void enable_irq_level(uint32_t irq);

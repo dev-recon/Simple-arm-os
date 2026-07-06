@@ -38,9 +38,9 @@ static volatile uint32_t last_irq_id = 0;
 static volatile uint32_t irq_counts[GIC_IRQ_COUNTERS];
 
 /* Acces runtime via l'alias MMIO prive TTBR1. */
-#define LOCAL_GICD_BASE     KERNEL_MMIO_GIC_DIST_BASE
-#define LOCAL_GICC_BASE     KERNEL_MMIO_GIC_CPU_BASE
-#define LOCAL_VIRTIO_BASE   KERNEL_MMIO_VIRTIO_BASE
+#define LOCAL_GICD_BASE     ARMOS_PLATFORM_KERNEL_MMIO_GIC_DIST_BASE
+#define LOCAL_GICC_BASE     ARMOS_PLATFORM_KERNEL_MMIO_GIC_CPU_BASE
+#define LOCAL_VIRTIO_BASE   ARMOS_PLATFORM_KERNEL_MMIO_VIRTIO_BASE
 
 static uint8_t gic_boot_cpu_mask(void)
 {
@@ -143,7 +143,7 @@ void init_gic(void)
     //KDEBUG("[GIC] Enabling important IRQs...\n");
     /* IRQs coeur. Les drivers MMIO activent ensuite leurs IRQ propres. */
 #if 1
-    uint32_t important_irqs[] = {1, 33, 30};
+    uint32_t important_irqs[] = {IRQ_UART, IRQ_KEYBOARD, IRQ_TIMER};
     
     for (int i = 0; i < (int)(sizeof(important_irqs) / sizeof(important_irqs[0])); i++) {
         uint32_t irq = important_irqs[i];
@@ -215,8 +215,8 @@ void gic_init_secondary_cpu_interface(void)
     volatile uint8_t* ipriority = (volatile uint8_t*)(LOCAL_GICD_BASE + 0x400);
     uint32_t sgi_reg = IRQ_SGI_TLB_SHOOTDOWN / 32;
     uint32_t sgi_bit = IRQ_SGI_TLB_SHOOTDOWN % 32;
-    uint32_t timer_reg = VIRT_TIMER_NS_EL1_IRQ / 32;
-    uint32_t timer_bit = VIRT_TIMER_NS_EL1_IRQ % 32;
+    uint32_t timer_reg = IRQ_TIMER / 32;
+    uint32_t timer_bit = IRQ_TIMER % 32;
 
     /*
      * Secondary CPUs enter here with TTBR1 enabled but outside the scheduler.
@@ -227,7 +227,7 @@ void gic_init_secondary_cpu_interface(void)
     gicc[0x004 / 4] = 0xF0;  /* GICC_PMR */
     gicc[0x008 / 4] = 0x03;  /* GICC_BPR */
     ipriority[IRQ_SGI_TLB_SHOOTDOWN] = 0xA0;
-    ipriority[VIRT_TIMER_NS_EL1_IRQ] = 0xA0;
+    ipriority[IRQ_TIMER] = 0xA0;
     gicd[0x100 / 4 + sgi_reg] |= (1u << sgi_bit);
     gicd[0x100 / 4 + timer_reg] |= (1u << timer_bit);
     gicc[0x000 / 4] = 0x01;
@@ -301,12 +301,12 @@ void irq_c_handler(void)
     
     /* Router vers les handlers specifiques pour machine virt */
     switch (int_id) {
-        case VIRT_TIMER_NS_EL1_IRQ:  /* Timer generique ARM */
+        case IRQ_TIMER:  /* Timer generique ARM */
             //kprintf("[IRQ] Generic Timer IRQ %u Received\n", int_id);
             timer_irq_handler();
             break;
             
-        case VIRT_UART_IRQ:  /* UART machine virt */
+        case IRQ_UART:  /* UART machine virt */
             //kprintf("[IRQ] UART IRQ %u Received\n", int_id);
             uart_irq_handler();
             break;
@@ -326,8 +326,8 @@ void irq_c_handler(void)
         /* VirtIO IRQs non utilises pour l'instant. Les laisser visibles plutot
          * que les router dans l'ancien handler ATA, qui manipule un etat de
          * queue different du driver virtio_block.c. */
-        case VIRT_VIRTIO_CONSOLE_IRQ:
-        case VIRT_VIRTIO_RNG_IRQ:
+        case IRQ_VIRTIO_CONSOLE:
+        case IRQ_VIRTIO_RNG:
         case 79:
         case 48:
             //kprintf("[IRQ] Ignoring unused VirtIO IRQ %u\n", int_id);
@@ -487,7 +487,7 @@ void test_timer_irq_virt(void)
         set_cntp_ctl(ctl);
         
         /* Activer IRQ */
-        enable_irq(VIRT_TIMER_NS_EL1_IRQ);
+        enable_irq(IRQ_TIMER);
         
         kprintf("[TEST] Generic Timer configured, waiting for IRQ...\n");
     } else {
@@ -545,8 +545,8 @@ void test_virtio_irq_virt(void)
         kprintf("[TEST]   Device ID: %u\n", device_id);
         
         /* Activer les IRQ VirtIO */
-        enable_irq(VIRT_VIRTIO_NET_IRQ);
-        enable_irq(VIRT_VIRTIO_BLOCK_IRQ);
+        enable_irq(IRQ_VIRTIO_NET);
+        enable_irq(IRQ_VIRTIO_BLOCK);
         
         /* Reset et configure device */
         virtio[0x070/4] = 0;      /* Reset */
