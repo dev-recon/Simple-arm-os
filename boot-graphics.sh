@@ -53,12 +53,11 @@ select_display() {
 }
 
 QEMU="$(select_qemu "${1:-}")"
-QEMU_MACHINE="${QEMU_MACHINE:-virt}"
-QEMU_CPU="${QEMU_CPU:-cortex-a15}"
+. "$ROOT_DIR/tools/qemu_platform_env.sh"
 QEMU_DISPLAY="$(select_display)"
 SMP_CPUS="${SMP_CPUS:-1}"
 
-GPU_DEVICE="virtio-gpu-device"
+GPU_DEVICE="${QEMU_GPU_DEVICE}"
 if [ -n "${GPU_XRES:-}" ] || [ -n "${GPU_YRES:-}" ]; then
     GPU_XRES="${GPU_XRES:-1024}"
     GPU_YRES="${GPU_YRES:-768}"
@@ -83,15 +82,16 @@ fi
 echo "=== Booting existing kernel.bin + disk.img with virtio-gpu ==="
 echo "UART console stays on this terminal; graphics output opens in a QEMU window."
 echo "QEMU: $("$QEMU" --version | head -n 1)"
+echo "Platform: ${TARGET_ARCH}/${TARGET_PLATFORM}"
 echo "Machine: ${QEMU_MACHINE}, CPU: ${QEMU_CPU}"
 echo "GPU: ${GPU_DEVICE}, display=${QEMU_DISPLAY}"
 echo "SMP: ${SMP_CPUS} CPU(s)"
 "$QEMU" -M "${QEMU_MACHINE}" -cpu "${QEMU_CPU}" \
     -m 2G -smp "${SMP_CPUS}" \
     -drive file=disk.img,if=none,format=raw,id=hd0 \
-    -device virtio-blk-device,drive=hd0 \
+    -device "${QEMU_BLOCK_DEVICE}" \
     -device "${GPU_DEVICE}" \
-    -device virtio-keyboard-device,event_idx=off,indirect_desc=off \
+    -device "${QEMU_INPUT_DEVICE}" \
     -chardev stdio,id=uart0,signal=off \
     -serial chardev:uart0 \
     -monitor none \

@@ -22,6 +22,24 @@ The fragment may use these variables from the root Makefile:
 - `ARCH_DIR`: selected architecture directory, for example `arch/arm32`.
 - `PLATFORM_DIR`: selected platform directory.
 
+## Optional `qemu.sh`
+
+Boot scripts source `qemu.sh` from the selected platform directory. Provide it
+when the platform can be launched through the repository scripts.
+
+The file is shell syntax and should define `*_DEFAULT` values rather than
+overriding user-provided environment variables directly:
+
+- `QEMU_MACHINE_DEFAULT`
+- `QEMU_CPU_DEFAULT`
+- `QEMU_BLOCK_DEVICE_DEFAULT`
+- `QEMU_GPU_DEVICE_DEFAULT`
+- `QEMU_INPUT_DEVICE_DEFAULT`
+- `QEMU_NET_DEVICE_MODEL_DEFAULT`
+
+The shared loader in `tools/qemu_platform_env.sh` applies these defaults while
+preserving explicit environment overrides.
+
 ## Rules
 
 - Do not add platform-specific conditionals to the root Makefile when a
