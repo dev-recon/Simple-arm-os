@@ -30,9 +30,7 @@
 #include <kernel/ata.h>
 #include <kernel/smp.h>
 #include <kernel/tlb.h>
-
-/* Inclusion des fonctions inline ARM apres les prototypes */
-#include <asm/arm.h>
+#include <kernel/arch_cpu.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
 #include <kernel/memory.h>
@@ -49,16 +47,10 @@
 #include <kernel/tty.h>
 #include <kernel/exceptions.h>
 
-//extern void test_utoa_direct();
-//extern void simple_utoa(unsigned int val, char *str, int base);
-
-
-// Canary statique
+/* Static stack-protector canary used by freestanding kernel builds. */
 uintptr_t __stack_chk_guard = 0xDEADBEEF;
 
-// Appelée si débordement détecté
 void __attribute__((noreturn)) __stack_chk_fail(void) {
-    // Panic ou halt, au choix
     extern void panic(const char*);
     panic("Stack smashing detected");
     while (1) {}
@@ -85,13 +77,13 @@ void init_early_uart(void)
 
 void panic(const char* message)
 {
-    disable_interrupts();
+    arch_disable_interrupts();
     uart_puts("KERNEL PANIC: ");
     uart_puts(message);
     uart_puts("\n");
     
     while (1) {
-        wait_for_interrupt();
+        arch_wait_for_interrupt();
     }
 }
 
@@ -100,25 +92,9 @@ void panic(const char* message)
 void early_init(void); 
 void kernel_main(void);
 
-static inline void disable_branch_predictor(void) {
-    uint32_t sctlr;
-
-    /* Clear SCTLR.Z, then invalidate branch predictor state. */
-    sctlr = get_sctlr();
-    sctlr &= ~(1 << 11);
-    set_sctlr(sctlr);
-    flush_branch_predictor();
-}
-
-
 static uint32_t boot_timer_frequency(void)
 {
-    uint32_t timer_freq = get_cntfrq();
-
-    if (timer_freq == 0)
-        timer_freq = 62500000;
-
-    return timer_freq;
+    return arch_timer_frequency();
 }
 
 static uint32_t boot_bogomips_x100(uint32_t timer_freq)
@@ -206,7 +182,7 @@ void kernel_main(void)
     KBOOT_OKF("Calibrating delay loop... %u.%02u BogoMIPS",
                 bogo_x100 / 100, bogo_x100 % 100);
 
-    //disable_branch_predictor();
+    //arch_disable_branch_predictor();
     
     init_memory();  // <- Allocateur physique EN PREMIER
 
@@ -275,7 +251,7 @@ void kernel_main(void)
     /* Phase 6: Activation des interruptions */
     timer_enable_scheduling();
  
-    enable_interrupts();
+    arch_enable_interrupts();
 
     /* Phase 7: Systemes de fichiers (OPTIONNEL) */
 #ifdef USE_RAMFS

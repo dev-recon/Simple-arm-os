@@ -10,10 +10,14 @@
  *
  * Responsibilities:
  * - Expose CPU identity data used by procfs and diagnostics.
- * - Keep architecture register reads out of generic filesystem code.
+ * - Expose boot CPU control hooks used by generic bootstrap code.
+ * - Keep architecture register reads and CPU-control instructions out of
+ *   generic kernel code.
  *
  * Notes:
- * - This is descriptive data only; CPU bring-up and scheduling stay elsewhere.
+ * - CPU bring-up and scheduling stay in their dedicated SMP/task modules.
+ *   These hooks cover only local CPU operations needed by generic boot and
+ *   fatal-stop paths.
  */
 
 #ifndef _KERNEL_ARCH_CPU_H
@@ -33,5 +37,10 @@ typedef struct arch_cpuinfo {
 } arch_cpuinfo_t;
 
 void arch_get_cpuinfo(arch_cpuinfo_t* info);
+void arch_disable_interrupts(void);
+void arch_enable_interrupts(void);
+void arch_wait_for_interrupt(void);
+void arch_disable_branch_predictor(void);
+uint32_t arch_timer_frequency(void);
 
 #endif /* _KERNEL_ARCH_CPU_H */

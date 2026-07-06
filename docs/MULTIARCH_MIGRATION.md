@@ -78,6 +78,9 @@ Done so far:
 
 - moved ARM32 CPU identity reads and `/proc/cpuinfo` data to
   `arch/arm32/cpu/cpu.c`, behind `arch_get_cpuinfo()`;
+- moved ARM32 local boot CPU controls to `arch/arm32/cpu/cpu.c`, behind
+  `arch_cpu` hooks for IRQ enable/disable, WFI, timer frequency, and branch
+  predictor control;
 - moved ARM32 boot assembly to `arch/arm32/boot/boot.S`;
 - moved ARM32 IRQ entry assembly to `arch/arm32/interrupt/interrupt.S`;
 - moved ARM32 exception/fault diagnostics to

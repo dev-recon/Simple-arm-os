@@ -39,3 +39,35 @@ void arch_get_cpuinfo(arch_cpuinfo_t* info)
     info->revision = midr & 0xf;
     info->mpidr = arm_read_mpidr();
 }
+
+void arch_disable_interrupts(void)
+{
+    disable_interrupts();
+}
+
+void arch_enable_interrupts(void)
+{
+    enable_interrupts();
+}
+
+void arch_wait_for_interrupt(void)
+{
+    wait_for_interrupt();
+}
+
+void arch_disable_branch_predictor(void)
+{
+    uint32_t sctlr;
+
+    sctlr = get_sctlr();
+    sctlr &= ~(1u << 11);
+    set_sctlr(sctlr);
+    flush_branch_predictor();
+}
+
+uint32_t arch_timer_frequency(void)
+{
+    uint32_t timer_freq = get_cntfrq();
+
+    return timer_freq ? timer_freq : 62500000u;
+}
