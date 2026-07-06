@@ -28,8 +28,8 @@
 #include <kernel/timer.h>
 #include <kernel/process.h>
 #include <kernel/smp.h>
-#include <asm/arm.h>
-#include <asm/mmu.h>
+#include <kernel/arch_barrier.h>
+#include <kernel/arch_cpu.h>
 #include <kernel/file.h>
 
 _Static_assert(offsetof(task_t, context) == 48,
@@ -1305,13 +1305,13 @@ void switch_to_idle_stack(void)
     new_sp &= ~7;  /* Alignement 8-bytes */
     
     /* CRITIQUE: Switcher vers la pile idle */
-    arm_set_sp(new_sp);
+    arch_set_stack_pointer(new_sp);
     
     /* Mettre à jour le SP d'idle */
     idle_task->context.sp = new_sp;
     
     /* Vérification */
-    current_sp = arm_current_sp();
+    current_sp = arch_current_stack_pointer();
     
     if (current_sp < task_stack_addr(idle_task->stack_base) ||
         current_sp >= task_stack_addr(idle_task->stack_top)) {
@@ -1951,7 +1951,7 @@ void debug_idle_corruption_source(void)
     
     /* Obtenir la trace de la pile */
     uint32_t lr;
-    lr = arm_current_lr();
+    lr = arch_current_link_register();
     
     KERROR("IDLE CORRUPTION DETECTED!\n");
     KERROR("  Called from: 0x%08X\n", lr);
@@ -2296,7 +2296,7 @@ static bool scheduler_entry_allowed(const char* caller, task_t* requested)
         return false;
     }
 
-    if (get_cpu_mode() == ARM_MODE_IRQ)
+    if (arch_current_mode_is_interrupt())
         return false;
 
     return true;
@@ -2424,7 +2424,7 @@ void schedule(void)
     current = task_current_local();
     scheduler_scan_waiters(current);
 
-    current_sp = arm_current_sp();
+    current_sp = arch_current_stack_pointer();
     save_current_context = current->state != TASK_ZOMBIE &&
                            current->state != TASK_TERMINATED;
 
@@ -2468,7 +2468,7 @@ void schedule_to(task_t *next_task)
     current = task_current_local();
     scheduler_scan_waiters(current);
 
-    current_sp = arm_current_sp();
+    current_sp = arch_current_stack_pointer();
     save_current_context = current->state != TASK_ZOMBIE &&
                            current->state != TASK_TERMINATED;
 
@@ -2524,8 +2524,8 @@ static void secondary_idle_park_for_shutdown(uint32_t cpu)
     KINFO("SMP: CPU%u parked for shutdown\n", cpu);
 
     for (;;) {
-        data_sync_barrier();
-        wait_for_interrupt();
+        arch_data_sync_barrier();
+        arch_wait_for_interrupt();
     }
 }
 
@@ -2892,8 +2892,8 @@ void idle_task_func(void* arg)
          * scan sleepers after each interrupt, but only enter the scheduler when
          * a real task became ready.
          */
-        enable_interrupts();
-        wait_for_interrupt();
+        arch_enable_interrupts();
+        arch_wait_for_interrupt();
         if (smp_shutdown_park_requested(cpu))
             secondary_idle_park_for_shutdown(cpu);
         scheduler_scan_waiters(task_current_local());
@@ -3555,7 +3555,7 @@ void debug_task_detailed(task_t *current_task)
     
     /* Verifier que le pointeur est dans une zone valide */
     vaddr_t current_task_addr = (vaddr_t)(uintptr_t)current_task;
-    if (!IS_KERNEL_ADDR(current_task_addr)) {
+    if (!memory_is_kernel_address(current_task_addr)) {
         KERROR("  KO current_task pointer invalid: %p\n", current_task);
         return;
     }

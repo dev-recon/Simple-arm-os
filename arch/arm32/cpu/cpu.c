@@ -87,9 +87,24 @@ vaddr_t arch_current_link_register(void)
     return arm_current_lr();
 }
 
+vaddr_t arch_current_stack_pointer(void)
+{
+    return arm_current_sp();
+}
+
+void arch_set_stack_pointer(vaddr_t sp)
+{
+    arm_set_sp(sp);
+}
+
 uint32_t arch_current_mode(void)
 {
     return get_cpsr() & ARM_CPSR_MODE;
+}
+
+bool arch_current_mode_is_interrupt(void)
+{
+    return arch_current_mode() == ARM_MODE_IRQ;
 }
 
 uint32_t arch_saved_mode(void)
