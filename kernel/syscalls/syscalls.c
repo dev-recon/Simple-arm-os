@@ -33,7 +33,6 @@
 #include <kernel/virtio_net.h>
 #include <kernel/arch_barrier.h>
 #include <kernel/arch_cpu.h>
-#include <asm/mmu.h>
 #include <kernel/timer.h>
 
 /* Syscall table */
@@ -389,78 +388,6 @@ static char** copy_exec_vector(char* const vector[], uint32_t count, bool from_u
 fail:
     cleanup_exec_args(NULL, copy, NULL);
     return NULL;
-}
-
-void check_instruction(vaddr_t test_vaddr, paddr_t phys_addr, uint32_t instruction)
-{
-    uint32_t l1_index = get_L1_index(test_vaddr);  // 0 
-    uint32_t l2_index = L2_INDEX(test_vaddr);  // 8 
-
-    KDEBUG("  Testing user mapping 0x%08X:\n", test_vaddr);
-
-        KDEBUG("    L1 index: %u, L2 index: %u\n", l1_index, l2_index);
-
-
-    /* Lire depuis le pgdir actuel (maintenant 0x41538000) */
-    uint32_t current_ttbr0 = get_ttbr0();
-    pgdir_cpu_t active_pgdir = (pgdir_cpu_t)phys_to_virt((paddr_t)(current_ttbr0 & ~0x7F));
-
-    uint32_t l1_entry = active_pgdir[l1_index];
-    KDEBUG("Current TTBR0 = 0x%08X\n", (uint32_t)active_pgdir);
-    //for (int i = 0 ; i < 16 ; i++) {
-    //    uint32_t entry = active_pgdir[i];
-    //    KDEBUG("    L1[%u] = 0x%08X\n", i, entry);
-    //}
-
-    if (l1_entry & 0x1) {  // Page table entry
-        KDEBUG("    User area properly mapped via page table\n");
-    } else {
-        KERROR("    User area not mapped!\n");
-    }
-
-    KDEBUG("=== FINAL INSTRUCTION CHECK ===\n"); 
-
-    uint32_t first_instruction;
-    paddr_t paddr = phys_addr;
-    uint32_t* phys_code = (uint32_t*)phys_to_virt(paddr);
-    first_instruction = *phys_code;
-
-    KDEBUG("  First instruction at 0x8000: user code (phys 0x%08X): 0x%08X\n",
-        paddr, first_instruction);
-    KDEBUG("  Expected: 0x%08X\n", instruction);
-
-    if (first_instruction == instruction) {
-        KDEBUG("  Instruction correct, ready for execution\n");
-    } else {
-        KERROR("  Instruction mismatch!\n");
-    }  
-
-    /* Lire l'instruction à l'adresse virtuelle 0x8000 */
-    vaddr_t vaddr = test_vaddr;
-    uint32_t* user_code = (uint32_t*)vaddr;
-    KDEBUG("=== USER CODE OK === user code 0x%08X \n", *user_code); 
-}
-
-
-void dbg_dump_pte_0x8000(void){
-    // L1 base (ttbr0_base_pa & ~0x3FFF)
-    uint32_t *l1 = (uint32_t*)map_temp_page(get_ttbr0() & 0xFFFFC000u);
-    uint32_t e1 = l1[0];
-    kprintf("DBG L1[0]=0x%08X for TTBRO = 0x%08X\n", e1, get_ttbr0());
-    //hexdump((void *)get_ttbr0(),32);
-    //hexdump((void *)0x7F001000, 32);
-
-    if ((e1 & 3u) == 1u){
-        uint32_t l2_pa_1kb = e1 & 0xFFFFFC00u;
-        paddr_t l2_page_pa = l2_pa_1kb & ~0x3FFu;
-        uint32_t l2_off = l2_pa_1kb & 0x3FFu;
-
-        uint8_t *l2p = (uint8_t*)map_temp_page(l2_page_pa);
-        volatile uint32_t *l2 = (volatile uint32_t*)(l2p + l2_off);
-        kprintf("DBG L2[8]=0x%08X (L2_page_pa=0x%08X)\n", l2[8], l2_page_pa);
-        unmap_temp_page((void*)l2p);
-    }
-    unmap_temp_page((void*)l1);
 }
 
 /**
