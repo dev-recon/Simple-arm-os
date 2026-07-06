@@ -21,7 +21,6 @@
 #include <kernel/kernel.h>
 #include <kernel/vfs.h>
 #include <kernel/syscalls.h>
-#include <asm/arm.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
 #include <kernel/fat32.h>

@@ -21,7 +21,6 @@
 #include <kernel/memory.h>
 #include <kernel/kernel.h>
 #include <kernel/vfs.h>
-#include <asm/arm.h>
 #include <kernel/kprintf.h>
 
 /* Forward declarations de toutes les fonctions statiques */
