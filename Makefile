@@ -19,7 +19,7 @@ TARGET_ARCH_DISPLAY = $(TARGET_ARCH)
 
 ifeq ($(TARGET_ARCH),arm32)
 ARCH_CFLAGS = -mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft \
-              -mno-unaligned-access -DARMV7A_KERNEL
+              -mno-unaligned-access -DARMV7A_KERNEL -DARMOS_ARCH_BITS=32
 else
 $(error Unsupported TARGET_ARCH '$(TARGET_ARCH)')
 endif

@@ -49,12 +49,27 @@ typedef uint32_t           time_t;
 
 /* === TYPES POUR ADRESSES === */
 
+#ifndef ARMOS_ARCH_BITS
+#define ARMOS_ARCH_BITS 32
+#endif
+
 /* Pour les calculs d'adresses et pointeurs */
-typedef uint32_t           uintptr_t;    /* ARM32 = 32-bit addresses */
-typedef int32_t            intptr_t;     /* Version signee */
-typedef uint32_t           paddr_t;      /* Physical address, 32-bit on ARMv7 */
-typedef uint32_t           vaddr_t;      /* Virtual address, 32-bit on ARMv7 */
-typedef uint32_t           pfn_t;        /* Physical page frame number */
+#if ARMOS_ARCH_BITS == 32
+typedef uint32_t           uintptr_t;
+typedef int32_t            intptr_t;
+typedef uint32_t           paddr_t;
+typedef uint32_t           vaddr_t;
+typedef uint32_t           pfn_t;
+#elif ARMOS_ARCH_BITS == 64
+typedef uint64_t           uintptr_t;
+typedef int64_t            intptr_t;
+typedef uint64_t           paddr_t;
+typedef uint64_t           vaddr_t;
+typedef uint64_t           pfn_t;
+#else
+#error "Unsupported ARMOS_ARCH_BITS value"
+#endif
+
 typedef void*              pgdir_t;      /* Opaque architecture page-directory handle */
 typedef paddr_t            phys_addr_t;  /* Legacy alias; prefer paddr_t */
 typedef vaddr_t            virt_addr_t;  /* Legacy alias; prefer vaddr_t */
@@ -302,7 +317,7 @@ typedef uint32_t in_addr_t;
 
 /* Verifications a la compilation */
 #if PAGE_SIZE != 4096
-#error "PAGE_SIZE must be 4096 for ARM32"
+#error "PAGE_SIZE must be 4096"
 #endif
 
 //#if CACHE_LINE_SIZE != 64
@@ -314,6 +329,6 @@ typedef char size_check_uint8_t[sizeof(uint8_t) == 1 ? 1 : -1];
 typedef char size_check_uint16_t[sizeof(uint16_t) == 2 ? 1 : -1];
 typedef char size_check_uint32_t[sizeof(uint32_t) == 4 ? 1 : -1];
 typedef char size_check_uint64_t[sizeof(uint64_t) == 8 ? 1 : -1];
-typedef char size_check_uintptr_t[sizeof(uintptr_t) == 4 ? 1 : -1];
+typedef char size_check_uintptr_t[sizeof(uintptr_t) == (ARMOS_ARCH_BITS / 8) ? 1 : -1];
 
 #endif /* _KERNEL_TYPES_H */
