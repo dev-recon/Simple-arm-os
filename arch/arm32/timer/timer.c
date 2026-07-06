@@ -232,7 +232,7 @@ void timer_init_local_cpu(void)
     timer_program_next_tick(timer_freq);
 }
 
-/* ARM Generic Timer - utilise par machine virt */
+/* ARM generic timer initialization for the active platform. */
 void init_timer(void)
 {
     extern int kprintf(const char *format, ...);
@@ -297,10 +297,10 @@ void timer_irq_handler(void)
         system_ticks += elapsed_ticks;
 
     /*
-     * PL011 TX interrupts are edge/level sensitive enough to miss a wake-up in
-     * QEMU under dense console bursts. Poll the TTY TX ring from the periodic
-     * timer as a safety net. Keep this on the boot CPU so future local timers
-     * do not make several CPUs compete for the same character backend.
+     * Some UART backends can miss a TX wake-up under dense console bursts.
+     * Poll the TTY TX ring from the periodic timer as a safety net. Keep this
+     * on the boot CPU so future local timers do not make several CPUs compete
+     * for the same character backend.
      */
     if (smp_is_boot_cpu() && tty_has_pending_output())
         tty_drain_output();
