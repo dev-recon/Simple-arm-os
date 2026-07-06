@@ -21,7 +21,7 @@
 #ifndef _KERNEL_USER_LAYOUT_H
 #define _KERNEL_USER_LAYOUT_H
 
-#include <asm/user_layout.h>
+#include <kernel/arch_user_layout.h>
 
 /*
  * Compatibility aliases for the user virtual layout.  The concrete addresses
