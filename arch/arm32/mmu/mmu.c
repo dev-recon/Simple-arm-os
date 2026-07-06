@@ -23,6 +23,7 @@
 #include <kernel/display.h>
 #include <kernel/task.h>
 #include <kernel/tlb.h>
+#include <kernel/arch_memory.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 
@@ -1267,6 +1268,11 @@ pgdir_cpu_t get_kernel_pgdir(void)
 pgdir_cpu_t get_kernel_ttbr0(void)
 {
     return ttbr0_pgdir;
+}
+
+arch_addrspace_context_t arch_kernel_address_space_context(void)
+{
+    return (arch_addrspace_context_t)ttbr0_pgdir;
 }
 
 /* Fonctions de debug mises à jour */

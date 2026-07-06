@@ -29,6 +29,7 @@
 #include <kernel/syscalls.h>
 #include <kernel/file.h>
 #include <kernel/string.h>
+#include <kernel/arch_memory.h>
 
 static DEFINE_SPINLOCK(exception_log_lock);
 
@@ -762,7 +763,7 @@ int coredumpd_start(void)
 
     coredumpd_task->process = vfs_context;
     coredumpd_task->context.is_first_run = 1;
-    coredumpd_task->context.ttbr0 = (uint32_t)ttbr0_pgdir;
+    coredumpd_task->context.ttbr0 = arch_kernel_address_space_context();
     coredumpd_task->context.asid = ASID_KERNEL;
     coredumpd_task->context.returns_to_user = 0;
     add_to_ready_queue(coredumpd_task);

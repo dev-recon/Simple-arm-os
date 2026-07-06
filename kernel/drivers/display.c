@@ -26,6 +26,7 @@
 #include <kernel/timer.h>
 #include <kernel/task.h>
 #include <kernel/spinlock.h>
+#include <kernel/arch_memory.h>
 
 /* displayd frame period: ~60 Hz coalesces bursts into one GPU flush. */
 #define DISPLAYD_FRAME_MS 16
@@ -303,7 +304,7 @@ int display_start_daemon(void)
         return -ENOMEM;
 
     displayd_task->context.is_first_run = 1;
-    displayd_task->context.ttbr0 = (uint32_t)ttbr0_pgdir;
+    displayd_task->context.ttbr0 = arch_kernel_address_space_context();
     displayd_task->context.asid = ASID_KERNEL;
     displayd_task->context.returns_to_user = 0;
     add_to_ready_queue(displayd_task);

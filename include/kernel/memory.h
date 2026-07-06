@@ -115,8 +115,6 @@ static inline bool memory_is_kernel_address(vaddr_t addr)
 
 #define MAX_TEMP_MAPPINGS 8
 
-extern pgdir_cpu_t kernel_pgdir;  /* CPU view of kernel page directory (TTBR1) */
-extern pgdir_cpu_t ttbr0_pgdir;   /* CPU view of boot/minimal TTBR0 */
 extern uint32_t kernel_memory_size;
 
 typedef struct kernel_context_save {
@@ -216,16 +214,10 @@ void invalidate_tlb_page(vaddr_t vaddr);
 void invalidate_tlb_page_asid(vaddr_t vaddr, uint32_t asid);  /* NOUVEAU */
 void invalidate_tlb_asid(uint32_t asid);                       /* NOUVEAU */
 
-/* TTBR access functions */
+/* Address-space register access functions */
 uint32_t get_ttbr0(void);
-pgdir_cpu_t get_kernel_ttbr0(void);
 void set_ttbr0(uint32_t ttbr0);
 uint32_t get_L1_index(vaddr_t vaddr);
-//uint32_t get_ttbr1(void);    /* NOUVEAU */
-//void set_ttbr1(uint32_t ttbr1);    /* NOUVEAU */
-
-/* Fonctions d'accès aux page directories */
-pgdir_cpu_t get_kernel_pgdir(void);        /* NOUVEAU - retourne TTBR1 */
 
 /* ASID management functions */
 uint32_t vm_allocate_asid(void);

@@ -28,6 +28,7 @@
 #include <kernel/signal.h>
 #include <kernel/timer.h>
 #include <kernel/smp.h>
+#include <kernel/arch_memory.h>
 
 
 
@@ -65,7 +66,7 @@ static void configure_idle_task_for_cpu(uint32_t cpu_id, task_t* task)
 
     task_register_idle_cpu(cpu_id, task);
     task->context.is_first_run = 1;
-    task->context.ttbr0 = (uint32_t)ttbr0_pgdir;
+    task->context.ttbr0 = arch_kernel_address_space_context();
     task->context.asid = ASID_KERNEL;
     task->context.returns_to_user = 0;
 }
@@ -97,7 +98,6 @@ void init_process_system(void)
 
     //init_process->context.sp = new_vm->stack_start;             /* Stack pointer */
     init_process->context.is_first_run = 1;                     /* Pas la premiere fois */
-    //init_process->context.ttbr0 = (uint32_t)ttbr0_pgdir;
     //init_process->context.asid = ASID_KERNEL;
     init_process->context.returns_to_user = 0;
 

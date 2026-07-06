@@ -371,6 +371,11 @@ static inline uint32_t read_cycle_counter(void)
 
 vaddr_t get_split_boundary(void);
 uint32_t get_optimal_ttbcr_n(void);
+uint32_t *get_kernel_ttbr0(void);
+uint32_t *get_kernel_pgdir(void);
+
+extern uint32_t *kernel_pgdir;  /* CPU view of kernel page directory (TTBR1) */
+extern uint32_t *ttbr0_pgdir;   /* CPU view of boot/minimal TTBR0 */
 
 #define SPLIT_BOUNDARY      get_split_boundary()
 #define TTBCR_N_OPTIMAL     get_optimal_ttbcr_n()
