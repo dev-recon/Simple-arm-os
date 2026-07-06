@@ -118,6 +118,13 @@ Done so far:
   `kernel/sync/spinlock.c`;
 - taught the top-level `Makefile` to build these ARM32 architecture objects
   from `arch/arm32` and to search architecture headers first.
+- introduced ARM32 platform fragments under `arch/arm32/platform/`, with
+  `TARGET_PLATFORM=qemu-virt` now loading
+  `arch/arm32/platform/qemu_virt/platform.mk` instead of hardcoding qemu-virt
+  objects and CPU flags in the root Makefile.
+- routed the default QEMU machine/CPU settings through the platform fragment
+  and matching boot-script environment variables (`QEMU_MACHINE`,
+  `QEMU_RUN_MACHINE`, `QEMU_CPU`).
 
 Kernel code that should remain architecture-neutral:
 
@@ -140,6 +147,14 @@ Candidates:
 
 This phase validates platform interfaces without also changing pointer width,
 exception level, or page-table format.
+
+Current staging:
+
+- `arch/arm32/platform/raspi2/` exists as a non-buildable staging directory.
+  It intentionally has no `platform.mk`, so `TARGET_PLATFORM=raspi2` fails
+  until the actual board contract is implemented.
+- The first raspi2 milestone is UART-only boot with `tty0` preserved as the
+  recovery console. Graphics and input are later milestones.
 
 ## Phase D - AArch64
 
