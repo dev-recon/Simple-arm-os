@@ -24,6 +24,7 @@
 #include <kernel/fdt.h>
 #include <asm/platform.h>
 #include <asm/memory_layout.h>
+#include <asm/arm.h>
 
 #define USE_RAMFS 1
 
@@ -337,14 +338,12 @@ void print_cpu_mode(void);
 #define __pure                  __attribute__((pure))
 #define __const                 __attribute__((const))
 
-/* === CONSTANTES CORTEX-A15 === */
-
-/* Performance features */
-#define CORTEX_A15_FEATURES     1
-#define HAS_NEON                1
-#define HAS_VFP                 1
-#define HAS_GENERIC_TIMER       1
-#define HAS_LARGE_PHYS_ADDR     1
+/* CPU feature aliases kept for compatibility while arch headers take over. */
+#define CORTEX_A15_FEATURES     ARM_CORTEX_A15_FEATURES
+#define HAS_NEON                ARM_HAS_NEON
+#define HAS_VFP                 ARM_HAS_VFP
+#define HAS_GENERIC_TIMER       ARM_HAS_GENERIC_TIMER
+#define HAS_LARGE_PHYS_ADDR     ARM_HAS_LARGE_PHYS_ADDR
 
 #define STDIN_FILENO            0
 #define STDOUT_FILENO           1
