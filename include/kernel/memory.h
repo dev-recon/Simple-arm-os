@@ -115,30 +115,6 @@ static inline bool memory_is_kernel_address(vaddr_t addr)
 
 #define MAX_TEMP_MAPPINGS 8
 
-/*
- * Configuration correcte des registres TTBR avec TTBCR.N=2
- */
-
-// Définitions des bits TTBR
-#define TTBR_RGN_OUTER_NC    (0b00 << 3)  // Non-cacheable
-#define TTBR_RGN_OUTER_WBWA  (0b01 << 3)  // Write-back write-allocate
-#define TTBR_RGN_OUTER_WT    (0b10 << 3)  // Write-through
-#define TTBR_RGN_OUTER_WB    (0b11 << 3)  // Write-back
-
-#define TTBR_SHAREABLE       (1 << 1)     // Bit S - Shareable
-#define TTBR_CACHEABLE       (1 << 0)     // Bit C - Cacheable
-
-// Pour TTBR avec TTBCR.N > 0, bits IRGN sont dans TTBCR, pas TTBR
-#define TTBCR_IRGN0_NC       (0b00 << 8)  // Inner non-cacheable TTBR0
-#define TTBCR_IRGN0_WBWA     (0b01 << 8)  // Inner write-back write-allocate TTBR0
-#define TTBCR_IRGN0_WT       (0b10 << 8)  // Inner write-through TTBR0
-#define TTBCR_IRGN0_WB       (0b11 << 8)  // Inner write-back TTBR0
-
-#define TTBCR_IRGN1_NC       (0b00 << 10) // Inner non-cacheable TTBR1
-#define TTBCR_IRGN1_WBWA     (0b01 << 10) // Inner write-back write-allocate TTBR1
-#define TTBCR_IRGN1_WT       (0b10 << 10) // Inner write-through TTBR1
-#define TTBCR_IRGN1_WB       (0b11 << 10) // Inner write-back TTBR1
-
 extern pgdir_cpu_t kernel_pgdir;  /* CPU view of kernel page directory (TTBR1) */
 extern pgdir_cpu_t ttbr0_pgdir;   /* CPU view of boot/minimal TTBR0 */
 extern uint32_t kernel_memory_size;

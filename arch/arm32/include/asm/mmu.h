@@ -57,6 +57,29 @@
 #define TTBCR_N_2GB     1       /* N=1: split à 2GB (0-2GB=TTBR0, 2-4GB=TTBR1) */
 #define TTBCR_N_3GB     2       /* N=2: split à 3GB (0-3GB=TTBR0, 3-4GB=TTBR1) */
 
+/* TTBR/TTBCR cacheability and shareability bits for ARM short descriptors. */
+#define TTBR_RGN_OUTER_NC    (0b00 << 3)  /* Non-cacheable */
+#define TTBR_RGN_OUTER_WBWA  (0b01 << 3)  /* Write-back write-allocate */
+#define TTBR_RGN_OUTER_WT    (0b10 << 3)  /* Write-through */
+#define TTBR_RGN_OUTER_WB    (0b11 << 3)  /* Write-back */
+
+#define TTBR_SHAREABLE       (1 << 1)     /* S bit */
+#define TTBR_CACHEABLE       (1 << 0)     /* C bit */
+
+/*
+ * With TTBCR.N > 0, inner cacheability for TTBR0/TTBR1 lives in TTBCR,
+ * not in each TTBR value.
+ */
+#define TTBCR_IRGN0_NC       (0b00 << 8)
+#define TTBCR_IRGN0_WBWA     (0b01 << 8)
+#define TTBCR_IRGN0_WT       (0b10 << 8)
+#define TTBCR_IRGN0_WB       (0b11 << 8)
+
+#define TTBCR_IRGN1_NC       (0b00 << 10)
+#define TTBCR_IRGN1_WBWA     (0b01 << 10)
+#define TTBCR_IRGN1_WT       (0b10 << 10)
+#define TTBCR_IRGN1_WB       (0b11 << 10)
+
 /* Split boundaries */
 #define TTBR0_MAX_ADDR_1GB      0x40000000UL    /* 1GB */
 #define TTBR0_MAX_ADDR          0x40000000UL    /* 2GB */
