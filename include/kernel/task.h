@@ -22,7 +22,7 @@
 #include <kernel/types.h>
 #include <kernel/memory.h>
 #include <kernel/spinlock.h>
-#include <kernel/kernel.h>
+#include <kernel/stddef.h>
 #include <kernel/arch_irq.h>
 #include <kernel/arch_task.h>
 

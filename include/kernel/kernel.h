@@ -27,10 +27,10 @@
 #include <kernel/fd.h>
 #include <kernel/linker.h>
 #include <kernel/util.h>
+#include <kernel/user_layout.h>
 #include <asm/cpu_features.h>
 #include <asm/platform.h>
 #include <asm/memory_layout.h>
-#include <asm/user_layout.h>
 
 #define USE_RAMFS 1
 
@@ -69,29 +69,6 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
      */
     return vaddr;
 }
-
-/* ========================================================================
- * USER SPACE
- * ======================================================================== */
-
-/*
- * Compatibility aliases for the user virtual layout.  The concrete addresses
- * are supplied by the active architecture backend.
- */
-#define USER_SPACE_START         ARCH_USER_SPACE_START
-#define USER_STACK_TOP           ARCH_USER_STACK_TOP
-#define USER_STACK_SIZE          ARCH_USER_STACK_SIZE
-#define USER_STACK_BOTTOM        ARCH_USER_STACK_BOTTOM
-#define USER_HEAP_START          ARCH_USER_HEAP_START
-#define USER_SHM_START           ARCH_USER_SHM_START
-#define USER_SHM_END             ARCH_USER_SHM_END
-#define USER_HEAP_END            ARCH_USER_HEAP_END
-#define USER_SPACE_END           ARCH_USER_SPACE_END
-#define USER_HEAP_MAX_SIZE       (USER_HEAP_END - USER_HEAP_START)
-
-#define USER_SIGNAL_REGION_START ARCH_USER_SIGNAL_REGION_START
-#define USER_SIGNAL_REGION_END   ARCH_USER_SIGNAL_REGION_END
-#define USER_SIGNAL_REGION_SIZE  ARCH_USER_SIGNAL_REGION_SIZE
 
 /* ========================================================================
  * MACROS UTILITAIRES

@@ -21,6 +21,7 @@
 
 #include <kernel/types.h>
 #include <kernel/task.h>
+#include <kernel/user_layout.h>
 
 
 /* Signal numbers */

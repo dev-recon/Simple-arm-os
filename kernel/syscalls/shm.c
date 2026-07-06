@@ -23,6 +23,7 @@
 #include <kernel/string.h>
 #include <kernel/kprintf.h>
 #include <kernel/spinlock.h>
+#include <kernel/user_layout.h>
 
 typedef struct shm_object {
     bool used;
