@@ -16,9 +16,9 @@
  * - Keep tty0/UART usable as the recovery console.
  */
 
-#include <kernel/kernel.h>
 #include <kernel/arch_platform.h>
 #include <kernel/config.h>
+#include <kernel/linker.h>
 #include <kernel/memory.h>
 #include <kernel/process.h>
 #include <kernel/interrupt.h>

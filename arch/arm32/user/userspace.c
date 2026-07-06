@@ -16,12 +16,12 @@
  * - ABI details must stay aligned with syscall and context-switch code.
  */
 
-#include <kernel/kernel.h>
 #include <kernel/types.h>
 #include <kernel/address_space.h>
 #include <asm/mmu.h>
 #include <kernel/memory.h>
 #include <kernel/kprintf.h>
+#include <kernel/string.h>
 #include <kernel/task.h>
 #include <kernel/process.h>
 

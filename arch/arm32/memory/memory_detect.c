@@ -21,7 +21,7 @@
 #include <kernel/memory.h>
 #include <kernel/address_space.h>
 #include <kernel/debug_print.h>
-#include <kernel/kernel.h>
+#include <kernel/fdt.h>
 #include <asm/arm.h>
 
 uint32_t kernel_memory_size = 0;

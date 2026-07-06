@@ -20,7 +20,6 @@
 #include <kernel/task.h>
 #include <kernel/interrupt.h>
 #include <kernel/process.h>
-#include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/uart.h>
 #include <kernel/tty.h>
