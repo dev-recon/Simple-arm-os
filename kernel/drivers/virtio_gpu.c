@@ -27,7 +27,8 @@
 #include <kernel/timer.h>
 #include <kernel/spinlock.h>
 #include <kernel/task.h>
-#include <asm/arm.h>
+#include <kernel/arch_barrier.h>
+#include <kernel/arch_cpu.h>
 
 #define VIRTIO_ID_GPU 16
 
@@ -203,7 +204,7 @@ static bool gpu_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
     vq->qsize = qsize;
     vq->last_used_idx = 0;
 
-    clean_dcache_by_mva(va_base, npages * PAGE_SIZE);
+    arch_clean_dcache_by_mva(va_base, npages * PAGE_SIZE);
     return true;
 }
 
@@ -221,20 +222,20 @@ static bool gpu_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq)
 
 static int gpu_wait_used(uint16_t prev_used)
 {
-    uint32_t freq = get_cntfrq();
+    uint32_t freq = arch_timer_frequency();
     if (freq == 0)
         freq = QEMU_TIMER_FREQ;
 
     uint64_t timeout_ticks = (uint64_t)VIRTIO_GPU_TIMEOUT_MS * (uint64_t)(freq / 1000);
-    uint64_t start = get_cntpct();
+    uint64_t start = arch_timer_counter();
 
-    while ((get_cntpct() - start) < timeout_ticks) {
-        invalidate_dcache_by_mva((void *)(uintptr_t)gpu.vq.va_used,
+    while ((arch_timer_counter() - start) < timeout_ticks) {
+        arch_invalidate_dcache_by_mva((void *)(uintptr_t)gpu.vq.va_used,
             sizeof(struct vring_used) + gpu.vq.qsize * sizeof(struct vring_used_elem));
-        data_memory_barrier_inner_shareable();
+        arch_data_memory_barrier_inner_shareable();
         if (gpu_used_ptr(&gpu.vq)->idx != prev_used)
             return 0;
-        cpu_relax();
+        arch_cpu_relax();
     }
 
     return -1;
@@ -269,7 +270,7 @@ static int gpu_acquire(void)
         if (task)
             yield();
         else
-            cpu_relax();
+            arch_cpu_relax();
     }
 }
 
@@ -319,20 +320,20 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
     desc1->flags = VRING_DESC_F_WRITE;
     desc1->next = 0;
 
-    clean_dcache_by_mva((void *)gpu.vq.va_desc, sizeof(struct vring_desc) * gpu.vq.qsize);
-    clean_dcache_by_mva(cmd, cmd_len);
-    clean_invalidate_dcache_by_mva(resp, resp_len);
-    data_memory_barrier_inner_shareable();
+    arch_clean_dcache_by_mva((void *)gpu.vq.va_desc, sizeof(struct vring_desc) * gpu.vq.qsize);
+    arch_clean_dcache_by_mva(cmd, cmd_len);
+    arch_clean_invalidate_dcache_by_mva(resp, resp_len);
+    arch_data_memory_barrier_inner_shareable();
 
     uint16_t prev_used = gpu.vq.last_used_idx;
     struct vring_avail *avail = gpu_avail_ptr(&gpu.vq);
     uint16_t old_idx = avail->idx;
     avail->ring[old_idx % gpu.vq.qsize] = d0;
-    clean_dcache_by_mva((void *)gpu.vq.va_avail, gpu.vq.avail_size);
-    data_memory_barrier_inner_shareable();
+    arch_clean_dcache_by_mva((void *)gpu.vq.va_avail, gpu.vq.avail_size);
+    arch_data_memory_barrier_inner_shareable();
     avail->idx = old_idx + 1;
-    clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
-    data_sync_barrier_inner_shareable_write();
+    arch_clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
+    arch_data_sync_barrier_inner_shareable_write();
 
     mmio_write32(gpu.mmio, VIRTIO_MMIO_QUEUE_NOTIFY, 0);
 
@@ -353,7 +354,7 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
     }
 
     gpu.vq.last_used_idx = used->idx;
-    invalidate_dcache_by_mva(resp, resp_len);
+    arch_invalidate_dcache_by_mva(resp, resp_len);
 
     /*
      * Only acknowledge the used-ring bit here. Acking the whole status word
@@ -469,7 +470,7 @@ int virtio_gpu_flush_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t heigh
     for (uint32_t row = 0; row < height; row++) {
         uint8_t *line = framebuffer_base +
             ((y + row) * FB_WIDTH + x) * (FB_BPP / 8);
-        clean_dcache_by_mva(line, width * (FB_BPP / 8));
+        arch_clean_dcache_by_mva(line, width * (FB_BPP / 8));
     }
 
     virtio_gpu_transfer_to_host_2d_t tx;

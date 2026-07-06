@@ -71,3 +71,8 @@ uint32_t arch_timer_frequency(void)
 
     return timer_freq ? timer_freq : 62500000u;
 }
+
+uint64_t arch_timer_counter(void)
+{
+    return get_cntpct();
+}

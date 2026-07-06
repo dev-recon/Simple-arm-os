@@ -26,7 +26,8 @@
 #include <kernel/task.h>
 #include <kernel/timer.h>
 #include <kernel/spinlock.h>
-#include <asm/arm.h>
+#include <kernel/arch_barrier.h>
+#include <kernel/arch_cpu.h>
 
 
 void vq_debug_print(vq_legacy_t *vq) {
@@ -94,7 +95,7 @@ static void virtio_blk_acquire(void)
          * spinlock while another request is in flight; wait cooperatively.
          */
         if (!task) {
-            cpu_relax();
+            arch_cpu_relax();
             continue;
         }
 
@@ -210,7 +211,7 @@ static bool vq_alloc_legacy(vq_legacy_t *vq, uint16_t qsize /*ex: 128*/) {
     memset((void *)vq->va_base, 0, npages * PAGE_SIZE);
 
     // Maintenance cache avant de donner au device
-    clean_dcache_by_mva((void *)vq->va_base, npages * PAGE_SIZE);
+    arch_clean_dcache_by_mva((void *)vq->va_base, npages * PAGE_SIZE);
     return true;
 }
 
@@ -245,12 +246,12 @@ static bool virtio_blk_request_in_bounds(uint64_t sector, uint32_t nsectors)
 
 static inline void virtio_dma_to_device(const void *addr, size_t size)
 {
-    clean_dcache_by_mva(addr, size);
+    arch_clean_dcache_by_mva(addr, size);
 }
 
 static inline void virtio_dma_from_device(void *addr, size_t size)
 {
-    clean_invalidate_dcache_by_mva(addr, size);
+    arch_clean_invalidate_dcache_by_mva(addr, size);
 }
 
 void virtio_mmio_dump32(uintptr_t base)
@@ -457,9 +458,9 @@ void virtio_block_irq_handler(void)
      * virtio_blk_finish_wait() clearing waiter/vq while the interrupt handler is
      * still running.
      */
-    invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
+    arch_invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
         sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
-    data_memory_barrier_inner_shareable();
+    arch_data_memory_barrier_inner_shareable();
 
     if (vq_used_ptr(vq)->idx == prev_used_idx)
         return;
@@ -486,9 +487,9 @@ void virtio_block_irq_handler(void)
 
 static bool virtio_blk_used_advanced(vq_legacy_t *vq, uint16_t prev_idx)
 {
-    invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
+    arch_invalidate_dcache_by_mva((void *)(uintptr_t)vq->va_used,
         sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
-    data_memory_barrier_inner_shareable();
+    arch_data_memory_barrier_inner_shareable();
 
     return vq_used_ptr(vq)->idx != prev_idx;
 }
@@ -503,7 +504,7 @@ static void virtio_blk_prepare_wait(vq_legacy_t *vq, uint16_t prev_idx)
     virtio_blk_pending.prev_used_idx = prev_idx;
     virtio_blk_pending.vq = vq;
     virtio_blk_pending.waiter = task_current_local();
-    data_memory_barrier_inner_shareable();
+    arch_data_memory_barrier_inner_shareable();
     spin_unlock_irqrestore(&virtio_blk_lock, flags);
 }
 
@@ -517,7 +518,7 @@ static void virtio_blk_finish_wait(void)
     virtio_blk_pending.prev_used_idx = 0;
     virtio_blk_pending.vq = NULL;
     virtio_blk_pending.waiter = NULL;
-    data_memory_barrier_inner_shareable();
+    arch_data_memory_barrier_inner_shareable();
     spin_unlock_irqrestore(&virtio_blk_lock, flags);
 }
 
@@ -539,31 +540,31 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
     const uint32_t spin_budget = 512;
     uint32_t freq;
     uint32_t spins = 0;
-    freq = get_cntfrq();
+    freq = arch_timer_frequency();
     if (freq == 0) freq = 62500000; /* 62.5 MHz défaut QEMU */
 
     uint64_t timeout_ticks = (uint64_t)timeout_ms * (uint64_t)(freq / 1000);
-    uint64_t t0 = get_cntpct();
+    uint64_t t0 = arch_timer_counter();
     uint32_t wake_deadline = get_system_ticks() + 2;
 
     while (1) {
         if (virtio_blk_wait_completed() || virtio_blk_used_advanced(vq, prev_idx))
             return 0;
 
-        if ((get_cntpct() - t0) >= timeout_ticks) {
+        if ((arch_timer_counter() - t0) >= timeout_ticks) {
             KERROR("virtio_blk: timeout waiting used ring\n");
             return -1;
         }
 
         if (spins++ < spin_budget) {
-            cpu_relax();
+            arch_cpu_relax();
             continue;
         }
         spins = 0;
 
         task_t *task = task_current_local();
         if (!task) {
-            wait_for_interrupt();
+            arch_wait_for_interrupt();
             continue;
         }
 
@@ -633,8 +634,8 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
 
 
     /* --- Flush descriptors ENTIER (important) --- */
-    clean_dcache_by_mva((void *)vq->va_desc, sizeof(struct vring_desc) * vq->qsize); /* ou au moins 3*16 */
-    data_memory_barrier_inner_shareable(); /* ensure desc visible */
+    arch_clean_dcache_by_mva((void *)vq->va_desc, sizeof(struct vring_desc) * vq->qsize); /* ou au moins 3*16 */
+    arch_data_memory_barrier_inner_shareable(); /* ensure desc visible */
 
     /* DMA ownership:
      * - header is read by the device
@@ -648,7 +649,7 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
         virtio_dma_to_device(data_va, data_len);
     }
     virtio_dma_from_device(status_va, 1);
-    data_memory_barrier_inner_shareable();
+    arch_data_memory_barrier_inner_shareable();
 
     /* --- Publier avail entry de façon sûre --- */
     uint16_t prev_used = vq->last_used_idx;
@@ -659,19 +660,19 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
     vq_avail_ptr(vq)->ring[slot] = d0;
 
     /* flush ring slot (ou entire avail) */
-    clean_dcache_by_mva((void *)vq->va_avail, vq->avail_size);
-    data_memory_barrier_inner_shareable();
+    arch_clean_dcache_by_mva((void *)vq->va_avail, vq->avail_size);
+    arch_data_memory_barrier_inner_shareable();
 
     /* incrément idx */
     vq_avail_ptr(vq)->idx = old_idx + 1;
-    clean_dcache_by_mva((void *)&vq_avail_ptr(vq)->idx, sizeof(vq_avail_ptr(vq)->idx));
-    data_sync_barrier_inner_shareable_write();
+    arch_clean_dcache_by_mva((void *)&vq_avail_ptr(vq)->idx, sizeof(vq_avail_ptr(vq)->idx));
+    arch_data_sync_barrier_inner_shareable_write();
 
     /* debug post-publish: re-read desc fields (après flush so they reflect final memory) */
     mmio_write32(mmio_base, VIRTIO_MMIO_QUEUE_NOTIFY, 0);
 
-    data_sync_barrier_inner_shareable_write();
-    instruction_sync_barrier();
+    arch_data_sync_barrier_inner_shareable_write();
+    arch_instruction_sync_barrier();
 
     /* wait for completion by polling used.idx (blocking) */
     if (wait_for_used(vq, prev_used, timeout_ms) != 0) {
@@ -683,7 +684,7 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
     virtio_blk_finish_wait();
 
     /* read the used element (invalidate used memory then read) */
-    invalidate_dcache_by_mva((void *)vq->va_used, sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
+    arch_invalidate_dcache_by_mva((void *)vq->va_used, sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
     struct vring_used *used = vq_used_ptr(vq);
     uint16_t new_used_idx = used->idx;
     uint16_t used_delta = (uint16_t)(new_used_idx - prev_used);
@@ -704,7 +705,7 @@ static int virtio_blk_submit_one(vq_legacy_t *vq,
     virtio_blk_ack_interrupts(mmio_base);
 
     /* read status */
-    invalidate_dcache_by_mva(status_va, 1);
+    arch_invalidate_dcache_by_mva(status_va, 1);
     uint8_t status = *status_va;
 
 
@@ -751,26 +752,26 @@ static int virtio_blk_submit_flush(vq_legacy_t *vq,
     desc2->flags = (uint16_t)VRING_DESC_F_WRITE;
     desc2->next  = 0;
 
-    clean_dcache_by_mva((void *)vq->va_desc, sizeof(struct vring_desc) * vq->qsize);
+    arch_clean_dcache_by_mva((void *)vq->va_desc, sizeof(struct vring_desc) * vq->qsize);
     virtio_dma_to_device(hdr, sizeof(struct virtio_blk_req));
     virtio_dma_from_device(status_va, 1);
-    data_memory_barrier_inner_shareable();
+    arch_data_memory_barrier_inner_shareable();
 
     uint16_t prev_used = vq->last_used_idx;
     virtio_blk_prepare_wait(vq, prev_used);
 
     uint16_t old_idx = vq_avail_ptr(vq)->idx;
     vq_avail_ptr(vq)->ring[old_idx % vq->qsize] = d0;
-    clean_dcache_by_mva((void *)vq->va_avail, vq->avail_size);
-    data_memory_barrier_inner_shareable();
+    arch_clean_dcache_by_mva((void *)vq->va_avail, vq->avail_size);
+    arch_data_memory_barrier_inner_shareable();
 
     vq_avail_ptr(vq)->idx = old_idx + 1;
-    clean_dcache_by_mva((void *)&vq_avail_ptr(vq)->idx, sizeof(vq_avail_ptr(vq)->idx));
-    data_sync_barrier_inner_shareable_write();
+    arch_clean_dcache_by_mva((void *)&vq_avail_ptr(vq)->idx, sizeof(vq_avail_ptr(vq)->idx));
+    arch_data_sync_barrier_inner_shareable_write();
 
     mmio_write32(mmio_base, VIRTIO_MMIO_QUEUE_NOTIFY, 0);
-    data_sync_barrier_inner_shareable_write();
-    instruction_sync_barrier();
+    arch_data_sync_barrier_inner_shareable_write();
+    arch_instruction_sync_barrier();
 
     if (wait_for_used(vq, prev_used, timeout_ms) != 0) {
         virtio_blk_finish_wait();
@@ -779,7 +780,7 @@ static int virtio_blk_submit_flush(vq_legacy_t *vq,
     }
 
     virtio_blk_finish_wait();
-    invalidate_dcache_by_mva((void *)vq->va_used,
+    arch_invalidate_dcache_by_mva((void *)vq->va_used,
         sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
 
     struct vring_used *used = vq_used_ptr(vq);
@@ -796,7 +797,7 @@ static int virtio_blk_submit_flush(vq_legacy_t *vq,
     vq->last_used_idx = new_used_idx;
     virtio_blk_ack_interrupts(mmio_base);
 
-    invalidate_dcache_by_mva(status_va, 1);
+    arch_invalidate_dcache_by_mva(status_va, 1);
     if (*status_va != VIRTIO_BLK_S_OK) {
         KERROR("virtio_blk: flush status=0x%02X\n", *status_va);
         return -1;
@@ -875,7 +876,7 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
     }
 
     /* copy back to user buffer */
-    invalidate_dcache_by_mva(data_va, bytes);
+    arch_invalidate_dcache_by_mva(data_va, bytes);
     memcpy(buf, data_va, bytes);
 
     free_pages(data_va, npages);
@@ -1037,8 +1038,8 @@ void virtio_blk_shutdown(void)
 
     virtio_blk_ack_interrupts(virtio_mmio_base);
     mmio_write32(virtio_mmio_base, VIRTIO_MMIO_STATUS, 0);
-    data_sync_barrier();
-    instruction_sync_barrier();
+    arch_data_sync_barrier();
+    arch_instruction_sync_barrier();
 }
 
 uint32_t virtio_blk_get_irq(void)

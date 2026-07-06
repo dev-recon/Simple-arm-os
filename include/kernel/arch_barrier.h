@@ -1,0 +1,68 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: include/kernel/arch_barrier.h
+ * Layer: Kernel / architecture boundary
+ *
+ * Responsibilities:
+ * - Expose architecture ordering and cache-maintenance primitives needed by
+ *   generic drivers.
+ * - Keep driver code from including ARM-specific helper headers directly.
+ *
+ * Notes:
+ * - These wrappers intentionally preserve the exact ARM32 primitive semantics.
+ *   A second architecture should implement equivalent ordering at this
+ *   boundary rather than teaching each driver about that architecture.
+ */
+
+#ifndef _KERNEL_ARCH_BARRIER_H
+#define _KERNEL_ARCH_BARRIER_H
+
+#include <kernel/types.h>
+#include <asm/arm.h>
+
+static inline void arch_cpu_relax(void)
+{
+    cpu_relax();
+}
+
+static inline void arch_data_memory_barrier_inner_shareable(void)
+{
+    data_memory_barrier_inner_shareable();
+}
+
+static inline void arch_data_sync_barrier(void)
+{
+    data_sync_barrier();
+}
+
+static inline void arch_data_sync_barrier_inner_shareable_write(void)
+{
+    data_sync_barrier_inner_shareable_write();
+}
+
+static inline void arch_instruction_sync_barrier(void)
+{
+    instruction_sync_barrier();
+}
+
+static inline void arch_clean_dcache_by_mva(const void *addr, size_t size)
+{
+    clean_dcache_by_mva(addr, size);
+}
+
+static inline void arch_invalidate_dcache_by_mva(const void *addr, size_t size)
+{
+    invalidate_dcache_by_mva(addr, size);
+}
+
+static inline void arch_clean_invalidate_dcache_by_mva(const void *addr, size_t size)
+{
+    clean_invalidate_dcache_by_mva(addr, size);
+}
+
+#endif /* _KERNEL_ARCH_BARRIER_H */

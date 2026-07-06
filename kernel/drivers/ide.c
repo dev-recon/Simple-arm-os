@@ -20,7 +20,7 @@
 #include <kernel/ide.h>
 #include <kernel/kprintf.h>
 #include <kernel/interrupt.h>
-#include <asm/arm.h>
+#include <kernel/arch_barrier.h>
 
 /* Variables globales */
 static volatile uint16_t* ide_base = (volatile uint16_t*)IDE_PRIMARY_BASE;
@@ -47,7 +47,7 @@ static void ide_write_reg(uint8_t reg, uint8_t value)
     }
     
     /* Barriere memoire */
-    data_sync_barrier();
+    arch_data_sync_barrier();
 }
 
 /* FONCTION 3: Attendre que le drive soit pret */

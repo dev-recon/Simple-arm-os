@@ -20,7 +20,7 @@
 #define _KERNEL_VIRTIO_BLOCK_H
 
 #include <kernel/types.h>
-#include <asm/arm.h>
+#include <kernel/arch_barrier.h>
 //#include <kernel/kernel.h>
 
 /* VirtIO Block Device - CORRECTION ADRESSE */
@@ -242,13 +242,13 @@ void virtio_write_reg(uint32_t reg, uint32_t value);
 
 static inline void mmio_write32(volatile uint32_t *base, uint32_t off, uint32_t val){
     // Évite que des écritures mémoire précédentes passent après l’accès MMIO
-    data_memory_barrier_inner_shareable();
+    arch_data_memory_barrier_inner_shareable();
 
     *(volatile uint32_t *)((uintptr_t)base + off) = val;
 
     // S’assure que l’écriture est poussée vers le périphérique
     // et ne sera pas retardée avant des opérations suivantes (interruptions, etc.)
-    data_sync_barrier_inner_shareable_write();
+    arch_data_sync_barrier_inner_shareable_write();
 }
 
 
@@ -256,7 +256,7 @@ static inline uint32_t mmio_read32(volatile uint32_t *base, uint32_t off){
 
     volatile uint32_t *p = (volatile uint32_t *)((uintptr_t)base + off);
     uint32_t v = *p;
-    data_memory_barrier_inner_shareable();
+    arch_data_memory_barrier_inner_shareable();
     return v;
 }
 
