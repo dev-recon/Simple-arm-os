@@ -24,16 +24,27 @@
 #include <kernel/types.h>
 #include <kernel/linker.h>
 #include <kernel/arch_memory_layout.h>
+#include <kernel/arch_platform.h>
 
 uint32_t get_kernel_memory_size(void);
 
 #define VIRT_RAM_SIZE           get_kernel_memory_size()
-#define VIRT_RAM_END            (VIRT_RAM_START + VIRT_RAM_SIZE)
+#define VIRT_RAM_END            (arch_platform_ram_start() + VIRT_RAM_SIZE)
+
+static inline paddr_t physical_ram_start(void)
+{
+    return arch_platform_ram_start();
+}
+
+static inline paddr_t physical_ram_end(void)
+{
+    return arch_platform_ram_start() + get_kernel_memory_size();
+}
 
 static inline bool phys_in_direct_map(paddr_t paddr)
 {
-    return paddr >= VIRT_RAM_START &&
-           paddr < (VIRT_RAM_START + KERNEL_DIRECT_MAP_SIZE);
+    return paddr >= physical_ram_start() &&
+           paddr < (physical_ram_start() + KERNEL_DIRECT_MAP_SIZE);
 }
 
 static inline bool virt_in_direct_map(vaddr_t vaddr)
@@ -59,7 +70,7 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
 }
 
 #define IS_DEVICE_ADDR(addr)    ((addr) >= DEVICE_START && (addr) < DEVICE_END)
-#define IS_VALID_RAM(addr)      ((addr) >= VIRT_RAM_START && (addr) < VIRT_RAM_END)
+#define IS_VALID_RAM(addr)      ((addr) >= physical_ram_start() && (addr) < physical_ram_end())
 #define IS_VIRTIO_ADDR(addr)    ((addr) >= VIRT_VIRTIO_BASE && (addr) < (VIRT_VIRTIO_BASE + VIRT_VIRTIO_SIZE * 8))
 #define IS_GIC_ADDR(addr)       ((addr) >= VIRT_GIC_DIST_BASE && (addr) < (VIRT_GIC_VCPU_BASE + VIRT_GIC_VCPU_SIZE))
 

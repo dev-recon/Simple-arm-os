@@ -299,9 +299,9 @@ static bool task_pointer_plausible(task_t* task)
         return false;
     if (p & 7u)
         return false;
-    if (p < VIRT_RAM_START)
+    if (p < physical_ram_start())
         return false;
-    if (p > (uintptr_t)VIRT_RAM_END - sizeof(task_t))
+    if (p > (uintptr_t)physical_ram_end() - sizeof(task_t))
         return false;
     return true;
 }

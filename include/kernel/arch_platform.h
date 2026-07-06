@@ -34,6 +34,11 @@ static inline vaddr_t arch_platform_uart0_kernel_base(void)
     return (vaddr_t)KERNEL_MMIO_UART_BASE;
 }
 
+static inline paddr_t arch_platform_ram_start(void)
+{
+    return (paddr_t)VIRT_RAM_START;
+}
+
 static inline uint32_t arch_platform_timer_irq(void)
 {
     return VIRT_TIMER_NS_EL1_IRQ;

@@ -85,7 +85,7 @@ void buddy_init()
     block->next = NULL;
     free_lists[MAX_ORDER] = block;
     uint32_t mem_size = detect_memory();
-    paddr_t ram_end = VIRT_RAM_START + mem_size;
+    paddr_t ram_end = physical_ram_start() + mem_size;
     uint32_t buddy_pages = (ram_end - buddy_base) / PAGE_SIZE;
 
     KINFO("[MEM] Buddy Allocator configuration:\n");
@@ -116,7 +116,7 @@ static uintptr_t buddy_of(uintptr_t addr, int order)
 
 void* buddy_alloc(size_t num_block) {
 
-    paddr_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
+    paddr_t ram_end = physical_ram_end();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
     unsigned long flags;
 
@@ -187,7 +187,7 @@ void* buddy_alloc(size_t num_block) {
 }
 
 static void buddy_free_locked(void* ptr) {
-    paddr_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
+    paddr_t ram_end = physical_ram_end();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
     paddr_t addr = (paddr_t)ptr;
 
@@ -238,7 +238,7 @@ void buddy_free(void* ptr) {
 static struct page_info* buddy_page_info(void* ptr)
 {
     paddr_t addr = (paddr_t)ptr;
-    paddr_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
+    paddr_t ram_end = physical_ram_end();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
     uint32_t index;
 
@@ -307,7 +307,7 @@ uint16_t page_ref_dec(void* page_addr)
 
 bool init_memory(void)
 {
-    paddr_t mem_start = VIRT_RAM_START;
+    paddr_t mem_start = physical_ram_start();
     uint32_t mem_size = detect_memory();    // UNCOMMENT FOR PROD
 
     // GDB DEBUG BLOCK - COMMENT FOR PROD
