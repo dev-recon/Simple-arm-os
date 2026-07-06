@@ -19,13 +19,14 @@
 #ifndef _KERNEL_INTERRUPT_H
 #define _KERNEL_INTERRUPT_H
 
+#include <asm/platform.h>
 #include <kernel/types.h>
 
-/* IRQ numbers */
-#define IRQ_SGI_TLB_SHOOTDOWN 14
-#define IRQ_TIMER           30
-#define IRQ_KEYBOARD        33
-#define IRQ_ATA             34
+/* Legacy generic IRQ aliases. The concrete IDs are supplied by the platform. */
+#define IRQ_SGI_TLB_SHOOTDOWN VIRT_SGI_TLB_SHOOTDOWN_IRQ
+#define IRQ_TIMER             VIRT_TIMER_NS_EL1_IRQ
+#define IRQ_KEYBOARD          VIRT_UART_LEGACY_IRQ
+#define IRQ_ATA               VIRT_ATA_LEGACY_IRQ
 
 /* GIC functions */
 void init_gic(void);
