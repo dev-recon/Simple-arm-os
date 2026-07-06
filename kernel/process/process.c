@@ -19,6 +19,7 @@
 #include <kernel/process.h>
 #include <kernel/memory.h>
 #include <kernel/kernel.h>
+#include <kernel/panic.h>
 #include <kernel/vfs.h>
 #include <kernel/syscalls.h>
 #include <kernel/uart.h>

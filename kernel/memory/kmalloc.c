@@ -18,6 +18,7 @@
 
 #include <kernel/memory.h>
 #include <kernel/kernel.h>
+#include <kernel/panic.h>
 #include <kernel/string.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>

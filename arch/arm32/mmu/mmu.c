@@ -17,6 +17,7 @@
  */
 
 #include <kernel/kernel.h>
+#include <kernel/panic.h>
 #include <kernel/memory.h>
 #include <kernel/address_space.h>
 #include <kernel/kprintf.h>

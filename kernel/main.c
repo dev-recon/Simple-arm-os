@@ -32,6 +32,7 @@
 #include <kernel/tlb.h>
 #include <kernel/arch_cpu.h>
 #include <kernel/uart.h>
+#include <kernel/panic.h>
 #include <kernel/kprintf.h>
 #include <kernel/memory.h>
 #include <kernel/debug_print.h>
@@ -51,7 +52,6 @@
 uintptr_t __stack_chk_guard = 0xDEADBEEF;
 
 void __attribute__((noreturn)) __stack_chk_fail(void) {
-    extern void panic(const char*);
     panic("Stack smashing detected");
     while (1) {}
 }

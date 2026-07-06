@@ -29,13 +29,9 @@
 #include <kernel/util.h>
 #include <kernel/user_layout.h>
 #include <kernel/address_space.h>
+#include <kernel/panic.h>
 
 #define USE_RAMFS 1
-
-/* === FONCTIONS KERNEL === */
-
-/* Panic et debug */
-void panic(const char* message) __attribute__((noreturn));
 
 //extern const uint32_t TASK_CONTEXT_OFF;
 

@@ -20,6 +20,7 @@
 #include <kernel/memory.h>
 #include <kernel/address_space.h>
 #include <kernel/kernel.h>
+#include <kernel/panic.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
 #include <kernel/uart.h>

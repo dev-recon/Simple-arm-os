@@ -22,6 +22,7 @@
 #include <kernel/tlb.h>
 #include <kernel/smp.h>
 #include <kernel/kernel.h>
+#include <kernel/panic.h>
 #include <kernel/kprintf.h>
 #include <kernel/interrupt.h>
 #include <kernel/memory.h>
