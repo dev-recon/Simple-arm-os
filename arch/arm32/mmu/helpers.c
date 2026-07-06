@@ -21,11 +21,11 @@
 #include <kernel/address_space.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
-#include <kernel/kernel.h>
 #include <kernel/panic.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
 #include <kernel/spinlock.h>
+#include <kernel/string.h>
 #include <kernel/stdarg.h>
 
 /* External symbols from linker script */

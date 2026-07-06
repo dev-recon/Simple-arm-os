@@ -21,8 +21,9 @@
  */
 
 #include <kernel/smp.h>
-#include <kernel/kernel.h>
+#include <kernel/fdt.h>
 #include <kernel/memory.h>
+#include <kernel/stddef.h>
 #include <kernel/string.h>
 #include <kernel/interrupt.h>
 #include <kernel/task.h>

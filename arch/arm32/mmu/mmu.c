@@ -16,13 +16,13 @@
  * - TLB, ASID, and TTBR changes are global stability concerns.
  */
 
-#include <kernel/kernel.h>
 #include <kernel/panic.h>
 #include <kernel/memory.h>
 #include <kernel/address_space.h>
 #include <kernel/kprintf.h>
 #include <kernel/debug_print.h>
 #include <kernel/display.h>
+#include <kernel/string.h>
 #include <kernel/task.h>
 #include <kernel/tlb.h>
 #include <kernel/arch_memory.h>

@@ -17,7 +17,6 @@
  */
 
 #include <kernel/interrupt.h>
-#include <kernel/kernel.h>
 #include <kernel/timer.h>
 #include <kernel/keyboard.h>
 #include <kernel/ata.h>

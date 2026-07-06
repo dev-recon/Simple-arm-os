@@ -20,7 +20,6 @@
  */
 
 #include <kernel/interrupt.h>
-#include <kernel/kernel.h>
 #include <kernel/signal.h>
 #include <kernel/smp.h>
 #include <kernel/task.h>
