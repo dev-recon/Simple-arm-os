@@ -27,10 +27,6 @@
 #define IRQ_KEYBOARD        33
 #define IRQ_ATA             34
 
-/* Adresses CORRECTES pour QEMU VExpress-A9 */
-//#define GICD_BASE 0x1E001000  /* GIC Distributor - VExpress-A9 */
-//#define GICC_BASE 0x1E000100  /* GIC CPU Interface - VExpress-A9 */
-
 /* GIC functions */
 void init_gic(void);
 void gic_init_secondary_cpu_interface(void);

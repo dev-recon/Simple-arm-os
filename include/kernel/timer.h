@@ -64,7 +64,7 @@ void unix_to_datetime(uint32_t unix_time, datetime_t* dt);
 uint32_t get_current_time(void);
 
 
-/* ARM Generic Timer functions pour machine virt */
+/* Platform timer functions */
 uint64_t get_generic_timer_count(void);
 void set_generic_timer_compare(uint64_t compare_value);
 void enable_generic_timer(void);

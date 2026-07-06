@@ -33,7 +33,7 @@ uint32_t get_kernel_memory_size(void);
 
 /* === INFORMATIONS DU LINKER SCRIPT === */
 
-/* Symboles exportes par le linker script pour machine virt */
+/* Symboles exportes par le linker script */
 extern uint32_t __start;           /* Debut du kernel */
 extern uint32_t __end;             /* Fin du kernel */
 extern uint32_t __kernel_start;    /* Alias pour __start */
@@ -191,7 +191,7 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
 #define PAGE_ALIGN_DOWN(addr)   ((addr) & PAGE_MASK)
 #define IS_PAGE_ALIGNED(addr)   (((addr) & (PAGE_SIZE - 1)) == 0)
 
-/* Verifications d'adresses pour machine virt */
+/* Verifications d'adresses */
 //#define IS_KERNEL_ADDR(addr)    ((addr) >= KERNEL_START && (addr) < VIRT_RAM_END)
 //#define IS_USER_ADDR(addr)      ((addr) >= USER_SPACE_START && (addr) < USER_SPACE_END)
 #define IS_DEVICE_ADDR(addr)    ((addr) >= DEVICE_START && (addr) < DEVICE_END)
@@ -284,21 +284,6 @@ void virtio_init(void);
 void* get_dtb_address(void);
 bool parse_device_tree(void);
 void print_cpu_mode(void);
-
-
-
-
-/* === VeRIFICATIONS DE COMPATIBILITe === */
-
-/* Verifier que les adresses sont coherentes */
-#if VIRT_RAM_START != 0x40000000u
-#error "VIRT_RAM_START must be 0x40000000 for machine virt"
-#endif
-
-#if PAGE_SIZE != 4096
-#error "PAGE_SIZE must be 4096 for ARM32"
-#endif
-
 /* === ATTRIBUTS COMPILATEUR === */
 
 /* Sections speciales */
@@ -306,7 +291,7 @@ void print_cpu_mode(void);
 #define __init_data             __attribute__((section(".data.init")))
 #define __kernel_data           __attribute__((section(".data.kernel")))
 
-/* Alignement ARM32 */
+/* Alignement courant */
 #define __aligned_4             __attribute__((aligned(4)))
 #define __aligned_8             __attribute__((aligned(8)))
 #define __aligned_page          __attribute__((aligned(PAGE_SIZE)))

@@ -21,4 +21,8 @@
 #define ARCH_PAGE_OFFSET_MASK 0x00000FFFu
 #define ARCH_PAGE_MASK        0xFFFFF000u
 
+#if ARCH_PAGE_SIZE != 4096u
+#error "ARM32 currently requires 4KB pages"
+#endif
+
 #endif /* ASM_ARM32_PAGE_H */

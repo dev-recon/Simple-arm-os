@@ -315,13 +315,6 @@ typedef uint32_t in_addr_t;
 #define LIKELY(x)               __builtin_expect(!!(x), 1)
 #define UNLIKELY(x)             __builtin_expect(!!(x), 0)
 
-/* === VeRIFICATIONS DE COHeRENCE === */
-
-/* Verifications a la compilation */
-#if PAGE_SIZE != 4096
-#error "PAGE_SIZE must be 4096"
-#endif
-
 /* Verifications des tailles */
 typedef char size_check_uint8_t[sizeof(uint8_t) == 1 ? 1 : -1];
 typedef char size_check_uint16_t[sizeof(uint16_t) == 2 ? 1 : -1];

@@ -26,6 +26,10 @@
 /* Physical RAM base for QEMU virt. */
 #define VIRT_RAM_START          0x40000000u
 
+#if VIRT_RAM_START != 0x40000000u
+#error "ARM32 QEMU virt RAM must start at 0x40000000"
+#endif
+
 /* Memory map: QEMU virt platform. */
 #define VIRT_FLASH_BASE         0x00000000u
 #define VIRT_FLASH_SIZE         0x08000000u
