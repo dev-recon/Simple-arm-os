@@ -20,6 +20,7 @@
 #include <kernel/fdt.h>
 #include <kernel/string.h>
 #include <kernel/virtio_block.h>
+#include <kernel/arch_platform.h>
 
 extern uint32_t dtb_address;
 
@@ -280,17 +281,13 @@ static bool fdt_virtio_mmio_cb(void *dtb_ptr, void *node_ptr,
     if (!fdt_decode_reg_addr(reg, reg_len, &phys))
         return false;
 
-    volatile uint32_t *base = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+    volatile uint32_t *base = arch_platform_virtio_mmio_base(phys);
     if (mmio_read32(base, VIRTIO_MMIO_MAGIC) != 0x74726976)
         return false;
     if (mmio_read32(base, VIRTIO_MMIO_DEVICE_ID) != ctx->virtio_id)
         return false;
 
-    if (phys >= VIRT_VIRTIO_BASE &&
-        ((phys - VIRT_VIRTIO_BASE) % VIRT_VIRTIO_SIZE) == 0) {
-        uint32_t index = (phys - VIRT_VIRTIO_BASE) / VIRT_VIRTIO_SIZE;
-        fallback_irq = VIRT_VIRTIO_IRQ(index);
-    }
+    (void)arch_platform_virtio_irq_from_phys(phys, &fallback_irq);
 
     uint32_t *intr = (uint32_t *)fdt_get_property(dtb_ptr, node_ptr,
                                                   "interrupts", &intr_len);

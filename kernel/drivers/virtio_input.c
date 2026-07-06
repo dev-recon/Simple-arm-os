@@ -28,6 +28,7 @@
 #include <kernel/interrupt.h>
 #include <kernel/display.h>
 #include <kernel/arch_barrier.h>
+#include <kernel/arch_platform.h>
 
 #define VIRTIO_ID_INPUT        18
 #define VIRTIO_INPUT_VQ_SIZE   32
@@ -494,7 +495,7 @@ bool virtio_input_init(int tty_id)
     input.phys = phys;
     input.irq = irq;
     input.irq_edge_triggered = irq_edge;
-    input.mmio = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+    input.mmio = arch_platform_virtio_mmio_base(phys);
 
     uint32_t magic = mmio_read32(input.mmio, VIRTIO_MMIO_MAGIC);
     uint32_t version = mmio_read32(input.mmio, VIRTIO_MMIO_VERSION);

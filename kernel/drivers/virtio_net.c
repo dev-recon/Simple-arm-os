@@ -32,6 +32,7 @@
 #include <kernel/timer.h>
 #include <kernel/task.h>
 #include <kernel/arch_barrier.h>
+#include <kernel/arch_platform.h>
 
 #define VIRTIO_NET_F_MAC      (1u << 5)
 
@@ -361,16 +362,7 @@ static bool net_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
 
 static bool net_irq_from_mmio(paddr_t phys, uint32_t *out_irq)
 {
-    if (!out_irq)
-        return false;
-    if (phys < VIRT_VIRTIO_BASE)
-        return false;
-    if (((phys - VIRT_VIRTIO_BASE) % VIRT_VIRTIO_SIZE) != 0)
-        return false;
-
-    uint32_t index = (phys - VIRT_VIRTIO_BASE) / VIRT_VIRTIO_SIZE;
-    *out_irq = VIRT_VIRTIO_IRQ(index);
-    return true;
+    return arch_platform_virtio_irq_from_phys(phys, out_irq);
 }
 
 static bool net_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq, bool *out_edge)
@@ -386,8 +378,8 @@ static bool net_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq, bool *out_e
 
 static bool net_probe_fallback(paddr_t *out_phys, uint32_t *out_irq, bool *out_edge)
 {
-    paddr_t phys = VIRT_VIRTIO_NET;
-    volatile uint32_t *base = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+    paddr_t phys = arch_platform_virtio_net_phys();
+    volatile uint32_t *base = arch_platform_virtio_mmio_base(phys);
 
     if (!out_phys || !out_irq)
         return false;
@@ -398,7 +390,7 @@ static bool net_probe_fallback(paddr_t *out_phys, uint32_t *out_irq, bool *out_e
 
     *out_phys = phys;
     if (!net_irq_from_mmio(phys, out_irq))
-        *out_irq = VIRT_VIRTIO_NET_IRQ;
+        *out_irq = arch_platform_virtio_net_irq();
     if (out_edge)
         *out_edge = true;
     return true;
@@ -1567,7 +1559,7 @@ bool virtio_net_init(void)
     net.phys = phys;
     net.irq = irq;
     net.irq_edge_triggered = edge;
-    net.mmio = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+    net.mmio = arch_platform_virtio_mmio_base(phys);
 
     magic = mmio_read32(net.mmio, VIRTIO_MMIO_MAGIC);
     version = mmio_read32(net.mmio, VIRTIO_MMIO_VERSION);

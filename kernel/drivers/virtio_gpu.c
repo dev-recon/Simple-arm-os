@@ -30,6 +30,7 @@
 #include <kernel/task.h>
 #include <kernel/arch_barrier.h>
 #include <kernel/arch_cpu.h>
+#include <kernel/arch_platform.h>
 
 #define VIRTIO_ID_GPU 16
 
@@ -637,7 +638,7 @@ bool virtio_gpu_init(void)
 
     gpu.phys = phys;
     gpu.irq = irq;
-    gpu.mmio = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+    gpu.mmio = arch_platform_virtio_mmio_base(phys);
     gpu.framebuffer_size = FB_WIDTH * FB_HEIGHT * (FB_BPP / 8);
 
     KINFO("VirtIO GPU found: phys=0x%08X mmio=%p irq=%u\n",

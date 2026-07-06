@@ -49,4 +49,53 @@ static inline uint32_t arch_platform_uart_irq(void)
     return VIRT_UART_IRQ;
 }
 
+static inline volatile uint32_t* arch_platform_virtio_mmio_base(paddr_t phys)
+{
+    return (volatile uint32_t*)(uintptr_t)KERNEL_MMIO_VIRTIO_ADDR(phys);
+}
+
+static inline bool arch_platform_virtio_irq_from_phys(paddr_t phys, uint32_t* out_irq)
+{
+    if (!out_irq)
+        return false;
+    if (phys < VIRT_VIRTIO_BASE)
+        return false;
+    if (((phys - VIRT_VIRTIO_BASE) % VIRT_VIRTIO_SIZE) != 0)
+        return false;
+
+    uint32_t index = (phys - VIRT_VIRTIO_BASE) / VIRT_VIRTIO_SIZE;
+    *out_irq = VIRT_VIRTIO_IRQ(index);
+    return true;
+}
+
+static inline paddr_t arch_platform_virtio_net_phys(void)
+{
+    return (paddr_t)VIRT_VIRTIO_NET;
+}
+
+static inline uint32_t arch_platform_virtio_net_irq(void)
+{
+    return VIRT_VIRTIO_NET_IRQ;
+}
+
+static inline paddr_t arch_platform_virtio_block_phys(void)
+{
+    return (paddr_t)VIRT_VIRTIO_BLOCK;
+}
+
+static inline paddr_t arch_platform_virtio_block_fallback_phys(void)
+{
+    return (paddr_t)(VIRT_VIRTIO_BASE + 31u * VIRT_VIRTIO_SIZE);
+}
+
+static inline uint32_t arch_platform_virtio_block_irq(void)
+{
+    return VIRT_VIRTIO_BLOCK_IRQ;
+}
+
+static inline uint32_t arch_platform_virtio_mmio_size(void)
+{
+    return VIRT_VIRTIO_SIZE;
+}
+
 #endif /* _KERNEL_ARCH_PLATFORM_H */

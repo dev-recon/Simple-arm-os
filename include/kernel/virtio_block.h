@@ -23,13 +23,14 @@
 #include <kernel/types.h>
 #include <kernel/arch_barrier.h>
 
-/* ARM32 QEMU virt block-device slot, exposed through the platform map. */
-#define VIRTIO_BLK_IRQ          VIRT_VIRTIO_BLOCK_IRQ
+/* VirtIO block-device slot exposed through the active platform map. */
+#define VIRTIO_BLK_IRQ          arch_platform_virtio_block_irq()
 
 /* VirtIO block MMIO window selected by the current platform. */
-#define VIRTIO_BLOCK_BASE       KERNEL_MMIO_VIRTIO_ADDR(VIRT_VIRTIO_BLOCK)
-#define VIRTIO_BLOCK_IRQ        VIRT_VIRTIO_BLOCK_IRQ
-#define VIRTIO_BLOCK_SIZE       VIRT_VIRTIO_SIZE
+#define VIRTIO_BLOCK_BASE \
+    ((vaddr_t)(uintptr_t)arch_platform_virtio_mmio_base(arch_platform_virtio_block_phys()))
+#define VIRTIO_BLOCK_IRQ        arch_platform_virtio_block_irq()
+#define VIRTIO_BLOCK_SIZE       arch_platform_virtio_mmio_size()
 
 #define VIRTIO_BLOCK_TIMEOUT    1000    /* Timeout for block operations - 1s */
 

@@ -120,10 +120,8 @@ static void virtio_blk_release(void)
     spin_unlock_irqrestore(&virtio_blk_lock, flags);
 }
 
-#define VIRTIO_FALLBACK_PHY_ADDR 0x0A003E00u
-volatile uint32_t *virtio_mmio_base =
-    (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(VIRTIO_FALLBACK_PHY_ADDR);
-static uint32_t virtio_blk_irq = VIRTIO_BLK_IRQ;
+volatile uint32_t *virtio_mmio_base = NULL;
+static uint32_t virtio_blk_irq = 0;
 
 static bool virtio_blk_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq)
 {
@@ -143,18 +141,23 @@ static vaddr_t virtio_blk_resolve_mmio_base(vaddr_t requested_base)
     uint32_t irq = 0;
 
     if (virtio_blk_probe_from_dtb(&phys, &irq)) {
-        virtio_mmio_base = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+        virtio_mmio_base = arch_platform_virtio_mmio_base(phys);
         virtio_blk_irq = irq;
         KINFO("VirtIO block from DTB: phys=0x%08X mmio=%p irq=%u\n",
               phys, virtio_mmio_base, virtio_blk_irq);
         return (vaddr_t)virtio_mmio_base;
     }
 
-    virtio_mmio_base = (volatile uint32_t *)requested_base;
+    if (requested_base) {
+        virtio_mmio_base = (volatile uint32_t *)requested_base;
+    } else {
+        virtio_mmio_base =
+            arch_platform_virtio_mmio_base(arch_platform_virtio_block_fallback_phys());
+    }
     virtio_blk_irq = VIRTIO_BLK_IRQ;
     KINFO("VirtIO block DTB probe failed, using fallback mmio=%p irq=%u\n",
           virtio_mmio_base, virtio_blk_irq);
-    return requested_base;
+    return (vaddr_t)virtio_mmio_base;
 }
 
 
