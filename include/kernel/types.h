@@ -20,6 +20,7 @@
 #define _KERNEL_TYPES_H
 
 #include <asm/cache.h>
+#include <asm/page.h>
 
 /* === TYPES DE BASE === */
 
@@ -87,10 +88,11 @@ typedef enum {
 
 #define NULL ((void*)0)
 
-/* Tailles de page pour machine virt */
-#define PAGE_SIZE       4096
-#define PAGE_SHIFT      12
-/* Note: PAGE_MASK defini dans kernel.h pour eviter les conflits */
+/* Page geometry supplied by the active architecture backend. */
+#define PAGE_SIZE        ARCH_PAGE_SIZE
+#define PAGE_SHIFT       ARCH_PAGE_SHIFT
+#define PAGE_OFFSET_MASK ARCH_PAGE_OFFSET_MASK
+#define PAGE_MASK        ARCH_PAGE_MASK
 
 /* Limites systeme */
 #define MAX_FILES       256

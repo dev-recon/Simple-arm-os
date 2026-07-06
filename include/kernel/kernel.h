@@ -102,12 +102,6 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
     return vaddr;
 }
 
-/* Tailles de page */
-#define PAGE_SIZE               4096
-#define PAGE_SHIFT              12
-#define PAGE_OFFSET_MASK        0x00000FFFu
-#define PAGE_MASK               0xFFFFF000u
-
 /* ========================================================================
  * KERNEL SPACE (utilise les symboles du linker)
  * ======================================================================== */
