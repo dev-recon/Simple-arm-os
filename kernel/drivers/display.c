@@ -19,12 +19,12 @@
 #include <kernel/display.h>
 #include <kernel/memory.h>
 #include <kernel/address_space.h>
-#include <kernel/kernel.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
 #include <kernel/tty.h>
 #include <kernel/virtio_gpu.h>
 #include <kernel/timer.h>
+#include <kernel/string.h>
 #include <kernel/task.h>
 #include <kernel/spinlock.h>
 #include <kernel/arch_memory.h>

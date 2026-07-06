@@ -16,9 +16,9 @@
  * - Device ordering and cache coherency matter under preemption.
  */
 
-#include <kernel/kernel.h>
 #include <kernel/types.h>
 #include <kernel/address_space.h>
+#include <kernel/fdt.h>
 #include <kernel/virtio_block.h>
 #include <kernel/memory.h>
 #include <kernel/string.h>
