@@ -730,26 +730,26 @@ static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "           CPU0\n");
     proc_append(buf, cap, len, "%3u: %10u GICv2  ipi-tlb\n",
                 IRQ_SGI_TLB_SHOOTDOWN,
-                gic_get_irq_count(IRQ_SGI_TLB_SHOOTDOWN));
+                irq_get_count(IRQ_SGI_TLB_SHOOTDOWN));
     proc_append(buf, cap, len, "%3u: %10u GICv2  timer\n",
                 timer_irq,
-                gic_get_irq_count(timer_irq));
+                irq_get_count(timer_irq));
     proc_append(buf, cap, len, "%3u: %10u GICv2  uart0\n",
                 uart_irq,
-                gic_get_irq_count(uart_irq));
+                irq_get_count(uart_irq));
     proc_append(buf, cap, len, "%3u: %10u GICv2  uart0-legacy\n",
                 IRQ_KEYBOARD,
-                gic_get_irq_count(IRQ_KEYBOARD));
+                irq_get_count(IRQ_KEYBOARD));
     proc_append(buf, cap, len, "%3u: %10u GICv2  virtio-blk\n",
                 virtio_irq,
-                gic_get_irq_count(virtio_irq));
+                irq_get_count(virtio_irq));
     if (virtio_net_is_initialized()) {
         proc_append(buf, cap, len, "%3u: %10u GICv2  virtio-net\n",
                     virtio_net_irq,
-                    gic_get_irq_count(virtio_net_irq));
+                    irq_get_count(virtio_net_irq));
     }
-    proc_append(buf, cap, len, "TOT: %10u\n", gic_get_total_irq_count());
-    proc_append(buf, cap, len, "LAST:%10u\n", gic_get_last_irq_id());
+    proc_append(buf, cap, len, "TOT: %10u\n", irq_get_total_count());
+    proc_append(buf, cap, len, "LAST:%10u\n", irq_get_last_id());
 }
 
 static void proc_fill_net_dev(char* buf, size_t cap, size_t* len)
@@ -1421,7 +1421,7 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
     }
 
     proc_append(buf, cap, len, "cpu  0 0 0 %u 0 0 0 0 0 0\n", get_system_ticks());
-    proc_append(buf, cap, len, "intr %u\n", gic_get_total_irq_count());
+    proc_append(buf, cap, len, "intr %u\n", irq_get_total_count());
     task_t *task = task_current_local();
     proc_append(buf, cap, len, "ctxt %u\n",
                 task ? task->switch_count : 0);
@@ -1829,12 +1829,12 @@ static ssize_t procfs_write(file_t* file, const void* buffer, size_t count)
     }
 
     if (strcmp(cmd, "self") == 0 || strcmp(cmd, "0") == 0) {
-        gic_send_sgi(1u << smp_boot_cpu_id(), IRQ_SGI_TLB_SHOOTDOWN);
+        irq_send_ipi(1u << smp_boot_cpu_id(), IRQ_SGI_TLB_SHOOTDOWN);
         return (ssize_t)count;
     }
 
     if (strcmp(cmd, "others") == 0) {
-        gic_send_sgi_others(IRQ_SGI_TLB_SHOOTDOWN);
+        irq_send_ipi_others(IRQ_SGI_TLB_SHOOTDOWN);
         return (ssize_t)count;
     }
 
