@@ -19,21 +19,21 @@
 #ifndef _KERNEL_VIRTIO_BLOCK_H
 #define _KERNEL_VIRTIO_BLOCK_H
 
+#include <asm/platform.h>
 #include <kernel/types.h>
 #include <kernel/arch_barrier.h>
-//#include <kernel/kernel.h>
 
-/* VirtIO Block Device - CORRECTION ADRESSE */
-#define VIRTIO_BLK_IRQ      17  /* IRQ 17 pour machine virt */
+/* ARM32 QEMU virt block-device slot, exposed through the platform map. */
+#define VIRTIO_BLK_IRQ          VIRT_VIRTIO_BLOCK_IRQ
 
-/* Adresses VirtIO pour machine virt (depuis kernel.h) */
+/* VirtIO block MMIO window selected by the current platform. */
 #define VIRTIO_BLOCK_BASE       KERNEL_MMIO_VIRTIO_ADDR(VIRT_VIRTIO_BLOCK)
-#define VIRTIO_BLOCK_IRQ        VIRT_VIRTIO_BLOCK_IRQ   /* IRQ 17 */
-#define VIRTIO_BLOCK_SIZE       VIRT_VIRTIO_SIZE        /* 512 bytes */
+#define VIRTIO_BLOCK_IRQ        VIRT_VIRTIO_BLOCK_IRQ
+#define VIRTIO_BLOCK_SIZE       VIRT_VIRTIO_SIZE
 
 #define VIRTIO_BLOCK_TIMEOUT    1000    /* Timeout for block operations - 1s */
 
-/* Registres VirtIO MMIO (offsets depuis base) */
+/* VirtIO MMIO registers, relative to VIRTIO_BLOCK_BASE. */
 #define VIRTIO_REG_MAGIC        0x000   /* Magic value */
 #define VIRTIO_REG_VERSION      0x004   /* Version */
 #define VIRTIO_REG_DEVICE_ID    0x008   /* Device ID */

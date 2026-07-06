@@ -19,6 +19,7 @@
 #ifndef MMIO_H
 #define MMIO_H
 
+#include <asm/platform.h>
 #include <kernel/types.h>
 #include <kernel/interrupt.h>
 
@@ -56,7 +57,7 @@ extern uint32_t TEST_MMIO(uint32_t address);
 #define MMIO_WRITE8(addr, val)     PUT8_MMIO((uint32_t)(addr), (uint8_t)(val))
 #define MMIO_READ8(addr)           GET8_MMIO((uint32_t)(addr))
 
-/* Macros pour registres specifiques - adapte pour machine virt */
+/* Compatibility aliases for GIC MMIO helpers. */
 #define GICD_BASE               KERNEL_MMIO_GIC_DIST_BASE
 #define GICC_BASE               KERNEL_MMIO_GIC_CPU_BASE
 

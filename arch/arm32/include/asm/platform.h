@@ -115,6 +115,16 @@
 #define VIRT_PCIE_ECAM_BASE     0x3F000000u
 #define VIRT_PCIE_ECAM_SIZE     0x01000000u
 
+/*
+ * Legacy IDE probing constants. The current ARM32 QEMU virt configuration
+ * still exposes this path for the old IDE fallback driver; keep the exact
+ * historical values here so generic storage headers do not own platform MMIO.
+ */
+#define VIRT_IDE_PRIMARY_BASE   0x3F000000u
+#define VIRT_IDE_PRIMARY_CTRL   0x3F00000Eu
+#define VIRT_IDE_PRIMARY_IRQ    14
+#define VIRT_IDE_LEGACY_IO_BASE (VIRT_PCIE_PIO_BASE + 0x1F0u)
+
 /* ARM generic timer interrupt IDs on QEMU virt. */
 #define VIRT_TIMER_NS_EL1_IRQ   30
 #define VIRT_TIMER_S_EL1_IRQ    29
