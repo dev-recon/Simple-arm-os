@@ -90,6 +90,19 @@ static inline void arch_task_context_set_returns_to_user(task_context_t *ctx,
     ctx->returns_to_user = returns_to_user ? 1u : 0u;
 }
 
+static inline void arch_task_context_mark_first_run(task_context_t *ctx)
+{
+    ctx->is_first_run = 1u;
+}
+
+static inline void arch_task_context_set_address_space(task_context_t *ctx,
+                                                       uintptr_t address_space,
+                                                       uint32_t asid)
+{
+    ctx->ttbr0 = (uint32_t)address_space;
+    ctx->asid = asid;
+}
+
 static inline void arch_task_context_init_kernel_entry(task_context_t *ctx,
                                                        void (*entry)(void *),
                                                        void *arg,
@@ -100,7 +113,7 @@ static inline void arch_task_context_init_kernel_entry(task_context_t *ctx,
     ctx->lr = 0;
     ctx->pc = (uint32_t)(uintptr_t)entry;
     ctx->cpsr = ARCH_TASK_KERNEL_CPSR;
-    ctx->is_first_run = 1;
+    arch_task_context_mark_first_run(ctx);
     arch_task_context_set_returns_to_user(ctx, false);
 }
 

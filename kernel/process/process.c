@@ -65,9 +65,10 @@ static void configure_idle_task_for_cpu(uint32_t cpu_id, task_t* task)
         return;
 
     task_register_idle_cpu(cpu_id, task);
-    task->context.is_first_run = 1;
-    task->context.ttbr0 = arch_kernel_address_space_context();
-    task->context.asid = ASID_KERNEL;
+    arch_task_context_mark_first_run(&task->context);
+    arch_task_context_set_address_space(&task->context,
+                                        arch_kernel_address_space_context(),
+                                        ASID_KERNEL);
     arch_task_context_set_returns_to_user(&task->context, false);
 }
 
@@ -97,8 +98,7 @@ void init_process_system(void)
     //init_process->entry_arg = NULL;
 
     //init_process->context.sp = new_vm->stack_start;             /* Stack pointer */
-    init_process->context.is_first_run = 1;                     /* Pas la premiere fois */
-    //init_process->context.asid = ASID_KERNEL;
+    arch_task_context_mark_first_run(&init_process->context);
     arch_task_context_set_returns_to_user(&init_process->context, false);
 
     //KDEBUG("[INIT] SCV STACK TOP = 0x%08X\n", init_process->context.svc_sp_top);
@@ -184,7 +184,7 @@ void init_process_main(void* arg)
         panic("Failed to create fallback shell process");
     }
 
-    shell_proc->context.is_first_run = 1;                    
+    arch_task_context_mark_first_run(&shell_proc->context);
     arch_task_context_set_returns_to_user(&shell_proc->context, false);
     shell_proc->process->uid = 1000;
     shell_proc->process->gid = 1000;

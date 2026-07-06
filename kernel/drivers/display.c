@@ -303,9 +303,10 @@ int display_start_daemon(void)
     if (!displayd_task)
         return -ENOMEM;
 
-    displayd_task->context.is_first_run = 1;
-    displayd_task->context.ttbr0 = arch_kernel_address_space_context();
-    displayd_task->context.asid = ASID_KERNEL;
+    arch_task_context_mark_first_run(&displayd_task->context);
+    arch_task_context_set_address_space(&displayd_task->context,
+                                        arch_kernel_address_space_context(),
+                                        ASID_KERNEL);
     arch_task_context_set_returns_to_user(&displayd_task->context, false);
     add_to_ready_queue(displayd_task);
     return 0;

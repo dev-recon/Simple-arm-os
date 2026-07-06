@@ -1223,7 +1223,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->cow_faults = 0;
     child->stack_faults = 0;
     child->lazy_faults = 0;
-    child->context.is_first_run = 1;
+    arch_task_context_mark_first_run(&child->context);
     child->context.r0 = 0;
     child->wakeup_time = 0;
     child->quantum_left = QUANTUM_TICKS;
@@ -1719,8 +1719,9 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
             return NULL;
         }
 
-        task->context.ttbr0 = (uint32_t)task->process->vm->pgdir;
-        task->context.asid = task->process->vm->asid;
+        arch_task_context_set_address_space(&task->context,
+                                            (uintptr_t)task->process->vm->pgdir,
+                                            task->process->vm->asid);
         
         /* Initialiser les fichiers */
         memset(task->process->files, 0, sizeof(task->process->files));
