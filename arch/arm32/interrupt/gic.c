@@ -59,8 +59,8 @@ static uint8_t gic_route_spi_to_boot_cpu(uint32_t irq)
 
     /*
      * GICv2 ITARGETSR is meaningful for SPIs only. SGIs/PPIs are private to a
-     * CPU interface and must not be programmed here. QEMU virt with more than
-     * one vCPU may otherwise route UART/VirtIO interrupts to a parked CPU.
+     * CPU interface and must not be programmed here. Platforms with multiple
+     * CPUs may otherwise route UART/VirtIO interrupts to a parked CPU.
      */
     if (irq < 32)
         return itargetsr[irq];
@@ -302,22 +302,23 @@ void irq_c_handler(void)
         return;
     }
     
-    /* Router vers les handlers specifiques pour machine virt */
+    /* Route to the platform/core IRQ handlers. */
     switch (int_id) {
         case IRQ_TIMER:  /* Timer generique ARM */
             //kprintf("[IRQ] Generic Timer IRQ %u Received\n", int_id);
             timer_irq_handler();
             break;
             
-        case IRQ_UART:  /* UART machine virt */
+        case IRQ_UART:  /* Console UART */
             //kprintf("[IRQ] UART IRQ %u Received\n", int_id);
             uart_irq_handler();
             break;
 
         case IRQ_KEYBOARD:
-            /* Sur qemu virt -nographic, l'entree interactive arrive via PL011.
-             * Le GIC nous livre l'IRQ 33 pour cette source; l'ancien handler
-             * clavier cible un MMIO non-present sur cette machine. */
+            /*
+             * Legacy keyboard aliases are still routed through the console UART
+             * until a platform provides a separate keyboard interrupt backend.
+             */
             uart_irq_handler();
             break;
             
@@ -372,8 +373,8 @@ void gic_send_sgi(uint32_t target_cpu_mask, uint32_t sgi_id)
 
     /*
      * GICD_SGIR TargetListFilter=0 sends the SGI to the explicit CPU target
-     * list in bits [23:16]. CPU numbering matches the GIC CPU interface ID on
-     * QEMU virt, which is exactly what we need for boot-time SMP experiments.
+     * list in bits [23:16]. The caller passes a GIC CPU-interface target mask;
+     * platform code is responsible for keeping that mask consistent.
      */
     gicd[0xF00 / 4] = value;
 }
@@ -395,15 +396,19 @@ void gic_send_sgi_others(uint32_t sgi_id)
 
 static void enable_irq_with_type(uint32_t irq, bool edge_triggered)
 {
-    KDEBUG("[IRQ] Enabling IRQ %u (machine virt mode, %s)...\n",
-           irq, edge_triggered ? "edge" : "level");
+    bool targets_auto_managed = arch_platform_gic_targets_auto_managed();
+
+    KDEBUG("[IRQ] Enabling IRQ %u (%s, %s)...\n",
+           irq,
+           targets_auto_managed ? "auto-targeting" : "kernel-targeting",
+           edge_triggered ? "edge" : "level");
     
     volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
     
     /* 1. Route SPIs to the boot CPU before enabling them. */
     uint8_t target = gic_route_spi_to_boot_cpu(irq);
     if (target == 0) {
-        KDEBUG("[IRQ]   Target: AUTO/QEMU managed\n");
+        KDEBUG("[IRQ]   Target: platform auto-managed\n");
     } else {
         KDEBUG("[IRQ]   Target: 0x%02X \n", target);
     }
@@ -440,7 +445,8 @@ static void enable_irq_with_type(uint32_t irq, bool edge_triggered)
     KDEBUG("[IRQ]   Status: %s\n", enabled ? "ENABLED OK" : "FAILED KO");
     
     if (enabled) {
-        KDEBUG("[IRQ] OK IRQ %u ready! (machine virt auto-route)\n", irq);
+        KDEBUG("[IRQ] OK IRQ %u ready! (%s)\n",
+               irq, targets_auto_managed ? "auto-route" : "explicit-route");
     } else {
         KDEBUG("[IRQ] KO IRQ %u activation failed\n", irq);
     }
@@ -449,9 +455,10 @@ static void enable_irq_with_type(uint32_t irq, bool edge_triggered)
 void enable_irq(uint32_t irq)
 {
     /*
-     * Default to level-triggered interrupts. QEMU virt's PL011, VirtIO MMIO
-     * devices and ARM generic timer all use level semantics; edge-triggering
-     * them risks losing interrupts that remain asserted while masked.
+     * Default to level-triggered interrupts. ArmOS' current platform devices
+     * (console UART, VirtIO MMIO and ARM generic timer) all use level
+     * semantics; edge-triggering them risks losing interrupts that remain
+     * asserted while masked.
      */
     enable_irq_with_type(irq, false);
 }
@@ -500,7 +507,7 @@ void test_timer_irq_virt(void)
 
 void comprehensive_irq_test_virt(void)
 {
-    kprintf("[TEST] === MACHINE VIRT IRQ TEST ===\n");
+    kprintf("[TEST] === %s IRQ TEST ===\n", arch_platform_name());
     
     uint32_t initial_count = irq_count;
     
@@ -521,16 +528,16 @@ void comprehensive_irq_test_virt(void)
     kprintf("[TEST] Last IRQ ID: %u\n", last_irq_id);
     
     if (received > 0) {
-        kprintf("[TEST] DONE SUCCESS: Machine virt interrupt system is WORKING!\n");
+        kprintf("[TEST] DONE SUCCESS: platform interrupt system is WORKING!\n");
     } else {
         kprintf("[TEST] WARNING  No IRQs received - may need timer events\n");
     }
 }
 
-/* Test VirtIO simple pour machine virt */
+/* Simple VirtIO IRQ smoke test. */
 void test_virtio_irq_virt(void)
 {
-    kprintf("[TEST] === TESTING VIRTIO IRQ (MACHINE VIRT) ===\n");
+    kprintf("[TEST] === TESTING VIRTIO IRQ (%s) ===\n", arch_platform_name());
     
     volatile uint32_t* virtio = (volatile uint32_t*)LOCAL_VIRTIO_BASE;
     
@@ -555,7 +562,7 @@ void test_virtio_irq_virt(void)
         virtio[0x070/4] = 0;      /* Reset */
         virtio[0x070/4] = 1;      /* Acknowledge */
         
-        kprintf("[TEST] VirtIO configured for machine virt\n");
+        kprintf("[TEST] VirtIO configured for %s\n", arch_platform_name());
     } else {
         kprintf("[TEST] No VirtIO device found at 0x%08X\n", LOCAL_VIRTIO_BASE);
     }
@@ -565,8 +572,8 @@ void test_virtio_irq_virt(void)
 void complete_gic_debug_virt(void)
 {
     kprintf("\n");
-    kprintf("- === MACHINE VIRT GIC DEBUG ===\n");
-    kprintf("Testing interrupt system on QEMU machine virt...\n");
+    kprintf("- === %s GIC DEBUG ===\n", arch_platform_name());
+    kprintf("Testing platform interrupt system...\n");
     kprintf("\n");
     
     /* Test 1: Timer generique ARM */
@@ -580,8 +587,8 @@ void complete_gic_debug_virt(void)
     /* Test 3: Test complet */
     comprehensive_irq_test_virt();
     
-    kprintf("=== MACHINE VIRT TESTING COMPLETE ===\n");
-    kprintf("DONE Your machine virt interrupt system is ready!\n");
+    kprintf("=== PLATFORM IRQ TESTING COMPLETE ===\n");
+    kprintf("DONE Your platform interrupt system is ready!\n");
 }
 
 /* Fonctions aliases pour compatibilite */
