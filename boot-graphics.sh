@@ -53,6 +53,8 @@ select_display() {
 }
 
 QEMU="$(select_qemu "${1:-}")"
+QEMU_MACHINE="${QEMU_MACHINE:-virt}"
+QEMU_CPU="${QEMU_CPU:-cortex-a15}"
 QEMU_DISPLAY="$(select_display)"
 SMP_CPUS="${SMP_CPUS:-1}"
 
@@ -81,9 +83,10 @@ fi
 echo "=== Booting existing kernel.bin + disk.img with virtio-gpu ==="
 echo "UART console stays on this terminal; graphics output opens in a QEMU window."
 echo "QEMU: $("$QEMU" --version | head -n 1)"
+echo "Machine: ${QEMU_MACHINE}, CPU: ${QEMU_CPU}"
 echo "GPU: ${GPU_DEVICE}, display=${QEMU_DISPLAY}"
 echo "SMP: ${SMP_CPUS} CPU(s)"
-"$QEMU" -M virt -cpu cortex-a15 \
+"$QEMU" -M "${QEMU_MACHINE}" -cpu "${QEMU_CPU}" \
     -m 2G -smp "${SMP_CPUS}" \
     -drive file=disk.img,if=none,format=raw,id=hd0 \
     -device virtio-blk-device,drive=hd0 \

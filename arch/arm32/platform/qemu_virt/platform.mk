@@ -21,5 +21,6 @@ PLATFORM_OBJS = \
 	$(ARCH_DIR)/interrupt/gic.o \
 	$(ARCH_DIR)/power/psci.o
 
-QEMU_MACHINE ?= virt,highmem=off
+QEMU_MACHINE ?= virt
+QEMU_RUN_MACHINE ?= virt,highmem=off
 QEMU_CPU ?= cortex-a15

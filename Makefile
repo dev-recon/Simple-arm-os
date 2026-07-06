@@ -324,7 +324,7 @@ userfs.bin: $(wildcard userfs/**/*)
 
 # Run avec userfs loader
 run-userfs: $(KERNEL_BIN)
-	$(QEMU) -M virt -cpu cortex-a15 \
+	$(QEMU) -M $(QEMU_MACHINE) -cpu $(QEMU_CPU) \
 		-m 2G -smp $(SMP_CPUS) \
 		-drive file=disk.img,if=none,format=raw,id=hd0 \
 		-device virtio-blk-device,drive=hd0 \
@@ -336,7 +336,7 @@ run-userfs: $(KERNEL_BIN)
 #-device loader,file=userfs.bin,addr=0x41000000
 
 debug-run-userfs: $(KERNEL_BIN) userfs.bin
-	$(QEMU) -M virt -cpu cortex-a15 \
+	$(QEMU) -M $(QEMU_MACHINE) -cpu $(QEMU_CPU) \
 		-m 2G -smp $(SMP_CPUS) \
 		-drive file=disk.img,if=none,format=raw,id=hd0 \
 		-device virtio-blk-device,drive=hd0 \
@@ -451,7 +451,7 @@ run-mmio: $(KERNEL_BIN) $(DISK_IMG)
 		-d int,guest_errors,unimp -D qemu.log
 
 run: $(KERNEL_BIN) $(DISK_IMG)
-	$(QEMU) -M $(QEMU_MACHINE) -cpu $(QEMU_CPU) \
+	$(QEMU) -M $(QEMU_RUN_MACHINE) -cpu $(QEMU_CPU) \
 		-m 1G -smp 1 \
 		-kernel $(KERNEL_BIN) \
 		-nographic \

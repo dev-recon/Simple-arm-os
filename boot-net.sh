@@ -26,6 +26,8 @@ select_qemu() {
 }
 
 QEMU="$(select_qemu "${1:-}")"
+QEMU_MACHINE="${QEMU_MACHINE:-virt}"
+QEMU_CPU="${QEMU_CPU:-cortex-a15}"
 SMP_CPUS="${SMP_CPUS:-1}"
 
 NET_HOST_ADDR="${NET_HOST_ADDR:-127.0.0.1}"
@@ -53,10 +55,11 @@ fi
 echo "=== Booting existing kernel.bin + disk.img with virtio-net ==="
 echo "UART console stays on this terminal; graphics are disabled."
 echo "QEMU: $("$QEMU" --version | head -n 1)"
+echo "Machine: ${QEMU_MACHINE}, CPU: ${QEMU_CPU}"
 echo "NET: ${NET_DEVICE}"
 echo "FWD: ${NET_HOST_ADDR}:${NET_HOST_PORT} -> guest :${NET_GUEST_PORT}"
 echo "SMP: ${SMP_CPUS} CPU(s)"
-"$QEMU" -M virt -cpu cortex-a15 \
+"$QEMU" -M "${QEMU_MACHINE}" -cpu "${QEMU_CPU}" \
     -m 2G -smp "${SMP_CPUS}" \
     -drive file=disk.img,if=none,format=raw,id=hd0 \
     -device virtio-blk-device,drive=hd0 \
