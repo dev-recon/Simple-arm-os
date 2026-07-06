@@ -62,8 +62,8 @@ extern uint32_t TEST_MMIO(uint32_t address);
 #define MMIO_READ8(addr)           GET8_MMIO((uint32_t)(addr))
 
 /* Compatibility aliases for GIC MMIO helpers. */
-#define GICD_BASE               KERNEL_MMIO_GIC_DIST_BASE
-#define GICC_BASE               KERNEL_MMIO_GIC_CPU_BASE
+#define GICD_BASE               ARMOS_PLATFORM_KERNEL_MMIO_GIC_DIST_BASE
+#define GICC_BASE               ARMOS_PLATFORM_KERNEL_MMIO_GIC_CPU_BASE
 
 #define GICD_WRITE(offset, val)    PUT32(GICD_BASE + (offset), (val))
 #define GICD_READ(offset)          GET32(GICD_BASE + (offset))

@@ -14,7 +14,7 @@
  *   explicitly needs address-space semantics.
  *
  * Notes:
- * - The active architecture backend owns the concrete KERNEL_* and VIRT_*
+ * - The active architecture backend owns the concrete KERNEL_* and PHYS_*
  *   constants through asm/memory_layout.h.
  */
 
@@ -28,8 +28,12 @@
 
 uint32_t get_kernel_memory_size(void);
 
-#define VIRT_RAM_SIZE           get_kernel_memory_size()
-#define VIRT_RAM_END            (arch_platform_ram_start() + VIRT_RAM_SIZE)
+#define PHYS_RAM_SIZE           get_kernel_memory_size()
+#define PHYS_RAM_END            (arch_platform_ram_start() + PHYS_RAM_SIZE)
+
+/* Legacy aliases kept while old call sites and diagnostics are phased out. */
+#define VIRT_RAM_SIZE           PHYS_RAM_SIZE
+#define VIRT_RAM_END            PHYS_RAM_END
 
 static inline paddr_t physical_ram_start(void)
 {
