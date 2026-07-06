@@ -25,5 +25,6 @@
 typedef uintptr_t arch_addrspace_context_t;
 
 arch_addrspace_context_t arch_kernel_address_space_context(void);
+vaddr_t arch_userfs_load_address(void);
 
 #endif /* _KERNEL_ARCH_MEMORY_H */

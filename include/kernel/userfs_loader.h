@@ -26,9 +26,6 @@
 //                     ((uint64_t)'F' << 32) | ((uint64_t)'S' << 40) | \
 //                     ((uint64_t)'0' << 48) | ((uint64_t)'1' << 56)) */
 
-//#define USERFS_LOAD_ADDR  0x41000000              /* QEMU loader address */
-#define USERFS_LOAD_ADDR  0x50000000              /* QEMU loader address */
-
 typedef struct {
     uint64_t magic;      /* Magic signature */
     uint32_t size;       /* TAR data size */

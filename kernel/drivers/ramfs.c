@@ -18,6 +18,7 @@
 
 #include <kernel/types.h>
 #include <kernel/memory.h>
+#include <kernel/arch_memory.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
 #include <kernel/kernel.h>
@@ -31,7 +32,6 @@
 #define RAMFS_SIZE          (64 * 1024 * 1024)   /* 64MB */
 #define RAMFS_SECTOR_SIZE   512
 #define RAMFS_SECTORS       (RAMFS_SIZE / RAMFS_SECTOR_SIZE)  /* 131072 sectors */
-#define RAMFS_BASE_ADDR     USERFS_LOAD_ADDR              /* Adresse fixe s-re */
 
 
 /* Global RAMFS device */
@@ -627,7 +627,7 @@ static bool ramfs_allocate_memory(void)
     KINFO("Allocating RAMFS at safe fixed address...\n");
     
     /* CORRECTION: Utiliser une adresse fixe s-re */
-    ramfs_device.memory_base = (uint8_t*)RAMFS_BASE_ADDR;  /* 1.25GB */
+    ramfs_device.memory_base = (uint8_t*)arch_userfs_load_address();  /* QEMU loader area */
 
     /* Calculate number of pages needed */
     uint32_t pages_needed = (RAMFS_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;

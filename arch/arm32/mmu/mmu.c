@@ -1275,6 +1275,11 @@ arch_addrspace_context_t arch_kernel_address_space_context(void)
     return (arch_addrspace_context_t)ttbr0_pgdir;
 }
 
+vaddr_t arch_userfs_load_address(void)
+{
+    return 0x50000000u;
+}
+
 /* Fonctions de debug mises à jour */
 void debug_mmu_state(void)
 {
