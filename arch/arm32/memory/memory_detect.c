@@ -9,11 +9,11 @@
  * Layer: ARM32 / platform memory detection
  *
  * Responsibilities:
- * - Manage physical pages, virtual address spaces, MMU mappings, and ASIDs.
- * - Support user mappings, page faults, and copy-on-write.
+ * - Detect the physical RAM size exposed to the ARM32 kernel.
+ * - Prefer the boot DTB memory node and keep conservative probing as fallback.
  *
  * Notes:
- * - TLB, ASID, and TTBR changes are global stability concerns.
+ * - CPU feature reads are ARM32-specific CP15 queries and stay local here.
  */
 
 #include <kernel/types.h>
@@ -24,6 +24,13 @@
 #include <asm/arm.h>
 
 uint32_t kernel_memory_size = 0;
+
+typedef struct {
+    uint32_t cache_info;
+    uint32_t tlb_info;
+    uint32_t memory_model;
+    uint32_t debug_features;
+} cpu_memory_info_t;
 
 /* Fonctions de detection */
 static uint32_t detect_memory_from_dtb(void* dtb_ptr);

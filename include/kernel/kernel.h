@@ -132,13 +132,6 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
 #define MAX(a, b)               ((a) > (b) ? (a) : (b))
 #define ARRAY_SIZE(arr)         (sizeof(arr) / sizeof((arr)[0]))
 
-typedef struct {
-    uint32_t cache_info;
-    uint32_t tlb_info;
-    uint32_t memory_model;
-    uint32_t debug_features;
-} cpu_memory_info_t;
-
 /* === FONCTIONS KERNEL === */
 
 /* Panic et debug */
