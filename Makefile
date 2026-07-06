@@ -41,6 +41,7 @@ LDFLAGS = -T linker.ld -nostdlib -Map=kernel.map
 
 TASK_OBJS = kernel/task/task.o \
             $(ARCH_DIR)/task/task_switch.o \
+            $(ARCH_DIR)/task/context_debug.o \
             kernel/task/task_test.o \
 			kernel/task/kernel_tasks.o \
             $(ARCH_DIR)/smp/smp.o \
