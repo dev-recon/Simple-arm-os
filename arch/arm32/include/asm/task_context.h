@@ -58,6 +58,7 @@ typedef struct task_context {
 } __attribute__((aligned(8))) task_context_t;
 
 #define ARCH_TASK_KERNEL_CPSR          0x13u
+#define ARCH_TASK_USER_CPSR            0x60000010u
 #define ARCH_TASK_STACK_ALIGNMENT      8u
 #define ARCH_TASK_KERNEL_STACK_RESERVE 512u
 
@@ -101,6 +102,31 @@ static inline void arch_task_context_set_address_space(task_context_t *ctx,
 {
     ctx->ttbr0 = (uint32_t)address_space;
     ctx->asid = asid;
+}
+
+static inline void arch_task_context_set_user_register(task_context_t *ctx,
+                                                       uint32_t reg,
+                                                       uint32_t value)
+{
+    if (reg < 13u)
+        ctx->usr_r[reg] = value;
+}
+
+static inline void arch_task_context_init_user_entry(task_context_t *ctx,
+                                                     uintptr_t address_space,
+                                                     uint32_t asid,
+                                                     vaddr_t kernel_stack_top,
+                                                     vaddr_t user_pc,
+                                                     vaddr_t user_sp)
+{
+    arch_task_context_mark_first_run(ctx);
+    arch_task_context_set_address_space(ctx, address_space, asid);
+    arch_task_context_set_returns_to_user(ctx, true);
+    ctx->cpsr = ARCH_TASK_USER_CPSR;
+    arch_task_context_prepare_kernel_stack(ctx, kernel_stack_top);
+    ctx->usr_pc = (uint32_t)user_pc;
+    ctx->usr_sp = (uint32_t)user_sp;
+    ctx->usr_cpsr = ARCH_TASK_USER_CPSR;
 }
 
 static inline void arch_task_context_init_kernel_entry(task_context_t *ctx,

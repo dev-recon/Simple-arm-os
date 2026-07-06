@@ -533,31 +533,18 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     /* Reinitialiser le contexte CPU - ADAPTe a VOTRE STRUCTURE */
     memset(&proc->context, 0, sizeof(task_context_t));
 
-    //proc->context.pc = elf_header.e_entry;              /* Point d'entree */
-    proc->context.is_first_run = 1;                     /* Pas la premiere fois */
-    proc->context.ttbr0 = (uint32_t)new_vm->pgdir;
-    proc->context.asid = new_vm->asid;
-    proc->context.returns_to_user = 1;
-    proc->context.cpsr = 0x60000010;                          /* Mode USER */
-
-        /* Configuration KERNEL (pour les syscalls futurs) */
-    proc->context.svc_sp_top = (uint32_t)proc->stack_top; /* Pile kernel pour cette tâche */
-    proc->context.sp = proc->context.svc_sp_top - 512;             /* Stack pointer */
-    proc->context.sp &= ~7;
-    proc->context.svc_sp = proc->context.sp;
-
-
-    /* Configuration USER - CORRECTION CRITIQUE */
-    proc->context.usr_pc = elf_header.e_entry;         /* Point d'entrée USER */
-    //proc->context.usr_sp = new_vm->stack_start + USER_STACK_SIZE - 512;        /* Stack USER */
-    proc->context.usr_sp = new_vm->stack_start;        /* Points at argc for crt0 */
-    proc->context.usr_cpsr = 0x60000010;               /* MODE USER + IRQ enabled */
+    arch_task_context_init_user_entry(&proc->context,
+                                      (uintptr_t)new_vm->pgdir,
+                                      new_vm->asid,
+                                      (vaddr_t)(uintptr_t)proc->stack_top,
+                                      elf_header.e_entry,
+                                      new_vm->stack_start);
 
     /* Arguments initiaux (argc, argv, etc.) */
-    proc->context.usr_r[0] = (uint32_t)kernel_filename;                     /* r0 = argc */
-    proc->context.usr_r[1] = (uint32_t)kernel_argv;     /* r1 = argv */
-    proc->context.usr_r[2] = (uint32_t)kernel_envp;     /* r2 = envp */
-    proc->context.usr_r[3] = argc;     /* r3 = argc */
+    arch_task_context_set_user_register(&proc->context, 0, (uint32_t)kernel_filename);
+    arch_task_context_set_user_register(&proc->context, 1, (uint32_t)kernel_argv);
+    arch_task_context_set_user_register(&proc->context, 2, (uint32_t)kernel_envp);
+    arch_task_context_set_user_register(&proc->context, 3, argc);
 
    /* Fermer tous les fichiers CLOEXEC - ACCeS CORRECT */
     close_cloexec_files(proc);
