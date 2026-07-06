@@ -344,7 +344,6 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
             return -1;
         }
 
-        //read_l2_entry(vm->pgdir, page_vaddr);
         //uint32_t temp = get_physical_address(vm->pgdir, page_vaddr);
         //hexdump((void*)temp, (size_t)0x800);
 

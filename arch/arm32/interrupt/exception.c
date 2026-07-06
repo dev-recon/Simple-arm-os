@@ -21,6 +21,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/debug_print.h>
 #include <asm/arm.h>
+#include <asm/mmu.h>
 #include <kernel/uart.h>
 #include <kernel/process.h>
 #include <kernel/task.h>

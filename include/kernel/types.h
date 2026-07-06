@@ -55,6 +55,7 @@ typedef int32_t            intptr_t;     /* Version signee */
 typedef uint32_t           paddr_t;      /* Physical address, 32-bit on ARMv7 */
 typedef uint32_t           vaddr_t;      /* Virtual address, 32-bit on ARMv7 */
 typedef uint32_t           pfn_t;        /* Physical page frame number */
+typedef void*              pgdir_t;      /* Opaque architecture page-directory handle */
 typedef paddr_t            phys_addr_t;  /* Legacy alias; prefer paddr_t */
 typedef vaddr_t            virt_addr_t;  /* Legacy alias; prefer vaddr_t */
 

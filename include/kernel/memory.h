@@ -21,22 +21,6 @@
 
 #include <kernel/types.h>
 
-/*
- * ARM short-descriptor page-table vocabulary.
- *
- * pgdir_t is still pointer-shaped because TTBR0/TTBR1 APIs historically pass
- * page-directory bases as uint32_t*.  Treat it as a physical table base unless
- * the name explicitly says "cpu": pgdir_cpu_t / l2_table_t are CPU-
- * dereferenceable views.
- */
-typedef uint32_t page_entry_t;
-typedef page_entry_t l1_entry_t;
-typedef page_entry_t l2_entry_t;
-typedef page_entry_t *pgdir_t;
-typedef page_entry_t *pgdir_cpu_t;
-typedef page_entry_t *l2_table_t;
-typedef page_entry_t *pte_ptr_t;
-
 typedef struct {
     uint32_t* bitmap;
     uint32_t total_pages;
@@ -192,21 +176,15 @@ int map_user_page_readonly(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr, uint
 int remap_user_page(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid);
 int set_user_page_readonly(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid);
 int set_user_page_writable(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid);
-pte_ptr_t get_user_pte(pgdir_t pgdir, vaddr_t vaddr);
 paddr_t get_physical_address(pgdir_t pgdir, vaddr_t vaddr);
 void debug_mmu_state(void);
 void unmap_temp_pages_contiguous(vaddr_t base_vaddr, int num_pages);
 vaddr_t map_temp_pages_contiguous(paddr_t phys_addr, int num_pages);
 
-pte_ptr_t get_page_entry_arm(pgdir_t pgdir, vaddr_t vaddr);
-int check_page_permissions(pgdir_t pgdir, vaddr_t vaddr);
 uint32_t get_current_ttrb0(void);
 
 vaddr_t map_user_to_kernel(pgdir_t pgdir, vaddr_t vaddr);
 void unmap_temp_user_page(void);
-paddr_t get_phys_addr_from_pgdir(pgdir_t pgdir, vaddr_t vaddr);
-
-uint32_t read_l2_entry(pgdir_t pgdir, vaddr_t vaddr);
 
 /* MMU helper functions - implémentées dans mmu.c */
 void invalidate_tlb_all(void);
@@ -217,7 +195,6 @@ void invalidate_tlb_asid(uint32_t asid);                       /* NOUVEAU */
 /* Address-space register access functions */
 uint32_t get_ttbr0(void);
 void set_ttbr0(uint32_t ttbr0);
-uint32_t get_L1_index(vaddr_t vaddr);
 
 /* ASID management functions */
 uint32_t vm_allocate_asid(void);

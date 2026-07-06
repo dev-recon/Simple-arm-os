@@ -21,6 +21,14 @@
 
 #include <kernel/types.h>
 
+/* ARMv7-A short-descriptor table vocabulary. */
+typedef uint32_t page_entry_t;
+typedef page_entry_t l1_entry_t;
+typedef page_entry_t l2_entry_t;
+typedef page_entry_t *pgdir_cpu_t;
+typedef page_entry_t *l2_table_t;
+typedef page_entry_t *pte_ptr_t;
+
 /* Bits des entrées de page table (niveau 2) */
 #define PTE_TYPE_MASK           0x3
 #define PTE_TYPE_FAULT          0x0     /* Page non présente */
@@ -373,6 +381,12 @@ vaddr_t get_split_boundary(void);
 uint32_t get_optimal_ttbcr_n(void);
 uint32_t *get_kernel_ttbr0(void);
 uint32_t *get_kernel_pgdir(void);
+uint32_t get_L1_index(vaddr_t vaddr);
+pte_ptr_t get_user_pte(pgdir_t pgdir, vaddr_t vaddr);
+pte_ptr_t get_page_entry_arm(pgdir_t pgdir, vaddr_t vaddr);
+int check_page_permissions(pgdir_t pgdir, vaddr_t vaddr);
+paddr_t get_phys_addr_from_pgdir(pgdir_t pgdir, vaddr_t vaddr);
+uint32_t read_l2_entry(pgdir_t pgdir, vaddr_t vaddr);
 
 extern uint32_t *kernel_pgdir;  /* CPU view of kernel page directory (TTBR1) */
 extern uint32_t *ttbr0_pgdir;   /* CPU view of boot/minimal TTBR0 */
