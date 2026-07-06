@@ -27,6 +27,17 @@ endif
 
 ifeq ($(TARGET_PLATFORM),qemu-virt)
 PLATFORM_CFLAGS = -DARMOS_PLATFORM_QEMU_VIRT
+PLATFORM_OBJS = \
+	kernel/drivers/ata.o \
+	kernel/drivers/keyboard.o \
+	kernel/drivers/display.o \
+	kernel/drivers/virtio_gpu.o \
+	kernel/drivers/virtio_input.o \
+	kernel/drivers/virtio_net.o \
+	kernel/drivers/ide.o \
+	kernel/drivers/virtio_block.o \
+	$(ARCH_DIR)/interrupt/gic.o \
+	$(ARCH_DIR)/power/psci.o
 else
 $(error Unsupported TARGET_PLATFORM '$(TARGET_PLATFORM)')
 endif
@@ -86,26 +97,17 @@ KERNEL_OBJS = \
 	kernel/fs/ext2_vfs.o \
 	kernel/fs/procfs.o \
 	kernel/fs/userfs_loader.o \
-	kernel/drivers/ata.o \
-	kernel/drivers/keyboard.o \
-	kernel/drivers/display.o \
 	kernel/drivers/console.o \
-	kernel/drivers/virtio_gpu.o \
-	kernel/drivers/virtio_input.o \
-	kernel/drivers/virtio_net.o \
 	kernel/drivers/uart.o \
 	kernel/drivers/tty.o \
 	kernel/drivers/null.o \
 	kernel/drivers/power.o \
-	kernel/drivers/ide.o \
 	kernel/drivers/ramfs.o \
 	kernel/drivers/tar_parser_ramfs.o \
-	kernel/drivers/virtio_block.o \
+	$(PLATFORM_OBJS) \
 	$(ARCH_DIR)/interrupt/exception.o \
 	$(ARCH_DIR)/interrupt/interrupt.o \
 	$(ARCH_DIR)/interrupt/irq_return.o \
-	$(ARCH_DIR)/interrupt/gic.o \
-	$(ARCH_DIR)/power/psci.o \
 	$(ARCH_DIR)/timer/timer.o \
 	$(ARCH_DIR)/syscall/syscall.o \
 	kernel/syscalls/syscalls.o \
