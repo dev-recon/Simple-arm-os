@@ -969,13 +969,8 @@ static void build_clean_kernel_stack(task_t *t)
     if(!t->stack_base && !task_alloc_kernel_stack(t))
         return;
 
-    // SP noyau posé près du top (garde 512B pour sentinelles/debug si tu veux)
     vaddr_t stack_top = task_stack_addr(t->stack_top);
-
-    t->context.svc_sp_top = (uint32_t)stack_top;
-    t->context.svc_sp     = (uint32_t)((stack_top - 512u) & ~7u);
-    t->context.sp         = t->context.svc_sp;
-    t->context.sp         = t->context.svc_sp;  // sp = SP_svc dans ton design
+    arch_task_context_prepare_kernel_stack(&t->context, stack_top);
 }
 
 
@@ -1010,8 +1005,7 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
 
         build_clean_kernel_stack(child);
 
-        // Marqueur pour le scheduler/retour en user
-        child->context.returns_to_user = 1;
+        arch_task_context_set_returns_to_user(&child->context, true);
         
         /* IMPORTANT : Copier l'espace mémoire utilisateur séparément */
         /* Ceci sera fait dans la partie VM space copy */
@@ -1043,7 +1037,8 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
                 /* Utiliser pile propre au lieu d'echouer */
                 memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
                 vaddr_t child_stack_top = task_stack_addr(child->stack_top);
-                child->context.sp = (uint32_t)(child_stack_top - 512u);
+                child->context.sp = (uint32_t)arch_task_stack_align(
+                    child_stack_top - ARCH_TASK_KERNEL_STACK_RESERVE);
             } else {
                 /*  Copier le contenu de la pile */
                 memcpy(child->stack_base, parent->stack_base, KERNEL_TASK_STACK_SIZE);
@@ -1091,19 +1086,19 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
             KWARN("Parent has no valid stack, creating clean stack\n");
             memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
             vaddr_t child_stack_top = task_stack_addr(child->stack_top);
-            child->context.sp = (uint32_t)(child_stack_top - 512u);
+            child->context.sp = (uint32_t)arch_task_stack_align(
+                child_stack_top - ARCH_TASK_KERNEL_STACK_RESERVE);
         }
 
-        child->context.sp &= ~7; 
-        child->context.svc_sp_top = (uint32_t)task_stack_addr(child->stack_top);
-        child->context.svc_sp     = child->context.sp;
-        // Ce child reprendra en SVC (kthread), pas de retour user implicite
-        child->context.returns_to_user = 0;
+        arch_task_context_set_kernel_stack(&child->context,
+                                           task_stack_addr(child->stack_top),
+                                           (vaddr_t)child->context.sp);
+        arch_task_context_set_returns_to_user(&child->context, false);
     }
     
     /*  Alignement final */
-    child->context.sp &= ~7;  /* Alignement 8-bytes */
-    child->context.svc_sp &= ~7;
+    child->context.sp = (uint32_t)arch_task_stack_align(child->context.sp);
+    child->context.svc_sp = (uint32_t)arch_task_stack_align(child->context.svc_sp);
 
     return child;
 
@@ -1302,7 +1297,7 @@ void switch_to_idle_stack(void)
     
     /* Réserver de l'espace sur la pile idle pour les variables locales */
     new_sp -= 64;  /* 64 bytes de marge */
-    new_sp &= ~7;  /* Alignement 8-bytes */
+    new_sp = arch_task_stack_align(new_sp);
     
     /* CRITIQUE: Switcher vers la pile idle */
     arch_set_stack_pointer(new_sp);
@@ -1626,15 +1621,8 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
 
     task->type = TASK_TYPE_PROCESS;  /* Nouvelle ligne */
     //task->process->pid = task->task_id;  /* Nouvelle ligne */
-    task->context.is_first_run = 1;
-    
     /* === CONFIGURATION CORRIGeE DU CONTEXTE === */
     setup_task_context(task);
-
-    vaddr_t stack_top = task_stack_addr(task->stack_top);
-    task->context.svc_sp_top = (uint32_t)stack_top;
-    task->context.svc_sp = (uint32_t)((stack_top - 512u) & ~7u);
-    task->context.sp = task->context.svc_sp;
 
     task->quantum_left = QUANTUM_TICKS;
     task->wakeup_time = 0;
@@ -1775,23 +1763,12 @@ void setup_task_context(task_t* task)
     memset(&task->context, 0, sizeof(task_context_t));
     
     /* Configuration des registres */
-    task->context.r0 = (uint32_t)task->entry_arg;
-    
-    /* Stack configuration corrigee */
     vaddr_t stack_base = task_stack_addr(task->stack_base);
     vaddr_t stack_top = task_stack_addr(task->stack_top);
-    vaddr_t stack_reserve = 512; /*512 avant*/
-    task->context.sp = (uint32_t)(stack_top - stack_reserve);
-    task->context.sp &= ~7;  /* Alignement 8-bytes */
-    
-    /* Autres registres */
-    task->context.lr = 0;
-    //task->context.lr = (uint32_t)task_destroy;
-    task->context.pc = (uint32_t)task->entry_point;
-    task->context.cpsr = 0x13;  /* Mode SVC, IRQ enabled */
-    
-    /* NOUVEAU: Marquer comme premiere execution */
-    task->context.is_first_run = 1;
+    arch_task_context_init_kernel_entry(&task->context,
+                                        task->entry_point,
+                                        task->entry_arg,
+                                        stack_top);
     
     /* Validation */
     vaddr_t sp = (vaddr_t)task->context.sp;

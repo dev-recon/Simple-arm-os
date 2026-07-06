@@ -306,7 +306,7 @@ int display_start_daemon(void)
     displayd_task->context.is_first_run = 1;
     displayd_task->context.ttbr0 = arch_kernel_address_space_context();
     displayd_task->context.asid = ASID_KERNEL;
-    displayd_task->context.returns_to_user = 0;
+    arch_task_context_set_returns_to_user(&displayd_task->context, false);
     add_to_ready_queue(displayd_task);
     return 0;
 }

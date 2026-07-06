@@ -68,7 +68,7 @@ static void configure_idle_task_for_cpu(uint32_t cpu_id, task_t* task)
     task->context.is_first_run = 1;
     task->context.ttbr0 = arch_kernel_address_space_context();
     task->context.asid = ASID_KERNEL;
-    task->context.returns_to_user = 0;
+    arch_task_context_set_returns_to_user(&task->context, false);
 }
 
 void init_process_system(void)
@@ -99,7 +99,7 @@ void init_process_system(void)
     //init_process->context.sp = new_vm->stack_start;             /* Stack pointer */
     init_process->context.is_first_run = 1;                     /* Pas la premiere fois */
     //init_process->context.asid = ASID_KERNEL;
-    init_process->context.returns_to_user = 0;
+    arch_task_context_set_returns_to_user(&init_process->context, false);
 
     //KDEBUG("[INIT] SCV STACK TOP = 0x%08X\n", init_process->context.svc_sp_top);
     //KDEBUG("[INIT] SCV STACK SP = 0x%08X\n", init_process->context.svc_sp);
@@ -185,7 +185,7 @@ void init_process_main(void* arg)
     }
 
     shell_proc->context.is_first_run = 1;                    
-    shell_proc->context.returns_to_user = 0;
+    arch_task_context_set_returns_to_user(&shell_proc->context, false);
     shell_proc->process->uid = 1000;
     shell_proc->process->gid = 1000;
     strcpy(shell_proc->process->cwd, "/home/user");
