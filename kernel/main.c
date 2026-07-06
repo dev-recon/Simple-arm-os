@@ -23,11 +23,8 @@
 #include <kernel/process.h>
 #include <kernel/interrupt.h>
 #include <kernel/timer.h>
-#include <kernel/keyboard.h>
 #include <kernel/display.h>
-#include <kernel/virtio_gpu.h>
-#include <kernel/virtio_input.h>
-#include <kernel/virtio_net.h>
+#include <kernel/platform_devices.h>
 #include <kernel/vfs.h>
 #include <kernel/ata.h>
 #include <kernel/smp.h>
@@ -169,7 +166,7 @@ void kernel_main(void)
     uint32_t available_mb;
     uint64_t disk_sectors;
     uint32_t disk_mb;
-    bool tty1_graphics_ready = false;
+    platform_devices_state_t platform_devices;
 
     /* Phase 0: etats du processeur */
     enable_async_abort_irq_fiq();
@@ -217,37 +214,7 @@ void kernel_main(void)
               smp_possible_cpu_count(), smp_online_cpu_count());
 
     /* Phase 4: Peripheriques d'entree/sortie */
-    init_keyboard();
-  
-    init_display();
-    if (virtio_gpu_init()) {
-        KBOOT_OKF("GPU: virtio-gpu %ux%ux%u", FB_WIDTH, FB_HEIGHT, FB_BPP);
-        if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0) {
-            tty1_graphics_ready = true;
-            tty_set_active(TTY_GRAPHICS_ID);
-            KBOOT_OKF("TTY: console tty1 on virtio-gpu");
-            if (virtio_input_init(TTY_GRAPHICS_ID)) {
-                KBOOT_OKF("Input: virtio-keyboard on tty1");
-            } else {
-                KBOOT_WARN("Input: virtio-keyboard unavailable");
-            }
-        } else {
-            KBOOT_WARN("TTY: tty1 framebuffer backend unavailable");
-        }
-    } else {
-        KBOOT_WARN("GPU: virtio-gpu unavailable");
-    }
-    KBOOT_OKF("TTY: console tty0 on uart0");
-
-    if (virtio_net_init()) {
-        uint8_t mac[6];
-        virtio_net_get_mac(mac);
-        KBOOT_OKF("Net: virtio-net %02X:%02X:%02X:%02X:%02X:%02X irq %u",
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-                  virtio_net_get_irq());
-    } else {
-        KBOOT_WARN("Net: virtio-net unavailable");
-    }
+    platform_devices = platform_devices_init();
       
     //kprintf("Initialize IDE ... ");
     //init_ide();
@@ -304,7 +271,7 @@ void kernel_main(void)
     else
         KBOOT_WARN("Core: coredump daemon unavailable");
 
-    if (tty1_graphics_ready) {
+    if (platform_devices.tty1_graphics_ready) {
         if (display_start_daemon() == 0)
             KBOOT_OK("Display: cursor daemon");
         else

@@ -28,6 +28,7 @@ endif
 ifeq ($(TARGET_PLATFORM),qemu-virt)
 PLATFORM_CFLAGS = -DARMOS_PLATFORM_QEMU_VIRT
 PLATFORM_OBJS = \
+	$(ARCH_DIR)/platform/qemu_virt/devices.o \
 	kernel/drivers/ata.o \
 	kernel/drivers/keyboard.o \
 	kernel/drivers/display.o \
