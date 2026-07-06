@@ -114,6 +114,16 @@ static inline vaddr_t arch_task_context_kernel_pc(const task_context_t *ctx)
     return (vaddr_t)ctx->pc;
 }
 
+static inline uint32_t arch_task_context_kernel_cpsr(const task_context_t *ctx)
+{
+    return ctx->cpsr;
+}
+
+static inline bool arch_task_context_is_first_run(const task_context_t *ctx)
+{
+    return ctx->is_first_run != 0;
+}
+
 static inline void arch_task_context_set_kernel_lr(task_context_t *ctx,
                                                    vaddr_t lr)
 {

@@ -1473,7 +1473,7 @@ void task_dump_stacks_detailed(void)
             
             vaddr_t base = task_stack_addr(task->stack_base);
             vaddr_t top = task_stack_addr(task->stack_top);
-            vaddr_t sp = (vaddr_t)task->context.sp;
+            vaddr_t sp = arch_task_context_kernel_sp(&task->context);
             uint32_t size = task->stack_size;
 
             print_cpu_mode();
@@ -1519,10 +1519,14 @@ void task_dump_stacks_detailed(void)
             KINFO("  SP alignment: %s\n", (sp & 7) ? "KO Misaligned" : "OK Aligned");
             KINFO("  Task Type : %s\n", task_type_to_string(task->type) );
             KINFO("  Task State : %s\n", task_state_string(task->state) );
-            KINFO("  Task Context LR : 0x%08X\n", task->context.lr );
-            KINFO("  Task Context PC : 0x%08X\n", task->context.pc );
-            KINFO("  Task Context CPSR : 0x%08X\n", task->context.cpsr );
-            KINFO("  Task Context IS FIRST RUN : %u\n", task->context.is_first_run );
+            KINFO("  Task Context LR : 0x%08X\n",
+                  arch_task_context_kernel_lr(&task->context));
+            KINFO("  Task Context PC : 0x%08X\n",
+                  arch_task_context_kernel_pc(&task->context));
+            KINFO("  Task Context CPSR : 0x%08X\n",
+                  arch_task_context_kernel_cpsr(&task->context));
+            KINFO("  Task Context IS FIRST RUN : %u\n",
+                  arch_task_context_is_first_run(&task->context));
             KINFO("  Task Context NEXT : 0x%08X\n", (uint32_t)task->next );
             KINFO("  Task Context PREVIOUS : 0x%08X\n", (uint32_t)task->prev );
             if(task->process){
@@ -1778,7 +1782,7 @@ void setup_task_context(task_t* task)
                                         stack_top);
     
     /* Validation */
-    vaddr_t sp = (vaddr_t)task->context.sp;
+    vaddr_t sp = arch_task_context_kernel_sp(&task->context);
     if (sp >= stack_top || sp <= stack_base) {
         KERROR("KO FATAL: Invalid SP for task %s\n", task->name);
         panic("Stack configuration error");
@@ -3233,8 +3237,10 @@ void task_dump_info(task_t* task)
     KINFO("  Stack top:    0x%08X\n", task_stack_addr(task->stack_top));
     KINFO("  Stack size:   %u bytes\n", task->stack_size);
     KINFO("  Entry point:  0x%08X\n", (uint32_t)task->entry_point);
-    KINFO("  Context SP:   0x%08X\n", task->context.sp);
-    KINFO("  Context PC:   0x%08X\n", task->context.pc);
+    KINFO("  Context SP:   0x%08X\n",
+          arch_task_context_kernel_sp(&task->context));
+    KINFO("  Context PC:   0x%08X\n",
+          arch_task_context_kernel_pc(&task->context));
 }
 
 void task_dump_stacks(void)
@@ -3262,7 +3268,7 @@ void task_dump_stacks(void)
         if (task && task->stack_base && task->stack_top) {
             vaddr_t stack_base = task_stack_addr(task->stack_base);
             vaddr_t stack_top = task_stack_addr(task->stack_top);
-            vaddr_t sp = (vaddr_t)task->context.sp;
+            vaddr_t sp = arch_task_context_kernel_sp(&task->context);
 
             KINFO("%-6u  %-11s  0x%08X   0x%08X   %-7u  0x%08X   ", 
                   task->task_id,
@@ -3270,7 +3276,7 @@ void task_dump_stacks(void)
                   stack_base,
                   stack_top,
                   task->stack_size,
-                  task->context.sp);
+                  sp);
             
             /* Calculer l'espace utilise dans la stack */
             uint32_t stack_used = (uint32_t)(stack_top - sp);
@@ -3324,12 +3330,14 @@ void task_dump_stacks(void)
     
     /* Afficher la tache courante */
     if (current) {
+        vaddr_t current_sp = arch_task_context_kernel_sp(&current->context);
+
         KINFO("Current task:     %s (ID=%u)\n", current->name, current->task_id);
-        KINFO("Current SP:       0x%08X\n", current->context.sp);
+        KINFO("Current SP:       0x%08X\n", current_sp);
         
         /* Verifier la stack de la tache courante */
-        if ((vaddr_t)current->context.sp < task_stack_addr(current->stack_base) ||
-            (vaddr_t)current->context.sp >= task_stack_addr(current->stack_top)) {
+        if (current_sp < task_stack_addr(current->stack_base) ||
+            current_sp >= task_stack_addr(current->stack_top)) {
             KINFO("*** CURRENT TASK HAS INVALID SP! ***\n");
         }
     }
@@ -3357,7 +3365,8 @@ void task_check_stack_integrity(void)
         if (task && task->stack_base && task->stack_top) {
             vaddr_t stack_base = task_stack_addr(task->stack_base);
             vaddr_t stack_top = task_stack_addr(task->stack_top);
-            vaddr_t sp = (vaddr_t)task->context.sp;
+            vaddr_t sp = arch_task_context_kernel_sp(&task->context);
+            vaddr_t pc = arch_task_context_kernel_pc(&task->context);
 
             /* Verifier l'alignement des adresses */
             if (stack_base % 8 != 0) {
@@ -3377,20 +3386,20 @@ void task_check_stack_integrity(void)
             /* Verifier SP dans les limites */
             if (sp < stack_base) {
                 KERROR("Task %s: SP underflow (SP=0x%08X, base=0x%08X)\n",
-                       task->name, task->context.sp, stack_base);
+                       task->name, sp, stack_base);
                 issues++;
             }
             
             if (sp >= stack_top) {
                 KERROR("Task %s: SP overflow (SP=0x%08X, top=0x%08X)\n",
-                       task->name, task->context.sp, stack_top);
+                       task->name, sp, stack_top);
                 issues++;
             }
             
             /* Verifier que PC est dans une zone valide */
-            if (task->context.pc != 0 && task->context.pc < 0x40000000) {
+            if (pc != 0 && pc < 0x40000000) {
                 KERROR("Task %s: Invalid PC (PC=0x%08X)\n", 
-                       task->name, task->context.pc);
+                       task->name, pc);
                 issues++;
             }
         }
@@ -3551,14 +3560,16 @@ void debug_task_detailed(task_t *current_task)
     KDEBUG("  Task ID: %u\n", current_task->task_id);
     KDEBUG("  ***************************************************************\n");
     KDEBUG("  KERNEL STACK ---\n");
-    KDEBUG("  Context SP: 0x%08X\n", current_task->context.sp);
+    KDEBUG("  Context SP: 0x%08X\n",
+           arch_task_context_kernel_sp(&current_task->context));
     KDEBUG("  Stack base: 0x%08X\n", task_stack_addr(current_task->stack_base));
     KDEBUG("  Stack top:  0x%08X\n", task_stack_addr(current_task->stack_top));
-    KDEBUG("  is_first_run: %u\n", current_task->context.is_first_run);
+    KDEBUG("  is_first_run: %u\n",
+           arch_task_context_is_first_run(&current_task->context));
     KDEBUG("  --------------------------\n");
     
     /* Verification des limites de stack */
-    uint32_t sp = current_task->context.sp;
+    vaddr_t sp = arch_task_context_kernel_sp(&current_task->context);
     vaddr_t base = task_stack_addr(current_task->stack_base);
     vaddr_t top = task_stack_addr(current_task->stack_top);
     
@@ -3572,13 +3583,14 @@ void debug_task_detailed(task_t *current_task)
     if(current_task->process)
     {
         KDEBUG("  USER STACK ---\n");
-        KDEBUG("  User SP: 0x%08X\n", current_task->context.usr_sp);
+        KDEBUG("  User SP: 0x%08X\n",
+               arch_task_context_user_sp(&current_task->context));
         KDEBUG("  User Stack base: 0x%08X\n", current_task->process->vm->stack_start);
         KDEBUG("  User Stack top:  0x%08X\n", current_task->process->vm->stack_start + USER_STACK_SIZE);
         KDEBUG("  --------------------------\n");
         
         /* Verification des limites de stack */
-        sp = current_task->context.usr_sp;
+        sp = arch_task_context_user_sp(&current_task->context);
         base = current_task->process->vm->stack_start;
         top = current_task->process->vm->stack_start + USER_STACK_SIZE;
         
@@ -3615,13 +3627,15 @@ void debug_current_task_detailed(const char* location)
     
     KDEBUG("  Task name: %s\n", task->name);
     KDEBUG("  Task ID: %u\n", task->task_id);
-    KDEBUG("  Context SP: 0x%08X\n", task->context.sp);
+    KDEBUG("  Context SP: 0x%08X\n",
+           arch_task_context_kernel_sp(&task->context));
     KDEBUG("  Stack base: 0x%08X\n", task_stack_addr(task->stack_base));
     KDEBUG("  Stack top:  0x%08X\n", task_stack_addr(task->stack_top));
-    KDEBUG("  is_first_run: %u\n", task->context.is_first_run);
+    KDEBUG("  is_first_run: %u\n",
+           arch_task_context_is_first_run(&task->context));
     
     /* Verification des limites de stack */
-    uint32_t sp = task->context.sp;
+    vaddr_t sp = arch_task_context_kernel_sp(&task->context);
     vaddr_t base = task_stack_addr(task->stack_base);
     vaddr_t top = task_stack_addr(task->stack_top);
     
@@ -3991,7 +4005,8 @@ void debug_all_task_stacks(void)
         KINFO("  Stack base: 0x%08X\n", task_stack_addr(task->stack_base));
         KINFO("  Stack top:  0x%08X\n", task_stack_addr(task->stack_top));
         KINFO("  Stack size: %u bytes\n", task->stack_size);
-        KINFO("  Context SP: 0x%08X\n", task->context.sp);
+        KINFO("  Context SP: 0x%08X\n",
+              arch_task_context_kernel_sp(&task->context));
         
         /* Vérifier chevauchement avec pile kernel */
         vaddr_t task_start = task_stack_addr(task->stack_base);
