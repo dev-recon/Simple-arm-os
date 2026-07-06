@@ -17,7 +17,8 @@
  */
 
 #include <kernel/types.h>
-#include <kernel/kernel.h>
+#include <kernel/arch_platform.h>
+#include <kernel/string.h>
 #include <kernel/spinlock.h>
 #include <kernel/vfs.h>
 #include <kernel/userspace.h>

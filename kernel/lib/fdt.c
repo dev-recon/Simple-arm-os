@@ -18,7 +18,6 @@
  */
 
 #include <kernel/fdt.h>
-#include <kernel/kernel.h>
 #include <kernel/string.h>
 #include <kernel/virtio_block.h>
 
