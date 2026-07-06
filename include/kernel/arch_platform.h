@@ -21,6 +21,27 @@
 #ifndef _KERNEL_ARCH_PLATFORM_H
 #define _KERNEL_ARCH_PLATFORM_H
 
+#include <kernel/types.h>
 #include <asm/platform.h>
+
+static inline paddr_t arch_platform_uart0_phys_base(void)
+{
+    return (paddr_t)VIRT_UART_BASE;
+}
+
+static inline vaddr_t arch_platform_uart0_kernel_base(void)
+{
+    return (vaddr_t)KERNEL_MMIO_UART_BASE;
+}
+
+static inline uint32_t arch_platform_timer_irq(void)
+{
+    return VIRT_TIMER_NS_EL1_IRQ;
+}
+
+static inline uint32_t arch_platform_uart_irq(void)
+{
+    return VIRT_UART_IRQ;
+}
 
 #endif /* _KERNEL_ARCH_PLATFORM_H */

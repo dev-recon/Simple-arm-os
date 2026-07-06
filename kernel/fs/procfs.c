@@ -35,6 +35,7 @@
 #include <kernel/smp.h>
 #include <kernel/tlb.h>
 #include <kernel/arch_cpu.h>
+#include <kernel/arch_platform.h>
 
 extern uint32_t task_count;
 extern task_t* task_list_head;
@@ -723,17 +724,19 @@ static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
 {
     uint32_t virtio_irq = virtio_blk_get_irq();
     uint32_t virtio_net_irq = virtio_net_get_irq();
+    uint32_t timer_irq = arch_platform_timer_irq();
+    uint32_t uart_irq = arch_platform_uart_irq();
 
     proc_append(buf, cap, len, "           CPU0\n");
     proc_append(buf, cap, len, "%3u: %10u GICv2  ipi-tlb\n",
                 IRQ_SGI_TLB_SHOOTDOWN,
                 gic_get_irq_count(IRQ_SGI_TLB_SHOOTDOWN));
     proc_append(buf, cap, len, "%3u: %10u GICv2  timer\n",
-                VIRT_TIMER_NS_EL1_IRQ,
-                gic_get_irq_count(VIRT_TIMER_NS_EL1_IRQ));
+                timer_irq,
+                gic_get_irq_count(timer_irq));
     proc_append(buf, cap, len, "%3u: %10u GICv2  uart0\n",
-                VIRT_UART_IRQ,
-                gic_get_irq_count(VIRT_UART_IRQ));
+                uart_irq,
+                gic_get_irq_count(uart_irq));
     proc_append(buf, cap, len, "%3u: %10u GICv2  uart0-legacy\n",
                 IRQ_KEYBOARD,
                 gic_get_irq_count(IRQ_KEYBOARD));

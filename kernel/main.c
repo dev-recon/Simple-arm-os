@@ -61,7 +61,8 @@ void __attribute__((noreturn)) __stack_chk_fail(void) {
 
 void init_early_uart(void)
 {
-    volatile uint32_t* uart = (volatile uint32_t*)UART0_BASE;
+    volatile uint32_t* uart =
+        (volatile uint32_t*)(uintptr_t)arch_platform_uart0_phys_base();
     
     /* Disable UART */
     uart[0x30/4] = 0;

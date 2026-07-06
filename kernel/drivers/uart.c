@@ -31,7 +31,7 @@
  * physique. early_init() bascule cette base vers l'alias prive TTBR1 des que
  * setup_mmu() a termine.
  */
-static uintptr_t uart_mmio_base = VIRT_UART_BASE;
+static uintptr_t uart_mmio_base;
 
 /* Registres PL011 UART */
 #define UART_REG(offset) (*(volatile uint32_t*)(uart_mmio_base + (offset)))
@@ -88,7 +88,7 @@ DEFINE_SPINLOCK(uart_lock);
 
 void uart_use_kernel_mmio_alias(void)
 {
-    uart_mmio_base = KERNEL_MMIO_UART_BASE;
+    uart_mmio_base = (uintptr_t)arch_platform_uart0_kernel_base();
     arch_data_sync_barrier();
     arch_instruction_sync_barrier();
 }
@@ -98,6 +98,9 @@ void uart_use_kernel_mmio_alias(void)
  */
 void uart_init(void)
 {
+    if (uart_mmio_base == 0)
+        uart_mmio_base = (uintptr_t)arch_platform_uart0_phys_base();
+
     /* Desactiver l'UART */
     UART_CR = 0;
     
