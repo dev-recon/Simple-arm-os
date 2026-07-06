@@ -24,6 +24,11 @@
 #include <kernel/types.h>
 #include <asm/platform.h>
 
+static inline const char* arch_platform_name(void)
+{
+    return ARMOS_PLATFORM_NAME;
+}
+
 static inline paddr_t arch_platform_uart0_phys_base(void)
 {
     return (paddr_t)ARMOS_PLATFORM_UART0_PHYS_BASE;
@@ -37,6 +42,16 @@ static inline vaddr_t arch_platform_uart0_kernel_base(void)
 static inline paddr_t arch_platform_ram_start(void)
 {
     return (paddr_t)ARMOS_PLATFORM_RAM_START;
+}
+
+static inline uint32_t arch_platform_ram_fallback_size(void)
+{
+    return ARMOS_PLATFORM_RAM_FALLBACK_SIZE;
+}
+
+static inline uint32_t arch_platform_ram_probe_max_mb(void)
+{
+    return ARMOS_PLATFORM_RAM_PROBE_MAX_MB;
 }
 
 static inline paddr_t arch_platform_device_start(void)

@@ -166,7 +166,10 @@
  * Generic platform contract consumed by include/kernel/arch_platform.h.
  * Keep the historical VIRT_* names local to this QEMU virt description.
  */
+#define ARMOS_PLATFORM_NAME                      "QEMU virt"
 #define ARMOS_PLATFORM_RAM_START                 VIRT_RAM_START
+#define ARMOS_PLATFORM_RAM_FALLBACK_SIZE         (1024u * 1024u * 1024u)
+#define ARMOS_PLATFORM_RAM_PROBE_MAX_MB          4096u
 #define ARMOS_PLATFORM_DEVICE_START              DEVICE_START
 #define ARMOS_PLATFORM_DEVICE_END                DEVICE_END
 

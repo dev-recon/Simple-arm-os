@@ -44,7 +44,7 @@ static bool test_memory_block(paddr_t addr, uint32_t size);
 /* Stub pour compilation si necessaire */
 void init_memory_detection(void)
 {
-    KDEBUG("Memory detection initialized for machine virt\n");
+    KDEBUG("Memory detection initialized for %s\n", arch_platform_name());
 }
 
 uint32_t get_kernel_memory_size(void){
@@ -57,7 +57,7 @@ uint32_t detect_memory(void)
     if( kernel_memory_size )
         return kernel_memory_size ;
     
-    KINFO("Starting memory detection for machine virt...\n");
+    KINFO("Starting memory detection for %s...\n", arch_platform_name());
     
     /* 1. Afficher les informations CPU Cortex-A15 */
     print_cpu_memory_features();
@@ -129,9 +129,7 @@ static uint32_t detect_memory_from_dtb(void* dtb_ptr)
         }
     }
     
-    /* Pour machine virt, utiliser la taille definie dans kernel.h */
-    /* TODO: Parser completement le DTB */
-    return VIRT_RAM_SIZE; /* Defini dans kernel.h comme 4GB */
+    return 0;
 }
 
 static cpu_memory_info_t get_cpu_memory_info(void)
@@ -177,38 +175,31 @@ static void print_cpu_memory_features(void)
 
 static uint32_t detect_memory_intelligent(void)
 {
-    KINFO("Intelligent memory detection for machine virt...\n");
-    
-    /* Zones memoire pour machine virt - tester de facon progressive */
-    struct memory_range {
-        uint32_t start;
-        uint32_t size_mb;
-        const char* name;
-    } ranges[] = {
-        { VIRT_RAM_START, 1024, "QEMU Virt (1GB)" },    /* Commencer par 1GB */
-        { VIRT_RAM_START, 2048, "QEMU Virt (2GB)" },    /* Puis 2GB */
-        { VIRT_RAM_START, 4096, "QEMU Virt (4GB)" },    /* Enfin 4GB */
-    };
-    
-    int i;
+    KINFO("Intelligent memory detection for %s...\n", arch_platform_name());
+
+    paddr_t ram_start = arch_platform_ram_start();
+    uint32_t max_probe_mb = arch_platform_ram_probe_max_mb();
+    uint32_t probe_mb = max_probe_mb < 1024u ? max_probe_mb : 1024u;
     uint32_t max_detected = 0;
-    
-    for (i = 0; i < 3; i++) {
-        paddr_t end_addr = (paddr_t)ranges[i].start + (ranges[i].size_mb * 1024 * 1024);
-        
-        KDEBUG("Testing %s range: 0x%08X-0x%08X (%u MB)\n",
-                ranges[i].name, ranges[i].start, end_addr, ranges[i].size_mb);
-        
-        uint32_t detected = probe_memory_range(ranges[i].start, end_addr);
-        
+
+    while (probe_mb > 0 && probe_mb <= max_probe_mb) {
+        uint64_t probe_bytes = (uint64_t)probe_mb * 1024u * 1024u;
+        uint64_t end64 = (uint64_t)ram_start + probe_bytes;
+        paddr_t end_addr = end64 > 0xFFFFFFFFull ? (paddr_t)0xFFFFFFFFu : (paddr_t)end64;
+
+        KDEBUG("Testing %s RAM range: 0x%08X-0x%08X (%u MB)\n",
+                arch_platform_name(), ram_start, end_addr, probe_mb);
+
+        uint32_t detected = probe_memory_range(ram_start, end_addr);
+
         if (detected > max_detected) {
             max_detected = detected;
-            KINFO("Found %d MB in %s range\n", 
-                    detected / (1024*1024), ranges[i].name);
-            
+            KINFO("Found %d MB in %s RAM range\n",
+                    detected / (1024*1024), arch_platform_name());
+
             /* Si on a detecte moins que la taille theorique, pas la peine de continuer */
-            if (detected < ranges[i].size_mb * 1024 * 1024) {
-                KINFO("Memory appears limited to %d MB, stopping detection\n", 
+            if ((uint64_t)detected < probe_bytes) {
+                KINFO("Memory appears limited to %d MB, stopping detection\n",
                         detected / (1024*1024));
                 break;
             }
@@ -218,11 +209,19 @@ static uint32_t detect_memory_intelligent(void)
                     max_detected / (1024*1024));
             break;
         }
+
+        if (probe_mb >= max_probe_mb)
+            break;
+
+        uint32_t next_probe_mb = probe_mb * 2u;
+        if (next_probe_mb < probe_mb || next_probe_mb > max_probe_mb)
+            next_probe_mb = max_probe_mb;
+        probe_mb = next_probe_mb;
     }
     
     if (max_detected == 0) {
         KWARN("No memory detected, using fallback\n");
-        max_detected = 1024 * 1024 * 1024; /* 1GB fallback */
+        max_detected = arch_platform_ram_fallback_size();
     }
     
     return max_detected;
@@ -266,7 +265,7 @@ static uint32_t probe_memory_range(paddr_t start, paddr_t end)
 
 static bool test_memory_block(paddr_t addr, uint32_t size)
 {
-    /* eviter la zone kernel pour machine virt - utiliser les constantes */
+    /* Avoid probing the live kernel mapping. */
     if (addr >= KERNEL_START && addr < KERNEL_END) {
         return true; /* Supposer que la zone kernel est valide */
     }
