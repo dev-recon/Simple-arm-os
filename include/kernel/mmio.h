@@ -23,11 +23,15 @@
 #include <kernel/types.h>
 #include <kernel/interrupt.h>
 
-/* Declarations des fonctions assembleur - compatible avec kernel.h */
+/* Low-level MMIO helpers implemented by the active architecture backend. */
 extern void PUT32(uint32_t address, uint32_t value);
 extern uint32_t GET32(uint32_t address);
+extern void PUT8(uint32_t address, uint32_t value);
+extern uint32_t GET8(uint32_t address);
+extern void PUT16(uint32_t address, uint32_t value);
+extern uint32_t GET16(uint32_t address);
 
-/* Wrappers pour compatibilite de types */
+/* Typed wrappers for byte and halfword accesses. */
 static inline void PUT8_MMIO(uint32_t address, uint8_t value) {
     PUT8(address, (unsigned int)value);
 }

@@ -132,15 +132,6 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
 #define MAX(a, b)               ((a) > (b) ? (a) : (b))
 #define ARRAY_SIZE(arr)         (sizeof(arr) / sizeof((arr)[0]))
 
-/* Implemented in boot.S */
-extern void PUT32(unsigned int, unsigned int);
-extern unsigned int GET32(unsigned int);
-extern void PUT8(unsigned int, unsigned int);  /* Compatible avec mmio.h */
-extern unsigned int GET8(unsigned int);        /* Compatible avec mmio.h */
-extern void PUT16(unsigned int, unsigned int); /* Compatible avec mmio.h */
-extern unsigned int GET16(unsigned int);       /* Compatible avec mmio.h */
-
-
 typedef struct {
     uint32_t cache_info;
     uint32_t tlb_info;
