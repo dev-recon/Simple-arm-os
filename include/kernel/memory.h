@@ -19,7 +19,7 @@
 #ifndef _KERNEL_MEMORY_H
 #define _KERNEL_MEMORY_H
 
-#include <asm/mmu.h>
+#include <kernel/arch_mmu.h>
 #include <kernel/types.h>
 #include <kernel/user_layout.h>
 

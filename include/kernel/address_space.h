@@ -23,7 +23,7 @@
 
 #include <kernel/types.h>
 #include <kernel/linker.h>
-#include <asm/memory_layout.h>
+#include <kernel/arch_memory_layout.h>
 
 uint32_t get_kernel_memory_size(void);
 
