@@ -125,6 +125,15 @@ Done so far:
 - routed the default QEMU machine/CPU settings through the platform fragment
   and matching boot-script environment variables (`QEMU_MACHINE`,
   `QEMU_RUN_MACHINE`, `QEMU_CPU`).
+- moved QEMU block/GPU/input/net boot-script defaults into platform-owned
+  fragments (`platform.mk` and `qemu.sh`) so boot scripts can fail fast for an
+  unsupported platform instead of silently launching a `qemu-virt` shape.
+- made GIC target-routing policy a named platform capability, currently
+  `ARMOS_PLATFORM_GIC_TARGETS_AUTO_MANAGED`, instead of inferring behavior from
+  a hardcoded machine name.
+- moved PL011 baud configuration into the platform contract
+  (`ARMOS_PLATFORM_UART0_CLOCK_HZ`, `ARMOS_PLATFORM_UART0_BAUD`) while keeping
+  the current qemu-virt divisor behavior unchanged.
 
 Kernel code that should remain architecture-neutral:
 
@@ -155,6 +164,9 @@ Current staging:
   until the actual board contract is implemented.
 - The first raspi2 milestone is UART-only boot with `tty0` preserved as the
   recovery console. Graphics and input are later milestones.
+- The staging README lists the minimal files required before making `raspi2`
+  buildable: platform header, `platform.mk`, platform `devices.c`, and optional
+  QEMU launch defaults.
 
 ## Phase D - AArch64
 
