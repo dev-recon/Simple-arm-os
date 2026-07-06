@@ -69,10 +69,10 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
     return vaddr;
 }
 
-#define IS_DEVICE_ADDR(addr)    ((addr) >= DEVICE_START && (addr) < DEVICE_END)
+#define IS_DEVICE_ADDR(addr)    arch_platform_phys_is_device((paddr_t)(addr))
 #define IS_VALID_RAM(addr)      ((addr) >= physical_ram_start() && (addr) < physical_ram_end())
-#define IS_VIRTIO_ADDR(addr)    ((addr) >= VIRT_VIRTIO_BASE && (addr) < (VIRT_VIRTIO_BASE + VIRT_VIRTIO_SIZE * 8))
-#define IS_GIC_ADDR(addr)       ((addr) >= VIRT_GIC_DIST_BASE && (addr) < (VIRT_GIC_VCPU_BASE + VIRT_GIC_VCPU_SIZE))
+#define IS_VIRTIO_ADDR(addr)    arch_platform_phys_is_virtio((paddr_t)(addr))
+#define IS_GIC_ADDR(addr)       arch_platform_phys_is_gic((paddr_t)(addr))
 
 static inline vaddr_t get_kernel_start(void) { return KERNEL_START; }
 static inline vaddr_t get_kernel_end(void) { return KERNEL_END; }

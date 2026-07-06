@@ -39,6 +39,26 @@ static inline paddr_t arch_platform_ram_start(void)
     return (paddr_t)VIRT_RAM_START;
 }
 
+static inline paddr_t arch_platform_device_start(void)
+{
+    return (paddr_t)DEVICE_START;
+}
+
+static inline paddr_t arch_platform_device_end(void)
+{
+    return (paddr_t)DEVICE_END;
+}
+
+static inline paddr_t arch_platform_gic_phys_start(void)
+{
+    return (paddr_t)VIRT_GIC_DIST_BASE;
+}
+
+static inline paddr_t arch_platform_gic_phys_end(void)
+{
+    return (paddr_t)(VIRT_GIC_VCPU_BASE + VIRT_GIC_VCPU_SIZE);
+}
+
 static inline uint32_t arch_platform_timer_irq(void)
 {
     return VIRT_TIMER_NS_EL1_IRQ;
@@ -96,6 +116,24 @@ static inline uint32_t arch_platform_virtio_block_irq(void)
 static inline uint32_t arch_platform_virtio_mmio_size(void)
 {
     return VIRT_VIRTIO_SIZE;
+}
+
+static inline bool arch_platform_phys_is_device(paddr_t phys)
+{
+    return phys >= arch_platform_device_start() &&
+           phys < arch_platform_device_end();
+}
+
+static inline bool arch_platform_phys_is_virtio(paddr_t phys)
+{
+    return phys >= VIRT_VIRTIO_BASE &&
+           phys < (VIRT_VIRTIO_BASE + VIRT_VIRTIO_SIZE * 8u);
+}
+
+static inline bool arch_platform_phys_is_gic(paddr_t phys)
+{
+    return phys >= arch_platform_gic_phys_start() &&
+           phys < arch_platform_gic_phys_end();
 }
 
 #endif /* _KERNEL_ARCH_PLATFORM_H */
