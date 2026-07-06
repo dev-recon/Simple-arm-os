@@ -17,6 +17,7 @@
  */
 
 #include <kernel/kernel.h>
+#include <kernel/config.h>
 #include <kernel/memory.h>
 #include <kernel/process.h>
 #include <kernel/interrupt.h>

@@ -17,6 +17,7 @@
  */
 
 #include <kernel/fat32.h>
+#include <kernel/config.h>
 #include <kernel/ata.h>
 #include <kernel/memory.h>
 #include <kernel/kernel.h>

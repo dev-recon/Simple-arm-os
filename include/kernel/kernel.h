@@ -31,8 +31,6 @@
 #include <kernel/address_space.h>
 #include <kernel/panic.h>
 
-#define USE_RAMFS 1
-
 //extern const uint32_t TASK_CONTEXT_OFF;
 
 #endif /* _KERNEL_H */
