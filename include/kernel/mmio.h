@@ -19,7 +19,7 @@
 #ifndef MMIO_H
 #define MMIO_H
 
-#include <asm/platform.h>
+#include <kernel/arch_platform.h>
 #include <kernel/types.h>
 #include <kernel/interrupt.h>
 

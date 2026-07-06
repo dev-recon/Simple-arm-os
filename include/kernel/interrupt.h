@@ -19,7 +19,7 @@
 #ifndef _KERNEL_INTERRUPT_H
 #define _KERNEL_INTERRUPT_H
 
-#include <asm/platform.h>
+#include <kernel/arch_platform.h>
 #include <kernel/types.h>
 
 /* Legacy generic IRQ aliases. The concrete IDs are supplied by the platform. */

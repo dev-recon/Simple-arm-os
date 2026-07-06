@@ -19,7 +19,7 @@
 #ifndef _KERNEL_IDE_H
 #define _KERNEL_IDE_H
 
-#include <asm/platform.h>
+#include <kernel/arch_platform.h>
 #include <kernel/types.h>
 
 /* Legacy IDE fallback window selected by the current platform. */

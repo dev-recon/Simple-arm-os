@@ -19,7 +19,7 @@
 #ifndef _KERNEL_VIRTIO_BLOCK_H
 #define _KERNEL_VIRTIO_BLOCK_H
 
-#include <asm/platform.h>
+#include <kernel/arch_platform.h>
 #include <kernel/types.h>
 #include <kernel/arch_barrier.h>
 
