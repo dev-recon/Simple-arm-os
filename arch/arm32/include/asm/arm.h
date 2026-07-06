@@ -19,6 +19,8 @@
 #ifndef _ASM_ARM_H
 #define _ASM_ARM_H
 
+#include <asm/cpu_features.h>
+
 #include <kernel/types.h>
 
 /* ARM32 specific definitions */
@@ -36,13 +38,13 @@
 #define ARM_CPSR_T      (1 << 5)    /* Thumb state */
 #define ARM_CPSR_MODE   0x1F        /* Mode mask */
 
-/* Cortex-A15 specific features */
-#define ARM_CORTEX_A15_FEATURES     1
-#define ARM_HAS_NEON                1
-#define ARM_HAS_VFP                 1
-#define ARM_HAS_GENERIC_TIMER       1
-#define ARM_HAS_LARGE_PHYS_ADDR     1
-#define ARM_HAS_VIRTUALIZATION      1
+/* Cortex-A15 specific feature aliases. */
+#define ARM_CORTEX_A15_FEATURES     ARCH_CORTEX_A15_FEATURES
+#define ARM_HAS_NEON                ARCH_HAS_NEON
+#define ARM_HAS_VFP                 ARCH_HAS_VFP
+#define ARM_HAS_GENERIC_TIMER       ARCH_HAS_GENERIC_TIMER
+#define ARM_HAS_LARGE_PHYS_ADDR     ARCH_HAS_LARGE_PHYS_ADDR
+#define ARM_HAS_VIRTUALIZATION      ARCH_HAS_VIRTUALIZATION
 
 #ifdef __GNUC__
 #define INLINE static __inline__

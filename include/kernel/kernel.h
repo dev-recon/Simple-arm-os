@@ -22,10 +22,10 @@
 #include <kernel/types.h>
 #include <kernel/string.h>
 #include <kernel/fdt.h>
+#include <asm/cpu_features.h>
 #include <asm/platform.h>
 #include <asm/memory_layout.h>
 #include <asm/user_layout.h>
-#include <asm/arm.h>
 
 #define USE_RAMFS 1
 
@@ -319,11 +319,11 @@ void print_cpu_mode(void);
 #define __const                 __attribute__((const))
 
 /* CPU feature aliases kept for compatibility while arch headers take over. */
-#define CORTEX_A15_FEATURES     ARM_CORTEX_A15_FEATURES
-#define HAS_NEON                ARM_HAS_NEON
-#define HAS_VFP                 ARM_HAS_VFP
-#define HAS_GENERIC_TIMER       ARM_HAS_GENERIC_TIMER
-#define HAS_LARGE_PHYS_ADDR     ARM_HAS_LARGE_PHYS_ADDR
+#define CORTEX_A15_FEATURES     ARCH_CORTEX_A15_FEATURES
+#define HAS_NEON                ARCH_HAS_NEON
+#define HAS_VFP                 ARCH_HAS_VFP
+#define HAS_GENERIC_TIMER       ARCH_HAS_GENERIC_TIMER
+#define HAS_LARGE_PHYS_ADDR     ARCH_HAS_LARGE_PHYS_ADDR
 
 #define STDIN_FILENO            0
 #define STDOUT_FILENO           1
