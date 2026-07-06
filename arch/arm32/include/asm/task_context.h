@@ -109,6 +109,17 @@ static inline vaddr_t arch_task_context_kernel_lr(const task_context_t *ctx)
     return (vaddr_t)ctx->lr;
 }
 
+static inline vaddr_t arch_task_context_kernel_pc(const task_context_t *ctx)
+{
+    return (vaddr_t)ctx->pc;
+}
+
+static inline void arch_task_context_set_kernel_lr(task_context_t *ctx,
+                                                   vaddr_t lr)
+{
+    ctx->lr = (uint32_t)lr;
+}
+
 static inline void arch_task_context_set_kernel_pc(task_context_t *ctx,
                                                    vaddr_t pc)
 {
