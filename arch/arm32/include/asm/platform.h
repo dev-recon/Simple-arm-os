@@ -65,6 +65,10 @@
 #define VIRT_SECURE_UART_BASE   0x09040000u
 #define VIRT_SECURE_UART_SIZE   0x00001000u
 
+/* Legacy PL050 keyboard fallback. Normal graphical input uses virtio-input. */
+#define VIRT_PL050_KBD_BASE     0x09060000u
+#define VIRT_PL050_KBD_SIZE     0x00001000u
+
 /* VirtIO MMIO region. */
 #define VIRT_VIRTIO_BASE        0x0A000000u
 #define VIRT_VIRTIO_SIZE        0x00000200u
