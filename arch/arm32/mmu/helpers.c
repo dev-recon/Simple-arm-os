@@ -344,7 +344,8 @@ static void setup_l2_access_zone(void)
     vaddr_t split_boundary = get_split_boundary();
     
     /* Vérifier que cette adresse est dans notre plage */
-    if (L2_CONTROL_VADDR < split_boundary || L2_CONTROL_VADDR >= KERNEL_MMIO_GIC_BASE) {
+    if (L2_CONTROL_VADDR < split_boundary ||
+        L2_CONTROL_VADDR >= arch_platform_kernel_mmio_gic_base()) {
         panic("L2_CONTROL_VADDR outside valid kernel range");
     }
     

@@ -344,13 +344,14 @@ vaddr_t get_split_boundary(void)
 /* Fonction de detection rapide pour MMU setup (inchangée) */
 static uint32_t detect_available_ram_for_mmu(void)
 {
+    paddr_t ram_start = arch_platform_ram_start();
     struct {
         uint32_t size_mb;
-        uint32_t test_addr;
+        paddr_t test_addr;
         const char* name;
     } quick_tests[] = {
-        { 1024, VIRT_RAM_START + ((1024U * 1024U * 1024U)) - 0x100000, "1GB" },
-        { 2048, VIRT_RAM_START + (2048ULL*1024*1024) - 0x100000, "2GB" },  
+        { 1024, ram_start + ((1024U * 1024U * 1024U)) - 0x100000, "1GB" },
+        { 2048, ram_start + (2048ULL * 1024 * 1024) - 0x100000, "2GB" },
     };
     
     for (int i = 1; i >= 0; i--) {
@@ -583,9 +584,10 @@ KDEBUG("All checks passed, proceeding with MMU activation...\n");
 static void map_kernel_mmio_alias(vaddr_t vaddr, paddr_t paddr)
 {
     uint32_t index = get_L1_index(vaddr);
+    uint32_t section_size = arch_platform_kernel_mmio_section_size();
 
-    if ((vaddr & (KERNEL_MMIO_SECTION_SIZE - 1)) ||
-        (paddr & (KERNEL_MMIO_SECTION_SIZE - 1)) ||
+    if ((vaddr & (section_size - 1)) ||
+        (paddr & (section_size - 1)) ||
         vaddr < get_split_boundary()) {
         panic("Invalid kernel MMIO alias");
     }
@@ -606,7 +608,8 @@ static void map_kernel_mmio_alias(vaddr_t vaddr, paddr_t paddr)
 static void setup_kernel_space(void)
 {
     vaddr_t split_boundary = get_split_boundary();  // 0x40000000 avec N=2
-    uint64_t ram_end = (uint64_t)VIRT_RAM_START + get_kernel_memory_size();
+    paddr_t ram_start = arch_platform_ram_start();
+    uint64_t ram_end = (uint64_t)ram_start + get_kernel_memory_size();
     if (ram_end > 0x100000000ULL) {
         ram_end = 0x100000000ULL;
     }
@@ -640,9 +643,11 @@ static void setup_kernel_space(void)
     KINFO("Mapped low memory (TTBR0): 0x0 - 0x40000000 - %u sections\n", mapped_low);
 
     /* Map device space */
-    for (paddr_t addr = DEVICE_START; addr < DEVICE_END; addr += 0x100000) {
+    for (paddr_t addr = arch_platform_device_start();
+         addr < arch_platform_device_end();
+         addr += 0x100000) {
 
-        uint32_t index = get_L1_index(addr);
+        uint32_t index = get_L1_index((vaddr_t)addr);
         
         // Devices: non-cacheable, non-bufferable
         ttbr0_pgdir[index] = addr | 
@@ -697,16 +702,16 @@ static void setup_kernel_space(void)
 
     /*
      * Explicit RAM direct map:
-     *   KERNEL_DIRECT_MAP_BASE + (paddr - VIRT_RAM_START) -> paddr
+     *   KERNEL_DIRECT_MAP_BASE + (paddr - ram_start) -> paddr
      */
     uint64_t direct_phys_end = ram_end;
-    uint64_t direct_max_phys = (uint64_t)VIRT_RAM_START + KERNEL_DIRECT_MAP_SIZE;
+    uint64_t direct_max_phys = (uint64_t)ram_start + KERNEL_DIRECT_MAP_SIZE;
     if (direct_phys_end > direct_max_phys) {
         direct_phys_end = direct_max_phys;
         KWARN("MMU: direct map truncated RAM above 0x%08X\n", (uint32_t)direct_phys_end);
     }
 
-    for (uint64_t paddr64 = VIRT_RAM_START; paddr64 < direct_phys_end; paddr64 += 0x100000) {
+    for (uint64_t paddr64 = ram_start; paddr64 < direct_phys_end; paddr64 += 0x100000) {
         paddr_t paddr = (paddr_t)paddr64;
         vaddr_t vaddr = phys_to_virt(paddr);
         uint32_t ttbr1_index = get_L1_index(vaddr);
@@ -735,10 +740,15 @@ static void setup_kernel_space(void)
      * Alias MMIO prives dans TTBR1. Ils sont additifs pour l'instant:
      * les pilotes continuent d'utiliser les adresses physiques basses.
      */
-    map_kernel_mmio_alias(KERNEL_MMIO_GIC_BASE, VIRT_GIC_DIST_BASE);
-    map_kernel_mmio_alias(KERNEL_MMIO_UART_BASE, VIRT_UART_BASE);
-    map_kernel_mmio_alias(KERNEL_MMIO_VIRTIO_BASE, VIRT_VIRTIO_BASE);
-    KINFO("MMU: Kernel MMIO aliases mapped at 0xF0000000 - 0xF02FFFFF\n");
+    vaddr_t mmio_gic_base = arch_platform_kernel_mmio_gic_base();
+    vaddr_t mmio_uart_base = arch_platform_kernel_mmio_uart_base();
+    vaddr_t mmio_virtio_base = arch_platform_kernel_mmio_virtio_base();
+
+    map_kernel_mmio_alias(mmio_gic_base, arch_platform_gic_phys_start());
+    map_kernel_mmio_alias(mmio_uart_base, arch_platform_uart0_phys_base());
+    map_kernel_mmio_alias(mmio_virtio_base, arch_platform_virtio_phys_start());
+    KINFO("MMU: Kernel MMIO aliases mapped: GIC=0x%08X UART=0x%08X VirtIO=0x%08X\n",
+          mmio_gic_base, mmio_uart_base, mmio_virtio_base);
 
     /* 3. NOUVEAU: Pré-allouer et configurer les temp mappings ICI */
     KINFO("MMU: Setting up temporary mapping slots...\n");
@@ -981,7 +991,7 @@ uint32_t vm_get_current_asid(void)
 static bool is_valid_vaddr(vaddr_t vaddr)
 {
     /* Current low-linked kernel and early boot metadata identity window. */
-    if (vaddr >= VIRT_RAM_START && vaddr < KERNEL_BOOT_IDENTITY_END) {
+    if (vaddr >= arch_platform_ram_start() && vaddr < KERNEL_BOOT_IDENTITY_END) {
         return true;
     }
 
@@ -991,7 +1001,7 @@ static bool is_valid_vaddr(vaddr_t vaddr)
     }
     
     /* Devices/peripherals pour machine virt */
-    if (vaddr >= DEVICE_START && vaddr < DEVICE_END) {
+    if (vaddr >= arch_platform_device_start() && vaddr < arch_platform_device_end()) {
         return true;
     }
 
@@ -1034,7 +1044,7 @@ void map_user_stack(void)
         uint32_t index = get_L1_index(addr);
         
         /* Calculer l'adresse physique dans la RAM basse */
-        paddr_t phys_addr = VIRT_RAM_START + 0x10000000 + (addr - USER_STACK_BOTTOM);
+        paddr_t phys_addr = arch_platform_ram_start() + 0x10000000 + (addr - USER_STACK_BOTTOM);
         
         /* Creer l'entree de section pour utilisateur */
         page_dir[index] = phys_addr |          /* Physical address */
