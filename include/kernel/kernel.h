@@ -26,6 +26,7 @@
 #include <kernel/stddef.h>
 #include <kernel/fd.h>
 #include <kernel/linker.h>
+#include <kernel/util.h>
 #include <asm/cpu_features.h>
 #include <asm/platform.h>
 #include <asm/memory_layout.h>
@@ -107,14 +108,6 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
  * MACROS UTILITAIRES
  * ======================================================================== */
 
-/* Alignement de pages */
-#define ALIGN_UP(x, align)      (((x) + (align) - 1) & ~((align) - 1))
-#define ALIGN_DOWN(x, align)    ((x) & ~((align) - 1))
-
-#define PAGE_ALIGN_UP(addr)     (((addr) + PAGE_SIZE - 1) & PAGE_MASK)
-#define PAGE_ALIGN_DOWN(addr)   ((addr) & PAGE_MASK)
-#define IS_PAGE_ALIGNED(addr)   (((addr) & (PAGE_SIZE - 1)) == 0)
-
 /* Verifications d'adresses */
 //#define IS_KERNEL_ADDR(addr)    ((addr) >= KERNEL_START && (addr) < VIRT_RAM_END)
 //#define IS_USER_ADDR(addr)      ((addr) >= USER_SPACE_START && (addr) < USER_SPACE_END)
@@ -122,15 +115,6 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
 #define IS_VALID_RAM(addr)      ((addr) >= VIRT_RAM_START && (addr) < VIRT_RAM_END)
 #define IS_VIRTIO_ADDR(addr)    ((addr) >= VIRT_VIRTIO_BASE && (addr) < (VIRT_VIRTIO_BASE + VIRT_VIRTIO_SIZE * 8))
 #define IS_GIC_ADDR(addr)       ((addr) >= VIRT_GIC_DIST_BASE && (addr) < (VIRT_GIC_VCPU_BASE + VIRT_GIC_VCPU_SIZE))
-
-/* Pages */
-#define ADDR_TO_PAGE(addr)      ((addr) >> PAGE_SHIFT)
-#define PAGE_TO_ADDR(page)      ((page) << PAGE_SHIFT)
-
-/* Utilitaires */
-#define MIN(a, b)               ((a) < (b) ? (a) : (b))
-#define MAX(a, b)               ((a) > (b) ? (a) : (b))
-#define ARRAY_SIZE(arr)         (sizeof(arr) / sizeof((arr)[0]))
 
 /* === FONCTIONS KERNEL === */
 
