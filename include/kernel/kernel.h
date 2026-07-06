@@ -22,6 +22,7 @@
 #include <kernel/types.h>
 #include <kernel/string.h>
 #include <kernel/fdt.h>
+#include <asm/platform.h>
 
 #define USE_RAMFS 1
 
@@ -66,10 +67,9 @@ extern uint32_t __free_memory_start; /* Debut memoire libre */
 extern uint32_t __stack_svc_top;
 
 /* ========================================================================
- * CONSTANTES HARDWARE MACHINE VIRT
+ * MEMORY LAYOUT
  * ======================================================================== */
-#define VIRT_RAM_START          0x40000000u                    /* Debut RAM physique */
-#define VIRT_RAM_SIZE           get_kernel_memory_size()        /* 4 GB */
+#define VIRT_RAM_SIZE           get_kernel_memory_size()
 #define VIRT_RAM_END            (VIRT_RAM_START + VIRT_RAM_SIZE)
 
 /*
@@ -121,99 +121,6 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
     return vaddr;
 }
 
-/* Memory map machine virt */
-#define VIRT_FLASH_BASE         0x00000000u                    /* Flash/ROM */
-#define VIRT_FLASH_SIZE         0x08000000u                    /* 128MB */
-
-/* GIC (Generic Interrupt Controller) v2 */
-#define VIRT_GIC_DIST_BASE      0x08000000u                    /* Distributor */
-#define VIRT_GIC_DIST_SIZE      0x00010000u                    /* 64KB */
-#define VIRT_GIC_CPU_BASE       0x08010000u                    /* CPU interface */
-#define VIRT_GIC_CPU_SIZE       0x00010000u                    /* 64KB */
-#define VIRT_GIC_V2M_BASE       0x08020000u                    /* MSI controller */
-#define VIRT_GIC_V2M_SIZE       0x00001000u                    /* 4KB */
-#define VIRT_GIC_HYP_BASE       0x08030000u                    /* Hypervisor */
-#define VIRT_GIC_HYP_SIZE       0x00010000u                    /* 64KB */
-#define VIRT_GIC_VCPU_BASE      0x08040000u                    /* Virtual CPU */
-#define VIRT_GIC_VCPU_SIZE      0x00010000u                    /* 64KB */
-
-/* Peripheriques systeme machine virt */
-#define VIRT_UART_BASE          0x09000000u                    /* PL011 UART */
-#define VIRT_UART_SIZE          0x00001000u                    /* 4KB */
-#define VIRT_UART_IRQ           1                             /* IRQ 1 */
-
-#define VIRT_RTC_BASE           0x09010000u                    /* PL031 RTC */
-#define VIRT_RTC_SIZE           0x00001000u                    /* 4KB */
-#define VIRT_RTC_IRQ            2                             /* IRQ 2 */
-
-#define VIRT_FW_CFG_BASE        0x09020000u                    /* Firmware config */
-#define VIRT_FW_CFG_SIZE        0x00000018u                    /* 24 bytes */
-
-#define VIRT_GPIO_BASE          0x09030000u                    /* PL061 GPIO */
-#define VIRT_GPIO_SIZE          0x00001000u                    /* 4KB */
-#define VIRT_GPIO_IRQ           7                             /* IRQ 7 */
-
-#define VIRT_SECURE_UART_BASE   0x09040000u                    /* Secure UART */
-#define VIRT_SECURE_UART_SIZE   0x00001000u                    /* 4KB */
-
-/* VirtIO devices MMIO region */
-#define VIRT_VIRTIO_BASE        0x0A000000u                    /* VirtIO devices */
-#define VIRT_VIRTIO_SIZE        0x00000200u                    /* 512 bytes per device */
-#define VIRT_VIRTIO_IRQ_BASE    16                            /* IRQ 16+ */
-
-/*
- * Alias MMIO prives dans TTBR1. Les pilotes utilisent encore les adresses
- * physiques basses; ces alias permettent leur migration progressive sans
- * exposer les peripheriques dans les futurs espaces TTBR0 des processus.
- */
-#define KERNEL_MMIO_GIC_BASE    0xF0000000u
-#define KERNEL_MMIO_UART_BASE   0xF0100000u
-#define KERNEL_MMIO_VIRTIO_BASE 0xF0200000u
-#define KERNEL_MMIO_SECTION_SIZE 0x00100000u
-#define KERNEL_MMIO_GIC_DIST_BASE KERNEL_MMIO_GIC_BASE
-#define KERNEL_MMIO_GIC_CPU_BASE  (KERNEL_MMIO_GIC_BASE + (VIRT_GIC_CPU_BASE - VIRT_GIC_DIST_BASE))
-#define KERNEL_MMIO_RTC_BASE       (KERNEL_MMIO_UART_BASE + (VIRT_RTC_BASE - VIRT_UART_BASE))
-#define KERNEL_MMIO_VIRTIO_ADDR(paddr) \
-    ((vaddr_t)(KERNEL_MMIO_VIRTIO_BASE + ((paddr_t)(paddr) - VIRT_VIRTIO_BASE)))
-
-/* Alias pour compatibilite avec votre code existant */
-#define VIRTIO_BASE             VIRT_VIRTIO_BASE              /* 0x0A000000 */
-#define VIRTIO_SIZE             VIRT_VIRTIO_SIZE              /* 512 bytes per device */
-#define VIRTIO_IRQ_BASE         VIRT_VIRTIO_IRQ_BASE          /* IRQ 16+ */
-
-/* Calcul des adresses VirtIO individuelles */
-#define VIRT_VIRTIO_DEVICE(n)   (VIRT_VIRTIO_BASE + (n) * VIRT_VIRTIO_SIZE)
-#define VIRT_VIRTIO_IRQ(n)      (VIRT_VIRTIO_IRQ_BASE + (n))
-
-/* Peripheriques VirtIO typiques */
-#define VIRT_VIRTIO_NET         VIRT_VIRTIO_DEVICE(0)         /* Reseau */
-#define VIRT_VIRTIO_BLOCK       VIRT_VIRTIO_DEVICE(1)         /* Stockage */
-#define VIRT_VIRTIO_CONSOLE     VIRT_VIRTIO_DEVICE(2)         /* Console */
-#define VIRT_VIRTIO_RNG         VIRT_VIRTIO_DEVICE(3)         /* RNG */
-
-#define VIRT_VIRTIO_NET_IRQ     VIRT_VIRTIO_IRQ(0)            /* IRQ 16 */
-#define VIRT_VIRTIO_BLOCK_IRQ   VIRT_VIRTIO_IRQ(1)            /* IRQ 17 */
-#define VIRT_VIRTIO_CONSOLE_IRQ VIRT_VIRTIO_IRQ(2)            /* IRQ 18 */
-#define VIRT_VIRTIO_RNG_IRQ     VIRT_VIRTIO_IRQ(3)            /* IRQ 19 */
-
-/* Macros pour acceder aux peripheriques VirtIO */
-#define VIRTIO_DEVICE(n)        VIRT_VIRTIO_DEVICE(n)
-#define VIRTIO_IRQ(n)           VIRT_VIRTIO_IRQ(n)
-
-/* PCI Configuration Space */
-#define VIRT_PCIE_MMIO_BASE     0x10000000u                    /* PCI MMIO */
-#define VIRT_PCIE_MMIO_SIZE     0x2EFF0000u                    /* 752MB */
-#define VIRT_PCIE_PIO_BASE      0x3EFF0000u                    /* PCI I/O */
-#define VIRT_PCIE_PIO_SIZE      0x00010000u                    /* 64KB */
-#define VIRT_PCIE_ECAM_BASE     0x3F000000u                    /* ECAM space */
-#define VIRT_PCIE_ECAM_SIZE     0x01000000u                    /* 16MB */
-
-/* Timers ARM Generic pour machine virt */
-#define VIRT_TIMER_NS_EL1_IRQ   30                            /* Non-secure EL1 */
-#define VIRT_TIMER_S_EL1_IRQ    29                            /* Secure EL1 */
-#define VIRT_TIMER_HYP_IRQ      26                            /* Hypervisor */
-#define VIRT_TIMER_VIRT_IRQ     27                            /* Virtual */
-
 /* Tailles de page */
 #define PAGE_SIZE               4096
 #define PAGE_SHIFT              12
@@ -261,35 +168,6 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
 #define RAM_START               PHYSICAL_RAM_START
 #define RAM_END                 PHYSICAL_RAM_END
 #define RAM_SIZE                PHYSICAL_RAM_SIZE
-
-/* === ADRESSES HARDWARE MACHINE VIRT === */
-
-/* UART (PL011) - compatible avec machine virt */
-#define UART0_BASE              VIRT_UART_BASE                /* UART0 machine virt */
-#define UART1_BASE              (VIRT_UART_BASE + 0x1000)    /* UART1 hypothetique */
-#define UART2_BASE              (VIRT_UART_BASE + 0x2000)    /* UART2 hypothetique */
-#define UART3_BASE              (VIRT_UART_BASE + 0x3000)    /* UART3 hypothetique */
-
-/* Interrupt Controller (GIC) */
-#define GIC_DIST_BASE           KERNEL_MMIO_GIC_DIST_BASE     /* GIC Distributor runtime */
-#define GIC_CPU_BASE            KERNEL_MMIO_GIC_CPU_BASE      /* GIC CPU Interface runtime */
-
-/* Timer (ARM Generic Timer) */
-#define TIMER0_BASE             0x09000000u                    /* Pas utilise sur virt */
-#define TIMER1_BASE             0x09000000u                    /* Pas utilise sur virt */
-
-/* GPIO */
-#define GPIO0_BASE              VIRT_GPIO_BASE                /* GPIO Port 0 */
-#define GPIO1_BASE              (VIRT_GPIO_BASE + 0x1000)    /* GPIO Port 1 hypothetique */
-
-/* RTC */
-#define RTC_BASE                VIRT_RTC_BASE                 /* PL031 RTC */
-
-/* Regions de peripheriques */
-#define DEVICE_START            0x08000000u                    /* Debut peripheriques */
-#define DEVICE_END              0x40000000u                    /* Fin peripheriques */
-#define PERIPHERAL_START        0x08000000u                    /* Debut peripheriques */
-#define PERIPHERAL_END          0x40000000u                    /* Fin peripheriques */
 
 /* ========================================================================
  * USER SPACE - PReSERVE VOS CONSTANTES EXISTANTES
