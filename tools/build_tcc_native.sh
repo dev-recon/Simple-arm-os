@@ -44,7 +44,7 @@ fi
 
 rm -rf "$WORK_DIR"
 mkdir -p "$PATCHED_SRC" "$BUILD_DIR/armos-include/sys" "$BUNDLE_DIR/bin" \
-         "$BUNDLE_DIR/lib/tcc/include" "$BUNDLE_DIR/include"
+         "$BUNDLE_DIR/lib/tcc/include" "$BUNDLE_DIR/include/armos"
 
 cp -R "$SRC_DIR"/. "$PATCHED_SRC"/
 
@@ -94,7 +94,7 @@ cd "$BUILD_DIR"
     --triplet=arm-none-eabi \
     --enable-static \
     --disable-rpath \
-    --sysincludepaths=/opt/tcc/lib/tcc/include:/opt/tcc/include \
+    --sysincludepaths=/opt/tcc/lib/tcc/include:/opt/tcc/include/armos:/opt/tcc/include \
     --libpaths=/opt/tcc/lib \
     --crtprefix=/opt/tcc/lib
 
@@ -133,9 +133,11 @@ if [ -f "$BUILD_DIR/libtcc.a" ]; then
     cp "$BUILD_DIR/libtcc.a" "$BUNDLE_DIR/lib/libtcc.a"
 fi
 cp -R "$NEWLIB_SYSROOT/include"/. "$BUNDLE_DIR/include"/
-# ArmOS owns a few public ABI headers that complement or override newlib's
-# generic ones, notably termios.h and sys/ioctl.h for TTY-aware programs.
-cp -R "$ROOT_DIR/userland/include"/. "$BUNDLE_DIR/include"/
+# ArmOS owns a few public ABI headers that complement or wrap newlib's generic
+# ones.  Keep them in a separate include directory placed before newlib in the
+# search path; wrappers such as stdlib.h rely on #include_next and break if they
+# overwrite the real newlib header in /opt/tcc/include.
+cp -R "$ROOT_DIR/userland/include"/. "$BUNDLE_DIR/include/armos"/
 cp -R "$PATCHED_SRC/include"/. "$BUNDLE_DIR/lib/tcc/include"/
 
 echo

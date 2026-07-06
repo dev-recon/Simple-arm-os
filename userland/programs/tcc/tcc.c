@@ -74,6 +74,7 @@ static int exec_real_tcc(int argc, char **argv, int add_include_paths)
     real_argv[n++] = (char *)REAL_TCC;
     if (add_include_paths) {
         real_argv[n++] = "-I/opt/tcc/lib/tcc/include";
+        real_argv[n++] = "-I/opt/tcc/include/armos";
         real_argv[n++] = "-I/opt/tcc/include";
         real_argv[n++] = "-I/opt/ncurses/include";
         real_argv[n++] = "-I/opt/ncurses/include/ncurses";
@@ -93,7 +94,7 @@ static int exec_armos_link(int argc, char **argv)
     int n = 0;
     int i;
 
-    if (argc + 17 >= TCC_MAX_ARGS) {
+    if (argc + 18 >= TCC_MAX_ARGS) {
         fprintf(stderr, "tcc: too many arguments\n");
         return 1;
     }
@@ -104,6 +105,7 @@ static int exec_armos_link(int argc, char **argv)
     real_argv[n++] = "-Wl,-Ttext=0x8000";
     real_argv[n++] = "-Wl,-e,_start";
     real_argv[n++] = "-I/opt/tcc/lib/tcc/include";
+    real_argv[n++] = "-I/opt/tcc/include/armos";
     real_argv[n++] = "-I/opt/tcc/include";
     real_argv[n++] = "-I/opt/ncurses/include";
     real_argv[n++] = "-I/opt/ncurses/include/ncurses";
