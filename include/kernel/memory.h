@@ -19,6 +19,7 @@
 #ifndef _KERNEL_MEMORY_H
 #define _KERNEL_MEMORY_H
 
+#include <asm/user_layout.h>
 #include <kernel/types.h>
 
 typedef struct {
@@ -61,8 +62,8 @@ typedef struct vm_space {
  * shared-memory mappings and the user stack. Keep mmap there so anonymous
  * mappings cannot collide with brk(), SHM, or stack growth.
  */
-#define USER_MMAP_START USER_SHM_END
-#define USER_MMAP_END   USER_STACK_BOTTOM
+#define USER_MMAP_START ARCH_USER_SHM_END
+#define USER_MMAP_END   ARCH_USER_STACK_BOTTOM
 
 /*
  * Generic virtual-address split helpers.

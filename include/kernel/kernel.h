@@ -24,6 +24,7 @@
 #include <kernel/fdt.h>
 #include <asm/platform.h>
 #include <asm/memory_layout.h>
+#include <asm/user_layout.h>
 #include <asm/arm.h>
 
 #define USE_RAMFS 1
@@ -145,42 +146,27 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
 #define RAM_SIZE                PHYSICAL_RAM_SIZE
 
 /* ========================================================================
- * USER SPACE - PReSERVE VOS CONSTANTES EXISTANTES
+ * USER SPACE
  * ======================================================================== */
 
 /*
- * LAYOUT ACTUEL (preserve) mais avec signal stack optimisee pour machine virt :
- * 
- * 0x00000000 - 0x00010000  : Reserve systeme
- * 0x00010000 - 0x08000000  : Code et donnees utilisateur (127MB)
- * 0x08000000 - 0x30000000  : Heap utilisateur
- * 0x30000000 - 0x34000000  : Shared memory mappings
- * 0x37000000 - 0x3F000000  : Stack utilisateur (8MB - votre taille)
- * 0x3F000000 - 0x40000000  : Zone libre pour signal stacks (16MB)
- * 0x40000000+              : Kernel space (machine virt)
+ * Compatibility aliases for the user virtual layout.  The concrete addresses
+ * are supplied by the active architecture backend.
  */
+#define USER_SPACE_START         ARCH_USER_SPACE_START
+#define USER_STACK_TOP           ARCH_USER_STACK_TOP
+#define USER_STACK_SIZE          ARCH_USER_STACK_SIZE
+#define USER_STACK_BOTTOM        ARCH_USER_STACK_BOTTOM
+#define USER_HEAP_START          ARCH_USER_HEAP_START
+#define USER_SHM_START           ARCH_USER_SHM_START
+#define USER_SHM_END             ARCH_USER_SHM_END
+#define USER_HEAP_END            ARCH_USER_HEAP_END
+#define USER_SPACE_END           ARCH_USER_SPACE_END
+#define USER_HEAP_MAX_SIZE       (USER_HEAP_END - USER_HEAP_START)
 
-
-
-/* Zones memoire utilisateur - VOS CONSTANTES PReSERVeES */
-#define USER_SPACE_START        0x00010000u                    /* Debut espace utilisateur */
-#define USER_STACK_TOP          0x3F000000u                    /* Pile utilisateur (avant kernel) */
-#define USER_STACK_SIZE         (8*1024*1024u)                 /* 8MB de pile */
-//#define USER_STACK_SIZE         (8*1024u)                       /* 8KB de pile */
-#define USER_STACK_BOTTOM       (USER_STACK_TOP - USER_STACK_SIZE)  /* 0x37000000 */
-#define USER_HEAP_START         0x08000000u                    /* Debut heap utilisateur */
-#define USER_SHM_START          0x30000000u
-#define USER_SHM_END            0x34000000u
-#define USER_HEAP_END           USER_SHM_START
-#define USER_SPACE_END          USER_STACK_TOP                /* 0x3F000000 */
-
-/* Heap utilisateur - taille actuelle preservee */
-#define USER_HEAP_MAX_SIZE      (USER_HEAP_END - USER_HEAP_START)  /* 752MB */
-
-/* NOUVELLE : Zone dediee aux signal stacks APReS la stack user */
-#define USER_SIGNAL_REGION_START USER_STACK_TOP               /* 0x3F000000 */
-#define USER_SIGNAL_REGION_END   0x3FFFF000u                 /* Jusqu'au kernel (~0x40000000) */
-#define USER_SIGNAL_REGION_SIZE  (USER_SIGNAL_REGION_END - USER_SIGNAL_REGION_START)  /* ~16MB */
+#define USER_SIGNAL_REGION_START ARCH_USER_SIGNAL_REGION_START
+#define USER_SIGNAL_REGION_END   ARCH_USER_SIGNAL_REGION_END
+#define USER_SIGNAL_REGION_SIZE  ARCH_USER_SIGNAL_REGION_SIZE
 
 /* ========================================================================
  * SIGNAL STACK - UTILISE LA ZONE LIBRE APReS USER_STACK_TOP
