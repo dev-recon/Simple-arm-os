@@ -1019,8 +1019,6 @@ int sys_times(void* buf)
     return (int)ticks;
 }
 
-static uint32_t vm_rss_kb(vm_space_t *vm);
-
 static void fill_rusage_for_task(task_t *task, struct rusage_kernel *usage)
 {
     uint32_t runtime;
@@ -1036,7 +1034,7 @@ static void fill_rusage_for_task(task_t *task, struct rusage_kernel *usage)
     usage->ru_majflt = 0;
     usage->ru_nvcsw = (int32_t)task->switch_count;
     if (task->type == TASK_TYPE_PROCESS && task->process && task->process->vm)
-        usage->ru_maxrss = (int32_t)vm_rss_kb(task->process->vm);
+        usage->ru_maxrss = (int32_t)vm_resident_kb(task->process->vm);
 }
 
 int sys_getrusage(int who, struct rusage_kernel* usage)
@@ -2450,52 +2448,6 @@ static process_t *task_process_for_sysinfo(task_t *task)
     return NULL;
 }
 
-static uint32_t vm_virtual_kb(vm_space_t *vm)
-{
-    uint32_t bytes = 0;
-    for (vma_t *vma = vm ? vm->vma_list : NULL; vma; vma = vma->next) {
-        if (vma->end > vma->start)
-            bytes += vma->end - vma->start;
-    }
-    return bytes / 1024;
-}
-
-static uint32_t vm_rss_kb(vm_space_t *vm)
-{
-    uint32_t pages = 0;
-    pgdir_cpu_t pgdir_v;
-    if (!vm || !vm->pgdir) return 0;
-    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
-
-    for (uint32_t i = 0; i < 1024; i++) {
-        l1_entry_t l1_entry = pgdir_v[i];
-        if ((l1_entry & 0x3) != 0x1)
-            continue;
-
-        l2_table_t l2_table = (l2_table_t)phys_to_virt((paddr_t)(l1_entry & 0xFFFFFC00));
-        for (uint32_t j = 0; j < 256; j++) {
-            if ((l2_table[j] & 0x3) != 0)
-                pages++;
-        }
-    }
-
-    return (pages * PAGE_SIZE) / 1024;
-}
-
-static uint32_t vm_l2_table_count(vm_space_t *vm)
-{
-    uint32_t count = 0;
-    pgdir_cpu_t pgdir_v;
-    if (!vm || !vm->pgdir) return 0;
-    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
-
-    for (uint32_t i = 0; i < 1024; i++) {
-        if ((pgdir_v[i] & 0x3) == 0x1)
-            count++;
-    }
-    return count;
-}
-
 int sys_sysinfo(struct sysinfo_response *resp)
 {
     if (!resp) return -EINVAL;
@@ -2588,8 +2540,8 @@ int sys_sysinfo(struct sysinfo_response *resp)
             uint32_t used = (vm->brk > vm->heap_start) ? (vm->brk - vm->heap_start) : 0;
             p->heap_kb = used / 1024;
             p->vm_kb = vm_virtual_kb(vm);
-            p->rss_kb = vm_rss_kb(vm);
-            p->l2_tables = vm_l2_table_count(vm);
+            p->rss_kb = vm_resident_kb(vm);
+            p->l2_tables = vm_page_table_count(vm);
         }
 
         int i;

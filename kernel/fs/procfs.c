@@ -196,57 +196,6 @@ static process_t* proc_task_process(task_t* task)
     return NULL;
 }
 
-static uint32_t proc_vm_virtual_kb(vm_space_t* vm)
-{
-    uint32_t bytes = 0;
-
-    for (vma_t* vma = vm ? vm->vma_list : NULL; vma; vma = vma->next) {
-        if (vma->end > vma->start)
-            bytes += vma->end - vma->start;
-    }
-
-    return bytes / 1024;
-}
-
-static uint32_t proc_vm_rss_kb(vm_space_t* vm)
-{
-    uint32_t pages = 0;
-    pgdir_cpu_t pgdir_v;
-
-    if (!vm || !vm->pgdir) return 0;
-    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
-
-    for (uint32_t i = 0; i < 1024; i++) {
-        l1_entry_t l1_entry = pgdir_v[i];
-        if ((l1_entry & 0x3) != 0x1)
-            continue;
-
-        l2_table_t l2_table = (l2_table_t)phys_to_virt((paddr_t)(l1_entry & 0xFFFFFC00));
-        for (uint32_t j = 0; j < 256; j++) {
-            if ((l2_table[j] & 0x3) != 0)
-                pages++;
-        }
-    }
-
-    return (pages * PAGE_SIZE) / 1024;
-}
-
-static uint32_t proc_vm_l2_tables(vm_space_t* vm)
-{
-    uint32_t count = 0;
-    pgdir_cpu_t pgdir_v;
-
-    if (!vm || !vm->pgdir) return 0;
-    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
-
-    for (uint32_t i = 0; i < 1024; i++) {
-        if ((pgdir_v[i] & 0x3) == 0x1)
-            count++;
-    }
-
-    return count;
-}
-
 static task_t* proc_find_task_locked(pid_t pid)
 {
     task_t* task = task_list_head;
@@ -1641,9 +1590,9 @@ static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "KStack:\t%u kB\n", KERNEL_TASK_STACK_SIZE / 1024);
     proc_append(buf, cap, len, "Heap:\t%u kB\n",
                 (vm && vm->brk >= vm->heap_start) ? ((vm->brk - vm->heap_start) / 1024u) : 0);
-    proc_append(buf, cap, len, "VmSize:\t%u kB\n", proc_vm_virtual_kb(vm));
-    proc_append(buf, cap, len, "VmRSS:\t%u kB\n", proc_vm_rss_kb(vm));
-    proc_append(buf, cap, len, "L2Tables:\t%u\n", proc_vm_l2_tables(vm));
+    proc_append(buf, cap, len, "VmSize:\t%u kB\n", vm_virtual_kb(vm));
+    proc_append(buf, cap, len, "VmRSS:\t%u kB\n", vm_resident_kb(vm));
+    proc_append(buf, cap, len, "L2Tables:\t%u\n", vm_page_table_count(vm));
     proc_append(buf, cap, len, "CtxSwitches:\t%u\n", task->switch_count);
     proc_append(buf, cap, len, "RuntimeTicks:\t%u\n", (uint32_t)task_runtime_ticks(task));
     proc_append(buf, cap, len, "PageFaults:\t%u\n", task->page_faults);

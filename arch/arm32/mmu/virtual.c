@@ -158,6 +158,77 @@ static paddr_t vm_l1_coarse_base(uint32_t entry)
     return entry & 0xFFFFFC00;
 }
 
+static uint32_t vm_user_l1_entries(void)
+{
+    vaddr_t split = get_split_boundary();
+    if (split == 0)
+        return 0;
+    return get_L1_index(split - 1) + 1;
+}
+
+uint32_t vm_virtual_kb(vm_space_t *vm)
+{
+    uint32_t bytes = 0;
+
+    for (vma_t *vma = vm ? vm->vma_list : NULL; vma; vma = vma->next) {
+        if (vma->end > vma->start)
+            bytes += vma->end - vma->start;
+    }
+
+    return bytes / 1024;
+}
+
+uint32_t vm_resident_kb(vm_space_t *vm)
+{
+    uint32_t pages = 0;
+    pgdir_cpu_t pgdir_v;
+    uint32_t l1_entries;
+
+    if (!vm || !vm->pgdir)
+        return 0;
+
+    pgdir_v = vm_pgdir_cpu_view(vm);
+    if (!pgdir_v)
+        return 0;
+
+    l1_entries = vm_user_l1_entries();
+    for (uint32_t i = 0; i < l1_entries; i++) {
+        l1_entry_t l1_entry = pgdir_v[i];
+        if (!vm_l1_entry_is_coarse(l1_entry))
+            continue;
+
+        l2_table_t l2_table = (l2_table_t)phys_to_virt(vm_l1_coarse_base(l1_entry));
+        for (uint32_t j = 0; j < 256; j++) {
+            if ((l2_table[j] & PTE_TYPE_MASK) != PTE_TYPE_FAULT)
+                pages++;
+        }
+    }
+
+    return (pages * PAGE_SIZE) / 1024;
+}
+
+uint32_t vm_page_table_count(vm_space_t *vm)
+{
+    uint32_t count = 0;
+    pgdir_cpu_t pgdir_v;
+    uint32_t l1_entries;
+
+    if (!vm || !vm->pgdir)
+        return 0;
+
+    pgdir_v = vm_pgdir_cpu_view(vm);
+    if (!pgdir_v)
+        return 0;
+
+    l1_entries = vm_user_l1_entries();
+    for (uint32_t i = 0; i < l1_entries; i++) {
+        if (vm_l1_entry_is_coarse(pgdir_v[i]))
+            count++;
+    }
+
+    return count;
+}
+
 static bool vm_phys_page_is_freeable(paddr_t phys_addr, const char* owner)
 {
     if (!phys_addr) {

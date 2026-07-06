@@ -196,6 +196,9 @@ vaddr_t vm_find_free_range(vm_space_t* vm, vaddr_t hint, uint32_t size,
                            vaddr_t base, vaddr_t limit);
 int vm_unmap_range(vm_space_t* vm, vaddr_t start, uint32_t size);
 vma_t* find_vma(vm_space_t* vm, vaddr_t addr);
+uint32_t vm_virtual_kb(vm_space_t* vm);
+uint32_t vm_resident_kb(vm_space_t* vm);
+uint32_t vm_page_table_count(vm_space_t* vm);
 int handle_cow_fault(vaddr_t fault_addr);
 int handle_user_stack_fault(vaddr_t fault_addr);
 int handle_lazy_anon_fault(vaddr_t fault_addr, bool is_write);
