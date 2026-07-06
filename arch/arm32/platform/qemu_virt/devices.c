@@ -88,3 +88,8 @@ void platform_block_init(void)
     if (!disk_layout_init_from_mbr())
         KBOOT_WARN("Partition: using compiled fallback layout");
 }
+
+void platform_block_shutdown(void)
+{
+    virtio_blk_shutdown();
+}

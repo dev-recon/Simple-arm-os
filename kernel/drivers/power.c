@@ -21,7 +21,7 @@
 #include <kernel/types.h>
 #include <kernel/task.h>
 #include <kernel/process.h>
-#include <kernel/virtio_block.h>
+#include <kernel/platform_devices.h>
 #include <kernel/vfs.h>
 #include <kernel/signal.h>
 #include <kernel/timer.h>
@@ -188,7 +188,7 @@ static void shutdown_drivers(void)
         KERROR("Shutdown: VFS shutdown completed with errors\n");
 
     kprintf("Shutdown: flushing and stopping block device\n");
-    virtio_blk_shutdown();
+    platform_block_shutdown();
     kprintf("Shutdown: block device stopped\n");
 }
 
