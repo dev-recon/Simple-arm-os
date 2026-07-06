@@ -29,8 +29,6 @@
 #include <kernel/util.h>
 #include <kernel/user_layout.h>
 #include <kernel/address_space.h>
-#include <asm/cpu_features.h>
-#include <asm/platform.h>
 
 #define USE_RAMFS 1
 
@@ -65,15 +63,6 @@ void virtio_init(void);
 void* get_dtb_address(void);
 bool parse_device_tree(void);
 void print_cpu_mode(void);
-/* CPU feature aliases kept for compatibility while arch headers take over. */
-#define CORTEX_A15_FEATURES     ARCH_CORTEX_A15_FEATURES
-#define HAS_NEON                ARCH_HAS_NEON
-#define HAS_VFP                 ARCH_HAS_VFP
-#define HAS_GENERIC_TIMER       ARCH_HAS_GENERIC_TIMER
-#define HAS_LARGE_PHYS_ADDR     ARCH_HAS_LARGE_PHYS_ADDR
-
-/* ARM privileged register/cache helpers are exposed through <asm/arm.h>. */
-
 //extern const uint32_t TASK_CONTEXT_OFF;
 
 #endif /* _KERNEL_H */
