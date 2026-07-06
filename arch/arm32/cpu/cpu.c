@@ -11,12 +11,10 @@
  * Responsibilities:
  * - Read ARMv7 CPU identity registers for procfs and diagnostics.
  * - Keep ARM CP15 register access out of generic procfs code.
- *
- * Notes:
- * - The strings are currently calibrated for QEMU virt Cortex-A15.
  */
 
 #include <kernel/arch_cpu.h>
+#include <kernel/arch_platform.h>
 #include <kernel/string.h>
 #include <asm/arm.h>
 
@@ -30,9 +28,9 @@ void arch_get_cpuinfo(arch_cpuinfo_t* info)
     memset(info, 0, sizeof(*info));
 
     midr = arm_read_midr();
-    info->model_name = "ARM Cortex-A15 @ QEMU virt";
-    info->features = "swp half thumb fastmult vfp edsp neon vfpv4 tls";
-    info->hardware = "ArmOS QEMU virt";
+    info->model_name = arch_platform_cpu_model();
+    info->features = arch_platform_cpu_features();
+    info->hardware = arch_platform_hardware_name();
     info->implementer = (midr >> 24) & 0xff;
     info->architecture = 7;
     info->part = (midr >> 4) & 0xfff;
@@ -74,7 +72,7 @@ uint32_t arch_timer_frequency(void)
 {
     uint32_t timer_freq = get_cntfrq();
 
-    return timer_freq ? timer_freq : 62500000u;
+    return timer_freq ? timer_freq : arch_platform_timer_fallback_hz();
 }
 
 uint64_t arch_timer_counter(void)

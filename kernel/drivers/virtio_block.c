@@ -545,7 +545,8 @@ static int wait_for_used(vq_legacy_t *vq, uint16_t prev_idx, unsigned timeout_ms
     uint32_t freq;
     uint32_t spins = 0;
     freq = arch_timer_frequency();
-    if (freq == 0) freq = 62500000; /* 62.5 MHz défaut QEMU */
+    if (freq == 0)
+        freq = TIMER_FALLBACK_FREQ;
 
     uint64_t timeout_ticks = (uint64_t)timeout_ms * (uint64_t)(freq / 1000);
     uint64_t t0 = arch_timer_counter();

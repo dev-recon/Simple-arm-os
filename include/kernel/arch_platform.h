@@ -29,6 +29,21 @@ static inline const char* arch_platform_name(void)
     return ARMOS_PLATFORM_NAME;
 }
 
+static inline const char* arch_platform_cpu_model(void)
+{
+    return ARMOS_PLATFORM_CPU_MODEL;
+}
+
+static inline const char* arch_platform_cpu_features(void)
+{
+    return ARMOS_PLATFORM_CPU_FEATURES;
+}
+
+static inline const char* arch_platform_hardware_name(void)
+{
+    return ARMOS_PLATFORM_HARDWARE_NAME;
+}
+
 static inline paddr_t arch_platform_uart0_phys_base(void)
 {
     return (paddr_t)ARMOS_PLATFORM_UART0_PHYS_BASE;
@@ -52,6 +67,11 @@ static inline uint32_t arch_platform_ram_fallback_size(void)
 static inline uint32_t arch_platform_ram_probe_max_mb(void)
 {
     return ARMOS_PLATFORM_RAM_PROBE_MAX_MB;
+}
+
+static inline uint32_t arch_platform_timer_fallback_hz(void)
+{
+    return ARMOS_PLATFORM_TIMER_FALLBACK_HZ;
 }
 
 static inline paddr_t arch_platform_device_start(void)

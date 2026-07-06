@@ -226,7 +226,7 @@ static int gpu_wait_used(uint16_t prev_used)
 {
     uint32_t freq = arch_timer_frequency();
     if (freq == 0)
-        freq = QEMU_TIMER_FREQ;
+        freq = TIMER_FALLBACK_FREQ;
 
     uint64_t timeout_ticks = (uint64_t)VIRTIO_GPU_TIMEOUT_MS * (uint64_t)(freq / 1000);
     uint64_t start = arch_timer_counter();

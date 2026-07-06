@@ -24,6 +24,7 @@
 #include <kernel/uart.h>
 #include <kernel/tty.h>
 #include <kernel/smp.h>
+#include <kernel/arch_platform.h>
 
 
 /* Flag pour savoir si le systeme de processus est pret */
@@ -111,7 +112,7 @@ void init_timer_software(void)
     uint32_t timer_freq = get_cntfrq();
     
     if (timer_freq == 0) {
-        timer_freq = 62500000;  /* 62.5MHz par défaut QEMU */
+        timer_freq = arch_platform_timer_fallback_hz();
     }
     
     KINFO("[TIMER] Timer frequency: %u Hz\n", timer_freq);
@@ -243,8 +244,9 @@ void init_timer(void)
     uint32_t timer_freq = get_cntfrq();
     
     if (timer_freq == 0) {
-        KWARN("[TIMER] Timer frequency is 0, using default 62.5MHz\n");
-        timer_freq = 62500000;  // Frequence par defaut QEMU
+        timer_freq = arch_platform_timer_fallback_hz();
+        KWARN("[TIMER] Timer frequency is 0, using platform fallback %u Hz\n",
+              timer_freq);
     }
     
     KINFO("[TIMER] Timer frequency: %u Hz\n", timer_freq);
@@ -359,8 +361,7 @@ uint32_t get_timer_frequency(void)
     freq = get_cntfrq();
     
     if (freq == 0) {
-        /* Valeur par defaut pour QEMU machine virt */
-        freq = 62500000;  // 62.5MHz
+        freq = arch_platform_timer_fallback_hz();
     }
     
     return freq;

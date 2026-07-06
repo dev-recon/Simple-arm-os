@@ -167,9 +167,13 @@
  * Keep the historical VIRT_* names local to this QEMU virt description.
  */
 #define ARMOS_PLATFORM_NAME                      "QEMU virt"
+#define ARMOS_PLATFORM_CPU_MODEL                 "ARM Cortex-A15 @ QEMU virt"
+#define ARMOS_PLATFORM_CPU_FEATURES              "swp half thumb fastmult vfp edsp neon vfpv4 tls"
+#define ARMOS_PLATFORM_HARDWARE_NAME             "ArmOS QEMU virt"
 #define ARMOS_PLATFORM_RAM_START                 VIRT_RAM_START
 #define ARMOS_PLATFORM_RAM_FALLBACK_SIZE         (1024u * 1024u * 1024u)
 #define ARMOS_PLATFORM_RAM_PROBE_MAX_MB          4096u
+#define ARMOS_PLATFORM_TIMER_FALLBACK_HZ         62500000u
 #define ARMOS_PLATFORM_DEVICE_START              DEVICE_START
 #define ARMOS_PLATFORM_DEVICE_END                DEVICE_END
 

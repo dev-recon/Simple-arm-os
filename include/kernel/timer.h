@@ -24,7 +24,7 @@
 
 /* 1000Hz currently means one accounting tick per millisecond. */
 #define TIMER_FREQ      ARCH_TIMER_TICK_HZ
-#define QEMU_TIMER_FREQ ARCH_TIMER_FALLBACK_HZ
+#define TIMER_FALLBACK_FREQ ARCH_TIMER_FALLBACK_HZ
 
 /* Structure pour décomposer une date Unix */
 typedef struct {
