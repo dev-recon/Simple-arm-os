@@ -84,6 +84,8 @@ Done so far:
 - introduced `include/kernel/arch_barrier.h` so VirtIO/IDE drivers use
   architecture-neutral names for CPU relax, cache maintenance, and memory
   ordering primitives instead of including ARM helper headers directly;
+- introduced `include/kernel/arch_irq.h` so generic task/process code treats
+  saved interrupt state as an opaque architecture token;
 - moved ARM32 boot assembly to `arch/arm32/boot/boot.S`;
 - moved ARM32 IRQ entry assembly to `arch/arm32/interrupt/interrupt.S`;
 - moved ARM32 exception/fault diagnostics to

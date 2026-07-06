@@ -23,7 +23,7 @@
 #include <kernel/memory.h>
 #include <kernel/spinlock.h>
 #include <kernel/kernel.h>
-#include <asm/arm.h>
+#include <kernel/arch_irq.h>
 
 struct signal_state_t;
 struct file;
@@ -584,12 +584,12 @@ extern void get_and_save_usr_context(task_t* t);
 
 static inline uint32_t disable_interrupts_save(void)
 {
-    return arm_disable_irq_fiq_save();
+    return arch_irq_fiq_save();
 }
 
 static inline void restore_interrupts(uint32_t cpsr)
 {
-    arm_restore_cpsr_control(cpsr);
+    arch_irq_fiq_restore(cpsr);
 }
 
 #endif /* _KERNEL_TASK_H */
