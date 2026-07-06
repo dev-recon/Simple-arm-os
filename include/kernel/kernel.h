@@ -94,17 +94,6 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
 #define USER_SIGNAL_REGION_SIZE  ARCH_USER_SIGNAL_REGION_SIZE
 
 /* ========================================================================
- * SIGNAL STACK - UTILISE LA ZONE LIBRE APReS USER_STACK_TOP
- * ======================================================================== */
-
-/* Signal stack dans la zone libre entre user space et kernel */
-#define DEFAULT_SIGNAL_STACK_SIZE   (16*1024u)                 /* 16KB par defaut */
-#define MAX_SIGNAL_STACK_SIZE       (1024*1024u)               /* 1MB maximum */
-
-/* Base pour signal stack (dans la zone libre de 16MB) */
-#define SIGNAL_STACK_BASE_DEFAULT   (USER_SIGNAL_REGION_START + DEFAULT_SIGNAL_STACK_SIZE)
-
-/* ========================================================================
  * MACROS UTILITAIRES
  * ======================================================================== */
 
