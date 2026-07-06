@@ -18,8 +18,8 @@
 
 #include <kernel/memory.h>
 #include <kernel/address_space.h>
-#include <kernel/kernel.h>
 #include <kernel/kprintf.h>
+#include <kernel/string.h>
 #include <kernel/spinlock.h>
 #include <kernel/arch_cpu.h>
 
