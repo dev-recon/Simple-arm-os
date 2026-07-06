@@ -15,6 +15,7 @@ ARCH_INCLUDE = $(ARCH_DIR)/include
 ASM_OFFSETS_SRC = $(ARCH_DIR)/asm-offsets.c
 ASM_OFFSETS_S = $(BUILD_DIR)/asm-offsets.s
 ASM_OFFSETS_H = $(BUILD_DIR)/generated/asm-offsets.h
+TARGET_ARCH_DISPLAY = $(TARGET_ARCH)
 
 ifeq ($(TARGET_ARCH),arm32)
 ARCH_CFLAGS = -mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft \
@@ -287,12 +288,12 @@ $(DISK_IMG): $(FAT32_IMG) $(EXT2_IMG) $(MBR_TOOL)
 $(USERFS_DIR):
 	@echo "Creating $(USERFS_DIR) directory with test files..."
 	mkdir -p $(USERFS_DIR)
-	echo "Hello from the ARM32 OS!" > $(USERFS_DIR)/hello.txt
+	echo "Hello from ArmOS ($(TARGET_ARCH_DISPLAY))!" > $(USERFS_DIR)/hello.txt
 	echo "This is a test file for the kernel" > $(USERFS_DIR)/test.txt
-	echo "ARM32 Kernel" > $(USERFS_DIR)/readme.txt
+	echo "ArmOS kernel ($(TARGET_ARCH_DISPLAY))" > $(USERFS_DIR)/readme.txt
 	echo "#!/bin/sh" > $(USERFS_DIR)/init.sh
 	echo "echo 'System initialization...'" >> $(USERFS_DIR)/init.sh
-	echo "echo 'Welcome to ARM32 OS'" >> $(USERFS_DIR)/init.sh
+	echo "echo 'Welcome to ArmOS ($(TARGET_ARCH_DISPLAY))'" >> $(USERFS_DIR)/init.sh
 	chmod +x $(USERFS_DIR)/init.sh
 	
 	# Creer des sous-repertoires
@@ -302,9 +303,9 @@ $(USERFS_DIR):
 	echo "Binary placeholder" > $(USERFS_DIR)/usr/bin/hello
 	
 	mkdir -p $(USERFS_DIR)/etc
-	echo "# ARM32 OS Configuration" > $(USERFS_DIR)/etc/os.conf
+	echo "# ArmOS Configuration" > $(USERFS_DIR)/etc/os.conf
 	echo "version=1.0" >> $(USERFS_DIR)/etc/os.conf
-	echo "architecture=arm32" >> $(USERFS_DIR)/etc/os.conf
+	echo "architecture=$(TARGET_ARCH)" >> $(USERFS_DIR)/etc/os.conf
 	
 	mkdir -p $(USERFS_DIR)/tmp
 	echo "Temporary files directory" > $(USERFS_DIR)/tmp/README
