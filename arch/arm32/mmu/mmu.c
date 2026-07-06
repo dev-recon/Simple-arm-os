@@ -192,12 +192,10 @@ void setup_kernel_asid_context(void)
     KDEBUG("Setting up ASID %d kernel context...\n", ASID_KERNEL);
     
     /*
-     * IMPORTANT : Avec QEMU virt, toute la RAM physique est >= 0x40000000
-     * Il n'y a PAS de RAM physique < 0x40000000
-     * 
-     * Pour TTBR0, nous devons :
-     * 1. Allouer une page physique dans la RAM réelle (>= 0x40000000)
-     * 2. L'utiliser comme table de pages pour l'espace virtuel TTBR0 (< 0x40000000)
+     * The kernel stores TTBR0 page tables in real platform RAM, while TTBR0
+     * describes the low user address space below the architecture split.
+     * Keep those two domains explicit: physical page-table storage is not the
+     * same thing as the virtual user addresses it describes.
      */
     
     /* Allouer une page physique réelle pour la table TTBR0 */
@@ -292,7 +290,8 @@ void setup_kernel_asid_context(void)
     KDEBUG("Kernel ASID %d context configured:\n", ASID_KERNEL);
     KDEBUG("  TTBR0 physical table: 0x%08X\n", (uint32_t)kernel_ttbr0);
     //KDEBUG("  Sections mapped: %d\n", mapped_sections);
-    KDEBUG("  Ready to handle userspace virtual addresses < 0x40000000\n");
+    KDEBUG("  Ready to handle userspace virtual addresses < 0x%08X\n",
+           (uint32_t)get_split_boundary());
 }
 
 void dump_l1(vaddr_t va) {
@@ -1000,7 +999,7 @@ static bool is_valid_vaddr(vaddr_t vaddr)
         return true;
     }
     
-    /* Devices/peripherals pour machine virt */
+    /* Platform device/peripheral window. */
     if (vaddr >= arch_platform_device_start() && vaddr < arch_platform_device_end()) {
         return true;
     }
