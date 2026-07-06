@@ -17,10 +17,10 @@
  */
 
 #include <kernel/spinlock.h>
+#include <kernel/arch_spinlock.h>
 #include <kernel/smp.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
-#include <asm/spinlock.h>
 
 static inline int spin_atomic_try_acquire(volatile uint32_t* locked)
 {

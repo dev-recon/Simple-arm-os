@@ -22,9 +22,9 @@
 #include <kernel/types.h>
 
 /*
- * ARMv7 SMP spinlock.
+ * SMP spinlock.
  *
- * The lock word is acquired with LDREX/STREX in kernel/sync/spinlock.c.
+ * The lock word is acquired with architecture-provided atomic primitives.
  * owner stores the CPU id that owns the lock, or SPINLOCK_NO_OWNER when the
  * lock is free.  This stays useful even before secondary CPUs are enabled:
  * it makes accidental recursive locking and future SMP bugs visible.
