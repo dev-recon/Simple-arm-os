@@ -20,10 +20,13 @@
  */
 
 #include <kernel/display.h>
+#include <kernel/ata.h>
+#include <kernel/disk_layout.h>
 #include <kernel/kprintf.h>
 #include <kernel/keyboard.h>
 #include <kernel/platform_devices.h>
 #include <kernel/tty.h>
+#include <kernel/virtio_block.h>
 #include <kernel/virtio_gpu.h>
 #include <kernel/virtio_input.h>
 #include <kernel/virtio_net.h>
@@ -66,4 +69,22 @@ platform_devices_state_t platform_devices_init(void)
     }
 
     return state;
+}
+
+void platform_block_init(void)
+{
+    uint64_t disk_sectors;
+    uint32_t disk_mb;
+
+    if (!init_ata()) {
+        KBOOT_WARN("Block: virtio0 unavailable");
+        return;
+    }
+
+    disk_sectors = ata_get_capacity_sectors();
+    disk_mb = (uint32_t)(disk_sectors / 2048u);
+    KBOOT_OKF("Block: virtio0 %uMB, irq %u", disk_mb, virtio_blk_get_irq());
+
+    if (!disk_layout_init_from_mbr())
+        KBOOT_WARN("Partition: using compiled fallback layout");
 }

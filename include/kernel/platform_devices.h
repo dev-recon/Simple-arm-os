@@ -27,5 +27,6 @@ typedef struct {
 } platform_devices_state_t;
 
 platform_devices_state_t platform_devices_init(void);
+void platform_block_init(void);
 
 #endif /* _KERNEL_PLATFORM_DEVICES_H */

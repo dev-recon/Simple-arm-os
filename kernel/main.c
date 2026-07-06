@@ -26,7 +26,6 @@
 #include <kernel/display.h>
 #include <kernel/platform_devices.h>
 #include <kernel/vfs.h>
-#include <kernel/ata.h>
 #include <kernel/smp.h>
 #include <kernel/tlb.h>
 #include <kernel/arch_cpu.h>
@@ -164,8 +163,6 @@ void kernel_main(void)
     uint32_t bogo_x100;
     uint32_t total_mb;
     uint32_t available_mb;
-    uint64_t disk_sectors;
-    uint32_t disk_mb;
     platform_devices_state_t platform_devices;
 
     /* Phase 0: etats du processeur */
@@ -235,16 +232,7 @@ void kernel_main(void)
     }
 #endif
 
-    if (!init_ata()) {
-        KBOOT_WARN("Block: virtio0 unavailable");
-    } else {
-        disk_sectors = ata_get_capacity_sectors();
-        disk_mb = (uint32_t)(disk_sectors / 2048u);
-        KBOOT_OKF("Block: virtio0 %uMB, irq 47", disk_mb);
-        if (!disk_layout_init_from_mbr()) {
-            KBOOT_WARN("Partition: using compiled fallback layout");
-        }
-    }
+    platform_block_init();
 
     if (!init_vfs()) {
         KBOOT_WARN("VFS: mount failed");
