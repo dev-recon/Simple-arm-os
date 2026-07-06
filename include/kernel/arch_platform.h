@@ -26,77 +26,77 @@
 
 static inline paddr_t arch_platform_uart0_phys_base(void)
 {
-    return (paddr_t)VIRT_UART_BASE;
+    return (paddr_t)ARMOS_PLATFORM_UART0_PHYS_BASE;
 }
 
 static inline vaddr_t arch_platform_uart0_kernel_base(void)
 {
-    return (vaddr_t)KERNEL_MMIO_UART_BASE;
+    return (vaddr_t)ARMOS_PLATFORM_UART0_KERNEL_BASE;
 }
 
 static inline paddr_t arch_platform_ram_start(void)
 {
-    return (paddr_t)VIRT_RAM_START;
+    return (paddr_t)ARMOS_PLATFORM_RAM_START;
 }
 
 static inline paddr_t arch_platform_device_start(void)
 {
-    return (paddr_t)DEVICE_START;
+    return (paddr_t)ARMOS_PLATFORM_DEVICE_START;
 }
 
 static inline paddr_t arch_platform_device_end(void)
 {
-    return (paddr_t)DEVICE_END;
+    return (paddr_t)ARMOS_PLATFORM_DEVICE_END;
 }
 
 static inline uint32_t arch_platform_kernel_mmio_section_size(void)
 {
-    return KERNEL_MMIO_SECTION_SIZE;
+    return ARMOS_PLATFORM_KERNEL_MMIO_SECTION_SIZE;
 }
 
 static inline vaddr_t arch_platform_kernel_mmio_gic_base(void)
 {
-    return (vaddr_t)KERNEL_MMIO_GIC_BASE;
+    return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_GIC_BASE;
 }
 
 static inline vaddr_t arch_platform_kernel_mmio_uart_base(void)
 {
-    return (vaddr_t)KERNEL_MMIO_UART_BASE;
+    return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_UART_BASE;
 }
 
 static inline vaddr_t arch_platform_kernel_mmio_virtio_base(void)
 {
-    return (vaddr_t)KERNEL_MMIO_VIRTIO_BASE;
+    return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_VIRTIO_BASE;
 }
 
 static inline paddr_t arch_platform_gic_phys_start(void)
 {
-    return (paddr_t)VIRT_GIC_DIST_BASE;
+    return (paddr_t)ARMOS_PLATFORM_GIC_PHYS_START;
 }
 
 static inline paddr_t arch_platform_gic_phys_end(void)
 {
-    return (paddr_t)(VIRT_GIC_VCPU_BASE + VIRT_GIC_VCPU_SIZE);
+    return (paddr_t)ARMOS_PLATFORM_GIC_PHYS_END;
 }
 
 static inline uint32_t arch_platform_timer_irq(void)
 {
-    return VIRT_TIMER_NS_EL1_IRQ;
+    return ARMOS_PLATFORM_TIMER_IRQ;
 }
 
 static inline uint32_t arch_platform_uart_irq(void)
 {
-    return VIRT_UART_IRQ;
+    return ARMOS_PLATFORM_UART_IRQ;
 }
 
 static inline volatile uint32_t* arch_platform_virtio_mmio_base(paddr_t phys)
 {
-    return (volatile uint32_t*)(uintptr_t)KERNEL_MMIO_VIRTIO_ADDR(phys);
+    return (volatile uint32_t*)(uintptr_t)ARMOS_PLATFORM_VIRTIO_MMIO_ADDR(phys);
 }
 
 static inline paddr_t arch_platform_virtio_phys_start(void)
 {
-    return (paddr_t)VIRT_VIRTIO_BASE;
+    return (paddr_t)ARMOS_PLATFORM_VIRTIO_PHYS_START;
 }
 
 static inline bool arch_platform_virtio_irq_from_phys(paddr_t phys, uint32_t* out_irq)
@@ -105,42 +105,42 @@ static inline bool arch_platform_virtio_irq_from_phys(paddr_t phys, uint32_t* ou
         return false;
     if (phys < arch_platform_virtio_phys_start())
         return false;
-    if (((phys - arch_platform_virtio_phys_start()) % VIRT_VIRTIO_SIZE) != 0)
+    if (((phys - arch_platform_virtio_phys_start()) % ARMOS_PLATFORM_VIRTIO_MMIO_SIZE) != 0)
         return false;
 
-    uint32_t index = (phys - arch_platform_virtio_phys_start()) / VIRT_VIRTIO_SIZE;
-    *out_irq = VIRT_VIRTIO_IRQ(index);
+    uint32_t index = (phys - arch_platform_virtio_phys_start()) / ARMOS_PLATFORM_VIRTIO_MMIO_SIZE;
+    *out_irq = ARMOS_PLATFORM_VIRTIO_IRQ(index);
     return true;
 }
 
 static inline paddr_t arch_platform_virtio_net_phys(void)
 {
-    return (paddr_t)VIRT_VIRTIO_NET;
+    return (paddr_t)ARMOS_PLATFORM_VIRTIO_NET_PHYS;
 }
 
 static inline uint32_t arch_platform_virtio_net_irq(void)
 {
-    return VIRT_VIRTIO_NET_IRQ;
+    return ARMOS_PLATFORM_VIRTIO_NET_IRQ;
 }
 
 static inline paddr_t arch_platform_virtio_block_phys(void)
 {
-    return (paddr_t)VIRT_VIRTIO_BLOCK;
+    return (paddr_t)ARMOS_PLATFORM_VIRTIO_BLOCK_PHYS;
 }
 
 static inline paddr_t arch_platform_virtio_block_fallback_phys(void)
 {
-    return (paddr_t)(VIRT_VIRTIO_BASE + 31u * VIRT_VIRTIO_SIZE);
+    return (paddr_t)ARMOS_PLATFORM_VIRTIO_BLOCK_FALLBACK_PHYS;
 }
 
 static inline uint32_t arch_platform_virtio_block_irq(void)
 {
-    return VIRT_VIRTIO_BLOCK_IRQ;
+    return ARMOS_PLATFORM_VIRTIO_BLOCK_IRQ;
 }
 
 static inline uint32_t arch_platform_virtio_mmio_size(void)
 {
-    return VIRT_VIRTIO_SIZE;
+    return ARMOS_PLATFORM_VIRTIO_MMIO_SIZE;
 }
 
 static inline bool arch_platform_phys_is_device(paddr_t phys)
@@ -152,7 +152,7 @@ static inline bool arch_platform_phys_is_device(paddr_t phys)
 static inline bool arch_platform_phys_is_virtio(paddr_t phys)
 {
     paddr_t start = arch_platform_virtio_phys_start();
-    return phys >= start && phys < (start + VIRT_VIRTIO_SIZE * 8u);
+    return phys >= start && phys < (start + ARMOS_PLATFORM_VIRTIO_MMIO_SIZE * 8u);
 }
 
 static inline bool arch_platform_phys_is_gic(paddr_t phys)

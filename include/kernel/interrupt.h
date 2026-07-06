@@ -24,10 +24,10 @@
 #include <kernel/types.h>
 
 /* Legacy generic IRQ aliases. The concrete IDs are supplied by the platform. */
-#define IRQ_SGI_TLB_SHOOTDOWN VIRT_SGI_TLB_SHOOTDOWN_IRQ
-#define IRQ_TIMER             VIRT_TIMER_NS_EL1_IRQ
-#define IRQ_KEYBOARD          VIRT_UART_LEGACY_IRQ
-#define IRQ_ATA               VIRT_ATA_LEGACY_IRQ
+#define IRQ_SGI_TLB_SHOOTDOWN ARMOS_PLATFORM_SGI_TLB_SHOOTDOWN_IRQ
+#define IRQ_TIMER             ARMOS_PLATFORM_TIMER_IRQ
+#define IRQ_KEYBOARD          ARMOS_PLATFORM_KEYBOARD_IRQ
+#define IRQ_ATA               ARMOS_PLATFORM_ATA_IRQ
 
 void enable_irq(uint32_t irq);
 void enable_irq_level(uint32_t irq);
