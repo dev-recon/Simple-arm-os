@@ -1020,7 +1020,7 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
             /*  Calculer l'offset DEPUIS LE HAUT de la pile parent */
             vaddr_t parent_stack_base = task_stack_addr(parent->stack_base);
             vaddr_t parent_stack_top = parent_stack_base + parent->stack_size;
-            vaddr_t parent_sp = (vaddr_t)parent->context.sp;
+            vaddr_t parent_sp = arch_task_context_kernel_sp(&parent->context);
             uint32_t parent_sp_offset_from_top = (uint32_t)(parent_stack_top - parent_sp);
             
             //KDEBUG("Parent stack analysis:\n");
@@ -1037,15 +1037,17 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
                 /* Utiliser pile propre au lieu d'echouer */
                 memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
                 vaddr_t child_stack_top = task_stack_addr(child->stack_top);
-                child->context.sp = (uint32_t)arch_task_stack_align(
-                    child_stack_top - ARCH_TASK_KERNEL_STACK_RESERVE);
+                arch_task_context_set_kernel_sp(&child->context,
+                    arch_task_stack_align(child_stack_top -
+                                          ARCH_TASK_KERNEL_STACK_RESERVE));
             } else {
                 /*  Copier le contenu de la pile */
                 memcpy(child->stack_base, parent->stack_base, KERNEL_TASK_STACK_SIZE);
                 
                 /*  Calculer le nouveau SP avec le MeME offset depuis le haut */
                 vaddr_t child_stack_top = task_stack_addr(child->stack_top);
-                child->context.sp = (uint32_t)(child_stack_top - parent_sp_offset_from_top);
+                arch_task_context_set_kernel_sp(&child->context,
+                    child_stack_top - parent_sp_offset_from_top);
 
                 /* NOUVEAU : Corriger les adresses dans le contenu copié */
                 vaddr_t child_stack_base = task_stack_addr(child->stack_base);
@@ -1078,7 +1080,8 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
                 
                 KDEBUG("Child stack analysis:\n");
                 KDEBUG("  Child stack: %p - %p\n", child->stack_base, child->stack_top);
-                KDEBUG("  Child SP: 0x%08X\n", child->context.sp);
+                KDEBUG("  Child SP: 0x%08X\n",
+                       arch_task_context_kernel_sp(&child->context));
                 KDEBUG("  Copied stack with SP offset %u from top\n", parent_sp_offset_from_top);
             }
         } else {
@@ -1086,13 +1089,14 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
             KWARN("Parent has no valid stack, creating clean stack\n");
             memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
             vaddr_t child_stack_top = task_stack_addr(child->stack_top);
-            child->context.sp = (uint32_t)arch_task_stack_align(
-                child_stack_top - ARCH_TASK_KERNEL_STACK_RESERVE);
+            arch_task_context_set_kernel_sp(&child->context,
+                arch_task_stack_align(child_stack_top -
+                                      ARCH_TASK_KERNEL_STACK_RESERVE));
         }
 
         arch_task_context_set_kernel_stack(&child->context,
                                            task_stack_addr(child->stack_top),
-                                           (vaddr_t)child->context.sp);
+                                           arch_task_context_kernel_sp(&child->context));
         arch_task_context_set_returns_to_user(&child->context, false);
     }
     
@@ -1226,7 +1230,7 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->stack_faults = 0;
     child->lazy_faults = 0;
     arch_task_context_mark_first_run(&child->context);
-    child->context.r0 = 0;
+    arch_task_context_set_kernel_return_value(&child->context, 0);
     child->wakeup_time = 0;
     child->quantum_left = QUANTUM_TICKS;
     child->ready_since_tick = 0;
@@ -1397,7 +1401,7 @@ bool validate_task_stack_safe(task_t* task)
     
     vaddr_t base = task_stack_addr(task->stack_base);
     vaddr_t top = task_stack_addr(task->stack_top);
-    vaddr_t sp = (vaddr_t)task->context.sp;
+    vaddr_t sp = arch_task_context_kernel_sp(&task->context);
     
     /* Verification fondamentale */
     if (base >= top) {
@@ -2330,8 +2334,8 @@ static bool scheduler_validate_switch(task_t* old_task,
         KERROR("      stack 0x%08X-0x%08X context.sp=0x%08X svc_sp=0x%08X\n",
                (uint32_t)old_task->stack_base,
                (uint32_t)old_task->stack_top,
-               old_task->context.sp,
-               old_task->context.svc_sp);
+               arch_task_context_kernel_sp(&old_task->context),
+               arch_task_context_svc_sp(&old_task->context));
         kernel_lifecycle_stats.scheduler_refused++;
         sched_trace_record(SCHED_TRACE_REFUSE_INVALID_TASK, old_task);
         return false;

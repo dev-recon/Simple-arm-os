@@ -408,7 +408,8 @@ void ultra_simple_test(void)
     /* Afficher l'etat actuel */
     task_t* current = task_current_local();
     KINFO("Current task: %s\n", current ? current->name : "NULL");
-    KINFO("Current SP: 0x%08X\n", current ? current->context.sp : 0);
+    KINFO("Current SP: 0x%08X\n",
+          current ? arch_task_context_kernel_sp(&current->context) : 0);
     //task_dump_stacks_detailed();
     
     /* Creer une tache qui ne fait rien */
