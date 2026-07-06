@@ -577,6 +577,24 @@ static bool runqueue_contains_locked(task_t* task)
     return task && task->rq_priority < TASK_PRIORITY_LEVELS;
 }
 
+static void scheduler_clear_nonrunnable_debt_locked(task_t* task, task_state_t state)
+{
+    if (!task)
+        return;
+
+    if (state == TASK_READY || state == TASK_RUNNING)
+        return;
+
+    /*
+     * Debt is a fairness hint for runnable tasks only.  Once a task sleeps,
+     * blocks, stops, or exits, forget the consumed-CPU penalty so long-lived
+     * tools such as top do not keep fossilized debt while waiting for input or
+     * a refresh timeout.
+     */
+    task->sched_debt = 0;
+    task->ready_since_tick = 0;
+}
+
 static bool runqueue_link_plausible_locked(task_t* task, uint32_t prio)
 {
     if (!task_header_plausible(task))
@@ -3015,6 +3033,7 @@ void task_set_state(task_t* task, task_state_t state)
 
     runqueue_remove_locked(task);
 
+    scheduler_clear_nonrunnable_debt_locked(task, state);
     task->state = state;
     if (state == TASK_RUNNING) {
         task->running_cpu = smp_processor_id();
@@ -3049,6 +3068,7 @@ void task_set_blocked_under_lock(task_t* task)
     }
 
     runqueue_remove_locked(task);
+    scheduler_clear_nonrunnable_debt_locked(task, TASK_BLOCKED);
     task->state = TASK_BLOCKED;
     if (task->type == TASK_TYPE_PROCESS && task->process)
         task->process->state = (proc_state_t)PROC_BLOCKED;
@@ -3068,6 +3088,7 @@ void task_set_stopped_under_lock(task_t* task)
     }
 
     runqueue_remove_locked(task);
+    scheduler_clear_nonrunnable_debt_locked(task, TASK_STOPPED);
     task->state = TASK_STOPPED;
     if (task->type == TASK_TYPE_PROCESS && task->process)
         task->process->state = (proc_state_t)PROC_STOPPED;
@@ -3092,6 +3113,7 @@ static void task_set_sleep_state_until(task_t* task, task_state_t state,
     }
 
     runqueue_remove_locked(task);
+    scheduler_clear_nonrunnable_debt_locked(task, state);
     task->state = state;
     task->wakeup_time = wakeup_time;
     if (task->type == TASK_TYPE_PROCESS && task->process) {

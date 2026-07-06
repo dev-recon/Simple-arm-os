@@ -691,6 +691,8 @@ void sys_exit(int status)
     }
     //task_set_state(proc, TASK_ZOMBIE);
     if (proc->state != TASK_ZOMBIE) {
+        proc->sched_debt = 0;
+        proc->ready_since_tick = 0;
         proc->state = TASK_ZOMBIE;           /* Pas TASK_TERMINATED ! */
         proc->process->state = (proc_state_t)PROC_ZOMBIE;
         /*
