@@ -19,7 +19,6 @@
 #include <kernel/process.h>
 #include <kernel/syscalls.h>
 #include <kernel/memory.h>
-#include <kernel/kernel.h>
 #include <kernel/vfs.h>
 #include <kernel/kprintf.h>
 

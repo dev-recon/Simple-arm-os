@@ -19,10 +19,11 @@
 #include <kernel/signal.h>
 #include <kernel/process.h>
 #include <kernel/memory.h>
-#include <kernel/kernel.h>
 #include <kernel/syscalls.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
+#include <kernel/string.h>
+#include <kernel/util.h>
 
 /* Configuration signal stack */
 //#define DEFAULT_SIGNAL_STACK_SIZE   (16*1024)     /* 16KB par processus */

@@ -20,7 +20,6 @@
 #include <kernel/syscalls.h>
 #include <kernel/memory.h>
 #include <kernel/vfs.h>
-#include <kernel/kernel.h>
 #include <kernel/elf32.h>
 #include <kernel/arch_exec.h>
 #include <kernel/kprintf.h>
