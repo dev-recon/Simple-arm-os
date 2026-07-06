@@ -22,6 +22,7 @@
 #include <kernel/types.h>
 #include <kernel/string.h>
 #include <kernel/fdt.h>
+#include <kernel/linker.h>
 #include <asm/cpu_features.h>
 #include <asm/platform.h>
 #include <asm/memory_layout.h>
@@ -30,44 +31,6 @@
 #define USE_RAMFS 1
 
 uint32_t get_kernel_memory_size(void);
-
-/* === INFORMATIONS DU LINKER SCRIPT === */
-
-/* Symboles exportes par le linker script */
-extern uint32_t __start;           /* Debut du kernel */
-extern uint32_t __end;             /* Fin du kernel */
-extern uint32_t __kernel_start;    /* Alias pour __start */
-extern uint32_t __kernel_end;      /* Alias pour __end */
-extern uint32_t __kernel_size;     /* Taille du kernel */
-
-/* Sections du kernel */
-extern uint32_t __text_start;      /* Debut section .text */
-extern uint32_t __text_end;        /* Fin section .text */
-extern uint32_t __rodata_start;    /* Debut section .rodata */
-extern uint32_t __rodata_end;      /* Fin section .rodata */
-extern uint32_t __data_start;      /* Debut section .data */
-extern uint32_t __data_end;        /* Fin section .data */
-extern uint32_t __bss_start;       /* Debut section .bss */
-extern uint32_t __bss_end;         /* Fin section .bss */
-
-//extern uint32_t __mmu_tables_start;
-//extern uint32_t __mmu_tables_end;
-//extern uint32_t __mmu_size;
-
-/* Pile et heap kernel */
-extern uint32_t __stack_bottom;    /* Debut de la pile kernel */
-extern uint32_t __stack_top;       /* Fin de la pile kernel */
-extern uint32_t stack_bottom;      /* Alias */
-extern uint32_t stack_top;         /* Alias */
-extern uint32_t __heap_start;      /* Debut du heap kernel */
-extern uint32_t __heap_end;        /* Fin du heap kernel */
-extern uint32_t __heap_size;       /* Taille du heap kernel */
-extern uint32_t __ram_start;       /* Debut RAM libre */
-extern uint32_t __ram_end;         /* Fin RAM libre */
-extern uint32_t __ram_size;        /* Taille RAM libre */
-extern uint32_t __free_memory_start; /* Debut memoire libre */
-
-extern uint32_t __stack_svc_top;
 
 /* ========================================================================
  * MEMORY LAYOUT
@@ -102,48 +65,6 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
      */
     return vaddr;
 }
-
-/* ========================================================================
- * KERNEL SPACE (utilise les symboles du linker)
- * ======================================================================== */
-#define KERNEL_START            ((vaddr_t)(uintptr_t)&__start)          /* Debut kernel */
-#define KERNEL_END              ((vaddr_t)(uintptr_t)&__end)            /* Fin kernel */
-#define KERNEL_SIZE             ((size_t)(uintptr_t)&__kernel_size)     /* Taille kernel */
-#define KERNEL_BASE             KERNEL_START                  /* Alias compatibilite */
-
-/* Sections kernel */
-#define KERNEL_TEXT_START       ((vaddr_t)(uintptr_t)&__text_start)
-#define KERNEL_TEXT_END         ((vaddr_t)(uintptr_t)&__text_end)
-#define KERNEL_DATA_START       ((vaddr_t)(uintptr_t)&__data_start)
-#define KERNEL_DATA_END         ((vaddr_t)(uintptr_t)&__data_end)
-#define KERNEL_BSS_START        ((vaddr_t)(uintptr_t)&__bss_start)
-#define KERNEL_BSS_END          ((vaddr_t)(uintptr_t)&__bss_end)
-
-/* Stack kernel */
-#define KERNEL_STACK_BOTTOM     ((vaddr_t)(uintptr_t)&__stack_bottom)
-#define KERNEL_STACK_TOP        ((vaddr_t)(uintptr_t)&__stack_top)
-#define KERNEL_STACK_SIZE       (KERNEL_STACK_TOP - KERNEL_STACK_BOTTOM)
-
-/* Heap kernel (defini par le linker) */
-#define KERNEL_HEAP_START       ((vaddr_t)(uintptr_t)&__heap_start)
-#define KERNEL_HEAP_END         ((vaddr_t)(uintptr_t)&__heap_end)
-#define KERNEL_HEAP_SIZE        ((size_t)(uintptr_t)&__heap_size)
-
-/* RAM physique disponible (apres kernel et heap) */
-#define PHYSICAL_RAM_START      ((paddr_t)(uintptr_t)&__ram_start)
-#define PHYSICAL_RAM_END        ((paddr_t)(uintptr_t)&__ram_end)
-#define PHYSICAL_RAM_SIZE       ((size_t)(uintptr_t)&__ram_size)
-#define FREE_MEMORY_START       ((paddr_t)(uintptr_t)&__free_memory_start)
-
-#define KERNEL_SVC_STACK_TOP    ((vaddr_t)(uintptr_t)&__stack_svc_top)
-
-/* Aliases pour compatibilite */
-#define HEAP_START              KERNEL_HEAP_START
-#define HEAP_END                KERNEL_HEAP_END
-#define HEAP_SIZE               KERNEL_HEAP_SIZE
-#define RAM_START               PHYSICAL_RAM_START
-#define RAM_END                 PHYSICAL_RAM_END
-#define RAM_SIZE                PHYSICAL_RAM_SIZE
 
 /* ========================================================================
  * USER SPACE
