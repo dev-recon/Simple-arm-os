@@ -37,12 +37,6 @@
 /* Panic et debug */
 void panic(const char* message) __attribute__((noreturn));
 
-/* Initialisation precoce */
-void init_early_uart(void);
-uint32_t detect_memory(void);
-
-/* Device Tree support */
-void print_cpu_mode(void);
 //extern const uint32_t TASK_CONTEXT_OFF;
 
 #endif /* _KERNEL_H */

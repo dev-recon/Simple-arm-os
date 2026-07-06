@@ -56,4 +56,6 @@ bool arch_mode_is_user(uint32_t mode);
 bool arch_mode_is_supervisor(uint32_t mode);
 const char* arch_mode_name(uint32_t mode);
 
+void print_cpu_mode(void);
+
 #endif /* _KERNEL_ARCH_CPU_H */
