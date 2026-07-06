@@ -19,14 +19,15 @@ ASM_OFFSETS_H = $(BUILD_DIR)/generated/asm-offsets.h
 TARGET_ARCH_DISPLAY = $(TARGET_ARCH)/$(TARGET_PLATFORM)
 
 ifeq ($(TARGET_ARCH),arm32)
-ARCH_CFLAGS = -mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft \
+ARCH_CFLAGS = -marm -mfpu=neon-vfpv4 -mfloat-abi=soft \
               -mno-unaligned-access -DARMV7A_KERNEL -DARMOS_ARCH_BITS=32
 else
 $(error Unsupported TARGET_ARCH '$(TARGET_ARCH)')
 endif
 
 ifeq ($(TARGET_PLATFORM),qemu-virt)
-PLATFORM_CFLAGS = -DARMOS_PLATFORM_QEMU_VIRT
+PLATFORM_CPU_CFLAGS = -mcpu=cortex-a15
+PLATFORM_CFLAGS = $(PLATFORM_CPU_CFLAGS) -DARMOS_PLATFORM_QEMU_VIRT
 PLATFORM_OBJS = \
 	$(ARCH_DIR)/platform/qemu_virt/devices.o \
 	kernel/drivers/ata.o \
