@@ -19,7 +19,7 @@
 #ifndef _KERNEL_TIMER_H
 #define _KERNEL_TIMER_H
 
-#include <asm/timer.h>
+#include <kernel/arch_timer.h>
 #include <kernel/types.h>
 
 /* 1000Hz currently means one accounting tick per millisecond. */

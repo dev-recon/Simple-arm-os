@@ -19,8 +19,8 @@
 #ifndef _KERNEL_TYPES_H
 #define _KERNEL_TYPES_H
 
-#include <asm/cache.h>
-#include <asm/page.h>
+#include <kernel/arch_cache.h>
+#include <kernel/arch_page.h>
 
 /* === TYPES DE BASE === */
 
