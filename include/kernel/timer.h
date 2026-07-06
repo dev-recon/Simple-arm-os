@@ -65,6 +65,9 @@ uint32_t get_current_time(void);
 
 
 /* Platform timer functions */
+uint32_t timer_get_frequency(void);
+uint64_t timer_get_count(void);
+void timer_set_compare(uint64_t compare);
 uint64_t get_generic_timer_count(void);
 void set_generic_timer_compare(uint64_t compare_value);
 void enable_generic_timer(void);

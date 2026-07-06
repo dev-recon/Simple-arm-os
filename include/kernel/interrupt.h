@@ -31,6 +31,8 @@
 /* GIC functions */
 void init_gic(void);
 void gic_init_secondary_cpu_interface(void);
+void gic_enable_irq_kernel(uint32_t irq);
+void gic_ack_irq_kernel(uint32_t irq);
 void enable_irq(uint32_t irq);
 void enable_irq_level(uint32_t irq);
 void disable_irq(uint32_t irq);
