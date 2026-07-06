@@ -18,6 +18,7 @@
 
 #include <kernel/kernel.h>
 #include <kernel/memory.h>
+#include <kernel/address_space.h>
 #include <kernel/kprintf.h>
 #include <kernel/debug_print.h>
 #include <kernel/display.h>

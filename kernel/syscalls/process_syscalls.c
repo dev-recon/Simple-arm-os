@@ -19,6 +19,7 @@
 #include <kernel/syscalls.h>
 #include <kernel/process.h>
 #include <kernel/memory.h>
+#include <kernel/address_space.h>
 #include <kernel/vfs.h>
 #include <kernel/kernel.h>
 #include <kernel/string.h>

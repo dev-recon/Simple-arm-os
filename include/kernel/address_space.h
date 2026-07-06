@@ -22,6 +22,7 @@
 #define _KERNEL_ADDRESS_SPACE_H
 
 #include <kernel/types.h>
+#include <kernel/linker.h>
 #include <asm/memory_layout.h>
 
 uint32_t get_kernel_memory_size(void);

@@ -19,6 +19,7 @@
 #include <kernel/ext2.h>
 #include <kernel/vfs.h>
 #include <kernel/memory.h>
+#include <kernel/address_space.h>
 #include <kernel/string.h>
 #include <kernel/kprintf.h>
 #include <kernel/kernel.h>

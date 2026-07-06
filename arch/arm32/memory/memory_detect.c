@@ -19,6 +19,7 @@
 #include <kernel/types.h>
 #include <kernel/kprintf.h>
 #include <kernel/memory.h>
+#include <kernel/address_space.h>
 #include <kernel/debug_print.h>
 #include <kernel/kernel.h>
 #include <asm/arm.h>

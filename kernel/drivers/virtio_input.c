@@ -18,6 +18,7 @@
 
 #include <kernel/kernel.h>
 #include <kernel/types.h>
+#include <kernel/address_space.h>
 #include <kernel/virtio_input.h>
 #include <kernel/virtio_block.h>
 #include <kernel/tty.h>

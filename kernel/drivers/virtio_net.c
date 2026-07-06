@@ -20,6 +20,7 @@
 
 #include <kernel/kernel.h>
 #include <kernel/types.h>
+#include <kernel/address_space.h>
 #include <kernel/virtio_net.h>
 #include <kernel/virtio_block.h>
 #include <kernel/memory.h>

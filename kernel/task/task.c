@@ -18,6 +18,7 @@
 
 #include <kernel/task.h>
 #include <kernel/memory.h>
+#include <kernel/address_space.h>
 #include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>

@@ -18,6 +18,7 @@
 
 #include <kernel/memory.h>
 #include <kernel/types.h>
+#include <kernel/address_space.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 #include <kernel/kernel.h>
