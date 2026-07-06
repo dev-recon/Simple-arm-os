@@ -23,6 +23,11 @@
 #include <kernel/types.h>
 
 bool arch_validate_elf_header(const elf32_ehdr_t* header);
-void arch_sync_loaded_user_page(vaddr_t user_vaddr, size_t size, bool executable);
+/*
+ * The page has just been filled through a kernel temporary mapping.  The arch
+ * hook owns the cache maintenance needed before the same physical page is
+ * installed in the user address space.
+ */
+void arch_sync_loaded_user_page(vaddr_t mapped_vaddr, size_t size, bool executable);
 
 #endif /* _KERNEL_ARCH_EXEC_H */

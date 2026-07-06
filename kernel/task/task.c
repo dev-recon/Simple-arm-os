@@ -3459,7 +3459,7 @@ void task_sleep_ms(uint32_t ms)
     if (!scheduler_initialized) {
         volatile uint32_t total = ms * 1000;
         for (volatile uint32_t i = 0; i < total; i++)
-            cpu_relax();
+            arch_cpu_relax();
         return;
     }
 

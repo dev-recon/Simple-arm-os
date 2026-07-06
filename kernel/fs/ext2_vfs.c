@@ -28,6 +28,7 @@
 #include <kernel/timer.h>
 #include <kernel/virtio_block.h>
 #include <kernel/stdarg.h>
+#include <kernel/arch_barrier.h>
 
 extern int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer);
 extern int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer);
@@ -260,7 +261,7 @@ static void ext2_op_acquire(void)
             return;
 
         if (!task) {
-            cpu_relax();
+            arch_cpu_relax();
             continue;
         }
 
@@ -338,7 +339,7 @@ static void ext2_cache_acquire(void)
             return;
 
         if (!task) {
-            cpu_relax();
+            arch_cpu_relax();
             continue;
         }
 

@@ -266,18 +266,8 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
             
             //KDEBUG("Successfully read %u bytes\n", bytes_read);
 
-            // juste après le read() réussi dans temp_vaddr
-            uintptr_t start = (temp_vaddr) & ~63u;
-            uintptr_t end   = (temp_vaddr + PAGE_SIZE + 63u) & ~63u;
-            invalidate_dcache_range((vaddr_t)start, (vaddr_t)end);
-
-            dcache_clean_by_va((void*)temp_vaddr, PAGE_SIZE);
-
-            if (vma_flags & VMA_EXEC) {
-                sync_icache_for_exec();
-            }
-
-            clean_dcache_by_mva((void *)temp_vaddr, PAGE_SIZE); 
+            arch_sync_loaded_user_page(temp_vaddr, PAGE_SIZE,
+                                       (vma_flags & VMA_EXEC) != 0);
 
         /* Après la lecture réussie */
 

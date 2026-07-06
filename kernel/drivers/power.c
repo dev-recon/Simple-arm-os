@@ -26,6 +26,7 @@
 #include <kernel/signal.h>
 #include <kernel/timer.h>
 #include <kernel/smp.h>
+#include <kernel/arch_cpu.h>
 #include <kernel/arch_power.h>
 
 #define SHUTDOWN_TERM_GRACE_MS 200
@@ -226,7 +227,7 @@ void kernel_poweroff(void)
     shutdown_processes();
     shutdown_park_secondary_cpus();
     shutdown_drivers();
-    disable_interrupts();
+    arch_disable_interrupts();
     kprintf("Shutdown: interrupts disabled\n");
     kprintf("Shutdown: entering platform poweroff\n");
     arch_system_off();
