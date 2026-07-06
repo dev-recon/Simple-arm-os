@@ -170,7 +170,7 @@ static void tlb_wait_remote_ack(uint32_t target_mask, uint32_t generation)
                 KWARN("TLB: waiting for shootdown generation %u ack mask=0x%08x\n",
                       generation, pending);
             }
-            gic_send_sgi(pending, IRQ_SGI_TLB_SHOOTDOWN);
+            irq_send_ipi(pending, IRQ_SGI_TLB_SHOOTDOWN);
             if (slow_reports >= TLB_SHOOTDOWN_PANIC_REPORTS)
                 panic("TLB shootdown ack timeout");
             spin = 0;
@@ -211,7 +211,7 @@ static void tlb_shootdown_common(tlb_request_kind_t kind, vaddr_t vaddr, uint32_
     data_sync_barrier();
 
     shootdown_remote_count++;
-    gic_send_sgi(target_mask, IRQ_SGI_TLB_SHOOTDOWN);
+    irq_send_ipi(target_mask, IRQ_SGI_TLB_SHOOTDOWN);
     tlb_wait_remote_ack(target_mask, generation);
     spin_unlock(&shootdown_lock);
 }

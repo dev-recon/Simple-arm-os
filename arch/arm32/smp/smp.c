@@ -163,7 +163,7 @@ void smp_secondary_main(uint32_t cpu_id)
     if (cpu_id < ARMOS_MAX_CPUS)
         smp_cpu_infos[cpu_id].state = SMP_CPU_PARKED;
 
-    gic_init_secondary_cpu_interface();
+    irq_init_local_cpu_interface();
     timer_init_local_cpu();
     enable_interrupts();
 

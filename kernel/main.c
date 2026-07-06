@@ -204,7 +204,7 @@ void kernel_main(void)
     setup_svc_stack();
 
     /* Phase 3: Controleurs materiels de base */
-    init_gic();
+    irq_init_controller();
     KBOOT_OKF("GIC: v2, 288 IRQs");
 
     //init_timer_software();

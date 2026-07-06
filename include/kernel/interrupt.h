@@ -60,6 +60,26 @@ uint32_t gic_get_last_irq_id(void);
 void gic_send_sgi(uint32_t target_cpu_mask, uint32_t sgi_id);
 void gic_send_sgi_others(uint32_t sgi_id);
 
+static inline void irq_init_controller(void)
+{
+    init_gic();
+}
+
+static inline void irq_init_local_cpu_interface(void)
+{
+    gic_init_secondary_cpu_interface();
+}
+
+static inline void irq_enable(uint32_t irq)
+{
+    gic_enable_irq_kernel(irq);
+}
+
+static inline void irq_ack(uint32_t irq)
+{
+    gic_ack_irq_kernel(irq);
+}
+
 static inline uint32_t irq_get_count(uint32_t irq)
 {
     return gic_get_irq_count(irq);

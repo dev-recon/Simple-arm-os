@@ -235,6 +235,8 @@ void timer_init_local_cpu(void)
 void init_timer(void)
 {
     extern int kprintf(const char *format, ...);
+    uint32_t timer_irq;
+
     KINFO("[TIMER] Starting ARM Generic Timer initialization...\n");
     
     /* 1. Lire la frequence du timer */
@@ -257,11 +259,11 @@ void init_timer(void)
     
     KINFO("[TIMER] ARM Generic Timer configured\n");
     
-    /* 4. Activer l'IRQ 30 dans le GIC */
-    KINFO("[TIMER] Enabling timer IRQ (30) in GIC...\n");
+    /* 4. Enable the timer IRQ through the interrupt-controller facade. */
+    timer_irq = arch_platform_timer_irq();
+    KINFO("[TIMER] Enabling timer IRQ (%u)...\n", timer_irq);
 
-    /* 3. Activer l'IRQ du timer dans le GIC */
-    gic_enable_irq_kernel(VIRT_TIMER_NS_EL1_IRQ);  // IRQ 30
+    irq_enable(timer_irq);
     
     /* 5. Activer les interruptions au niveau CPU */
     enable_interrupts();
@@ -281,7 +283,7 @@ void timer_irq_handler(void)
     timer_ctrl |= 0x4;  /* Set ISTATUS bit */
     set_cntp_ctl(timer_ctrl);
 
-    gic_ack_irq_kernel(IRQ_TIMER);
+    irq_ack(arch_platform_timer_irq());
     
     /* 2. Program the next absolute compare and catch up delayed ticks. */
     elapsed_ticks = timer_program_next_tick(get_timer_frequency());
