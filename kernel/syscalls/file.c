@@ -21,7 +21,6 @@
 #include <kernel/vfs.h>
 #include <kernel/process.h>
 #include <kernel/memory.h>
-#include <kernel/kernel.h>
 #include <kernel/string.h>
 #include <kernel/userspace.h>
 #include <kernel/kprintf.h>

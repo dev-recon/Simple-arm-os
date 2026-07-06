@@ -21,9 +21,10 @@
 #include <kernel/memory.h>
 #include <kernel/address_space.h>
 #include <kernel/vfs.h>
-#include <kernel/kernel.h>
+#include <kernel/fd.h>
 #include <kernel/string.h>
 #include <kernel/task.h>
+#include <kernel/util.h>
 #include <kernel/userspace.h>
 #include <kernel/kprintf.h>
 #include <kernel/file.h>

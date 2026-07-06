@@ -19,8 +19,9 @@
 #include <kernel/syscalls.h>
 #include <kernel/process.h>
 #include <kernel/vfs.h>
-#include <kernel/kernel.h>
 #include <kernel/kprintf.h>
+#include <kernel/stddef.h>
+#include <kernel/string.h>
 #include <kernel/task.h>
 #include <kernel/elf32.h>
 #include <kernel/userspace.h>
