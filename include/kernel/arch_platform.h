@@ -54,6 +54,16 @@ static inline vaddr_t arch_platform_uart0_kernel_base(void)
     return (vaddr_t)ARMOS_PLATFORM_UART0_KERNEL_BASE;
 }
 
+static inline uint32_t arch_platform_uart0_clock_hz(void)
+{
+    return ARMOS_PLATFORM_UART0_CLOCK_HZ;
+}
+
+static inline uint32_t arch_platform_uart0_baud(void)
+{
+    return ARMOS_PLATFORM_UART0_BAUD;
+}
+
 static inline paddr_t arch_platform_ram_start(void)
 {
     return (paddr_t)ARMOS_PLATFORM_RAM_START;
