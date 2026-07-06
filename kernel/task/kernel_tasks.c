@@ -27,6 +27,7 @@
 #include <kernel/timer.h>
 #include <kernel/file.h>
 #include <kernel/uart.h>
+#include <kernel/arch_cpu.h>
 
 /* === VARIABLES STATIQUES === */
 static volatile bool system_shutdown = false;
@@ -138,7 +139,7 @@ void system_monitor_task(void* arg)
     (void)arg;
     
     /* Verification de la stack des le debut */
-    (void)arm_current_sp();
+    (void)arch_current_stack_pointer();
     //KINFO("System monitor task started, SP=0x%08X\n", current_sp);
     
     /* Test d'acces memoire de base */
@@ -380,7 +381,7 @@ void minimal_test_func(void* arg)
         
         /* Test de l'integrite de la stack */
         vaddr_t current_sp;
-        current_sp = arm_current_sp();
+        current_sp = arch_current_stack_pointer();
         KINFO("- Current SP in task: 0x%08X\n", current_sp);
         
         /* Variable locale pour tester la stack */

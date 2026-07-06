@@ -23,6 +23,7 @@
 #include <kernel/userspace.h>
 #include <kernel/tty.h>
 #include <kernel/kprintf.h>
+#include <kernel/arch_barrier.h>
 
 /*
  * Avant l'activation de la MMU, l'UART doit etre accedee par son adresse
@@ -87,8 +88,8 @@ DEFINE_SPINLOCK(uart_lock);
 void uart_use_kernel_mmio_alias(void)
 {
     uart_mmio_base = KERNEL_MMIO_UART_BASE;
-    data_sync_barrier();
-    instruction_sync_barrier();
+    arch_data_sync_barrier();
+    arch_instruction_sync_barrier();
 }
 
 /*
