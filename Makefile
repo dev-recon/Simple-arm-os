@@ -326,8 +326,8 @@ userfs.bin: $(wildcard userfs/**/*)
 run-userfs: $(KERNEL_BIN)
 	$(QEMU) -M $(QEMU_MACHINE) -cpu $(QEMU_CPU) \
 		-m 2G -smp $(SMP_CPUS) \
-		-drive file=disk.img,if=none,format=raw,id=hd0 \
-		-device virtio-blk-device,drive=hd0 \
+		$(QEMU_BOOT_DRIVE) \
+		$(QEMU_BOOT_DEVICE) \
 		-kernel $(KERNEL_BIN) \
 		-nographic
 
@@ -338,8 +338,8 @@ run-userfs: $(KERNEL_BIN)
 debug-run-userfs: $(KERNEL_BIN) userfs.bin
 	$(QEMU) -M $(QEMU_MACHINE) -cpu $(QEMU_CPU) \
 		-m 2G -smp $(SMP_CPUS) \
-		-drive file=disk.img,if=none,format=raw,id=hd0 \
-		-device virtio-blk-device,drive=hd0 \
+		$(QEMU_BOOT_DRIVE) \
+		$(QEMU_BOOT_DEVICE) \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
 		-device loader,file=userfs.bin,addr=0x50000000 -s -S
@@ -446,8 +446,8 @@ run-mmio: $(KERNEL_BIN) $(DISK_IMG)
 		-m 1G -smp 1 \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
-		-drive file=$(DISK_IMG),format=raw,if=none,id=disk0 \
-		-device virtio-blk-device,drive=disk0,bus=virtio-mmio-bus.0 \
+		$(QEMU_MMIO_DRIVE) \
+		$(QEMU_MMIO_DEVICE) \
 		-d int,guest_errors,unimp -D qemu.log
 
 run: $(KERNEL_BIN) $(DISK_IMG)
@@ -455,7 +455,7 @@ run: $(KERNEL_BIN) $(DISK_IMG)
 		-m 1G -smp 1 \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
-		-drive file=disk.img,if=virtio,format=raw
+		$(QEMU_SIMPLE_DRIVE)
 
 #-machine secure=on \
 #-bios bl1.bin \
@@ -464,8 +464,8 @@ run: $(KERNEL_BIN) $(DISK_IMG)
 debug: $(KERNEL_BIN) $(DISK_IMG)
 	$(QEMU) -machine $(QEMU_MACHINE) -cpu $(QEMU_CPU) -m 128M \
 		-kernel $(KERNEL_BIN) -nographic -s -S \
-		-drive file=$(DISK_IMG),format=raw,if=none,id=disk0 \
-		-device virtio-blk-device,drive=disk0
+		$(QEMU_MMIO_DRIVE) \
+		$(QEMU_DEBUG_DEVICE)
 #,bus=virtio-mmio-bus.0
 
 # Commandes d'aide

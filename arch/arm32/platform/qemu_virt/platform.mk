@@ -24,3 +24,9 @@ PLATFORM_OBJS = \
 QEMU_MACHINE ?= virt
 QEMU_RUN_MACHINE ?= virt,highmem=off
 QEMU_CPU ?= cortex-a15
+QEMU_BOOT_DRIVE ?= -drive file=disk.img,if=none,format=raw,id=hd0
+QEMU_BOOT_DEVICE ?= -device virtio-blk-device,drive=hd0
+QEMU_MMIO_DRIVE ?= -drive file=$(DISK_IMG),format=raw,if=none,id=disk0
+QEMU_MMIO_DEVICE ?= -device virtio-blk-device,drive=disk0,bus=virtio-mmio-bus.0
+QEMU_DEBUG_DEVICE ?= -device virtio-blk-device,drive=disk0
+QEMU_SIMPLE_DRIVE ?= -drive file=disk.img,if=virtio,format=raw
