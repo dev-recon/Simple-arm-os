@@ -80,6 +80,26 @@ typedef struct vm_space {
 #define USER_MMAP_START USER_SHM_END
 #define USER_MMAP_END   USER_STACK_BOTTOM
 
+/*
+ * Generic virtual-address split helpers.
+ *
+ * The split boundary is supplied by the active MMU backend. ARM32 currently
+ * implements it with split TTBR0/TTBR1; future architectures should keep the
+ * public meaning ("below is user, above is kernel") while providing their own
+ * backend value.
+ */
+vaddr_t get_split_boundary(void);
+
+static inline bool memory_is_user_address(vaddr_t addr)
+{
+    return addr < get_split_boundary();
+}
+
+static inline bool memory_is_kernel_address(vaddr_t addr)
+{
+    return addr >= get_split_boundary();
+}
+
 /* VMA flags */
 #define VMA_READ    (1 << 0)
 #define VMA_WRITE   (1 << 1)

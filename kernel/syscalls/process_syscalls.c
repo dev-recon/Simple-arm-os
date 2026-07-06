@@ -34,7 +34,6 @@
 #include <kernel/virtio_net.h>
 #include <kernel/mount.h>
 #include <kernel/virtio_block.h>
-#include <asm/mmu.h>
 
 #define PIPE_BUF_SIZE 4096
 
