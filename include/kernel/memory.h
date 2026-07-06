@@ -19,6 +19,7 @@
 #ifndef _KERNEL_MEMORY_H
 #define _KERNEL_MEMORY_H
 
+#include <asm/mmu.h>
 #include <asm/user_layout.h>
 #include <kernel/types.h>
 
@@ -93,10 +94,14 @@ static inline bool memory_is_kernel_address(vaddr_t addr)
 #define VMA_SHARED  (1 << 4)
 #define VMA_LAZY    (1 << 5)
 
-/* ASID constants */
-#define ASID_KERNEL     254       /* ASID réservé pour le noyau */
-#define ASID_MIN_USER   1       /* Premier ASID utilisateur */
-#define ASID_MAX        255     /* ASID maximum (8 bits) */
+/*
+ * ASID aliases. The active MMU backend owns the concrete ASID width and the
+ * reserved kernel slot; generic code keeps using these names during the
+ * multi-arch split.
+ */
+#define ASID_KERNEL     ARCH_ASID_KERNEL
+#define ASID_MIN_USER   ARCH_ASID_MIN_USER
+#define ASID_MAX        ARCH_ASID_MAX
 
 #define MAX_TEMP_MAPPINGS 8
 

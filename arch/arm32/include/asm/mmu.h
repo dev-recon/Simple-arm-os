@@ -93,11 +93,19 @@ typedef page_entry_t *pte_ptr_t;
 #define TTBR0_MAX_ADDR          0x40000000UL    /* 2GB */
 #define TTBR0_MAX_ADDR_3GB      0xC0000000UL    /* 3GB */
 
-/* ASID configuration */
-#define ASID_BITS               8
-#define MAX_ASID                ((1 << ASID_BITS) - 1)
-#define ASID_MASK               MAX_ASID
-#define CONTEXTIDR_ASID_MASK    ASID_MASK
+/* ASID configuration. ARMv7-A stores an 8-bit ASID in CONTEXTIDR. */
+#define ARCH_ASID_BITS              8u
+#define ARCH_ASID_MAX               ((1u << ARCH_ASID_BITS) - 1u)
+#define ARCH_ASID_MASK              ARCH_ASID_MAX
+#define ARCH_ASID_MIN_USER          1u
+#define ARCH_ASID_KERNEL            254u
+#define ARCH_CONTEXTIDR_ASID_MASK   ARCH_ASID_MASK
+
+/* Compatibility aliases while the generic memory layer is being untangled. */
+#define ASID_BITS               ARCH_ASID_BITS
+#define MAX_ASID                ARCH_ASID_MAX
+#define ASID_MASK               ARCH_ASID_MASK
+#define CONTEXTIDR_ASID_MASK    ARCH_CONTEXTIDR_ASID_MASK
 
 /* Kernel temporary mappings live above the RAM direct-map window. */
 #define TEMP_MAPPING_START  0xE0000000u

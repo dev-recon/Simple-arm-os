@@ -38,12 +38,6 @@
 #define TTBCR_PD0           (1 << 4)  /* Disable table walk for TTBR0 on TLB miss */
 #define TTBCR_PD1           (1 << 5)  /* Disable table walk for TTBR1 on TLB miss */
 
-/* Gestion ASID */
-#define ASID_BITS           8
-#define MAX_ASID            ((1 << ASID_BITS) - 1)
-#define ASID_MASK           MAX_ASID
-#define CONTEXTIDR_ASID_MASK ASID_MASK
-
 /* Page directories séparés avec adresses fixes alignées 16KB */
 static l1_entry_t kernel_page_dir[4096] __attribute__((section(".data"), aligned(16384)));  /* TTBR1 */
 static l1_entry_t kernel_ttbr0[4096] __attribute__((section(".data"), aligned(16384)));  /* TTBR1 */; /* TTBR0 */
