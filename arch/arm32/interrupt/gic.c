@@ -26,7 +26,6 @@
 #include <kernel/uart.h>
 #include <kernel/ide.h>
 #include <kernel/kprintf.h>
-#include <kernel/mmio.h>
 #include <kernel/smp.h>
 #include <kernel/tlb.h>
 #include <kernel/arch_platform.h>
@@ -35,12 +34,13 @@
 /* Compteur global pour verifier que les IRQ arrivent */
 static volatile uint32_t irq_count = 0;
 static volatile uint32_t last_irq_id = 0;
+static uint32_t gic_irq_line_count = 0;
 #define GIC_IRQ_COUNTERS 1024
 static volatile uint32_t irq_counts[GIC_IRQ_COUNTERS];
 
 /* Acces runtime via l'alias MMIO prive TTBR1. */
-#define LOCAL_GICD_BASE     ARMOS_PLATFORM_KERNEL_MMIO_GIC_DIST_BASE
-#define LOCAL_GICC_BASE     ARMOS_PLATFORM_KERNEL_MMIO_GIC_CPU_BASE
+#define LOCAL_GICD_BASE     QEMU_VIRT_KERNEL_MMIO_GIC_DIST_BASE
+#define LOCAL_GICC_BASE     QEMU_VIRT_KERNEL_MMIO_GIC_CPU_BASE
 #define LOCAL_VIRTIO_BASE   ARMOS_PLATFORM_KERNEL_MMIO_VIRTIO_BASE
 
 static uint8_t gic_boot_cpu_mask(void)
@@ -88,9 +88,10 @@ void init_gic(void)
     KDEBUG("[GIC] GICD_TYPER: 0x%08X\n", gicd_typer);
     
     uint32_t num_irqs = ((gicd_typer & 0x1F) + 1) * 32;
+    gic_irq_line_count = num_irqs;
     KDEBUG("[GIC] Number of IRQs: %u\n", num_irqs);
     
-    bool targets_auto_managed = arch_platform_gic_targets_auto_managed();
+    bool targets_auto_managed = arch_platform_irq_targets_auto_managed();
     KDEBUG("[GIC] ITARGETSR mode: %s\n",
            targets_auto_managed ? "platform auto-managed" : "kernel-programmed");
     
@@ -396,7 +397,7 @@ void gic_send_sgi_others(uint32_t sgi_id)
 
 static void enable_irq_with_type(uint32_t irq, bool edge_triggered)
 {
-    bool targets_auto_managed = arch_platform_gic_targets_auto_managed();
+    bool targets_auto_managed = arch_platform_irq_targets_auto_managed();
 
     KDEBUG("[IRQ] Enabling IRQ %u (%s, %s)...\n",
            irq,
@@ -452,7 +453,7 @@ static void enable_irq_with_type(uint32_t irq, bool edge_triggered)
     }
 }
 
-void enable_irq(uint32_t irq)
+static void enable_irq(uint32_t irq)
 {
     /*
      * Default to level-triggered interrupts. ArmOS' current platform devices
@@ -463,12 +464,12 @@ void enable_irq(uint32_t irq)
     enable_irq_with_type(irq, false);
 }
 
-void enable_irq_level(uint32_t irq)
+static void enable_irq_level(uint32_t irq)
 {
     enable_irq_with_type(irq, false);
 }
 
-void disable_irq(uint32_t irq)
+static void disable_irq(uint32_t irq)
 {
     volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
     uint32_t reg = irq / 32;
@@ -615,9 +616,29 @@ void arch_irq_init_local_cpu_interface(void)
     gic_init_secondary_cpu_interface();
 }
 
+const char* arch_irq_controller_name(void)
+{
+    return "GIC: v2";
+}
+
+uint32_t arch_irq_controller_line_count(void)
+{
+    return gic_irq_line_count;
+}
+
 void arch_irq_enable(uint32_t irq)
 {
     enable_irq(irq);
+}
+
+void arch_irq_enable_level(uint32_t irq)
+{
+    enable_irq_level(irq);
+}
+
+void arch_irq_disable(uint32_t irq)
+{
+    disable_irq(irq);
 }
 
 void arch_irq_ack(uint32_t irq)

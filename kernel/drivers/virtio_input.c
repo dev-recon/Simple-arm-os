@@ -548,9 +548,9 @@ bool virtio_input_init(int tty_id)
     mmio_write32(input.mmio, VIRTIO_MMIO_STATUS,
                  mmio_read32(input.mmio, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_DRIVER_OK);
     if (input.irq_edge_triggered)
-        enable_irq(input.irq);
+        irq_enable(input.irq);
     else
-        enable_irq_level(input.irq);
+        irq_enable_level(input.irq);
     input_post_all();
 
     KINFO("VirtIO keyboard initialized: phys=0x%08X irq=%u %s tty%d\n",

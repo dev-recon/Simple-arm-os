@@ -22,21 +22,25 @@
 #define _KERNEL_ARCH_IRQ_H
 
 #include <kernel/types.h>
-#include <asm/arm.h>
+#include <asm/irq.h>
 
 static inline uint32_t arch_irq_fiq_save(void)
 {
-    return arm_disable_irq_fiq_save();
+    return asm_irq_fiq_save();
 }
 
 static inline void arch_irq_fiq_restore(uint32_t saved_state)
 {
-    arm_restore_cpsr_control(saved_state);
+    asm_irq_fiq_restore(saved_state);
 }
 
 void arch_irq_controller_init(void);
 void arch_irq_init_local_cpu_interface(void);
+const char* arch_irq_controller_name(void);
+uint32_t arch_irq_controller_line_count(void);
 void arch_irq_enable(uint32_t irq);
+void arch_irq_enable_level(uint32_t irq);
+void arch_irq_disable(uint32_t irq);
 void arch_irq_ack(uint32_t irq);
 uint32_t arch_irq_get_count(uint32_t irq);
 uint32_t arch_irq_get_total_count(void);

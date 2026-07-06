@@ -34,11 +34,6 @@
 #define IRQ_VIRTIO_CONSOLE    ARMOS_PLATFORM_VIRTIO_CONSOLE_IRQ
 #define IRQ_VIRTIO_RNG        ARMOS_PLATFORM_VIRTIO_RNG_IRQ
 
-void enable_irq(uint32_t irq);
-void enable_irq_level(uint32_t irq);
-void disable_irq(uint32_t irq);
-void clear_irq(uint32_t irq);
-
 /* IRQ handler */
 void irq_c_handler(void);
 void fiq_c_handler(void);
@@ -60,6 +55,16 @@ static inline void irq_init_controller(void)
     arch_irq_controller_init();
 }
 
+static inline const char* irq_controller_name(void)
+{
+    return arch_irq_controller_name();
+}
+
+static inline uint32_t irq_controller_line_count(void)
+{
+    return arch_irq_controller_line_count();
+}
+
 static inline void irq_init_local_cpu_interface(void)
 {
     arch_irq_init_local_cpu_interface();
@@ -68,6 +73,16 @@ static inline void irq_init_local_cpu_interface(void)
 static inline void irq_enable(uint32_t irq)
 {
     arch_irq_enable(irq);
+}
+
+static inline void irq_enable_level(uint32_t irq)
+{
+    arch_irq_enable_level(irq);
+}
+
+static inline void irq_disable(uint32_t irq)
+{
+    arch_irq_disable(irq);
 }
 
 static inline void irq_ack(uint32_t irq)

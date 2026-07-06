@@ -23,51 +23,51 @@
 #define _KERNEL_ARCH_BARRIER_H
 
 #include <kernel/types.h>
-#include <asm/arm.h>
+#include <asm/barrier.h>
 
 static inline void arch_cpu_relax(void)
 {
-    cpu_relax();
+    asm_cpu_relax();
 }
 
 static inline void arch_data_memory_barrier_inner_shareable(void)
 {
-    data_memory_barrier_inner_shareable();
+    asm_data_memory_barrier_inner_shareable();
 }
 
 static inline void arch_data_memory_barrier(void)
 {
-    data_memory_barrier();
+    asm_data_memory_barrier();
 }
 
 static inline void arch_data_sync_barrier(void)
 {
-    data_sync_barrier();
+    asm_data_sync_barrier();
 }
 
 static inline void arch_data_sync_barrier_inner_shareable_write(void)
 {
-    data_sync_barrier_inner_shareable_write();
+    asm_data_sync_barrier_inner_shareable_write();
 }
 
 static inline void arch_instruction_sync_barrier(void)
 {
-    instruction_sync_barrier();
+    asm_instruction_sync_barrier();
 }
 
 static inline void arch_clean_dcache_by_mva(const void *addr, size_t size)
 {
-    clean_dcache_by_mva(addr, size);
+    asm_clean_dcache_by_mva(addr, size);
 }
 
 static inline void arch_invalidate_dcache_by_mva(const void *addr, size_t size)
 {
-    invalidate_dcache_by_mva(addr, size);
+    asm_invalidate_dcache_by_mva(addr, size);
 }
 
 static inline void arch_clean_invalidate_dcache_by_mva(const void *addr, size_t size)
 {
-    clean_invalidate_dcache_by_mva(addr, size);
+    asm_clean_invalidate_dcache_by_mva(addr, size);
 }
 
 #endif /* _KERNEL_ARCH_BARRIER_H */

@@ -726,27 +726,40 @@ static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
     uint32_t virtio_net_irq = virtio_net_get_irq();
     uint32_t timer_irq = arch_platform_timer_irq();
     uint32_t uart_irq = arch_platform_uart_irq();
+    const char* irq_name = irq_controller_name();
 
     proc_append(buf, cap, len, "           CPU0\n");
-    proc_append(buf, cap, len, "%3u: %10u GICv2  ipi-tlb\n",
-                IRQ_SGI_TLB_SHOOTDOWN,
-                irq_get_count(IRQ_SGI_TLB_SHOOTDOWN));
-    proc_append(buf, cap, len, "%3u: %10u GICv2  timer\n",
+    if (IRQ_SGI_TLB_SHOOTDOWN != 0u) {
+        proc_append(buf, cap, len, "%3u: %10u %s  ipi-tlb\n",
+                    IRQ_SGI_TLB_SHOOTDOWN,
+                    irq_get_count(IRQ_SGI_TLB_SHOOTDOWN),
+                    irq_name);
+    }
+    proc_append(buf, cap, len, "%3u: %10u %s  timer\n",
                 timer_irq,
-                irq_get_count(timer_irq));
-    proc_append(buf, cap, len, "%3u: %10u GICv2  uart0\n",
+                irq_get_count(timer_irq),
+                irq_name);
+    proc_append(buf, cap, len, "%3u: %10u %s  uart0\n",
                 uart_irq,
-                irq_get_count(uart_irq));
-    proc_append(buf, cap, len, "%3u: %10u GICv2  uart0-legacy\n",
-                IRQ_KEYBOARD,
-                irq_get_count(IRQ_KEYBOARD));
-    proc_append(buf, cap, len, "%3u: %10u GICv2  virtio-blk\n",
-                virtio_irq,
-                irq_get_count(virtio_irq));
-    if (virtio_net_is_initialized()) {
-        proc_append(buf, cap, len, "%3u: %10u GICv2  virtio-net\n",
+                irq_get_count(uart_irq),
+                irq_name);
+    if (IRQ_KEYBOARD != 0u) {
+        proc_append(buf, cap, len, "%3u: %10u %s  uart0-legacy\n",
+                    IRQ_KEYBOARD,
+                    irq_get_count(IRQ_KEYBOARD),
+                    irq_name);
+    }
+    if (virtio_irq != 0u) {
+        proc_append(buf, cap, len, "%3u: %10u %s  virtio-blk\n",
+                    virtio_irq,
+                    irq_get_count(virtio_irq),
+                    irq_name);
+    }
+    if (virtio_net_is_initialized() && virtio_net_irq != 0u) {
+        proc_append(buf, cap, len, "%3u: %10u %s  virtio-net\n",
                     virtio_net_irq,
-                    irq_get_count(virtio_net_irq));
+                    irq_get_count(virtio_net_irq),
+                    irq_name);
     }
     proc_append(buf, cap, len, "TOT: %10u\n", irq_get_total_count());
     proc_append(buf, cap, len, "LAST:%10u\n", irq_get_last_id());

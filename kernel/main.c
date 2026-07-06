@@ -199,7 +199,7 @@ void kernel_main(void)
 
     /* Phase 3: Controleurs materiels de base */
     irq_init_controller();
-    KBOOT_OKF("GIC: v2, 288 IRQs");
+    KBOOT_OKF("%s, %u IRQs", irq_controller_name(), irq_controller_line_count());
 
     //init_timer_software();
     init_timer();

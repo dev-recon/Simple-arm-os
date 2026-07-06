@@ -24,6 +24,106 @@
 #include <kernel/types.h>
 #include <asm/platform.h>
 
+/*
+ * Optional platform capabilities.
+ *
+ * A second board should not have to publish fake VirtIO/RTC addresses just
+ * because qemu-virt has them. Defaults keep this header parseable while real
+ * users still check the matching arch_platform_has_* helper before touching
+ * optional MMIO windows.
+ */
+#ifndef ARMOS_PLATFORM_KERNEL_MMIO_RTC_BASE
+#define ARMOS_PLATFORM_KERNEL_MMIO_RTC_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_KERNEL_MMIO_VIRTIO_BASE
+#define ARMOS_PLATFORM_KERNEL_MMIO_VIRTIO_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_VIRTIO_PHYS_START
+#define ARMOS_PLATFORM_VIRTIO_PHYS_START 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_VIRTIO_MMIO_SIZE
+#define ARMOS_PLATFORM_VIRTIO_MMIO_SIZE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_VIRTIO_MMIO_ADDR
+#define ARMOS_PLATFORM_VIRTIO_MMIO_ADDR(paddr) ((void)(paddr), 0u)
+#endif
+
+#ifndef ARMOS_PLATFORM_VIRTIO_IRQ
+#define ARMOS_PLATFORM_VIRTIO_IRQ(n) ((void)(n), 0u)
+#endif
+
+#ifndef ARMOS_PLATFORM_VIRTIO_NET_PHYS
+#define ARMOS_PLATFORM_VIRTIO_NET_PHYS 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_VIRTIO_NET_IRQ
+#define ARMOS_PLATFORM_VIRTIO_NET_IRQ 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_VIRTIO_BLOCK_PHYS
+#define ARMOS_PLATFORM_VIRTIO_BLOCK_PHYS 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_VIRTIO_BLOCK_FALLBACK_PHYS
+#define ARMOS_PLATFORM_VIRTIO_BLOCK_FALLBACK_PHYS 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_VIRTIO_BLOCK_IRQ
+#define ARMOS_PLATFORM_VIRTIO_BLOCK_IRQ 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_VIRTIO_CONSOLE_IRQ
+#define ARMOS_PLATFORM_VIRTIO_CONSOLE_IRQ 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_VIRTIO_RNG_IRQ
+#define ARMOS_PLATFORM_VIRTIO_RNG_IRQ 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_SGI_TLB_SHOOTDOWN_IRQ
+#define ARMOS_PLATFORM_SGI_TLB_SHOOTDOWN_IRQ 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_KEYBOARD_IRQ
+#define ARMOS_PLATFORM_KEYBOARD_IRQ 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_ATA_IRQ
+#define ARMOS_PLATFORM_ATA_IRQ 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_PL050_KBD_BASE
+#define ARMOS_PLATFORM_PL050_KBD_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_IDE_PRIMARY_BASE
+#define ARMOS_PLATFORM_IDE_PRIMARY_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_IDE_PRIMARY_CTRL
+#define ARMOS_PLATFORM_IDE_PRIMARY_CTRL 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_IDE_PRIMARY_IRQ
+#define ARMOS_PLATFORM_IDE_PRIMARY_IRQ 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_PCIE_PIO_BASE
+#define ARMOS_PLATFORM_PCIE_PIO_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_IDE_LEGACY_IO_BASE
+#define ARMOS_PLATFORM_IDE_LEGACY_IO_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_IRQ_TARGETS_AUTO_MANAGED
+#define ARMOS_PLATFORM_IRQ_TARGETS_AUTO_MANAGED 0u
+#endif
+
 static inline const char* arch_platform_name(void)
 {
     return ARMOS_PLATFORM_NAME;
@@ -99,9 +199,9 @@ static inline uint32_t arch_platform_kernel_mmio_section_size(void)
     return ARMOS_PLATFORM_KERNEL_MMIO_SECTION_SIZE;
 }
 
-static inline vaddr_t arch_platform_kernel_mmio_gic_base(void)
+static inline vaddr_t arch_platform_kernel_mmio_irqctrl_base(void)
 {
-    return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_GIC_BASE;
+    return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_IRQCTRL_BASE;
 }
 
 static inline vaddr_t arch_platform_kernel_mmio_uart_base(void)
@@ -119,19 +219,36 @@ static inline vaddr_t arch_platform_kernel_mmio_virtio_base(void)
     return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_VIRTIO_BASE;
 }
 
-static inline paddr_t arch_platform_gic_phys_start(void)
+static inline bool arch_platform_has_virtio_mmio(void)
 {
-    return (paddr_t)ARMOS_PLATFORM_GIC_PHYS_START;
+    return ARMOS_PLATFORM_VIRTIO_MMIO_SIZE != 0u;
 }
 
-static inline paddr_t arch_platform_gic_phys_end(void)
+static inline bool arch_platform_has_pl050_keyboard(void)
 {
-    return (paddr_t)ARMOS_PLATFORM_GIC_PHYS_END;
+    return ARMOS_PLATFORM_PL050_KBD_BASE != 0u && ARMOS_PLATFORM_KEYBOARD_IRQ != 0u;
 }
 
-static inline bool arch_platform_gic_targets_auto_managed(void)
+static inline bool arch_platform_has_legacy_ide(void)
 {
-    return ARMOS_PLATFORM_GIC_TARGETS_AUTO_MANAGED != 0;
+    return ARMOS_PLATFORM_IDE_PRIMARY_BASE != 0u &&
+           ARMOS_PLATFORM_IDE_PRIMARY_CTRL != 0u &&
+           ARMOS_PLATFORM_IDE_PRIMARY_IRQ != 0u;
+}
+
+static inline paddr_t arch_platform_irqctrl_phys_start(void)
+{
+    return (paddr_t)ARMOS_PLATFORM_IRQCTRL_PHYS_START;
+}
+
+static inline paddr_t arch_platform_irqctrl_phys_end(void)
+{
+    return (paddr_t)ARMOS_PLATFORM_IRQCTRL_PHYS_END;
+}
+
+static inline bool arch_platform_irq_targets_auto_managed(void)
+{
+    return ARMOS_PLATFORM_IRQ_TARGETS_AUTO_MANAGED != 0;
 }
 
 static inline uint32_t arch_platform_timer_irq(void)
@@ -157,6 +274,8 @@ static inline paddr_t arch_platform_virtio_phys_start(void)
 static inline bool arch_platform_virtio_irq_from_phys(paddr_t phys, uint32_t* out_irq)
 {
     if (!out_irq)
+        return false;
+    if (!arch_platform_has_virtio_mmio())
         return false;
     if (phys < arch_platform_virtio_phys_start())
         return false;
@@ -206,14 +325,16 @@ static inline bool arch_platform_phys_is_device(paddr_t phys)
 
 static inline bool arch_platform_phys_is_virtio(paddr_t phys)
 {
+    if (!arch_platform_has_virtio_mmio())
+        return false;
     paddr_t start = arch_platform_virtio_phys_start();
     return phys >= start && phys < (start + ARMOS_PLATFORM_VIRTIO_MMIO_SIZE * 8u);
 }
 
-static inline bool arch_platform_phys_is_gic(paddr_t phys)
+static inline bool arch_platform_phys_is_irqctrl(paddr_t phys)
 {
-    return phys >= arch_platform_gic_phys_start() &&
-           phys < arch_platform_gic_phys_end();
+    return phys >= arch_platform_irqctrl_phys_start() &&
+           phys < arch_platform_irqctrl_phys_end();
 }
 
 #endif /* _KERNEL_ARCH_PLATFORM_H */

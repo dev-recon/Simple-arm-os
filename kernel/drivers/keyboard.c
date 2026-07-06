@@ -55,6 +55,11 @@ static spinlock_t kbd_lock = SPINLOCK_INIT("keyboard");
 
 void init_keyboard(void)
 {
+    if (!arch_platform_has_pl050_keyboard()) {
+        KINFO("Keyboard: PL050 not present on this platform\n");
+        return;
+    }
+
     volatile uint32_t* kbd = (volatile uint32_t*)KBD_BASE;
     
     /* Reset keyboard */
@@ -67,7 +72,7 @@ void init_keyboard(void)
     kbd[KBD_CTRL/4] = (1 << 2) | (1 << 4);
     
     /* Enable keyboard IRQ */
-    enable_irq(IRQ_KEYBOARD);
+    irq_enable(IRQ_KEYBOARD);
     
     kbd_state.head = 0;
     kbd_state.tail = 0;
@@ -78,6 +83,9 @@ void init_keyboard(void)
 
 void keyboard_irq_handler(void)
 {
+    if (!arch_platform_has_pl050_keyboard())
+        return;
+
     volatile uint32_t* kbd = (volatile uint32_t*)KBD_BASE;
     uint8_t scancode;
     

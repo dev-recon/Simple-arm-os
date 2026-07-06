@@ -1610,9 +1610,9 @@ bool virtio_net_init(void)
     net.initialized = true;
 
     if (net.irq_edge_triggered)
-        enable_irq(net.irq);
+        irq_enable(net.irq);
     else
-        enable_irq_level(net.irq);
+        irq_enable_level(net.irq);
 
     net_send_arp_request(VIRTIO_NET_GW_IP);
 

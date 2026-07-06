@@ -739,15 +739,20 @@ static void setup_kernel_space(void)
      * Alias MMIO prives dans TTBR1. Ils sont additifs pour l'instant:
      * les pilotes continuent d'utiliser les adresses physiques basses.
      */
-    vaddr_t mmio_gic_base = arch_platform_kernel_mmio_gic_base();
+    vaddr_t mmio_irqctrl_base = arch_platform_kernel_mmio_irqctrl_base();
     vaddr_t mmio_uart_base = arch_platform_kernel_mmio_uart_base();
     vaddr_t mmio_virtio_base = arch_platform_kernel_mmio_virtio_base();
 
-    map_kernel_mmio_alias(mmio_gic_base, arch_platform_gic_phys_start());
+    map_kernel_mmio_alias(mmio_irqctrl_base, arch_platform_irqctrl_phys_start());
     map_kernel_mmio_alias(mmio_uart_base, arch_platform_uart0_phys_base());
-    map_kernel_mmio_alias(mmio_virtio_base, arch_platform_virtio_phys_start());
-    KINFO("MMU: Kernel MMIO aliases mapped: GIC=0x%08X UART=0x%08X VirtIO=0x%08X\n",
-          mmio_gic_base, mmio_uart_base, mmio_virtio_base);
+    if (arch_platform_has_virtio_mmio()) {
+        map_kernel_mmio_alias(mmio_virtio_base, arch_platform_virtio_phys_start());
+        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X UART=0x%08X VirtIO=0x%08X\n",
+              mmio_irqctrl_base, mmio_uart_base, mmio_virtio_base);
+    } else {
+        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X UART=0x%08X\n",
+              mmio_irqctrl_base, mmio_uart_base);
+    }
 
     /* 3. NOUVEAU: Pré-allouer et configurer les temp mappings ICI */
     KINFO("MMU: Setting up temporary mapping slots...\n");

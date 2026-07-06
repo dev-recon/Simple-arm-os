@@ -381,7 +381,7 @@ bool virtio_blk_init_legacy(vaddr_t base_addr)
 
     /* Enable IRQ */
     KDEBUG("Configuring VirtIO IRQs...\n");
-    enable_irq(virtio_blk_irq);
+    irq_enable(virtio_blk_irq);
     KINFO("VirtIO IRQ %u enabled\n", virtio_blk_irq);
 
     // DRIVER_OK

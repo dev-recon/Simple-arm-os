@@ -53,7 +53,12 @@
 #define VIRTIO_GPU_RESOURCE_ID                 1
 #define VIRTIO_GPU_SCANOUT_ID                  0
 #define VIRTIO_GPU_VQ_SIZE                     8
-#define VIRTIO_GPU_TIMEOUT_MS                  1000
+/*
+ * GPU flushes are not on a correctness-critical path like block I/O.  Give
+ * QEMU enough room under SMP/host load, then fail the graphics backend cleanly
+ * instead of reusing descriptors from an uncertain control queue.
+ */
+#define VIRTIO_GPU_TIMEOUT_MS                  3000
 
 /* VirtIO MMIO interrupt status bits. */
 #define VIRTIO_GPU_INT_USED_RING               0x1u
@@ -135,6 +140,7 @@ typedef struct {
     uint16_t next_desc;
     uint32_t framebuffer_size;
     bool initialized;
+    bool failed;
 } virtio_gpu_state_t;
 
 static virtio_gpu_state_t gpu = {0};
@@ -276,6 +282,30 @@ static int gpu_acquire(void)
     }
 }
 
+static void gpu_mark_failed(const char *reason, uint32_t cmd_type)
+{
+    unsigned long flags;
+    bool first_failure = false;
+
+    spin_lock_irqsave(&gpu_lock, &flags);
+    if (!gpu.failed) {
+        gpu.failed = true;
+        first_failure = true;
+    }
+    gpu.initialized = false;
+    spin_unlock_irqrestore(&gpu_lock, flags);
+
+    if (!first_failure)
+        return;
+
+    KERROR("virtio_gpu: disabling device after %s (cmd=0x%08X)\n",
+           reason ? reason : "queue failure", cmd_type);
+    if (gpu.mmio)
+        mmio_write32(gpu.mmio, VIRTIO_MMIO_STATUS,
+                     mmio_read32(gpu.mmio, VIRTIO_MMIO_STATUS) |
+                     VIRTIO_STATUS_FAILED);
+}
+
 static void gpu_release(void)
 {
     task_t *task = task_current_local();
@@ -295,13 +325,19 @@ static void gpu_release(void)
 static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len)
 {
     int ret = -1;
+    uint32_t cmd_type = cmd ? ((virtio_gpu_ctrl_hdr_t *)cmd)->type : 0;
 
-    if (!gpu.initialized || !cmd || cmd_len == 0 || !resp || resp_len == 0)
+    if (!gpu.initialized || gpu.failed || !cmd || cmd_len == 0 ||
+        !resp || resp_len == 0)
         return -1;
     if (gpu.vq.qsize < 2)
         return -1;
     if (gpu_acquire() < 0)
         return -1;
+    if (!gpu.initialized || gpu.failed) {
+        gpu_release();
+        return -1;
+    }
 
     unsigned d0 = gpu.next_desc;
     unsigned d1 = (gpu.next_desc + 1) % gpu.vq.qsize;
@@ -340,18 +376,17 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
     mmio_write32(gpu.mmio, VIRTIO_MMIO_QUEUE_NOTIFY, 0);
 
     if (gpu_wait_used(prev_used) < 0) {
-        KERROR("virtio_gpu: command timeout type=0x%08X\n",
-               ((virtio_gpu_ctrl_hdr_t *)cmd)->type);
+        gpu_mark_failed("control queue timeout", cmd_type);
         goto out;
     }
 
     struct vring_used *used = gpu_used_ptr(&gpu.vq);
     if ((uint16_t)(used->idx - prev_used) != 1) {
-        KERROR("virtio_gpu: unexpected used ring advance\n");
+        gpu_mark_failed("unexpected used ring advance", cmd_type);
         goto out;
     }
     if (used->ring[prev_used % gpu.vq.qsize].id != d0) {
-        KERROR("virtio_gpu: unexpected used descriptor id\n");
+        gpu_mark_failed("unexpected used descriptor id", cmd_type);
         goto out;
     }
 

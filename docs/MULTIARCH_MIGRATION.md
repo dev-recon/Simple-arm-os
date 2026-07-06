@@ -128,9 +128,27 @@ Done so far:
 - moved QEMU block/GPU/input/net boot-script defaults into platform-owned
   fragments (`platform.mk` and `qemu.sh`) so boot scripts can fail fast for an
   unsupported platform instead of silently launching a `qemu-virt` shape.
-- made GIC target-routing policy a named platform capability, currently
-  `ARMOS_PLATFORM_GIC_TARGETS_AUTO_MANAGED`, instead of inferring behavior from
+- made interrupt-target routing policy a named platform capability, currently
+  `ARMOS_PLATFORM_IRQ_TARGETS_AUTO_MANAGED`, instead of inferring behavior from
   a hardcoded machine name.
+- moved IRQ controller identity and line-count reporting behind
+  `irq_controller_name()` / `irq_controller_line_count()`, so boot logs no
+  longer hardcode `GIC: v2, 288 IRQs`.
+- routed generic drivers through `irq_enable()` / `irq_enable_level()` instead
+  of calling the ARM32 GIC backend symbols directly. The old `enable_irq*`
+  helpers are now backend-private implementation details.
+- renamed the generic platform MMIO/physical window contract from GIC-specific
+  helpers to IRQ-controller helpers (`IRQCTRL`). QEMU virt still owns GICv2
+  details in its platform header and backend, but generic MMU/address-space
+  code no longer requires every platform to pretend it has a GIC.
+- made VirtIO platform fields optional at the `arch_platform_*` boundary.
+  Non-VirtIO boards should not publish fake MMIO values just to compile;
+  callers must use `arch_platform_has_virtio_mmio()` before mapping or probing
+  that optional window.
+- made PL050 keyboard and legacy IDE fields optional too. A platform that does
+  not expose those devices can omit their macros, and generic code must check
+  `arch_platform_has_pl050_keyboard()` or `arch_platform_has_legacy_ide()`
+  before touching the corresponding MMIO registers.
 - moved PL011 baud configuration into the platform contract
   (`ARMOS_PLATFORM_UART0_CLOCK_HZ`, `ARMOS_PLATFORM_UART0_BAUD`) while keeping
   the current qemu-virt divisor behavior unchanged.
@@ -167,6 +185,12 @@ Current staging:
 - The staging README lists the minimal files required before making `raspi2`
   buildable: platform header, `platform.mk`, platform `devices.c`, and optional
   QEMU launch defaults.
+- Do not make `raspi2` buildable by reusing the qemu-virt GIC fragment. The
+  next real step is a Raspberry Pi interrupt-controller backend that implements
+  the `arch_irq_*` contract used by generic drivers.
+- Do not add fake VirtIO, PL050, or legacy IDE constants to `raspi2`. Its first
+  milestone is allowed to be UART-only; optional helpers now have safe defaults
+  for platforms that do not expose those MMIO devices.
 
 ## Phase D - AArch64
 
