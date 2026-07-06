@@ -595,12 +595,48 @@ void set_irq_edge_triggered(uint32_t irq)
     }
 }
 
-/* Aliases pour eviter les conflits avec mmio.h */
-void gic_enable_irq_kernel(uint32_t irq) {
+void arch_irq_controller_init(void)
+{
+    init_gic();
+}
+
+void arch_irq_init_local_cpu_interface(void)
+{
+    gic_init_secondary_cpu_interface();
+}
+
+void arch_irq_enable(uint32_t irq)
+{
     enable_irq(irq);
 }
 
-void gic_ack_irq_kernel(uint32_t irq) {
+void arch_irq_ack(uint32_t irq)
+{
     volatile uint32_t* gicc = (volatile uint32_t*)LOCAL_GICC_BASE;
     gicc[0x010/4] = irq;
+}
+
+uint32_t arch_irq_get_count(uint32_t irq)
+{
+    return gic_get_irq_count(irq);
+}
+
+uint32_t arch_irq_get_total_count(void)
+{
+    return gic_get_total_irq_count();
+}
+
+uint32_t arch_irq_get_last_id(void)
+{
+    return gic_get_last_irq_id();
+}
+
+void arch_irq_send_ipi(uint32_t target_cpu_mask, uint32_t irq)
+{
+    gic_send_sgi(target_cpu_mask, irq);
+}
+
+void arch_irq_send_ipi_others(uint32_t irq)
+{
+    gic_send_sgi_others(irq);
 }

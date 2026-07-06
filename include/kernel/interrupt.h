@@ -19,6 +19,7 @@
 #ifndef _KERNEL_INTERRUPT_H
 #define _KERNEL_INTERRUPT_H
 
+#include <kernel/arch_irq.h>
 #include <kernel/arch_platform.h>
 #include <kernel/types.h>
 
@@ -28,11 +29,6 @@
 #define IRQ_KEYBOARD          VIRT_UART_LEGACY_IRQ
 #define IRQ_ATA               VIRT_ATA_LEGACY_IRQ
 
-/* GIC functions */
-void init_gic(void);
-void gic_init_secondary_cpu_interface(void);
-void gic_enable_irq_kernel(uint32_t irq);
-void gic_ack_irq_kernel(uint32_t irq);
 void enable_irq(uint32_t irq);
 void enable_irq_level(uint32_t irq);
 void disable_irq(uint32_t irq);
@@ -54,57 +50,49 @@ void fiq_c_handler(void);
 uint32_t irq_user_work_prepare(uint32_t* irq_frame);
 void irq_user_work_pending(void);
 
-uint32_t gic_get_irq_count(uint32_t irq);
-uint32_t gic_get_total_irq_count(void);
-uint32_t gic_get_last_irq_id(void);
-void gic_send_sgi(uint32_t target_cpu_mask, uint32_t sgi_id);
-void gic_send_sgi_others(uint32_t sgi_id);
-
 static inline void irq_init_controller(void)
 {
-    init_gic();
+    arch_irq_controller_init();
 }
 
 static inline void irq_init_local_cpu_interface(void)
 {
-    gic_init_secondary_cpu_interface();
+    arch_irq_init_local_cpu_interface();
 }
 
 static inline void irq_enable(uint32_t irq)
 {
-    gic_enable_irq_kernel(irq);
+    arch_irq_enable(irq);
 }
 
 static inline void irq_ack(uint32_t irq)
 {
-    gic_ack_irq_kernel(irq);
+    arch_irq_ack(irq);
 }
 
 static inline uint32_t irq_get_count(uint32_t irq)
 {
-    return gic_get_irq_count(irq);
+    return arch_irq_get_count(irq);
 }
 
 static inline uint32_t irq_get_total_count(void)
 {
-    return gic_get_total_irq_count();
+    return arch_irq_get_total_count();
 }
 
 static inline uint32_t irq_get_last_id(void)
 {
-    return gic_get_last_irq_id();
+    return arch_irq_get_last_id();
 }
 
 static inline void irq_send_ipi(uint32_t target_cpu_mask, uint32_t irq)
 {
-    gic_send_sgi(target_cpu_mask, irq);
+    arch_irq_send_ipi(target_cpu_mask, irq);
 }
 
 static inline void irq_send_ipi_others(uint32_t irq)
 {
-    gic_send_sgi_others(irq);
+    arch_irq_send_ipi_others(irq);
 }
-
-void complete_gic_debug(void);
 
 #endif
