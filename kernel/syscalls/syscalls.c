@@ -31,8 +31,9 @@
 #include <kernel/file.h>
 #include <kernel/mount.h>
 #include <kernel/virtio_net.h>
+#include <kernel/arch_barrier.h>
+#include <kernel/arch_cpu.h>
 #include <asm/mmu.h>
-#include <asm/arm.h>
 #include <kernel/timer.h>
 
 /* Syscall table */
@@ -321,12 +322,11 @@ void dump_svc_stack(task_t *task, uint32_t *sp) {
 }
 
 void print_cpu_mode(void){
-     uint32_t cpsr = get_cpsr();
-     cpsr &= 0x1F;
+    uint32_t mode = arch_current_mode();
     
     kprintf("\n\n**************************************\n");
     kprintf("Current CPU MODE = Mode: 0x%02X, -->: %s\n", 
-            cpsr , cpsr == ARM_MODE_USR ? "USR" : cpsr == ARM_MODE_SVC ? "SVC" : "UNKNOWN" );
+            mode, arch_mode_name(mode));
     kprintf("**************************************\n\n");
 
 }
@@ -496,10 +496,8 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         return -EINVAL;
     }
 
-    uint32_t spsr = read_spsr();
-    uint32_t caller_mode = spsr & 0x1f;   // 0x10 = USR
-
-    bool from_user = (caller_mode == ARM_MODE_USR);  // tu n’utilises pas SYS ici
+    uint32_t caller_mode = arch_saved_mode();
+    bool from_user = arch_mode_is_user(caller_mode);  // tu n’utilises pas SYS ici
 
     result = count_exec_vector(argv, from_user, &argc);
     if (result < 0)
@@ -641,8 +639,8 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     destroy_vm_space(old_vm);
 
     //tlb_flush_all_debug();
-    data_memory_barrier();
-    instruction_sync_barrier();
+    arch_data_memory_barrier();
+    arch_instruction_sync_barrier();
 
     rename_task_from_exec_path(proc, kernel_filename);
     if (exec_mode & S_ISUID)
@@ -671,12 +669,9 @@ int sys_fork(void)
     task_t* parent = task_current_local();
     task_t* child;
 
-    uint32_t return_address = arm_current_lr();
-
-    uint32_t spsr = read_spsr();
-    uint32_t caller_mode = spsr & 0x1f;   // 0x10 = USR
-
-    bool from_user = (caller_mode == ARM_MODE_USR);  // tu n’utilises pas SYS ici
+    uint32_t return_address = arch_current_link_register();
+    uint32_t caller_mode = arch_saved_mode();
+    bool from_user = arch_mode_is_user(caller_mode);  // tu n’utilises pas SYS ici
     
     if (!parent || parent->type != TASK_TYPE_PROCESS) {
         KERROR("sys_fork: Current task is not a process\n");
@@ -739,7 +734,7 @@ int sys_fork(void)
 
         /* CRITIQUE: Copier le contexte de reprise du parent */
         child->context.usr_lr = parent->context.usr_lr;    /*  Adresse après SWI */
-        child->context.usr_cpsr = read_spsr_svc(); /*  Mode user */
+        child->context.usr_cpsr = arch_saved_svc_status(); /*  Mode user */
         
         /* Copier tous les registres user SAUF r0 */
         memcpy(child->context.usr_r, parent->context.usr_r, sizeof(parent->context.usr_r));
@@ -751,7 +746,7 @@ int sys_fork(void)
         //child->context.usr_lr   = parent->context.usr_pc;
         //child->context.usr_pc   = parent->context.usr_pc;
 
-        child->context.spsr = read_spsr_svc();
+        child->context.spsr = arch_saved_svc_status();
 
     }
     else{
@@ -761,7 +756,7 @@ int sys_fork(void)
         child->context.pc = return_address;       /* Après sys_fork() dans C */
         child->context.lr = return_address;       /* LR cohérent */
         child->context.returns_to_user = 0;
-        child->context.spsr = read_spsr_svc();
+        child->context.spsr = arch_saved_svc_status();
 
         /* Copier tous les registres user SAUF r0 */
         memcpy(child->context.usr_r, parent->context.usr_r, sizeof(parent->context.usr_r));
@@ -847,7 +842,7 @@ void sys_exit(int status)
     
     /* Boucle d'urgence pour eviter la corruption */
     while (1) {
-        wait_for_interrupt();
+        arch_wait_for_interrupt();
     }
 }
 
@@ -1463,7 +1458,7 @@ int sys_print(const char* msg) {
 
     char *str = NULL;
 
-    bool user_mode = IS_USER_ADDR((vaddr_t)msg);
+    bool user_mode = memory_is_user_address((vaddr_t)msg);
 
     if(user_mode){
         str = copy_string_from_user(msg);

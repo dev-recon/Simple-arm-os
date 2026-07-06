@@ -44,5 +44,12 @@ void arch_disable_branch_predictor(void);
 uint32_t arch_timer_frequency(void);
 uint64_t arch_timer_counter(void);
 bool arch_mmu_enabled(void);
+vaddr_t arch_current_link_register(void);
+uint32_t arch_current_mode(void);
+uint32_t arch_saved_mode(void);
+uint32_t arch_saved_svc_status(void);
+bool arch_mode_is_user(uint32_t mode);
+bool arch_mode_is_supervisor(uint32_t mode);
+const char* arch_mode_name(uint32_t mode);
 
 #endif /* _KERNEL_ARCH_CPU_H */

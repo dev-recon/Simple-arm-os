@@ -81,3 +81,55 @@ bool arch_mmu_enabled(void)
 {
     return (get_sctlr() & SCTLR_M) != 0;
 }
+
+vaddr_t arch_current_link_register(void)
+{
+    return arm_current_lr();
+}
+
+uint32_t arch_current_mode(void)
+{
+    return get_cpsr() & ARM_CPSR_MODE;
+}
+
+uint32_t arch_saved_mode(void)
+{
+    return read_spsr() & ARM_CPSR_MODE;
+}
+
+uint32_t arch_saved_svc_status(void)
+{
+    return read_spsr_svc();
+}
+
+bool arch_mode_is_user(uint32_t mode)
+{
+    return mode == ARM_MODE_USR;
+}
+
+bool arch_mode_is_supervisor(uint32_t mode)
+{
+    return mode == ARM_MODE_SVC;
+}
+
+const char* arch_mode_name(uint32_t mode)
+{
+    switch (mode) {
+    case ARM_MODE_USR:
+        return "USR";
+    case ARM_MODE_SVC:
+        return "SVC";
+    case ARM_MODE_IRQ:
+        return "IRQ";
+    case ARM_MODE_FIQ:
+        return "FIQ";
+    case ARM_MODE_ABT:
+        return "ABT";
+    case ARM_MODE_UND:
+        return "UND";
+    case ARM_MODE_SYS:
+        return "SYS";
+    default:
+        return "UNKNOWN";
+    }
+}

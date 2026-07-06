@@ -35,6 +35,11 @@ static inline void arch_data_memory_barrier_inner_shareable(void)
     data_memory_barrier_inner_shareable();
 }
 
+static inline void arch_data_memory_barrier(void)
+{
+    data_memory_barrier();
+}
+
 static inline void arch_data_sync_barrier(void)
 {
     data_sync_barrier();
