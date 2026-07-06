@@ -104,6 +104,23 @@ static inline void arch_task_context_save_kernel_sp(task_context_t *ctx,
     ctx->svc_sp = (uint32_t)sp;
 }
 
+static inline vaddr_t arch_task_context_kernel_lr(const task_context_t *ctx)
+{
+    return (vaddr_t)ctx->lr;
+}
+
+static inline void arch_task_context_set_kernel_pc(task_context_t *ctx,
+                                                   vaddr_t pc)
+{
+    ctx->pc = (uint32_t)pc;
+}
+
+static inline void arch_task_context_set_kernel_return_value(task_context_t *ctx,
+                                                            uint32_t value)
+{
+    ctx->r0 = value;
+}
+
 static inline void arch_task_context_set_kernel_stack(task_context_t *ctx,
                                                       vaddr_t stack_top,
                                                       vaddr_t sp)

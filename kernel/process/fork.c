@@ -103,18 +103,20 @@ void return_to_caller_with_value(int return_value)
     
     KDEBUG("[WAITPID] Retour avec valeur: %d\n", return_value);
     
-    /* ACCeS CORRECT au contexte */
-    proc->context.r0 = return_value;
+    arch_task_context_set_kernel_return_value(&proc->context, (uint32_t)return_value);
     
     /* Utiliser l'adresse stockee lors de l'appel initial - ACCeS CORRECT */
     if (proc->process->waitpid_caller_lr != 0) {
-        proc->context.pc = proc->process->waitpid_caller_lr;
+        arch_task_context_set_kernel_pc(&proc->context,
+                                        (vaddr_t)proc->process->waitpid_caller_lr);
         KDEBUG("[WAITPID] PC mis a caller_lr: 0x%08X\n", proc->process->waitpid_caller_lr);
     } else {
         /* Fallback: utiliser LR si disponible */
-        if (proc->context.lr != 0) {
-            proc->context.pc = proc->context.lr;
-            KDEBUG("[WAITPID] PC mis a LR: 0x%08X\n", proc->context.lr);
+        vaddr_t lr = arch_task_context_kernel_lr(&proc->context);
+
+        if (lr != 0) {
+            arch_task_context_set_kernel_pc(&proc->context, lr);
+            KDEBUG("[WAITPID] PC mis a LR: 0x%08X\n", lr);
         } else {
             KDEBUG("[WAITPID] Ni caller_lr ni LR disponible - continuation normale\n");
         }
