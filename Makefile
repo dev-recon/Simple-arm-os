@@ -1,4 +1,4 @@
-# ARM32 Kernel Makefile
+# ArmOS kernel Makefile
 
 CROSS_COMPILE = arm-none-eabi-
 CC = $(CROSS_COMPILE)gcc
@@ -9,7 +9,8 @@ OBJDUMP = $(CROSS_COMPILE)objdump
 QEMU ?= qemu-system-arm
 SMP_CPUS ?= 1
 BUILD_DIR = build
-ARCH_DIR = arch/arm32
+TARGET_ARCH ?= arm32
+ARCH_DIR = arch/$(TARGET_ARCH)
 ARCH_INCLUDE = $(ARCH_DIR)/include
 ASM_OFFSETS_SRC = $(ARCH_DIR)/asm-offsets.c
 ASM_OFFSETS_S = $(BUILD_DIR)/asm-offsets.s
