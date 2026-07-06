@@ -22,6 +22,7 @@
 #include <kernel/types.h>
 #include <kernel/string.h>
 #include <kernel/fdt.h>
+#include <kernel/compiler.h>
 #include <kernel/linker.h>
 #include <asm/cpu_features.h>
 #include <asm/platform.h>
@@ -205,25 +206,6 @@ void virtio_init(void);
 void* get_dtb_address(void);
 bool parse_device_tree(void);
 void print_cpu_mode(void);
-/* === ATTRIBUTS COMPILATEUR === */
-
-/* Sections speciales */
-#define __init_code             __attribute__((section(".text.init")))
-#define __init_data             __attribute__((section(".data.init")))
-#define __kernel_data           __attribute__((section(".data.kernel")))
-
-/* Alignement courant */
-#define __aligned_4             __attribute__((aligned(4)))
-#define __aligned_8             __attribute__((aligned(8)))
-#define __aligned_page          __attribute__((aligned(PAGE_SIZE)))
-#define __cache_aligned         __attribute__((aligned(CACHE_LINE_SIZE)))
-
-/* Optimisations */
-#define __always_inline         __attribute__((always_inline))
-#define __noinline              __attribute__((noinline))
-#define __pure                  __attribute__((pure))
-#define __const                 __attribute__((const))
-
 /* CPU feature aliases kept for compatibility while arch headers take over. */
 #define CORTEX_A15_FEATURES     ARCH_CORTEX_A15_FEATURES
 #define HAS_NEON                ARCH_HAS_NEON
