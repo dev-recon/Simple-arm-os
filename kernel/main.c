@@ -155,10 +155,11 @@ void test_heap_health(const char* phase_name)
 }
 
 /*
- * Point d'entree principal du kernel ARMv7-A
+ * Point d'entree principal du kernel.
  */
 void kernel_main(void)
 {
+    arch_cpuinfo_t boot_cpuinfo;
     uint32_t timer_freq;
     uint32_t bogo_x100;
     uint32_t total_mb;
@@ -175,10 +176,12 @@ void kernel_main(void)
 
     timer_freq = boot_timer_frequency();
     bogo_x100 = boot_bogomips_x100(timer_freq);
+    arch_get_cpuinfo(&boot_cpuinfo);
 
     KBOOT("\n");
-    KBOOT(KBOOT_COLOR_INFO "ArmOS 0.6 armv7l" KBOOT_COLOR_RESET "\n");
-    KBOOT_OKF("CPU: ARM Cortex-A15 @ QEMU virt");
+    KBOOT(KBOOT_COLOR_INFO "ArmOS 0.6 %s" KBOOT_COLOR_RESET "\n",
+          arch_machine_name());
+    KBOOT_OKF("CPU: %s", boot_cpuinfo.model_name ? boot_cpuinfo.model_name : "unknown");
     KBOOT_OKF("Calibrating delay loop... %u.%02u BogoMIPS",
                 bogo_x100 / 100, bogo_x100 % 100);
 

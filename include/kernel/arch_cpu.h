@@ -37,6 +37,7 @@ typedef struct arch_cpuinfo {
 } arch_cpuinfo_t;
 
 void arch_get_cpuinfo(arch_cpuinfo_t* info);
+const char* arch_machine_name(void);
 void arch_disable_interrupts(void);
 void arch_enable_interrupts(void);
 void arch_wait_for_interrupt(void);

@@ -40,6 +40,11 @@ void arch_get_cpuinfo(arch_cpuinfo_t* info)
     info->mpidr = arm_read_mpidr();
 }
 
+const char* arch_machine_name(void)
+{
+    return "armv7l";
+}
+
 void arch_disable_interrupts(void)
 {
     disable_interrupts();
