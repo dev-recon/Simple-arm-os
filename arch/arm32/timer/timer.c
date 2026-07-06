@@ -494,7 +494,8 @@ void unix_to_datetime(uint32_t unix_time, datetime_t* dt) {
 /* Si vous avez un RTC sur votre board */
 uint32_t get_current_time(void) {
     /* PL031 runtime via l'alias MMIO prive TTBR1. */
-    volatile uint32_t* rtc_base = (uint32_t*)KERNEL_MMIO_RTC_BASE;
+    volatile uint32_t* rtc_base =
+        (volatile uint32_t*)(uintptr_t)arch_platform_kernel_mmio_rtc_base();
     
     /* Le PL031 donne directement un timestamp Unix */
     return rtc_base[0];  /* RTC Data Register */

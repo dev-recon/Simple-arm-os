@@ -79,6 +79,11 @@ static inline vaddr_t arch_platform_kernel_mmio_uart_base(void)
     return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_UART_BASE;
 }
 
+static inline vaddr_t arch_platform_kernel_mmio_rtc_base(void)
+{
+    return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_RTC_BASE;
+}
+
 static inline vaddr_t arch_platform_kernel_mmio_virtio_base(void)
 {
     return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_VIRTIO_BASE;
