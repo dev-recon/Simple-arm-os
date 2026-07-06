@@ -978,9 +978,6 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
         return NULL;
     }
 
-    //bool parent_is_user_process = (parent->context.sp < 0x40000000);  /* Espace user */
-    //bool parent_is_user_process = false;  /* FIX IT Espace user */
-
     //KDEBUG("task_create_copy: parent_is_user_process=%s\n", 
     //   from_user ? "YES" : "NO");
     //KDEBUG("  Parent SP: 0x%08X\n", parent->context.sp);
@@ -3392,7 +3389,7 @@ void task_check_stack_integrity(void)
             }
             
             /* Verifier que PC est dans une zone valide */
-            if (pc != 0 && pc < 0x40000000) {
+            if (pc != 0 && !memory_is_kernel_address(pc)) {
                 KERROR("Task %s: Invalid PC (PC=0x%08X)\n", 
                        task->name, pc);
                 issues++;
@@ -3615,7 +3612,7 @@ void debug_current_task_detailed(const char* location)
     }
     
     /* Verifier que le pointeur est dans une zone valide */
-    if ((uint32_t)task < 0x40000000 || (uint32_t)task > 0x50000000) {
+    if (!memory_is_kernel_address((vaddr_t)(uintptr_t)task)) {
         KERROR("  KO current_task pointer invalid: %p\n", task);
         return;
     }
