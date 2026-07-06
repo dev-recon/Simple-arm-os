@@ -119,6 +119,11 @@ static inline paddr_t arch_platform_gic_phys_end(void)
     return (paddr_t)ARMOS_PLATFORM_GIC_PHYS_END;
 }
 
+static inline bool arch_platform_gic_targets_auto_managed(void)
+{
+    return ARMOS_PLATFORM_GIC_TARGETS_AUTO_MANAGED != 0;
+}
+
 static inline uint32_t arch_platform_timer_irq(void)
 {
     return ARMOS_PLATFORM_TIMER_IRQ;

@@ -46,5 +46,8 @@ preserving explicit environment overrides.
   platform fragment can own the decision.
 - Keep platform discovery in C behind `arch_platform_*` and `platform_*`
   helpers rather than scattering QEMU or board constants through generic code.
+- Describe platform quirks as named capabilities. For example, qemu-virt
+  declares whether GIC ITARGETSR routing is auto-managed instead of making the
+  interrupt controller guess the machine name.
 - A directory without `platform.mk` is documentation or staging only; it is not
   a supported `TARGET_PLATFORM`.

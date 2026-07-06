@@ -29,6 +29,7 @@
 #include <kernel/mmio.h>
 #include <kernel/smp.h>
 #include <kernel/tlb.h>
+#include <kernel/arch_platform.h>
 #include <asm/arm.h>
 
 /* Compteur global pour verifier que les IRQ arrivent */
@@ -71,7 +72,7 @@ static uint8_t gic_route_spi_to_boot_cpu(uint32_t irq)
 
 void init_gic(void)
 {
-    KDEBUG("[GIC] Starting GIC initialization (machine virt)...\n");
+    KDEBUG("[GIC] Starting GIC initialization (%s)...\n", arch_platform_name());
     
     volatile uint32_t* gicd = (volatile uint32_t*)LOCAL_GICD_BASE;
     volatile uint32_t* gicc = (volatile uint32_t*)LOCAL_GICC_BASE;
@@ -89,9 +90,9 @@ void init_gic(void)
     uint32_t num_irqs = ((gicd_typer & 0x1F) + 1) * 32;
     KDEBUG("[GIC] Number of IRQs: %u\n", num_irqs);
     
-    /* Detecter si on est sur QEMU machine virt */
-    bool is_qemu_virt = true;  /* Assumer QEMU virt */
-    KDEBUG("[GIC] TARGET QEMU machine virt detected - using auto-targeting mode\n");
+    bool targets_auto_managed = arch_platform_gic_targets_auto_managed();
+    KDEBUG("[GIC] ITARGETSR mode: %s\n",
+           targets_auto_managed ? "platform auto-managed" : "kernel-programmed");
     
     /* === PHASE 2: CONFIGURATION === */
     
@@ -114,9 +115,9 @@ void init_gic(void)
     
     volatile uint8_t* itargetsr = (volatile uint8_t*)(LOCAL_GICD_BASE + 0x800);
     
-    if (is_qemu_virt) {
-        KDEBUG("[GIC] QEMU mode: ITARGETSR is read-only (auto-managed)\n");
-        KDEBUG("[GIC] This is NORMAL behavior - interrupts will still work!\n");
+    if (targets_auto_managed) {
+        KDEBUG("[GIC] Platform mode: ITARGETSR is read-only/auto-managed\n");
+        KDEBUG("[GIC] This is expected for this platform\n");
         
         /* Verifier les valeurs auto-configurees */
         for (uint32_t irq = 16; irq < 48; irq += 4) {
@@ -150,7 +151,7 @@ void init_gic(void)
         uint8_t target;
         
         /*
-         * Core QEMU virt interrupts used by ArmOS are level-triggered:
+         * Core platform interrupts used by ArmOS are level-triggered:
          * - ARM generic timer PPI
          * - PL011 UART SPI (GIC id 33)
          *
@@ -179,7 +180,7 @@ void init_gic(void)
         uint32_t enabled = gicd[0x100/4 + reg] & (1 << bit);
         target = itargetsr[irq];
         
-        if (is_qemu_virt && target == 0) {
+        if (targets_auto_managed && target == 0) {
             KDEBUG("[GIC] IRQ %u: %s, target=AUTO OK\n", 
                    irq, enabled ? "ENABLED" : "disabled");
         } else {
@@ -202,7 +203,9 @@ void init_gic(void)
            (final_gicc & 1) ? "OK ACTIVE" : "KO INACTIVE");
     
     if ((final_gicd & 1) && (final_gicc & 1)) {
-        KDEBUG("[GIC] - QEMU machine virt GIC ready! (auto-targeting mode)\n");
+        KDEBUG("[GIC] - %s GIC ready! (%s mode)\n",
+               arch_platform_name(),
+               targets_auto_managed ? "auto-targeting" : "kernel-targeting");
     } else {
         KDEBUG("[GIC] KO GIC initialization failed\n");
     }
