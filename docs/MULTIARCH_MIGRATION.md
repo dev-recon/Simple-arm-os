@@ -80,7 +80,7 @@ Done so far:
   `arch/arm32/cpu/cpu.c`, behind `arch_get_cpuinfo()`;
 - moved ARM32 local boot CPU controls to `arch/arm32/cpu/cpu.c`, behind
   `arch_cpu` hooks for IRQ enable/disable, WFI, timer frequency, and branch
-  predictor control;
+  predictor/MMU-control state;
 - introduced `include/kernel/arch_barrier.h` so VirtIO/IDE drivers use
   architecture-neutral names for CPU relax, cache maintenance, and memory
   ordering primitives instead of including ARM helper headers directly;

@@ -22,7 +22,6 @@
 #include <kernel/types.h>
 #include <kernel/string.h>
 #include <kernel/fdt.h>
-#include <asm/arm.h>
 
 #define USE_RAMFS 1
 

@@ -43,5 +43,6 @@ void arch_wait_for_interrupt(void);
 void arch_disable_branch_predictor(void);
 uint32_t arch_timer_frequency(void);
 uint64_t arch_timer_counter(void);
+bool arch_mmu_enabled(void);
 
 #endif /* _KERNEL_ARCH_CPU_H */

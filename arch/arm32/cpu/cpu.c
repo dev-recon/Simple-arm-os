@@ -76,3 +76,8 @@ uint64_t arch_timer_counter(void)
 {
     return get_cntpct();
 }
+
+bool arch_mmu_enabled(void)
+{
+    return (get_sctlr() & SCTLR_M) != 0;
+}

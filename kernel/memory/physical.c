@@ -20,6 +20,7 @@
 #include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/spinlock.h>
+#include <kernel/arch_cpu.h>
 
 
 physical_allocator_t phys_alloc;
@@ -45,7 +46,7 @@ static void account_buddy_free(size_t pages);
 
 static bool mmu_is_enabled(void)
 {
-    return (get_sctlr() & SCTLR_M) != 0;
+    return arch_mmu_enabled();
 }
 
 void* early_alloc(uint32_t size, uint32_t align) {
