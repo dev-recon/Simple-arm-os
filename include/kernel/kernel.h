@@ -23,6 +23,7 @@
 #include <kernel/string.h>
 #include <kernel/fdt.h>
 #include <asm/platform.h>
+#include <asm/memory_layout.h>
 
 #define USE_RAMFS 1
 
@@ -71,27 +72,6 @@ extern uint32_t __stack_svc_top;
  * ======================================================================== */
 #define VIRT_RAM_SIZE           get_kernel_memory_size()
 #define VIRT_RAM_END            (VIRT_RAM_START + VIRT_RAM_SIZE)
-
-/*
- * Kernel RAM mapping policy.
- *
- * ArmOS is moving away from relying on VA == PA for all RAM.  The kernel
- * image and early boot metadata still keep a small identity window so the
- * current ARM32 boot/linker path remains simple, but general allocator pages
- * must be accessed through the direct map.
- *
- * Direct map layout with the current 1GB TTBR0 / 3GB TTBR1 split:
- *   VA 0x60000000..0xDFFFFFFF -> PA 0x40000000..0xBFFFFFFF
- *
- * That covers the supported QEMU virt 2GB RAM profile and leaves
- * 0xE0000000..0xEFFFFFFF for temporary mappings before the MMIO aliases at
- * 0xF0000000.
- */
-#define KERNEL_BOOT_IDENTITY_END 0x54100000u
-#define KERNEL_DIRECT_MAP_BASE   0x60000000u
-#define KERNEL_DIRECT_MAP_END    0xE0000000u
-#define KERNEL_DIRECT_MAP_SIZE   (KERNEL_DIRECT_MAP_END - KERNEL_DIRECT_MAP_BASE)
-#define KERNEL_DIRECT_MAP_OFFSET (KERNEL_DIRECT_MAP_BASE - VIRT_RAM_START)
 
 static inline bool phys_in_direct_map(paddr_t paddr)
 {
