@@ -59,7 +59,7 @@ uint32_t detect_memory(void)
     
     KINFO("Starting memory detection for %s...\n", arch_platform_name());
     
-    /* 1. Afficher les informations CPU Cortex-A15 */
+    /* 1. Print ARM32 CP15 memory/cache feature registers. */
     print_cpu_memory_features();
 
     //dtb_address = 0x40000000;
@@ -155,20 +155,20 @@ static void print_cpu_memory_features(void)
 {
     cpu_memory_info_t info = get_cpu_memory_info();
     
-    KINFO("=== Cortex-A15 Memory Features ===\n");
+    KINFO("=== ARM32 Memory Features ===\n");
     KINFO("Cache Info:     0x%08x\n", info.cache_info);
     KINFO("TLB Info:       0x%08x\n", info.tlb_info);
     KINFO("Memory Model:   0x%08x\n", info.memory_model);
     KINFO("Debug Features: 0x%08x\n", info.debug_features);
     
-    /* Decoder les informations cache Cortex-A15 */
+    /* Decode cache line information reported by CLIDR/CCSIDR helpers. */
     uint32_t icache_line = 4 << ((info.cache_info >> 0) & 0xF);
     uint32_t dcache_line = 4 << ((info.cache_info >> 16) & 0xF);
     
     KINFO("I-Cache line:   %d bytes\n", icache_line);
     KINFO("D-Cache line:   %d bytes\n", dcache_line);
     
-    /* Informations specifiques Cortex-A15 */
+    /* Historical bring-up notes kept disabled until a per-CPU decoder exists. */
     //kprintf("L2 Cache line:  64 bytes (Cortex-A15)\n");
     //kprintf("Virtual addr:   40-bit (Large Physical Address)\n");
 }

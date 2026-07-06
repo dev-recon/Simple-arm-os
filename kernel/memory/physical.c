@@ -503,7 +503,7 @@ static void reserve_dtb_pages(void)
     paddr_t dtb_end = dtb_start + dtb_size;
 
     
-    KINFO("[MEM] DTB layout from QEMU:\n");
+    KINFO("[MEM] DTB layout from %s:\n", arch_platform_name());
     KINFO("[MEM]   DTB start:  0x%08X\n", dtb_start);
     KINFO("[MEM]   DTB end:    0x%08X\n", dtb_start + dtb_size);
     KINFO("[MEM]   DTB size:   %u bytes (%u KB)\n", dtb_size, dtb_size / 1024);

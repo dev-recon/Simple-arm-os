@@ -99,8 +99,8 @@ static uint32_t boot_timer_frequency(void)
 static uint32_t boot_bogomips_x100(uint32_t timer_freq)
 {
     /*
-     * Early Linux printed a delay-loop calibration as BogoMIPS. For QEMU virt
-     * this gives a stable, readable estimate tied to the ARM generic timer.
+     * Early Linux printed a delay-loop calibration as BogoMIPS. In ArmOS this
+     * is a stable, readable estimate tied to the active platform timer.
      */
     return timer_freq / 5000;
 }
