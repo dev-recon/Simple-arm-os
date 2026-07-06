@@ -630,51 +630,22 @@ int sys_fork(void)
 
     init_process_signals(child);
 
-    //parent->context.usr_lr = return_address ;    /* Adresse après SWI */
-    child->context.ttbr0 = (uint32_t)child->process->vm->pgdir;
-    child->context.asid = child->process->vm->asid;
-
     if( from_user )
     {
-        // Reprendre au même point utilisateur que le parent (après SVC)
-        child->context.usr_pc   = parent->context.usr_pc;
-
-        // Même pile utilisateur que le parent (copy-on-write dans ta VM)
-        child->context.usr_sp   = parent->context.usr_sp;
-
-        // Marquer premier run
-        child->context.is_first_run = 1;
-        child->context.returns_to_user = 1;
-
-        /* CRITIQUE: Copier le contexte de reprise du parent */
-        child->context.usr_lr = parent->context.usr_lr;    /*  Adresse après SWI */
-        child->context.usr_cpsr = arch_saved_svc_status(); /*  Mode user */
-        
-        /* Copier tous les registres user SAUF r0 */
-        memcpy(child->context.usr_r, parent->context.usr_r, sizeof(parent->context.usr_r));
-        child->context.usr_r[0] = 0;            /*  Enfant retourne 0 */
-
-        child->context.r0 = 0;
-        child->context.lr = return_address;
-        child->context.pc = return_address;
-        //child->context.usr_lr   = parent->context.usr_pc;
-        //child->context.usr_pc   = parent->context.usr_pc;
-
-        child->context.spsr = arch_saved_svc_status();
-
+        arch_task_context_prepare_user_fork(&child->context,
+                                            &parent->context,
+                                            (uintptr_t)child->process->vm->pgdir,
+                                            child->process->vm->asid,
+                                            return_address,
+                                            arch_saved_svc_status());
     }
     else{
-        /* L'enfant retourne 0 dans r0 */
-        child->context.r0 = 0;
-        child->context.is_first_run = 1;
-        child->context.pc = return_address;       /* Après sys_fork() dans C */
-        child->context.lr = return_address;       /* LR cohérent */
-        child->context.returns_to_user = 0;
-        child->context.spsr = arch_saved_svc_status();
-
-        /* Copier tous les registres user SAUF r0 */
-        memcpy(child->context.usr_r, parent->context.usr_r, sizeof(parent->context.usr_r));
-        child->context.usr_r[0] = 0;            /*  Enfant retourne 0 */
+        arch_task_context_prepare_kernel_fork(&child->context,
+                                              &parent->context,
+                                              (uintptr_t)child->process->vm->pgdir,
+                                              child->process->vm->asid,
+                                              return_address,
+                                              arch_saved_svc_status());
     }
 
     add_to_ready_queue(child);
@@ -1129,7 +1100,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
      * construire une eventuelle frame signal. rt_sigreturn a deja restaure r0.
      */
     if (proc && syscall_num != __NR_rt_sigreturn) {
-        proc->context.usr_r[0] = (uint32_t)result;
+        arch_task_context_set_user_register(&proc->context, 0, (uint32_t)result);
     }
 
     if (proc && syscall_num != __NR_rt_sigreturn) {

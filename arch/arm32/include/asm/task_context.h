@@ -203,4 +203,45 @@ static inline void arch_task_context_init_kernel_entry(task_context_t *ctx,
     arch_task_context_set_returns_to_user(ctx, false);
 }
 
+static inline void arch_task_context_prepare_user_fork(task_context_t *child,
+                                                       const task_context_t *parent,
+                                                       uintptr_t address_space,
+                                                       uint32_t asid,
+                                                       vaddr_t kernel_return_pc,
+                                                       uint32_t saved_status)
+{
+    arch_task_user_context_t user;
+
+    arch_task_context_set_address_space(child, address_space, asid);
+    arch_task_context_capture_user(parent, &user);
+    user.cpsr = saved_status;
+    arch_task_context_restore_user(child, &user);
+    arch_task_context_set_user_register(child, 0, 0);
+
+    child->r0 = 0;
+    child->lr = (uint32_t)kernel_return_pc;
+    child->pc = (uint32_t)kernel_return_pc;
+    child->spsr = saved_status;
+    arch_task_context_mark_first_run(child);
+}
+
+static inline void arch_task_context_prepare_kernel_fork(task_context_t *child,
+                                                         const task_context_t *parent,
+                                                         uintptr_t address_space,
+                                                         uint32_t asid,
+                                                         vaddr_t kernel_return_pc,
+                                                         uint32_t saved_status)
+{
+    (void)parent;
+    arch_task_context_set_address_space(child, address_space, asid);
+    arch_task_context_set_user_register(child, 0, 0);
+
+    child->r0 = 0;
+    child->pc = (uint32_t)kernel_return_pc;
+    child->lr = (uint32_t)kernel_return_pc;
+    child->spsr = saved_status;
+    arch_task_context_mark_first_run(child);
+    arch_task_context_set_returns_to_user(child, false);
+}
+
 #endif /* _ASM_TASK_CONTEXT_H */
