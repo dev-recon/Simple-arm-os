@@ -17,6 +17,9 @@ ASM_OFFSETS_SRC = $(ARCH_DIR)/asm-offsets.c
 ASM_OFFSETS_S = $(BUILD_DIR)/asm-offsets.s
 ASM_OFFSETS_H = $(BUILD_DIR)/generated/asm-offsets.h
 TARGET_ARCH_DISPLAY = $(TARGET_ARCH)/$(TARGET_PLATFORM)
+TARGET_PLATFORM_DIR = $(subst -,_,$(TARGET_PLATFORM))
+PLATFORM_DIR = $(ARCH_DIR)/platform/$(TARGET_PLATFORM_DIR)
+PLATFORM_MK = $(PLATFORM_DIR)/platform.mk
 
 ifeq ($(TARGET_ARCH),arm32)
 ARCH_CFLAGS = -marm -mfpu=neon-vfpv4 -mfloat-abi=soft \
@@ -25,24 +28,10 @@ else
 $(error Unsupported TARGET_ARCH '$(TARGET_ARCH)')
 endif
 
-ifeq ($(TARGET_PLATFORM),qemu-virt)
-PLATFORM_CPU_CFLAGS = -mcpu=cortex-a15
-PLATFORM_CFLAGS = $(PLATFORM_CPU_CFLAGS) -DARMOS_PLATFORM_QEMU_VIRT
-PLATFORM_OBJS = \
-	$(ARCH_DIR)/platform/qemu_virt/devices.o \
-	kernel/drivers/ata.o \
-	kernel/drivers/keyboard.o \
-	kernel/drivers/display.o \
-	kernel/drivers/virtio_gpu.o \
-	kernel/drivers/virtio_input.o \
-	kernel/drivers/virtio_net.o \
-	kernel/drivers/ide.o \
-	kernel/drivers/virtio_block.o \
-	$(ARCH_DIR)/interrupt/gic.o \
-	$(ARCH_DIR)/power/psci.o
-else
-$(error Unsupported TARGET_PLATFORM '$(TARGET_PLATFORM)')
+ifeq ($(wildcard $(PLATFORM_MK)),)
+$(error Unsupported TARGET_PLATFORM '$(TARGET_PLATFORM)' for TARGET_ARCH '$(TARGET_ARCH)')
 endif
+include $(PLATFORM_MK)
 
 # CORRECTION 2: Flags specifiques pour corriger les operations mathematiques
 MATH_FLAGS = -fno-builtin-div -fno-builtin-mod
@@ -453,7 +442,7 @@ run-trace: $(KERNEL_BIN) $(DISK_IMG)
 		-D qemu-virtio.log 
 
 run-mmio: $(KERNEL_BIN) $(DISK_IMG)
-	$(QEMU) -M virt -cpu cortex-a15 \
+	$(QEMU) -M $(QEMU_MACHINE) -cpu $(QEMU_CPU) \
 		-m 1G -smp 1 \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
@@ -462,7 +451,7 @@ run-mmio: $(KERNEL_BIN) $(DISK_IMG)
 		-d int,guest_errors,unimp -D qemu.log
 
 run: $(KERNEL_BIN) $(DISK_IMG)
-	$(QEMU) -M virt,highmem=off -cpu cortex-a15 \
+	$(QEMU) -M $(QEMU_MACHINE) -cpu $(QEMU_CPU) \
 		-m 1G -smp 1 \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
@@ -473,7 +462,7 @@ run: $(KERNEL_BIN) $(DISK_IMG)
 #-global virtio-mmio.force-legacy=true
 
 debug: $(KERNEL_BIN) $(DISK_IMG)
-	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine $(QEMU_MACHINE) -cpu $(QEMU_CPU) -m 128M \
 		-kernel $(KERNEL_BIN) -nographic -s -S \
 		-drive file=$(DISK_IMG),format=raw,if=none,id=disk0 \
 		-device virtio-blk-device,drive=disk0
@@ -506,19 +495,19 @@ test-kernel: $(KERNEL_BIN)
 
 debug-verbose: $(KERNEL_BIN)
 	@echo "Running with verbose debug..."
-	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine $(QEMU_MACHINE) -cpu $(QEMU_CPU) -m 128M \
 		-kernel $(KERNEL_BIN) -nographic \
 		-d cpu,int,guest_errors
 
 debug-monitor: $(KERNEL_BIN)
 	@echo "Running with QEMU monitor (type 'info registers' then 'quit')..."
-	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine $(QEMU_MACHINE) -cpu $(QEMU_CPU) -m 128M \
 		-kernel $(KERNEL_BIN) -nographic \
 		-monitor stdio
 
 debug-trace: $(KERNEL_BIN)
 	@echo "Running with execution trace..."
-	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine $(QEMU_MACHINE) -cpu $(QEMU_CPU) -m 128M \
 		-kernel $(KERNEL_BIN) -nographic \
 		-d exec,cpu -D qemu.log
 	@echo "Check qemu.log for execution trace"
