@@ -28,7 +28,6 @@
 #include <kernel/tty.h>
 #include <kernel/virtio_input.h>
 #include <kernel/interrupt.h>
-#include <kernel/kernel.h>
 #include <kernel/virtio_block.h>
 #include <kernel/virtio_net.h>
 #include <kernel/ext2.h>

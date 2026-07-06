@@ -22,7 +22,6 @@
 #include <kernel/procfs.h>
 #include <kernel/disk_layout.h>
 #include <kernel/mount.h>
-#include <kernel/kernel.h>
 #include <kernel/memory.h>
 #include <kernel/process.h>
 #include <kernel/string.h>

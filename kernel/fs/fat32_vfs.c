@@ -19,7 +19,6 @@
 #include <kernel/vfs.h>
 #include <kernel/fat32.h>
 #include <kernel/memory.h>
-#include <kernel/kernel.h>
 #include <kernel/string.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
