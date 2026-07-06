@@ -19,6 +19,8 @@
 #ifndef _KERNEL_TYPES_H
 #define _KERNEL_TYPES_H
 
+#include <asm/cache.h>
+
 /* === TYPES DE BASE === */
 
 typedef unsigned char      uint8_t;
@@ -96,13 +98,6 @@ typedef enum {
 #define MAX_PATH        256
 #define MAX_NAME        255
 
-/* Constantes pour machine virt - defaut si pas redefinies */
-//#ifndef CACHE_LINE_SIZE
-//#define L1_CACHE_SIZE   32      /* Cortex-A15 L1 cache line */
-//#define L2_CACHE_SIZE   64      /* Cortex-A15 L2 cache line */
-//#define CACHE_LINE_SIZE L2_CACHE_SIZE
-//#endif
-
 /* === CODES D'ERREUR === */
 
 #define EPERM           1       /* Operation not permitted */
@@ -154,7 +149,7 @@ typedef struct {
     uint32_t owner;                      /* 4 bytes - CPU proprietaire */
     uint32_t count;                      /* 4 bytes - compteur recursif */
     uint32_t padding[5];                 /* 20 bytes - alignement cache line */
-} __attribute__((aligned(64))) spinlock_tt;  /* Aligne sur cache line A15 */
+} __attribute__((aligned(ARCH_CACHE_LINE_SIZE))) spinlock_tt;  /* Aligne sur cache line arch */
 
 /* Mutex simple */
 typedef struct {
@@ -303,6 +298,11 @@ typedef uint32_t in_addr_t;
 #define MB(x)                   ((x) * 1024 * 1024)
 #define GB(x)                   ((x) * 1024 * 1024 * 1024)
 
+/* Public cache-line aliases used by generic alignment macros. */
+#define L1_CACHE_LINE_SIZE      ARCH_L1_CACHE_LINE_SIZE
+#define L2_CACHE_LINE_SIZE      ARCH_L2_CACHE_LINE_SIZE
+#define CACHE_LINE_SIZE         ARCH_CACHE_LINE_SIZE
+
 /* === ATTRIBUTS COMPILATEUR === */
 
 /* Attributs pour l'optimisation */
@@ -319,10 +319,6 @@ typedef uint32_t in_addr_t;
 #if PAGE_SIZE != 4096
 #error "PAGE_SIZE must be 4096"
 #endif
-
-//#if CACHE_LINE_SIZE != 64
-//#error "CACHE_LINE_SIZE should be 64 for Cortex-A15"
-//#endif
 
 /* Verifications des tailles */
 typedef char size_check_uint8_t[sizeof(uint8_t) == 1 ? 1 : -1];

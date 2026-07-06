@@ -329,7 +329,7 @@ void print_cpu_mode(void);
 #define __aligned_4             __attribute__((aligned(4)))
 #define __aligned_8             __attribute__((aligned(8)))
 #define __aligned_page          __attribute__((aligned(PAGE_SIZE)))
-#define __cache_aligned         __attribute__((aligned(64)))  /* Cache line Cortex-A15 */
+#define __cache_aligned         __attribute__((aligned(CACHE_LINE_SIZE)))
 
 /* Optimisations */
 #define __always_inline         __attribute__((always_inline))
@@ -338,11 +338,6 @@ void print_cpu_mode(void);
 #define __const                 __attribute__((const))
 
 /* === CONSTANTES CORTEX-A15 === */
-
-/* Cache line sizes */
-#define L1_CACHE_LINE_SIZE      32
-#define L2_CACHE_LINE_SIZE      64
-#define CACHE_LINE_SIZE         L2_CACHE_LINE_SIZE
 
 /* Performance features */
 #define CORTEX_A15_FEATURES     1
