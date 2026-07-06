@@ -75,12 +75,41 @@ static inline vaddr_t arch_task_stack_align(vaddr_t sp)
     return sp & ~(vaddr_t)(ARCH_TASK_STACK_ALIGNMENT - 1u);
 }
 
+static inline vaddr_t arch_task_context_kernel_sp(const task_context_t *ctx)
+{
+    return (vaddr_t)ctx->sp;
+}
+
+static inline vaddr_t arch_task_context_svc_sp(const task_context_t *ctx)
+{
+    return (vaddr_t)ctx->svc_sp;
+}
+
+static inline void arch_task_context_set_kernel_sp(task_context_t *ctx,
+                                                   vaddr_t sp)
+{
+    ctx->sp = (uint32_t)arch_task_stack_align(sp);
+}
+
+static inline void arch_task_context_set_svc_sp(task_context_t *ctx,
+                                                vaddr_t sp)
+{
+    ctx->svc_sp = (uint32_t)arch_task_stack_align(sp);
+}
+
+static inline void arch_task_context_save_kernel_sp(task_context_t *ctx,
+                                                    vaddr_t sp)
+{
+    ctx->sp = (uint32_t)sp;
+    ctx->svc_sp = (uint32_t)sp;
+}
+
 static inline void arch_task_context_set_kernel_stack(task_context_t *ctx,
                                                       vaddr_t stack_top,
                                                       vaddr_t sp)
 {
     ctx->svc_sp_top = (uint32_t)stack_top;
-    ctx->svc_sp = (uint32_t)arch_task_stack_align(sp);
+    arch_task_context_set_svc_sp(ctx, sp);
     ctx->sp = ctx->svc_sp;
 }
 

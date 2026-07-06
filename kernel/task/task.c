@@ -537,11 +537,11 @@ static bool task_stack_metadata_valid(task_t* task)
 
     vaddr_t stack_base = task_stack_addr(task->stack_base);
     vaddr_t stack_top = task_stack_addr(task->stack_top);
-    vaddr_t sp = (vaddr_t)task->context.sp;
+    vaddr_t sp = arch_task_context_kernel_sp(&task->context);
 
     if (sp < stack_base || sp >= stack_top) {
         KERROR("TASK: %s context SP 0x%08X outside stack 0x%08X-0x%08X\n",
-               task->name, task->context.sp, stack_base, stack_top);
+               task->name, sp, stack_base, stack_top);
         return false;
     }
 
@@ -1097,8 +1097,10 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
     }
     
     /*  Alignement final */
-    child->context.sp = (uint32_t)arch_task_stack_align(child->context.sp);
-    child->context.svc_sp = (uint32_t)arch_task_stack_align(child->context.svc_sp);
+    arch_task_context_set_kernel_sp(&child->context,
+                                    arch_task_context_kernel_sp(&child->context));
+    arch_task_context_set_svc_sp(&child->context,
+                                 arch_task_context_svc_sp(&child->context));
 
     return child;
 
@@ -1293,7 +1295,7 @@ void switch_to_idle_stack(void)
     vaddr_t current_sp;
     
     /* Copier quelques données importantes sur la nouvelle pile */
-    uint32_t new_sp = idle_task->context.sp;
+    vaddr_t new_sp = arch_task_context_kernel_sp(&idle_task->context);
     
     /* Réserver de l'espace sur la pile idle pour les variables locales */
     new_sp -= 64;  /* 64 bytes de marge */
@@ -1303,7 +1305,7 @@ void switch_to_idle_stack(void)
     arch_set_stack_pointer(new_sp);
     
     /* Mettre à jour le SP d'idle */
-    idle_task->context.sp = new_sp;
+    arch_task_context_set_kernel_sp(&idle_task->context, new_sp);
     
     /* Vérification */
     current_sp = arch_current_stack_pointer();
@@ -2022,12 +2024,13 @@ void save_task_context_safe(task_t* task, vaddr_t current_sp)
         /* Vérification spéciale pour idle */
         if (is_on_task_stack(task, current_sp)) {
             /* SP valide dans la pile d'idle */
-            task->context.sp = current_sp;
+            arch_task_context_set_kernel_sp(&task->context, current_sp);
             //KDEBUG("Saved valid SP for idle: 0x%08X\n", current_sp);
         } else if (is_on_kernel_stack(current_sp)) {
             /* CRITIQUE: Idle sur pile kernel - ne pas sauvegarder ! */
             //KERROR("Idle still on kernel stack! SP=0x%08X\n", current_sp);
-            KERROR("Keeping idle SP at: 0x%08X\n", task->context.sp);
+            KERROR("Keeping idle SP at: 0x%08X\n",
+                   arch_task_context_kernel_sp(&task->context));
             /* Ne pas écraser task->context.sp */
         } else {
             KERROR("Idle on unknown stack! SP=0x%08X\n", current_sp);
@@ -2036,12 +2039,13 @@ void save_task_context_safe(task_t* task, vaddr_t current_sp)
     } else {
         /* Pour les autres tâches, comportement normal */
         if (is_on_task_stack(task, current_sp)) {
-            task->context.sp = current_sp;
-            task->context.svc_sp = current_sp;
+            arch_task_context_save_kernel_sp(&task->context, current_sp);
             //KDEBUG("Saved valid SP for %s: 0x%08X\n", task->name, current_sp);
         } else {
             task_dump_stacks_detailed();
-            KERROR("Task %s has invalid SP: 0x%08X - context SP = 0x%08X\n", task->name, current_sp, task->context.sp);
+            KERROR("Task %s has invalid SP: 0x%08X - context SP = 0x%08X\n",
+                   task->name, current_sp,
+                   arch_task_context_kernel_sp(&task->context));
             //panic("Stopping");
             yield();
             return;
