@@ -10,12 +10,13 @@ QEMU ?= qemu-system-arm
 SMP_CPUS ?= 1
 BUILD_DIR = build
 TARGET_ARCH ?= arm32
+TARGET_PLATFORM ?= qemu-virt
 ARCH_DIR = arch/$(TARGET_ARCH)
 ARCH_INCLUDE = $(ARCH_DIR)/include
 ASM_OFFSETS_SRC = $(ARCH_DIR)/asm-offsets.c
 ASM_OFFSETS_S = $(BUILD_DIR)/asm-offsets.s
 ASM_OFFSETS_H = $(BUILD_DIR)/generated/asm-offsets.h
-TARGET_ARCH_DISPLAY = $(TARGET_ARCH)
+TARGET_ARCH_DISPLAY = $(TARGET_ARCH)/$(TARGET_PLATFORM)
 
 ifeq ($(TARGET_ARCH),arm32)
 ARCH_CFLAGS = -mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft \
@@ -24,13 +25,19 @@ else
 $(error Unsupported TARGET_ARCH '$(TARGET_ARCH)')
 endif
 
+ifeq ($(TARGET_PLATFORM),qemu-virt)
+PLATFORM_CFLAGS = -DARMOS_PLATFORM_QEMU_VIRT
+else
+$(error Unsupported TARGET_PLATFORM '$(TARGET_PLATFORM)')
+endif
+
 # CORRECTION 2: Flags specifiques pour corriger les operations mathematiques
 MATH_FLAGS = -fno-builtin-div -fno-builtin-mod
 
 # Flags de compilation
 ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated
 
-CFLAGS = -std=gnu99 $(ARCH_CFLAGS) $(MATH_FLAGS) \
+CFLAGS = -std=gnu99 $(ARCH_CFLAGS) $(PLATFORM_CFLAGS) $(MATH_FLAGS) \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
          -Wall -Wextra -Werror -g -O0 -fno-omit-frame-pointer -Wformat -Wformat-security \
          -fno-builtin -fstack-protector -Wno-unused-function \
