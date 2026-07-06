@@ -22,7 +22,6 @@
 #include <kernel/address_space.h>
 #include <kernel/string.h>
 #include <kernel/kprintf.h>
-#include <kernel/kernel.h>
 #include <kernel/file.h>
 #include <kernel/spinlock.h>
 #include <kernel/task.h>

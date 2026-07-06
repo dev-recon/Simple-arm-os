@@ -19,7 +19,6 @@
 #include <kernel/kernel_tasks.h>
 #include <kernel/task.h>
 #include <kernel/memory.h>
-#include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
 #include <kernel/syscalls.h>

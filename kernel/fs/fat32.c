@@ -20,7 +20,6 @@
 #include <kernel/config.h>
 #include <kernel/ata.h>
 #include <kernel/memory.h>
-#include <kernel/kernel.h>
 #include <kernel/string.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>

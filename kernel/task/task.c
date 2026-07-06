@@ -19,9 +19,10 @@
 #include <kernel/task.h>
 #include <kernel/memory.h>
 #include <kernel/address_space.h>
-#include <kernel/kernel.h>
+#include <kernel/fd.h>
 #include <kernel/panic.h>
 #include <kernel/kprintf.h>
+#include <kernel/stddef.h>
 #include <kernel/string.h>
 #include <kernel/uart.h>
 #include <kernel/tty.h>
