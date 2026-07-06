@@ -262,22 +262,6 @@ static inline paddr_t virt_to_phys(vaddr_t vaddr)
 #define RAM_END                 PHYSICAL_RAM_END
 #define RAM_SIZE                PHYSICAL_RAM_SIZE
 
-/* Bits des entrees de page directory (niveau 1) */
-#define PDE_TYPE_MASK           0x3
-#define PDE_TYPE_FAULT          0x0
-#define PDE_TYPE_COARSE         0x1
-#define PDE_TYPE_SECTION        0x2
-
-/* Bits pour les sections (1MB) */
-#define PDE_SECTION_BASE        0xFFF00000u
-#define PDE_AP_MASK             0xC00
-#define PDE_AP_RW_RW            0x400                         /* Read/Write pour user et kernel */
-#define PDE_AP_RW_NA            0x800                         /* Read/Write kernel, No Access user */
-#define PDE_DOMAIN_MASK         0x1E0
-#define PDE_DOMAIN(x)           ((x) << 5)
-#define PDE_CACHEABLE           0x8                           /* Bit C */
-#define PDE_BUFFERABLE          0x4                           /* Bit B */
-
 /* === ADRESSES HARDWARE MACHINE VIRT === */
 
 /* UART (PL011) - compatible avec machine virt */
