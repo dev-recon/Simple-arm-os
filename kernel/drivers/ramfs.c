@@ -17,11 +17,11 @@
  */
 
 #include <kernel/types.h>
+#include <kernel/linker.h>
 #include <kernel/memory.h>
 #include <kernel/arch_memory.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
-#include <kernel/kernel.h>
 #include <kernel/userfs_loader.h>
 #include <kernel/tar_parser_ramfs.h>
 #include <kernel/spinlock.h>

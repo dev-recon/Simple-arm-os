@@ -19,11 +19,9 @@
 #include <kernel/keyboard.h>
 #include <kernel/task.h>
 #include <kernel/interrupt.h>
-#include <kernel/kernel.h>
 #include <kernel/string.h>
 #include <kernel/uart.h>
 #include <kernel/signal.h>
-#include <kernel/kernel.h>
 #include <kernel/process.h>
 #include <kernel/kprintf.h>
 

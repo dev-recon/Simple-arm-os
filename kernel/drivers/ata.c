@@ -17,7 +17,6 @@
  */
 
 #include <kernel/ata.h>
-#include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
 #include <kernel/virtio_block.h>
