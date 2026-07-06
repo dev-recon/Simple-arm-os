@@ -54,7 +54,7 @@ KERNEL_OBJS = \
 	kernel/main.o \
 	$(ARCH_DIR)/cpu/cpu.o \
 	kernel/internals/ls_process.o \
-	kernel/memory/helpers.o \
+	$(ARCH_DIR)/mmu/helpers.o \
 	kernel/memory/physical.o \
 	$(ARCH_DIR)/mmu/virtual.o \
 	$(ARCH_DIR)/mmu/mmu.o \

@@ -5,12 +5,12 @@
  * Licensed under the Apache License, Version 2.0.
  * See LICENSE for details.
  *
- * File: kernel/memory/helpers.c
- * Layer: Kernel / memory management
+ * File: arch/arm32/mmu/helpers.c
+ * Layer: ARM32 / MMU support
  *
  * Responsibilities:
- * - Manage physical pages, virtual address spaces, MMU mappings, and ASIDs.
- * - Support user mappings, page faults, and copy-on-write.
+ * - Manage ARM short-descriptor page-table helpers and temporary mappings.
+ * - Support user mappings, page faults, copy-on-write, TTBR, ASID, and TLB flows.
  *
  * Notes:
  * - TLB, ASID, and TTBR changes are global stability concerns.
