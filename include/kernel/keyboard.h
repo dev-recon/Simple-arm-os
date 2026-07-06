@@ -24,7 +24,7 @@
 #include <kernel/task.h>
 
 /* Legacy PL050 keyboard fallback selected by the current platform. */
-#define KBD_BASE        VIRT_PL050_KBD_BASE
+#define KBD_BASE        ARMOS_PLATFORM_PL050_KBD_BASE
 #define KBD_DATA        (KBD_BASE + 0x00u)
 #define KBD_STAT        (KBD_BASE + 0x04u)
 #define KBD_CTRL        (KBD_BASE + 0x08u)

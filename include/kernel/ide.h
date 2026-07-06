@@ -23,13 +23,13 @@
 #include <kernel/types.h>
 
 /* Legacy IDE fallback window selected by the current platform. */
-#define IDE_PRIMARY_BASE    VIRT_IDE_PRIMARY_BASE
-#define IDE_PRIMARY_CTRL    VIRT_IDE_PRIMARY_CTRL
-#define IDE_PRIMARY_IRQ     VIRT_IDE_PRIMARY_IRQ
+#define IDE_PRIMARY_BASE    ARMOS_PLATFORM_IDE_PRIMARY_BASE
+#define IDE_PRIMARY_CTRL    ARMOS_PLATFORM_IDE_PRIMARY_CTRL
+#define IDE_PRIMARY_IRQ     ARMOS_PLATFORM_IDE_PRIMARY_IRQ
 
 /* PCIe PIO legacy port aliases. */
-#define IDE_PCIE_BASE       VIRT_PCIE_PIO_BASE
-#define IDE_LEGACY_IO_BASE  VIRT_IDE_LEGACY_IO_BASE
+#define IDE_PCIE_BASE       ARMOS_PLATFORM_PCIE_PIO_BASE
+#define IDE_LEGACY_IO_BASE  ARMOS_PLATFORM_IDE_LEGACY_IO_BASE
 
 /* IDE registers, relative to IDE_PRIMARY_BASE. */
 #define IDE_REG_DATA        0x00    /* Data register */
