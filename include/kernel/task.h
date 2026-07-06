@@ -22,7 +22,9 @@
 #include <kernel/types.h>
 #include <kernel/memory.h>
 #include <kernel/spinlock.h>
-#include <kernel/kernel.h>
+#include <kernel/stddef.h>
+#include <kernel/arch_irq.h>
+#include <kernel/arch_task.h>
 
 struct signal_state_t;
 struct file;
@@ -292,37 +294,6 @@ typedef enum {
     TASK_TYPE_KERNEL = 3    /* Tache kernel pure */
 } task_type_t;
 
-/* Structure pour sauvegarder le contexte ARM32 */
-typedef struct task_context {
-    /* Registres generaux r0-r12 */
-    uint32_t r0, r1, r2, r3, r4, r5, r6;
-    uint32_t r7, r8, r9, r10, r11, r12;
-    
-    /* Registres speciaux */
-    uint32_t sp;            // Stack Pointer 
-    uint32_t lr;            // Link Register 
-    uint32_t pc;            // Program Counter 
-    uint32_t cpsr;          // Current Program Status Register 
-    
-    uint32_t is_first_run;  // NOUVEAU: Flag pour premiere execution 
-    uint32_t ttbr0;
-    uint32_t asid;
-
-    uint32_t spsr;             // SPSR_svc 
-    uint32_t returns_to_user;  // has to return to user mode 
-
-    uint32_t usr_r[13];   // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    uint32_t usr_sp;
-    uint32_t usr_lr;      // optionnel si tu l’utilises
-    uint32_t usr_pc;      // point de reprise user
-    uint32_t usr_cpsr;    // en général 0x10
-    uint32_t svc_sp_top;  // haut de pile noyau allouée pour ce task
-    uint32_t svc_sp;      // courant (si tu le tiens à jour)
-    uint32_t svc_lr_saved; // si tu en as besoin
-
-} __attribute__((aligned(8))) task_context_t;
-
-
 /* Signal actions */
 typedef enum {
     SIG_ACT_TERM,
@@ -581,28 +552,14 @@ extern void get_and_save_usr_context(task_t* t);
 
 #define TASK_CONTEXT_OFF offsetof(task_t, context)
 
-/* Ajout des fonctions de gestion des interruptions ARM */
 static inline uint32_t disable_interrupts_save(void)
 {
-    uint32_t cpsr;
-    __asm__ volatile(
-        "mrs %0, cpsr\n"      /* Lire CPSR actuel */
-        "cpsid if"            /* Desactiver IRQ et FIQ */
-        : "=r" (cpsr)
-        :
-        : "memory"
-    );
-    return cpsr;
+    return arch_irq_fiq_save();
 }
 
 static inline void restore_interrupts(uint32_t cpsr)
 {
-    __asm__ volatile(
-        "msr cpsr_c, %0"      /* Restaurer seulement les bits de controle */
-        :
-        : "r" (cpsr)
-        : "memory"
-    );
+    arch_irq_fiq_restore(cpsr);
 }
 
 #endif /* _KERNEL_TASK_H */

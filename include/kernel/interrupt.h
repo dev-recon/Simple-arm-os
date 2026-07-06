@@ -19,25 +19,20 @@
 #ifndef _KERNEL_INTERRUPT_H
 #define _KERNEL_INTERRUPT_H
 
+#include <kernel/arch_irq.h>
+#include <kernel/arch_platform.h>
 #include <kernel/types.h>
 
-/* IRQ numbers */
-#define IRQ_SGI_TLB_SHOOTDOWN 14
-#define IRQ_TIMER           30
-#define IRQ_KEYBOARD        33
-#define IRQ_ATA             34
-
-/* Adresses CORRECTES pour QEMU VExpress-A9 */
-//#define GICD_BASE 0x1E001000  /* GIC Distributor - VExpress-A9 */
-//#define GICC_BASE 0x1E000100  /* GIC CPU Interface - VExpress-A9 */
-
-/* GIC functions */
-void init_gic(void);
-void gic_init_secondary_cpu_interface(void);
-void enable_irq(uint32_t irq);
-void enable_irq_level(uint32_t irq);
-void disable_irq(uint32_t irq);
-void clear_irq(uint32_t irq);
+/* Legacy generic IRQ aliases. The concrete IDs are supplied by the platform. */
+#define IRQ_SGI_TLB_SHOOTDOWN ARMOS_PLATFORM_SGI_TLB_SHOOTDOWN_IRQ
+#define IRQ_TIMER             ARMOS_PLATFORM_TIMER_IRQ
+#define IRQ_UART              ARMOS_PLATFORM_UART_IRQ
+#define IRQ_KEYBOARD          ARMOS_PLATFORM_KEYBOARD_IRQ
+#define IRQ_ATA               ARMOS_PLATFORM_ATA_IRQ
+#define IRQ_VIRTIO_NET        ARMOS_PLATFORM_VIRTIO_NET_IRQ
+#define IRQ_VIRTIO_BLOCK      ARMOS_PLATFORM_VIRTIO_BLOCK_IRQ
+#define IRQ_VIRTIO_CONSOLE    ARMOS_PLATFORM_VIRTIO_CONSOLE_IRQ
+#define IRQ_VIRTIO_RNG        ARMOS_PLATFORM_VIRTIO_RNG_IRQ
 
 /* IRQ handler */
 void irq_c_handler(void);
@@ -55,12 +50,69 @@ void fiq_c_handler(void);
 uint32_t irq_user_work_prepare(uint32_t* irq_frame);
 void irq_user_work_pending(void);
 
-uint32_t gic_get_irq_count(uint32_t irq);
-uint32_t gic_get_total_irq_count(void);
-uint32_t gic_get_last_irq_id(void);
-void gic_send_sgi(uint32_t target_cpu_mask, uint32_t sgi_id);
-void gic_send_sgi_others(uint32_t sgi_id);
+static inline void irq_init_controller(void)
+{
+    arch_irq_controller_init();
+}
 
-void complete_gic_debug(void);
+static inline const char* irq_controller_name(void)
+{
+    return arch_irq_controller_name();
+}
+
+static inline uint32_t irq_controller_line_count(void)
+{
+    return arch_irq_controller_line_count();
+}
+
+static inline void irq_init_local_cpu_interface(void)
+{
+    arch_irq_init_local_cpu_interface();
+}
+
+static inline void irq_enable(uint32_t irq)
+{
+    arch_irq_enable(irq);
+}
+
+static inline void irq_enable_level(uint32_t irq)
+{
+    arch_irq_enable_level(irq);
+}
+
+static inline void irq_disable(uint32_t irq)
+{
+    arch_irq_disable(irq);
+}
+
+static inline void irq_ack(uint32_t irq)
+{
+    arch_irq_ack(irq);
+}
+
+static inline uint32_t irq_get_count(uint32_t irq)
+{
+    return arch_irq_get_count(irq);
+}
+
+static inline uint32_t irq_get_total_count(void)
+{
+    return arch_irq_get_total_count();
+}
+
+static inline uint32_t irq_get_last_id(void)
+{
+    return arch_irq_get_last_id();
+}
+
+static inline void irq_send_ipi(uint32_t target_cpu_mask, uint32_t irq)
+{
+    arch_irq_send_ipi(target_cpu_mask, irq);
+}
+
+static inline void irq_send_ipi_others(uint32_t irq)
+{
+    arch_irq_send_ipi_others(irq);
+}
 
 #endif

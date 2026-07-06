@@ -19,36 +19,12 @@
 #ifndef _KERNEL_TIMER_H
 #define _KERNEL_TIMER_H
 
+#include <kernel/arch_timer.h>
 #include <kernel/types.h>
 
-/* Timer SP804 pour machine virt (si utilise) */
-#define TIMER_BASE_SP804    0x10011000
-
-#define TIMER_FREQ 1000  /* 1000Hz, system_ticks increments every millisecond */
-
-/* Macros conditionnelles pour eviter les redefinitions */
-#ifndef TIMER_LOAD
-#define TIMER_LOAD  (*(volatile uint32_t*)(TIMER_BASE_SP804 + 0x00))
-#endif
-
-#ifndef TIMER_CTRL
-#define TIMER_CTRL  (*(volatile uint32_t*)(TIMER_BASE_SP804 + 0x08))
-#endif
-
-#ifndef TIMER_INTCLR
-#define TIMER_INTCLR (*(volatile uint32_t*)(TIMER_BASE_SP804 + 0x0C))
-#endif
-
-#define TIMER_MIS   (*(volatile uint32_t*)(TIMER_BASE_SP804 + 0x10))
-
-/* ARM Generic Timer pour machine virt (prefere) */
-#define ARM_GENERIC_TIMER_FREQ_REG  14, 0, 0   /* CNTFRQ */
-#define ARM_GENERIC_TIMER_COUNT_REG 14         /* CNTPCT */
-#define ARM_GENERIC_TIMER_CTL_REG   14, 2, 1   /* CNTP_CTL */
-#define ARM_GENERIC_TIMER_TVAL_REG  14, 2, 0   /* CNTP_TVAL */
-
-/* Frequence fixe pour QEMU machine virt */
-#define QEMU_TIMER_FREQ 62500000
+/* 1000Hz currently means one accounting tick per millisecond. */
+#define TIMER_FREQ      ARCH_TIMER_TICK_HZ
+#define TIMER_FALLBACK_FREQ ARCH_TIMER_FALLBACK_HZ
 
 /* Structure pour décomposer une date Unix */
 typedef struct {
@@ -88,7 +64,10 @@ void unix_to_datetime(uint32_t unix_time, datetime_t* dt);
 uint32_t get_current_time(void);
 
 
-/* ARM Generic Timer functions pour machine virt */
+/* Platform timer functions */
+uint32_t timer_get_frequency(void);
+uint64_t timer_get_count(void);
+void timer_set_compare(uint64_t compare);
 uint64_t get_generic_timer_count(void);
 void set_generic_timer_compare(uint64_t compare_value);
 void enable_generic_timer(void);
@@ -99,25 +78,5 @@ void timer_set_timeout(uint64_t timeout_ticks);
 void debug_timer_state(void);
 void trigger_timer_interrupt(void);
 void test_timer_functionality(void);
-
-/* Lecture 64-bit du compteur virtuel CNTVCT */
-static inline uint64_t read_cntvct64(void)
-{
-    uint64_t val;
-    /* ISB avant lecture pour s'assurer que l'ordonnancement est correct */
-    asm volatile("isb" ::: "memory");
-    /* MRRC p15,1 -> lire CNTVCT (virtual count) en deux registres */
-    asm volatile("mrrc p15, 1, %Q0, %R0, c14" : "=r"(val));
-    return val;
-}
-
-/* Ecriture 64-bit du compare (virtual timer CVAL) */
-static inline void write_cntv_cval64(uint64_t cval)
-{
-    /* Ecrire CVAL en 64 bits avec MCRR p15,3 (CP15 c14, opc1=3) */
-    asm volatile("mcrr p15, 3, %Q0, %R0, c14" :: "r"(cval));
-    /* Garantir que l'écriture est visible avant de quitter l'IRQ */
-    asm volatile("dsb; isb" ::: "memory");
-}
 
 #endif

@@ -21,6 +21,7 @@
 
 #include <kernel/types.h>
 #include <kernel/task.h>
+#include <kernel/user_layout.h>
 
 
 /* Signal numbers */
@@ -46,6 +47,16 @@
 #define SIGTTIN    21
 #define SIGTTOU    22
 #define SIGWINCH   28
+
+/*
+ * Per-process signal stack defaults.
+ *
+ * The signal stack lives in the architecture-provided user signal region,
+ * between normal user mappings and the kernel split.
+ */
+#define DEFAULT_SIGNAL_STACK_SIZE   (16 * 1024u)
+#define MAX_SIGNAL_STACK_SIZE       (1024 * 1024u)
+#define SIGNAL_STACK_BASE_DEFAULT   (USER_SIGNAL_REGION_START + DEFAULT_SIGNAL_STACK_SIZE)
 
 /* Signal flags */
 #define SA_RESTART    0x01

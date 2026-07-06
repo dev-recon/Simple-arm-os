@@ -18,8 +18,11 @@
 
 #include <kernel/task.h>
 #include <kernel/memory.h>
-#include <kernel/kernel.h>
+#include <kernel/address_space.h>
+#include <kernel/fd.h>
+#include <kernel/panic.h>
 #include <kernel/kprintf.h>
+#include <kernel/stddef.h>
 #include <kernel/string.h>
 #include <kernel/uart.h>
 #include <kernel/tty.h>
@@ -28,8 +31,8 @@
 #include <kernel/timer.h>
 #include <kernel/process.h>
 #include <kernel/smp.h>
-#include <asm/arm.h>
-#include <asm/mmu.h>
+#include <kernel/arch_barrier.h>
+#include <kernel/arch_cpu.h>
 #include <kernel/file.h>
 
 _Static_assert(offsetof(task_t, context) == 48,
@@ -117,7 +120,7 @@ static task_t* task_current_from_cpu_register(void)
      * for the hot "who am I?" path. current_tasks[] remains useful for /proc
      * and cross-CPU diagnostics.
      */
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 4" : "=r"(task));
+    task = (task_t*)get_tpidrprw();
     return task_header_plausible(task) ? task : NULL;
 }
 
@@ -296,9 +299,9 @@ static bool task_pointer_plausible(task_t* task)
         return false;
     if (p & 7u)
         return false;
-    if (p < VIRT_RAM_START)
+    if (p < physical_ram_start())
         return false;
-    if (p > (uintptr_t)VIRT_RAM_END - sizeof(task_t))
+    if (p > (uintptr_t)physical_ram_end() - sizeof(task_t))
         return false;
     return true;
 }
@@ -490,12 +493,7 @@ void debug_context_switch_first_exec(void);
 void debug_context_switch_restore(void);
 void debug_null_old_ctx(void);
 void debug_null_new_ctx(void);
-void debug_context_registers(task_context_t* ctx, const char* moment);
 void debug_task_detailed(task_t *current_task);
-
-void debug_print_ctx(task_context_t *context, const char* caller);
-void debug_return_snapshot(task_context_t *ctx, uint32_t spsr, uint32_t usr_pc, uint32_t tracer);
-
 
 /* Fonctions assembleur externes */
 extern void __task_first_switch_v2(task_context_t* new_ctx);
@@ -537,11 +535,11 @@ static bool task_stack_metadata_valid(task_t* task)
 
     vaddr_t stack_base = task_stack_addr(task->stack_base);
     vaddr_t stack_top = task_stack_addr(task->stack_top);
-    vaddr_t sp = (vaddr_t)task->context.sp;
+    vaddr_t sp = arch_task_context_kernel_sp(&task->context);
 
     if (sp < stack_base || sp >= stack_top) {
         KERROR("TASK: %s context SP 0x%08X outside stack 0x%08X-0x%08X\n",
-               task->name, task->context.sp, stack_base, stack_top);
+               task->name, sp, stack_base, stack_top);
         return false;
     }
 
@@ -577,6 +575,24 @@ static bool task_is_schedulable(task_t* task)
 static bool runqueue_contains_locked(task_t* task)
 {
     return task && task->rq_priority < TASK_PRIORITY_LEVELS;
+}
+
+static void scheduler_clear_nonrunnable_debt_locked(task_t* task, task_state_t state)
+{
+    if (!task)
+        return;
+
+    if (state == TASK_READY || state == TASK_RUNNING)
+        return;
+
+    /*
+     * Debt is a fairness hint for runnable tasks only.  Once a task sleeps,
+     * blocks, stops, or exits, forget the consumed-CPU penalty so long-lived
+     * tools such as top do not keep fossilized debt while waiting for input or
+     * a refresh timeout.
+     */
+    task->sched_debt = 0;
+    task->ready_since_tick = 0;
 }
 
 static bool runqueue_link_plausible_locked(task_t* task, uint32_t prio)
@@ -969,13 +985,8 @@ static void build_clean_kernel_stack(task_t *t)
     if(!t->stack_base && !task_alloc_kernel_stack(t))
         return;
 
-    // SP noyau posé près du top (garde 512B pour sentinelles/debug si tu veux)
     vaddr_t stack_top = task_stack_addr(t->stack_top);
-
-    t->context.svc_sp_top = (uint32_t)stack_top;
-    t->context.svc_sp     = (uint32_t)((stack_top - 512u) & ~7u);
-    t->context.sp         = t->context.svc_sp;
-    t->context.sp         = t->context.svc_sp;  // sp = SP_svc dans ton design
+    arch_task_context_prepare_kernel_stack(&t->context, stack_top);
 }
 
 
@@ -987,9 +998,6 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
         //kfree(child);
         return NULL;
     }
-
-    //bool parent_is_user_process = (parent->context.sp < 0x40000000);  /* Espace user */
-    //bool parent_is_user_process = false;  /* FIX IT Espace user */
 
     //KDEBUG("task_create_copy: parent_is_user_process=%s\n", 
     //   from_user ? "YES" : "NO");
@@ -1010,8 +1018,7 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
 
         build_clean_kernel_stack(child);
 
-        // Marqueur pour le scheduler/retour en user
-        child->context.returns_to_user = 1;
+        arch_task_context_set_returns_to_user(&child->context, true);
         
         /* IMPORTANT : Copier l'espace mémoire utilisateur séparément */
         /* Ceci sera fait dans la partie VM space copy */
@@ -1026,7 +1033,7 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
             /*  Calculer l'offset DEPUIS LE HAUT de la pile parent */
             vaddr_t parent_stack_base = task_stack_addr(parent->stack_base);
             vaddr_t parent_stack_top = parent_stack_base + parent->stack_size;
-            vaddr_t parent_sp = (vaddr_t)parent->context.sp;
+            vaddr_t parent_sp = arch_task_context_kernel_sp(&parent->context);
             uint32_t parent_sp_offset_from_top = (uint32_t)(parent_stack_top - parent_sp);
             
             //KDEBUG("Parent stack analysis:\n");
@@ -1043,14 +1050,17 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
                 /* Utiliser pile propre au lieu d'echouer */
                 memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
                 vaddr_t child_stack_top = task_stack_addr(child->stack_top);
-                child->context.sp = (uint32_t)(child_stack_top - 512u);
+                arch_task_context_set_kernel_sp(&child->context,
+                    arch_task_stack_align(child_stack_top -
+                                          ARCH_TASK_KERNEL_STACK_RESERVE));
             } else {
                 /*  Copier le contenu de la pile */
                 memcpy(child->stack_base, parent->stack_base, KERNEL_TASK_STACK_SIZE);
                 
                 /*  Calculer le nouveau SP avec le MeME offset depuis le haut */
                 vaddr_t child_stack_top = task_stack_addr(child->stack_top);
-                child->context.sp = (uint32_t)(child_stack_top - parent_sp_offset_from_top);
+                arch_task_context_set_kernel_sp(&child->context,
+                    child_stack_top - parent_sp_offset_from_top);
 
                 /* NOUVEAU : Corriger les adresses dans le contenu copié */
                 vaddr_t child_stack_base = task_stack_addr(child->stack_base);
@@ -1083,7 +1093,8 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
                 
                 KDEBUG("Child stack analysis:\n");
                 KDEBUG("  Child stack: %p - %p\n", child->stack_base, child->stack_top);
-                KDEBUG("  Child SP: 0x%08X\n", child->context.sp);
+                KDEBUG("  Child SP: 0x%08X\n",
+                       arch_task_context_kernel_sp(&child->context));
                 KDEBUG("  Copied stack with SP offset %u from top\n", parent_sp_offset_from_top);
             }
         } else {
@@ -1091,19 +1102,22 @@ task_t* set_process_stack(task_t* parent, task_t* child, bool from_user)
             KWARN("Parent has no valid stack, creating clean stack\n");
             memset(child->stack_base, 0, KERNEL_TASK_STACK_SIZE);
             vaddr_t child_stack_top = task_stack_addr(child->stack_top);
-            child->context.sp = (uint32_t)(child_stack_top - 512u);
+            arch_task_context_set_kernel_sp(&child->context,
+                arch_task_stack_align(child_stack_top -
+                                      ARCH_TASK_KERNEL_STACK_RESERVE));
         }
 
-        child->context.sp &= ~7; 
-        child->context.svc_sp_top = (uint32_t)task_stack_addr(child->stack_top);
-        child->context.svc_sp     = child->context.sp;
-        // Ce child reprendra en SVC (kthread), pas de retour user implicite
-        child->context.returns_to_user = 0;
+        arch_task_context_set_kernel_stack(&child->context,
+                                           task_stack_addr(child->stack_top),
+                                           arch_task_context_kernel_sp(&child->context));
+        arch_task_context_set_returns_to_user(&child->context, false);
     }
     
     /*  Alignement final */
-    child->context.sp &= ~7;  /* Alignement 8-bytes */
-    child->context.svc_sp &= ~7;
+    arch_task_context_set_kernel_sp(&child->context,
+                                    arch_task_context_kernel_sp(&child->context));
+    arch_task_context_set_svc_sp(&child->context,
+                                 arch_task_context_svc_sp(&child->context));
 
     return child;
 
@@ -1228,8 +1242,8 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     child->cow_faults = 0;
     child->stack_faults = 0;
     child->lazy_faults = 0;
-    child->context.is_first_run = 1;
-    child->context.r0 = 0;
+    arch_task_context_mark_first_run(&child->context);
+    arch_task_context_set_kernel_return_value(&child->context, 0);
     child->wakeup_time = 0;
     child->quantum_left = QUANTUM_TICKS;
     child->ready_since_tick = 0;
@@ -1298,25 +1312,20 @@ void switch_to_idle_stack(void)
     vaddr_t current_sp;
     
     /* Copier quelques données importantes sur la nouvelle pile */
-    uint32_t new_sp = idle_task->context.sp;
+    vaddr_t new_sp = arch_task_context_kernel_sp(&idle_task->context);
     
     /* Réserver de l'espace sur la pile idle pour les variables locales */
     new_sp -= 64;  /* 64 bytes de marge */
-    new_sp &= ~7;  /* Alignement 8-bytes */
+    new_sp = arch_task_stack_align(new_sp);
     
     /* CRITIQUE: Switcher vers la pile idle */
-    __asm__ volatile(
-        "mov sp, %0  \n"     /* Charger le nouveau SP */
-        :
-        : "r"(new_sp)
-        : "memory"
-    );
+    arch_set_stack_pointer(new_sp);
     
     /* Mettre à jour le SP d'idle */
-    idle_task->context.sp = new_sp;
+    arch_task_context_set_kernel_sp(&idle_task->context, new_sp);
     
     /* Vérification */
-    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+    current_sp = arch_current_stack_pointer();
     
     if (current_sp < task_stack_addr(idle_task->stack_base) ||
         current_sp >= task_stack_addr(idle_task->stack_top)) {
@@ -1405,7 +1414,7 @@ bool validate_task_stack_safe(task_t* task)
     
     vaddr_t base = task_stack_addr(task->stack_base);
     vaddr_t top = task_stack_addr(task->stack_top);
-    vaddr_t sp = (vaddr_t)task->context.sp;
+    vaddr_t sp = arch_task_context_kernel_sp(&task->context);
     
     /* Verification fondamentale */
     if (base >= top) {
@@ -1477,7 +1486,7 @@ void task_dump_stacks_detailed(void)
             
             vaddr_t base = task_stack_addr(task->stack_base);
             vaddr_t top = task_stack_addr(task->stack_top);
-            vaddr_t sp = (vaddr_t)task->context.sp;
+            vaddr_t sp = arch_task_context_kernel_sp(&task->context);
             uint32_t size = task->stack_size;
 
             print_cpu_mode();
@@ -1523,10 +1532,14 @@ void task_dump_stacks_detailed(void)
             KINFO("  SP alignment: %s\n", (sp & 7) ? "KO Misaligned" : "OK Aligned");
             KINFO("  Task Type : %s\n", task_type_to_string(task->type) );
             KINFO("  Task State : %s\n", task_state_string(task->state) );
-            KINFO("  Task Context LR : 0x%08X\n", task->context.lr );
-            KINFO("  Task Context PC : 0x%08X\n", task->context.pc );
-            KINFO("  Task Context CPSR : 0x%08X\n", task->context.cpsr );
-            KINFO("  Task Context IS FIRST RUN : %u\n", task->context.is_first_run );
+            KINFO("  Task Context LR : 0x%08X\n",
+                  arch_task_context_kernel_lr(&task->context));
+            KINFO("  Task Context PC : 0x%08X\n",
+                  arch_task_context_kernel_pc(&task->context));
+            KINFO("  Task Context CPSR : 0x%08X\n",
+                  arch_task_context_kernel_cpsr(&task->context));
+            KINFO("  Task Context IS FIRST RUN : %u\n",
+                  arch_task_context_is_first_run(&task->context));
             KINFO("  Task Context NEXT : 0x%08X\n", (uint32_t)task->next );
             KINFO("  Task Context PREVIOUS : 0x%08X\n", (uint32_t)task->prev );
             if(task->process){
@@ -1631,15 +1644,8 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
 
     task->type = TASK_TYPE_PROCESS;  /* Nouvelle ligne */
     //task->process->pid = task->task_id;  /* Nouvelle ligne */
-    task->context.is_first_run = 1;
-    
     /* === CONFIGURATION CORRIGeE DU CONTEXTE === */
     setup_task_context(task);
-
-    vaddr_t stack_top = task_stack_addr(task->stack_top);
-    task->context.svc_sp_top = (uint32_t)stack_top;
-    task->context.svc_sp = (uint32_t)((stack_top - 512u) & ~7u);
-    task->context.sp = task->context.svc_sp;
 
     task->quantum_left = QUANTUM_TICKS;
     task->wakeup_time = 0;
@@ -1736,8 +1742,9 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
             return NULL;
         }
 
-        task->context.ttbr0 = (uint32_t)task->process->vm->pgdir;
-        task->context.asid = task->process->vm->asid;
+        arch_task_context_set_address_space(&task->context,
+                                            (uintptr_t)task->process->vm->pgdir,
+                                            task->process->vm->asid);
         
         /* Initialiser les fichiers */
         memset(task->process->files, 0, sizeof(task->process->files));
@@ -1780,26 +1787,15 @@ void setup_task_context(task_t* task)
     memset(&task->context, 0, sizeof(task_context_t));
     
     /* Configuration des registres */
-    task->context.r0 = (uint32_t)task->entry_arg;
-    
-    /* Stack configuration corrigee */
     vaddr_t stack_base = task_stack_addr(task->stack_base);
     vaddr_t stack_top = task_stack_addr(task->stack_top);
-    vaddr_t stack_reserve = 512; /*512 avant*/
-    task->context.sp = (uint32_t)(stack_top - stack_reserve);
-    task->context.sp &= ~7;  /* Alignement 8-bytes */
-    
-    /* Autres registres */
-    task->context.lr = 0;
-    //task->context.lr = (uint32_t)task_destroy;
-    task->context.pc = (uint32_t)task->entry_point;
-    task->context.cpsr = 0x13;  /* Mode SVC, IRQ enabled */
-    
-    /* NOUVEAU: Marquer comme premiere execution */
-    task->context.is_first_run = 1;
+    arch_task_context_init_kernel_entry(&task->context,
+                                        task->entry_point,
+                                        task->entry_arg,
+                                        stack_top);
     
     /* Validation */
-    vaddr_t sp = (vaddr_t)task->context.sp;
+    vaddr_t sp = arch_task_context_kernel_sp(&task->context);
     if (sp >= stack_top || sp <= stack_base) {
         KERROR("KO FATAL: Invalid SP for task %s\n", task->name);
         panic("Stack configuration error");
@@ -1956,7 +1952,7 @@ void debug_idle_corruption_source(void)
     
     /* Obtenir la trace de la pile */
     uint32_t lr;
-    __asm__ volatile("mov %0, lr" : "=r"(lr));
+    lr = arch_current_link_register();
     
     KERROR("IDLE CORRUPTION DETECTED!\n");
     KERROR("  Called from: 0x%08X\n", lr);
@@ -2045,29 +2041,17 @@ void save_task_context_safe(task_t* task, vaddr_t current_sp)
         return;
     }
     
-    /* Debug pour les enfants */
-/*     if (strstr(task->name, "child")) {
-
-        if(task->type == TASK_TYPE_PROCESS){
-            if(task->context.cpsr == 0x10 )
-                return; // User Process forking from userspace
-        }
-        vaddr_t current_sp;
-        __asm__ volatile("mov %0, sp" : "=r"(current_sp));
-        //KDEBUG("SAVE child: Current SP=0x%08X, task SP=0x%08X\n", 
-        //       current_sp, task->context.sp);
-    } */
-    
     if (task_is_idle_task(task)) {
         /* Vérification spéciale pour idle */
         if (is_on_task_stack(task, current_sp)) {
             /* SP valide dans la pile d'idle */
-            task->context.sp = current_sp;
+            arch_task_context_set_kernel_sp(&task->context, current_sp);
             //KDEBUG("Saved valid SP for idle: 0x%08X\n", current_sp);
         } else if (is_on_kernel_stack(current_sp)) {
             /* CRITIQUE: Idle sur pile kernel - ne pas sauvegarder ! */
             //KERROR("Idle still on kernel stack! SP=0x%08X\n", current_sp);
-            KERROR("Keeping idle SP at: 0x%08X\n", task->context.sp);
+            KERROR("Keeping idle SP at: 0x%08X\n",
+                   arch_task_context_kernel_sp(&task->context));
             /* Ne pas écraser task->context.sp */
         } else {
             KERROR("Idle on unknown stack! SP=0x%08X\n", current_sp);
@@ -2076,12 +2060,13 @@ void save_task_context_safe(task_t* task, vaddr_t current_sp)
     } else {
         /* Pour les autres tâches, comportement normal */
         if (is_on_task_stack(task, current_sp)) {
-            task->context.sp = current_sp;
-            task->context.svc_sp = current_sp;
+            arch_task_context_save_kernel_sp(&task->context, current_sp);
             //KDEBUG("Saved valid SP for %s: 0x%08X\n", task->name, current_sp);
         } else {
             task_dump_stacks_detailed();
-            KERROR("Task %s has invalid SP: 0x%08X - context SP = 0x%08X\n", task->name, current_sp, task->context.sp);
+            KERROR("Task %s has invalid SP: 0x%08X - context SP = 0x%08X\n",
+                   task->name, current_sp,
+                   arch_task_context_kernel_sp(&task->context));
             //panic("Stopping");
             yield();
             return;
@@ -2314,7 +2299,7 @@ static bool scheduler_entry_allowed(const char* caller, task_t* requested)
         return false;
     }
 
-    if (get_cpu_mode() == ARM_MODE_IRQ)
+    if (arch_current_mode_is_interrupt())
         return false;
 
     return true;
@@ -2366,8 +2351,8 @@ static bool scheduler_validate_switch(task_t* old_task,
         KERROR("      stack 0x%08X-0x%08X context.sp=0x%08X svc_sp=0x%08X\n",
                (uint32_t)old_task->stack_base,
                (uint32_t)old_task->stack_top,
-               old_task->context.sp,
-               old_task->context.svc_sp);
+               arch_task_context_kernel_sp(&old_task->context),
+               arch_task_context_svc_sp(&old_task->context));
         kernel_lifecycle_stats.scheduler_refused++;
         sched_trace_record(SCHED_TRACE_REFUSE_INVALID_TASK, old_task);
         return false;
@@ -2442,7 +2427,7 @@ void schedule(void)
     current = task_current_local();
     scheduler_scan_waiters(current);
 
-    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+    current_sp = arch_current_stack_pointer();
     save_current_context = current->state != TASK_ZOMBIE &&
                            current->state != TASK_TERMINATED;
 
@@ -2486,7 +2471,7 @@ void schedule_to(task_t *next_task)
     current = task_current_local();
     scheduler_scan_waiters(current);
 
-    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+    current_sp = arch_current_stack_pointer();
     save_current_context = current->state != TASK_ZOMBIE &&
                            current->state != TASK_TERMINATED;
 
@@ -2542,8 +2527,8 @@ static void secondary_idle_park_for_shutdown(uint32_t cpu)
     KINFO("SMP: CPU%u parked for shutdown\n", cpu);
 
     for (;;) {
-        data_sync_barrier();
-        wait_for_interrupt();
+        arch_data_sync_barrier();
+        arch_wait_for_interrupt();
     }
 }
 
@@ -2582,7 +2567,8 @@ void sched_start(void)
     
     // On ne devrait jamais arriver ici
     KERROR("FATAL: Returned from sched_start!\n");
-    while (1) __asm__ volatile("wfe");
+    while (1)
+        wait_for_event();
 }
 
 
@@ -2909,8 +2895,8 @@ void idle_task_func(void* arg)
          * scan sleepers after each interrupt, but only enter the scheduler when
          * a real task became ready.
          */
-        __asm__ volatile("cpsie i" ::: "memory");
-        __asm__ volatile("wfi" ::: "memory");
+        arch_enable_interrupts();
+        arch_wait_for_interrupt();
         if (smp_shutdown_park_requested(cpu))
             secondary_idle_park_for_shutdown(cpu);
         scheduler_scan_waiters(task_current_local());
@@ -3047,6 +3033,7 @@ void task_set_state(task_t* task, task_state_t state)
 
     runqueue_remove_locked(task);
 
+    scheduler_clear_nonrunnable_debt_locked(task, state);
     task->state = state;
     if (state == TASK_RUNNING) {
         task->running_cpu = smp_processor_id();
@@ -3081,6 +3068,7 @@ void task_set_blocked_under_lock(task_t* task)
     }
 
     runqueue_remove_locked(task);
+    scheduler_clear_nonrunnable_debt_locked(task, TASK_BLOCKED);
     task->state = TASK_BLOCKED;
     if (task->type == TASK_TYPE_PROCESS && task->process)
         task->process->state = (proc_state_t)PROC_BLOCKED;
@@ -3100,6 +3088,7 @@ void task_set_stopped_under_lock(task_t* task)
     }
 
     runqueue_remove_locked(task);
+    scheduler_clear_nonrunnable_debt_locked(task, TASK_STOPPED);
     task->state = TASK_STOPPED;
     if (task->type == TASK_TYPE_PROCESS && task->process)
         task->process->state = (proc_state_t)PROC_STOPPED;
@@ -3124,6 +3113,7 @@ static void task_set_sleep_state_until(task_t* task, task_state_t state,
     }
 
     runqueue_remove_locked(task);
+    scheduler_clear_nonrunnable_debt_locked(task, state);
     task->state = state;
     task->wakeup_time = wakeup_time;
     if (task->type == TASK_TYPE_PROCESS && task->process) {
@@ -3264,8 +3254,10 @@ void task_dump_info(task_t* task)
     KINFO("  Stack top:    0x%08X\n", task_stack_addr(task->stack_top));
     KINFO("  Stack size:   %u bytes\n", task->stack_size);
     KINFO("  Entry point:  0x%08X\n", (uint32_t)task->entry_point);
-    KINFO("  Context SP:   0x%08X\n", task->context.sp);
-    KINFO("  Context PC:   0x%08X\n", task->context.pc);
+    KINFO("  Context SP:   0x%08X\n",
+          arch_task_context_kernel_sp(&task->context));
+    KINFO("  Context PC:   0x%08X\n",
+          arch_task_context_kernel_pc(&task->context));
 }
 
 void task_dump_stacks(void)
@@ -3293,7 +3285,7 @@ void task_dump_stacks(void)
         if (task && task->stack_base && task->stack_top) {
             vaddr_t stack_base = task_stack_addr(task->stack_base);
             vaddr_t stack_top = task_stack_addr(task->stack_top);
-            vaddr_t sp = (vaddr_t)task->context.sp;
+            vaddr_t sp = arch_task_context_kernel_sp(&task->context);
 
             KINFO("%-6u  %-11s  0x%08X   0x%08X   %-7u  0x%08X   ", 
                   task->task_id,
@@ -3301,7 +3293,7 @@ void task_dump_stacks(void)
                   stack_base,
                   stack_top,
                   task->stack_size,
-                  task->context.sp);
+                  sp);
             
             /* Calculer l'espace utilise dans la stack */
             uint32_t stack_used = (uint32_t)(stack_top - sp);
@@ -3355,12 +3347,14 @@ void task_dump_stacks(void)
     
     /* Afficher la tache courante */
     if (current) {
+        vaddr_t current_sp = arch_task_context_kernel_sp(&current->context);
+
         KINFO("Current task:     %s (ID=%u)\n", current->name, current->task_id);
-        KINFO("Current SP:       0x%08X\n", current->context.sp);
+        KINFO("Current SP:       0x%08X\n", current_sp);
         
         /* Verifier la stack de la tache courante */
-        if ((vaddr_t)current->context.sp < task_stack_addr(current->stack_base) ||
-            (vaddr_t)current->context.sp >= task_stack_addr(current->stack_top)) {
+        if (current_sp < task_stack_addr(current->stack_base) ||
+            current_sp >= task_stack_addr(current->stack_top)) {
             KINFO("*** CURRENT TASK HAS INVALID SP! ***\n");
         }
     }
@@ -3388,7 +3382,8 @@ void task_check_stack_integrity(void)
         if (task && task->stack_base && task->stack_top) {
             vaddr_t stack_base = task_stack_addr(task->stack_base);
             vaddr_t stack_top = task_stack_addr(task->stack_top);
-            vaddr_t sp = (vaddr_t)task->context.sp;
+            vaddr_t sp = arch_task_context_kernel_sp(&task->context);
+            vaddr_t pc = arch_task_context_kernel_pc(&task->context);
 
             /* Verifier l'alignement des adresses */
             if (stack_base % 8 != 0) {
@@ -3408,20 +3403,20 @@ void task_check_stack_integrity(void)
             /* Verifier SP dans les limites */
             if (sp < stack_base) {
                 KERROR("Task %s: SP underflow (SP=0x%08X, base=0x%08X)\n",
-                       task->name, task->context.sp, stack_base);
+                       task->name, sp, stack_base);
                 issues++;
             }
             
             if (sp >= stack_top) {
                 KERROR("Task %s: SP overflow (SP=0x%08X, top=0x%08X)\n",
-                       task->name, task->context.sp, stack_top);
+                       task->name, sp, stack_top);
                 issues++;
             }
             
             /* Verifier que PC est dans une zone valide */
-            if (task->context.pc != 0 && task->context.pc < 0x40000000) {
+            if (pc != 0 && !memory_is_kernel_address(pc)) {
                 KERROR("Task %s: Invalid PC (PC=0x%08X)\n", 
-                       task->name, task->context.pc);
+                       task->name, pc);
                 issues++;
             }
         }
@@ -3486,7 +3481,7 @@ void task_sleep_ms(uint32_t ms)
     if (!scheduler_initialized) {
         volatile uint32_t total = ms * 1000;
         for (volatile uint32_t i = 0; i < total; i++)
-            __asm__ volatile("nop");
+            arch_cpu_relax();
         return;
     }
 
@@ -3572,7 +3567,7 @@ void debug_task_detailed(task_t *current_task)
     
     /* Verifier que le pointeur est dans une zone valide */
     vaddr_t current_task_addr = (vaddr_t)(uintptr_t)current_task;
-    if (!IS_KERNEL_ADDR(current_task_addr)) {
+    if (!memory_is_kernel_address(current_task_addr)) {
         KERROR("  KO current_task pointer invalid: %p\n", current_task);
         return;
     }
@@ -3582,14 +3577,16 @@ void debug_task_detailed(task_t *current_task)
     KDEBUG("  Task ID: %u\n", current_task->task_id);
     KDEBUG("  ***************************************************************\n");
     KDEBUG("  KERNEL STACK ---\n");
-    KDEBUG("  Context SP: 0x%08X\n", current_task->context.sp);
+    KDEBUG("  Context SP: 0x%08X\n",
+           arch_task_context_kernel_sp(&current_task->context));
     KDEBUG("  Stack base: 0x%08X\n", task_stack_addr(current_task->stack_base));
     KDEBUG("  Stack top:  0x%08X\n", task_stack_addr(current_task->stack_top));
-    KDEBUG("  is_first_run: %u\n", current_task->context.is_first_run);
+    KDEBUG("  is_first_run: %u\n",
+           arch_task_context_is_first_run(&current_task->context));
     KDEBUG("  --------------------------\n");
     
     /* Verification des limites de stack */
-    uint32_t sp = current_task->context.sp;
+    vaddr_t sp = arch_task_context_kernel_sp(&current_task->context);
     vaddr_t base = task_stack_addr(current_task->stack_base);
     vaddr_t top = task_stack_addr(current_task->stack_top);
     
@@ -3603,13 +3600,14 @@ void debug_task_detailed(task_t *current_task)
     if(current_task->process)
     {
         KDEBUG("  USER STACK ---\n");
-        KDEBUG("  User SP: 0x%08X\n", current_task->context.usr_sp);
+        KDEBUG("  User SP: 0x%08X\n",
+               arch_task_context_user_sp(&current_task->context));
         KDEBUG("  User Stack base: 0x%08X\n", current_task->process->vm->stack_start);
         KDEBUG("  User Stack top:  0x%08X\n", current_task->process->vm->stack_start + USER_STACK_SIZE);
         KDEBUG("  --------------------------\n");
         
         /* Verification des limites de stack */
-        sp = current_task->context.usr_sp;
+        sp = arch_task_context_user_sp(&current_task->context);
         base = current_task->process->vm->stack_start;
         top = current_task->process->vm->stack_start + USER_STACK_SIZE;
         
@@ -3639,20 +3637,22 @@ void debug_current_task_detailed(const char* location)
     }
     
     /* Verifier que le pointeur est dans une zone valide */
-    if ((uint32_t)task < 0x40000000 || (uint32_t)task > 0x50000000) {
+    if (!memory_is_kernel_address((vaddr_t)(uintptr_t)task)) {
         KERROR("  KO current_task pointer invalid: %p\n", task);
         return;
     }
     
     KDEBUG("  Task name: %s\n", task->name);
     KDEBUG("  Task ID: %u\n", task->task_id);
-    KDEBUG("  Context SP: 0x%08X\n", task->context.sp);
+    KDEBUG("  Context SP: 0x%08X\n",
+           arch_task_context_kernel_sp(&task->context));
     KDEBUG("  Stack base: 0x%08X\n", task_stack_addr(task->stack_base));
     KDEBUG("  Stack top:  0x%08X\n", task_stack_addr(task->stack_top));
-    KDEBUG("  is_first_run: %u\n", task->context.is_first_run);
+    KDEBUG("  is_first_run: %u\n",
+           arch_task_context_is_first_run(&task->context));
     
     /* Verification des limites de stack */
-    uint32_t sp = task->context.sp;
+    vaddr_t sp = arch_task_context_kernel_sp(&task->context);
     vaddr_t base = task_stack_addr(task->stack_base);
     vaddr_t top = task_stack_addr(task->stack_top);
     
@@ -3662,347 +3662,6 @@ void debug_current_task_detailed(const char* location)
         KERROR("  KO SP OUT OF RANGE! (SP=0x%08X, range=0x%08X-0x%08X)\n", 
                sp, base, top);
     }
-}
-
-/* Fonction de debug pour tracer les registres */
-void debug_context_registers(task_context_t* ctx, const char* moment)
-{
-    KDEBUG("[%s] Context registers:\n", moment);
-    KDEBUG("  r0 (arg): 0x%08X (%d)\n", ctx->r0, ctx->r0);
-    KDEBUG("  sp:       0x%08X\n", ctx->sp);
-    KDEBUG("  lr:       0x%08X\n", ctx->lr);
-    KDEBUG("  pc:       0x%08X\n", ctx->pc);
-    KDEBUG("  cpsr:     0x%08X\n", ctx->cpsr);
-    KDEBUG("  is_first: %u\n", ctx->is_first_run);
-}
-
-__attribute__((noinline))
-void debug_print_sp()
-{
-    //uart_puts("\n\n[DEBUG_SP] =============================\n\n");
-    uint32_t r0_val;
-    uint32_t r3_val;
-    
-     __asm__ volatile(
-        // Sauvegarder tous les registres dans les variables locales 
-        "mov %0, r0\n"          // Charger r0 
-        "mov %1, r3\n"          // Charger r0 
-        : "=r"(r0_val), "=r"(r3_val)
-        :
-        : "r3"          // on prévient le compilateur que r3 est touché par l'asm
-    ); 
-
-/*     __asm__ volatile(
-        // Sauvegarder tous les registres dans les variables locales 
-        "mov %0, r0\n"          // Charger r0 
-        : "=r"(r0_val)
-        :
-        : // Pas de registres clobbered car on les sauvegarde explicitement 
-    );
- */
-
-    debug_print_ctx((task_context_t *)r0_val, "---->>>> IN DEBUG__PRINT_SP - CALLED FROM ASM");
-    
-    /* Maintenant afficher avec kprintf (les registres originaux sont intacts) */
-    uart_puts("\n\nRegisters __task_switch_asm_debug:\n");
-    uart_puts("  &next_task->context: ");
-    uart_put_hex(r0_val);
-    uart_puts("\n");
-    uart_puts("  Traceur R3: ");
-    uart_put_hex(r3_val);
-    uart_puts("\n");
-
-}
-
-void debug_print_sp2()
-{
-    //uart_puts("\n\n[DEBUG_SP] =============================\n\n");
-    uint32_t r0_val, r1_val, sp_val, pc_val, lr_val;
-    
-    __asm__ volatile(
-        /* Sauvegarder tous les registres dans les variables locales */
-        "mov %0, r0\n"          /* Sauvegarder r0 */
-        "mov %1, r1\n"          /* Sauvegarder r1 */
-        "mov %2, sp\n"          /* Sauvegarder sp */
-        "mov %3, pc\n"          /* Sauvegarder pc (approximatif) */
-        "mov %4, lr\n"          /* Sauvegarder lr */
-        : "=r"(r0_val), "=r"(r1_val), "=r"(sp_val), "=r"(pc_val), "=r"(lr_val)
-        :
-        : /* Pas de registres clobbered car on les sauvegarde explicitement */
-    );
-    
-    /* Maintenant afficher avec kprintf (les registres originaux sont intacts) */
-    uart_puts("\n\nRegisters __task_first_switchV2:\n");
-    uart_puts("  r0: ");
-    uart_put_hex(r0_val);
-    uart_puts("\n  r1: ");
-    uart_put_hex(r1_val);
-    uart_puts("\n  sp: ");
-    uart_put_hex(sp_val);
-    uart_puts("\n  pc: ");
-    uart_put_hex(pc_val);
-    uart_puts("\n  lr: ");
-    uart_put_hex(lr_val);
-    uart_puts("\n\n");
-
-   //kprintf("  r1: 0x%08X\n", r1_val);
-    //kprintf("  sp: 0x%08X\n", sp_val);
-    //kprintf("  pc: 0x%08X (approx)\n", pc_val);
-    //kprintf("  lr: 0x%08X\n", lr_val);
-    //uart_puts("\n\n");
-}
-
-void debug_print_sp3()
-{
-    //uart_puts("\n\n[DEBUG_SP] =============================\n\n");
-    uint32_t r0_val, r1_val, sp_val, pc_val, lr_val, r7_val;
-    
-    __asm__ volatile(
-        /* Sauvegarder tous les registres dans les variables locales */
-        "mov %0, r0\n"          /* Sauvegarder r0 */
-        "mov %1, r1\n"          /* Sauvegarder r1 */
-        "mov %2, sp\n"          /* Sauvegarder sp */
-        "mov %3, pc\n"          /* Sauvegarder pc (approximatif) */
-        "mov %4, lr\n"          /* Sauvegarder lr */
-        "mov %5, r7\n"          /* Sauvegarder r7 */
-        : "=r"(r0_val), "=r"(r1_val), "=r"(sp_val), "=r"(pc_val), "=r"(lr_val), "=r"(r7_val)
-        :
-        : /* Pas de registres clobbered car on les sauvegarde explicitement */
-    );
-    
-    /* Maintenant afficher avec kprintf (les registres originaux sont intacts) */
-    uart_puts("\n\nRegisters SWI HANDLER:\n");
-    uart_puts("  r0: ");
-    uart_put_hex(r0_val);
-    uart_puts("\n  r1: ");
-    uart_put_hex(r7_val);
-    uart_puts("\n  r7: ");
-    uart_put_hex(r7_val);
-    uart_puts("\n  sp: ");
-    uart_put_hex(sp_val);
-    uart_puts("\n  pc: ");
-    uart_put_hex(pc_val);
-    uart_puts("\n  lr: ");
-    uart_put_hex(lr_val);
-    uart_puts("\n\n");
-
-   //kprintf("  r1: 0x%08X\n", r1_val);
-    //kprintf("  sp: 0x%08X\n", sp_val);
-    //kprintf("  pc: 0x%08X (approx)\n", pc_val);
-    //kprintf("  lr: 0x%08X\n", lr_val);
-    //uart_puts("\n\n");
-}
-
-void debug_print_ctx(task_context_t *context, const char* caller)
-{
-    if(!context)
-        KWARN("debug_print_ctx: Input task is NULL\n");
-
-    // r0.         0,
-    // r1          4,
-    // r2          8,
-    // r3          12
-    // r4          16
-    // r5          20
-    // r6          24
-    // r7          28
-    // r8          32
-    // r9          36
-    // r10         40
-    // r11         44
-    // r12         48
-    
-    /* Registres speciaux */
-    // sp          52       // Stack Pointer 
-    // lr          56       // Link Register 
-    // pc;         60       // Program Counter 
-    // cpsr;       64       // Current Program Status Register 
-    
-    // is_first_run; 68.     // NOUVEAU: Flag pour premiere execution 
-    // ttbr0;      72
-    // asid;       76
-
-    // spsr;       80        // SPSR_svc 
-    // returns_to_user;  84  // has to return to user mode 
-
-    // usr_r[0];     88      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[1];     92      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[2];     96      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[3];     100      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[4];     104      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[5];     108      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[6];     112      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[7];     116      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[8];     120      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[9];     124      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[10];    128      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[11];    132      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[12];    136      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_sp;       140
-    // usr_lr;       144         // optionnel si tu l’utilises
-    // usr_pc;       148         // point de reprise user
-    // usr_cpsr;     152        // en général 0x10
-    // svc_sp_top;   156        // haut de pile noyau allouée pour ce task
-    // svc_sp;       160        // courant (si tu le tiens à jour)
-    // svc_lr_saved; 164        // si tu en as besoin
-
-    
-    /* Maintenant afficher avec kprintf (les registres originaux sont intacts) */
-    kprintf("Current Task (0x%08X) saved Contex - Called from %st:\n", (uint32_t)context, caller);
-    kprintf("  r0: 0x%08X\n", context->r0);
-    kprintf("  r1: 0x%08X\n", context->r1);
-    kprintf("  r2: 0x%08X\n", context->r2);
-    kprintf("  r3: 0x%08X\n", context->r3);
-    kprintf("  r4: 0x%08X\n", context->r4);
-    kprintf("  r5: 0x%08X\n", context->r5);
-    kprintf("  r6: 0x%08X\n", context->r6);
-    kprintf("  r7: 0x%08X\n", context->r7);
-    kprintf("  r8: 0x%08X\n", context->r8);
-    kprintf("  r9: 0x%08X\n", context->r9);
-    kprintf("  r10: 0x%08X\n", context->r10);
-    kprintf("  r11: 0x%08X\n", context->r11);
-    kprintf("  r12: 0x%08X\n", context->r12);
-    kprintf("  SP: 0x%08X\n", context->sp);
-    kprintf("  LR: 0x%08X\n", context->lr);
-    kprintf("  PC: 0x%08X\n", context->pc);
-    kprintf("  CPSR: 0x%02X\n", context->cpsr /*& 0x1F*/);
-    kprintf("  IS FIRST RUN: 0x%01X\n", context->is_first_run);
-    kprintf("  TTBR0: 0x%08X\n", context->ttbr0);
-    kprintf("  ASID: 0x%03X\n", context->asid);
-    kprintf("  SPSR: 0x%02X\n", context->spsr & 0x1F);
-    kprintf("  RETURNS TO USER: 0x%01X\n", context->returns_to_user);
-
-    for(int i = 0 ; i < 13 ; i++)
-    {
-        kprintf("  usr_r[%d]: 0x%08X\n", i, context->usr_r[i]);
-    }
-
-    kprintf("  USR SP: 0x%08X\n", context->usr_sp);
-    kprintf("  USR LR: 0x%08X\n", context->usr_lr);
-    kprintf("  USR PC: 0x%08X\n", context->usr_pc);
-    kprintf("  USR CPSR: 0x%02X\n", context->usr_cpsr /*& 0x1F*/);
-
-    kprintf("  SVC SP TOP: 0x%08X\n", context->svc_sp_top);
-    kprintf("  SVC SP: 0x%08X\n", context->svc_sp);
-    kprintf("  SVC LR SAVED : 0x%08X\n", context->svc_lr_saved);
-}
-
-__attribute__((noinline))
-void debug_return_snapshot(task_context_t *ctx, uint32_t spsr, uint32_t usr_pc, uint32_t tracer) {
-    uart_puts("\n-- Return-to-user snapshot --\n");
-    uart_puts("ctx="); uart_put_hex((uint32_t)ctx);
-    uart_puts(" tracer="); uart_put_hex(tracer); uart_puts("\n");
-    uart_puts("SPSR="); uart_put_hex(spsr);
-    uart_puts(" (mode="); uart_put_hex(spsr & 0x1F);
-    uart_puts(" T="); uart_put_dec((spsr>>5)&1); uart_puts(")\n");
-    uart_puts("LR_svc(next) = "); uart_put_hex(usr_pc); uart_puts("\n");
-}
-
-
-void debug_print_task(task_t *task_in)
-{
-    task_t *task = NULL;
-    if(task_in)
-        task = task_in;
-    else
-        task = get_current_task();
-
-    if(!task)
-        KWARN("debug_print_ctx: Input task is NULL\n");
-
-    // r0.         0,
-    // r1          4,
-    // r2          8,
-    // r3          12
-    // r4          16
-    // r5          20
-    // r6          24
-    // r7          28
-    // r8          32
-    // r9          36
-    // r10         40
-    // r11         44
-    // r12         48
-    
-    /* Registres speciaux */
-    // sp          52       // Stack Pointer 
-    // lr          56       // Link Register 
-    // pc;         60       // Program Counter 
-    // cpsr;       64       // Current Program Status Register 
-    
-    // is_first_run; 68.     // NOUVEAU: Flag pour premiere execution 
-    // ttbr0;      72
-    // asid;       76
-
-    // spsr;       80        // SPSR_svc 
-    // returns_to_user;  84  // has to return to user mode 
-
-    // usr_r[0];     88      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[1];     92      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[2];     96      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[3];     100      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[4];     104      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[5];     108      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[6];     112      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[7];     116      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[8];     120      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[9];     124      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[10];    128      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[11];    132      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_r[12];    136      // r0..r12 à l’entrée SVC (ou état prêt à repartir)
-    // usr_sp;       140
-    // usr_lr;       144         // optionnel si tu l’utilises
-    // usr_pc;       148         // point de reprise user
-    // usr_cpsr;     152        // en général 0x10
-    // svc_sp_top;   156        // haut de pile noyau allouée pour ce task
-    // svc_sp;       160        // courant (si tu le tiens à jour)
-    // svc_lr_saved; 164        // si tu en as besoin
-
-    
-    /* Maintenant afficher avec kprintf (les registres originaux sont intacts) */
-    kprintf("Current Task (%s) saved Context:\n", task->name);
-    kprintf("  r0: 0x%08X\n", task->context.r0);
-    kprintf("  r1: 0x%08X\n", task->context.r1);
-    kprintf("  r2: 0x%08X\n", task->context.r2);
-    kprintf("  r3: 0x%08X\n", task->context.r3);
-    kprintf("  r4: 0x%08X\n", task->context.r4);
-    kprintf("  r5: 0x%08X\n", task->context.r5);
-    kprintf("  r6: 0x%08X\n", task->context.r6);
-    kprintf("  r7: 0x%08X\n", task->context.r7);
-    kprintf("  r8: 0x%08X\n", task->context.r8);
-    kprintf("  r9: 0x%08X\n", task->context.r9);
-    kprintf("  r10: 0x%08X\n", task->context.r10);
-    kprintf("  r11: 0x%08X\n", task->context.r11);
-    kprintf("  r12: 0x%08X\n", task->context.r12);
-    kprintf("  SP: 0x%08X\n", task->context.sp);
-    kprintf("  LR: 0x%08X\n", task->context.lr);
-    kprintf("  PC: 0x%08X\n", task->context.pc);
-    kprintf("  CPSR: 0x%02X\n", task->context.cpsr & 0x1F);
-    kprintf("  IS FIRST RUN: 0x%01X\n", task->context.is_first_run);
-    kprintf("  TTBR0: 0x%08X\n", task->context.ttbr0);
-    kprintf("  ASID: 0x%03X\n", task->context.asid);
-    kprintf("  SPSR: 0x%02X\n", task->context.spsr & 0x1F);
-    kprintf("  RETURNS TO USER: 0x%01X\n", task->context.returns_to_user);
-
-    for(int i = 0 ; i < 13 ; i++)
-    {
-        kprintf("  usr_r[%d]: 0x%08X\n", i, task->context.usr_r[i]);
-    }
-
-    kprintf("  USR SP: 0x%08X\n", task->context.usr_sp);
-    kprintf("  USR LR: 0x%08X\n", task->context.usr_lr);
-    kprintf("  USR PC: 0x%08X\n", task->context.usr_pc);
-    kprintf("  USR CPSR: 0x%02X\n", task->context.usr_cpsr & 0x1F);
-
-    kprintf("  SVC SP TOP: 0x%08X\n", task->context.svc_sp_top);
-    kprintf("  SVC SP: 0x%08X\n", task->context.svc_sp);
-    kprintf("  SVC LR SAVED : 0x%08X\n", task->context.svc_lr_saved);
- 
-   //kprintf("  r1: 0x%08X\n", r1_val);
-    //kprintf("  sp: 0x%08X\n", sp_val);
-    //kprintf("  pc: 0x%08X (approx)\n", pc_val);
-    //kprintf("  lr: 0x%08X\n", lr_val);
-    //uart_puts("\n\n");
 }
 
 /**
@@ -4139,7 +3798,8 @@ void debug_all_task_stacks(void)
         KINFO("  Stack base: 0x%08X\n", task_stack_addr(task->stack_base));
         KINFO("  Stack top:  0x%08X\n", task_stack_addr(task->stack_top));
         KINFO("  Stack size: %u bytes\n", task->stack_size);
-        KINFO("  Context SP: 0x%08X\n", task->context.sp);
+        KINFO("  Context SP: 0x%08X\n",
+              arch_task_context_kernel_sp(&task->context));
         
         /* Vérifier chevauchement avec pile kernel */
         vaddr_t task_start = task_stack_addr(task->stack_base);

@@ -17,7 +17,6 @@
  */
 
 #include <kernel/task.h>
-#include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
 #include <kernel/process.h>

@@ -16,24 +16,21 @@
  * - Keep tty0/UART usable as the recovery console.
  */
 
-#include <kernel/kernel.h>
+#include <kernel/arch_platform.h>
+#include <kernel/config.h>
+#include <kernel/linker.h>
 #include <kernel/memory.h>
 #include <kernel/process.h>
 #include <kernel/interrupt.h>
 #include <kernel/timer.h>
-#include <kernel/keyboard.h>
 #include <kernel/display.h>
-#include <kernel/virtio_gpu.h>
-#include <kernel/virtio_input.h>
-#include <kernel/virtio_net.h>
+#include <kernel/platform_devices.h>
 #include <kernel/vfs.h>
-#include <kernel/ata.h>
 #include <kernel/smp.h>
 #include <kernel/tlb.h>
-
-/* Inclusion des fonctions inline ARM apres les prototypes */
-#include <asm/arm.h>
+#include <kernel/arch_cpu.h>
 #include <kernel/uart.h>
+#include <kernel/panic.h>
 #include <kernel/kprintf.h>
 #include <kernel/memory.h>
 #include <kernel/debug_print.h>
@@ -49,17 +46,10 @@
 #include <kernel/tty.h>
 #include <kernel/exceptions.h>
 
-//extern void test_utoa_direct();
-//extern void simple_utoa(unsigned int val, char *str, int base);
-
-
-// Canary statique
+/* Static stack-protector canary used by freestanding kernel builds. */
 uintptr_t __stack_chk_guard = 0xDEADBEEF;
 
-// Appelée si débordement détecté
 void __attribute__((noreturn)) __stack_chk_fail(void) {
-    // Panic ou halt, au choix
-    extern void panic(const char*);
     panic("Stack smashing detected");
     while (1) {}
 }
@@ -67,7 +57,8 @@ void __attribute__((noreturn)) __stack_chk_fail(void) {
 
 void init_early_uart(void)
 {
-    volatile uint32_t* uart = (volatile uint32_t*)UART0_BASE;
+    volatile uint32_t* uart =
+        (volatile uint32_t*)(uintptr_t)arch_platform_uart0_phys_base();
     
     /* Disable UART */
     uart[0x30/4] = 0;
@@ -85,13 +76,13 @@ void init_early_uart(void)
 
 void panic(const char* message)
 {
-    disable_interrupts();
+    arch_disable_interrupts();
     uart_puts("KERNEL PANIC: ");
     uart_puts(message);
     uart_puts("\n");
     
     while (1) {
-        wait_for_interrupt();
+        arch_wait_for_interrupt();
     }
 }
 
@@ -100,40 +91,16 @@ void panic(const char* message)
 void early_init(void); 
 void kernel_main(void);
 
-static inline void disable_branch_predictor(void) {
-    uint32_t sctlr;
-
-    // Lire SCTLR
-    asm volatile("mrc p15, 0, %0, c1, c0, 0" : "=r"(sctlr));
-
-    // Clear bit Z (bit 11)
-    sctlr &= ~(1 << 11);
-
-    // Écrire SCTLR modifié
-    asm volatile("mcr p15, 0, %0, c1, c0, 0" :: "r"(sctlr));
-
-    // Flush BPIALL (invalidate branch predictor state)
-    asm volatile("mcr p15, 0, %0, c7, c5, 6" :: "r"(0));
-    asm volatile("isb");
-}
-
-
 static uint32_t boot_timer_frequency(void)
 {
-    uint32_t timer_freq;
-
-    __asm__ volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(timer_freq));
-    if (timer_freq == 0)
-        timer_freq = 62500000;
-
-    return timer_freq;
+    return arch_timer_frequency();
 }
 
 static uint32_t boot_bogomips_x100(uint32_t timer_freq)
 {
     /*
-     * Early Linux printed a delay-loop calibration as BogoMIPS. For QEMU virt
-     * this gives a stable, readable estimate tied to the ARM generic timer.
+     * Early Linux printed a delay-loop calibration as BogoMIPS. In ArmOS this
+     * is a stable, readable estimate tied to the active platform timer.
      */
     return timer_freq / 5000;
 }
@@ -187,34 +154,35 @@ void test_heap_health(const char* phase_name)
 }
 
 /*
- * Point d'entree principal du kernel ARMv7-A
+ * Point d'entree principal du kernel.
  */
 void kernel_main(void)
 {
+    arch_cpuinfo_t boot_cpuinfo;
     uint32_t timer_freq;
     uint32_t bogo_x100;
     uint32_t total_mb;
     uint32_t available_mb;
-    uint64_t disk_sectors;
-    uint32_t disk_mb;
-    bool tty1_graphics_ready = false;
+    platform_devices_state_t platform_devices;
 
     /* Phase 0: etats du processeur */
-    __asm__ volatile ("cpsie aif");
+    enable_async_abort_irq_fiq();
 
     sctlr_set_smp();
     smp_init_boot_cpu();
 
     timer_freq = boot_timer_frequency();
     bogo_x100 = boot_bogomips_x100(timer_freq);
+    arch_get_cpuinfo(&boot_cpuinfo);
 
     KBOOT("\n");
-    KBOOT(KBOOT_COLOR_INFO "ArmOS 0.6 armv7l" KBOOT_COLOR_RESET "\n");
-    KBOOT_OKF("CPU: ARM Cortex-A15 @ QEMU virt");
+    KBOOT(KBOOT_COLOR_INFO "ArmOS 0.6 %s" KBOOT_COLOR_RESET "\n",
+          arch_machine_name());
+    KBOOT_OKF("CPU: %s", boot_cpuinfo.model_name ? boot_cpuinfo.model_name : "unknown");
     KBOOT_OKF("Calibrating delay loop... %u.%02u BogoMIPS",
                 bogo_x100 / 100, bogo_x100 % 100);
 
-    //disable_branch_predictor();
+    //arch_disable_branch_predictor();
     
     init_memory();  // <- Allocateur physique EN PREMIER
 
@@ -230,8 +198,8 @@ void kernel_main(void)
     setup_svc_stack();
 
     /* Phase 3: Controleurs materiels de base */
-    init_gic();
-    KBOOT_OKF("GIC: v2, 288 IRQs");
+    irq_init_controller();
+    KBOOT_OKF("%s, %u IRQs", irq_controller_name(), irq_controller_line_count());
 
     //init_timer_software();
     init_timer();
@@ -243,37 +211,7 @@ void kernel_main(void)
               smp_possible_cpu_count(), smp_online_cpu_count());
 
     /* Phase 4: Peripheriques d'entree/sortie */
-    init_keyboard();
-  
-    init_display();
-    if (virtio_gpu_init()) {
-        KBOOT_OKF("GPU: virtio-gpu %ux%ux%u", FB_WIDTH, FB_HEIGHT, FB_BPP);
-        if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0) {
-            tty1_graphics_ready = true;
-            tty_set_active(TTY_GRAPHICS_ID);
-            KBOOT_OKF("TTY: console tty1 on virtio-gpu");
-            if (virtio_input_init(TTY_GRAPHICS_ID)) {
-                KBOOT_OKF("Input: virtio-keyboard on tty1");
-            } else {
-                KBOOT_WARN("Input: virtio-keyboard unavailable");
-            }
-        } else {
-            KBOOT_WARN("TTY: tty1 framebuffer backend unavailable");
-        }
-    } else {
-        KBOOT_WARN("GPU: virtio-gpu unavailable");
-    }
-    KBOOT_OKF("TTY: console tty0 on uart0");
-
-    if (virtio_net_init()) {
-        uint8_t mac[6];
-        virtio_net_get_mac(mac);
-        KBOOT_OKF("Net: virtio-net %02X:%02X:%02X:%02X:%02X:%02X irq %u",
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-                  virtio_net_get_irq());
-    } else {
-        KBOOT_WARN("Net: virtio-net unavailable");
-    }
+    platform_devices = platform_devices_init();
       
     //kprintf("Initialize IDE ... ");
     //init_ide();
@@ -283,7 +221,7 @@ void kernel_main(void)
     /* Phase 6: Activation des interruptions */
     timer_enable_scheduling();
  
-    enable_interrupts();
+    arch_enable_interrupts();
 
     /* Phase 7: Systemes de fichiers (OPTIONNEL) */
 #ifdef USE_RAMFS
@@ -294,16 +232,7 @@ void kernel_main(void)
     }
 #endif
 
-    if (!init_ata()) {
-        KBOOT_WARN("Block: virtio0 unavailable");
-    } else {
-        disk_sectors = ata_get_capacity_sectors();
-        disk_mb = (uint32_t)(disk_sectors / 2048u);
-        KBOOT_OKF("Block: virtio0 %uMB, irq 47", disk_mb);
-        if (!disk_layout_init_from_mbr()) {
-            KBOOT_WARN("Partition: using compiled fallback layout");
-        }
-    }
+    platform_block_init();
 
     if (!init_vfs()) {
         KBOOT_WARN("VFS: mount failed");
@@ -330,7 +259,7 @@ void kernel_main(void)
     else
         KBOOT_WARN("Core: coredump daemon unavailable");
 
-    if (tty1_graphics_ready) {
+    if (platform_devices.tty1_graphics_ready) {
         if (display_start_daemon() == 0)
             KBOOT_OK("Display: cursor daemon");
         else

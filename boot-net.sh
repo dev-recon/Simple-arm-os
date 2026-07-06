@@ -26,6 +26,7 @@ select_qemu() {
 }
 
 QEMU="$(select_qemu "${1:-}")"
+. "$ROOT_DIR/tools/qemu_platform_env.sh"
 SMP_CPUS="${SMP_CPUS:-1}"
 
 NET_HOST_ADDR="${NET_HOST_ADDR:-127.0.0.1}"
@@ -33,7 +34,7 @@ NET_HOST_PORT="${NET_HOST_PORT:-2323}"
 NET_GUEST_PORT="${NET_GUEST_PORT:-2323}"
 NET_MAC="${NET_MAC:-52:54:00:12:34:56}"
 NETDEV="user,id=net0,hostfwd=tcp:${NET_HOST_ADDR}:${NET_HOST_PORT}-:${NET_GUEST_PORT}"
-NET_DEVICE="virtio-net-device,netdev=net0,mac=${NET_MAC}"
+NET_DEVICE="${QEMU_NET_DEVICE_MODEL},netdev=net0,mac=${NET_MAC}"
 
 if [ ! -f kernel.bin ]; then
     echo "Error: kernel.bin not found. Run ./run.sh first to build everything."
@@ -53,13 +54,15 @@ fi
 echo "=== Booting existing kernel.bin + disk.img with virtio-net ==="
 echo "UART console stays on this terminal; graphics are disabled."
 echo "QEMU: $("$QEMU" --version | head -n 1)"
+echo "Platform: ${TARGET_ARCH}/${TARGET_PLATFORM}"
+echo "Machine: ${QEMU_MACHINE}, CPU: ${QEMU_CPU}"
 echo "NET: ${NET_DEVICE}"
 echo "FWD: ${NET_HOST_ADDR}:${NET_HOST_PORT} -> guest :${NET_GUEST_PORT}"
 echo "SMP: ${SMP_CPUS} CPU(s)"
-"$QEMU" -M virt -cpu cortex-a15 \
+"$QEMU" -M "${QEMU_MACHINE}" -cpu "${QEMU_CPU}" \
     -m 2G -smp "${SMP_CPUS}" \
     -drive file=disk.img,if=none,format=raw,id=hd0 \
-    -device virtio-blk-device,drive=hd0 \
+    -device "${QEMU_BLOCK_DEVICE}" \
     -netdev "${NETDEV}" \
     -device "${NET_DEVICE}" \
     -kernel kernel.bin \

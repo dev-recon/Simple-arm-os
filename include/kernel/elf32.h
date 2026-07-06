@@ -16,6 +16,9 @@
  * - Header changes can ripple across kernel and user ABI glue.
  */
 
+#ifndef _KERNEL_ELF32_H
+#define _KERNEL_ELF32_H
+
 #include <kernel/types.h>
 
 
@@ -52,3 +55,5 @@ typedef struct __attribute__((packed)) {
 #define PF_X    1
 #define PF_W    2
 #define PF_R    4
+
+#endif /* _KERNEL_ELF32_H */

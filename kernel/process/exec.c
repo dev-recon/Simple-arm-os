@@ -20,8 +20,8 @@
 #include <kernel/syscalls.h>
 #include <kernel/memory.h>
 #include <kernel/vfs.h>
-#include <kernel/kernel.h>
 #include <kernel/elf32.h>
+#include <kernel/arch_exec.h>
 #include <kernel/kprintf.h>
 #include <kernel/file.h>
 #include <kernel/string.h>
@@ -111,9 +111,9 @@ bool validate_elf_header(elf32_ehdr_t* header)
     
     //KDEBUG("Check 32-bit little-endian OK\n");
 
-    /* Check executable ARM */
+    /* Check executable for the active architecture. */
     if (header->e_type != 2 ||      /* ET_EXEC */
-        header->e_machine != 40) {  /* EM_ARM */
+        !arch_validate_elf_header(header)) {
         return false;
     }
 
@@ -173,12 +173,6 @@ int load_elf_segments(inode_t* inode, elf32_ehdr_t* elf_header, vm_space_t* vm)
     
     kfree(phdrs);
     return 0;
-}
-
-static inline void flush_instructions(void){
-    asm volatile("dsb ish");          // données visibles
-    asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0)); // IC IALLU (ou IVAU par ligne)
-    asm volatile("dsb ish; isb");
 }
 
 int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
@@ -272,22 +266,8 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
             
             //KDEBUG("Successfully read %u bytes\n", bytes_read);
 
-            // juste après le read() réussi dans temp_vaddr
-            uintptr_t start = (temp_vaddr) & ~63u;
-            uintptr_t end   = (temp_vaddr + PAGE_SIZE + 63u) & ~63u;
-            for (uintptr_t p = start; p < end; p += 64) {
-                //asm volatile("mcr p15,0,%0,c7,c10,1" :: "r"(p) : "memory"); // DCCMVAC
-                asm volatile("mcr p15,0,%0,c7,c6,1" :: "r"(p) : "memory"); // DCIMVAC
-            }
-            asm volatile("dsb ish" ::: "memory");
-
-            dcache_clean_by_va((void*)temp_vaddr, PAGE_SIZE);
-
-            if (vma_flags & VMA_EXEC) {
-                sync_icache_for_exec();
-            }
-
-            clean_dcache_by_mva((void *)temp_vaddr, PAGE_SIZE); 
+            arch_sync_loaded_user_page(temp_vaddr, PAGE_SIZE,
+                                       (vma_flags & VMA_EXEC) != 0);
 
         /* Après la lecture réussie */
 
@@ -353,18 +333,11 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
             return -1;
         }
 
-        //read_l2_entry(vm->pgdir, page_vaddr);
         //uint32_t temp = get_physical_address(vm->pgdir, page_vaddr);
         //hexdump((void*)temp, (size_t)0x800);
 
-        flush_instructions();
-
-        invalidate_dcache_by_mva((void *)page_vaddr, PAGE_SIZE); // DCIMVAC + DSB
-
-        if (vma_flags & VMA_EXEC) {
-            asm volatile("mcr p15,0,%0,c7,c5,0"::"r"(0)); // ICIALLU
-            asm volatile("dsb ish; isb");
-        }
+        arch_sync_loaded_user_page(page_vaddr, PAGE_SIZE,
+                                   (vma_flags & VMA_EXEC) != 0);
 
         //uint8_t* check2 = (uint8_t*)map_temp_page((uint32_t)phys_page);
         //KDEBUG("Check N2 page after map_user_page: %02X %02X %02X %02X\n", check2[0], check2[1], check2[2], check2[3]);

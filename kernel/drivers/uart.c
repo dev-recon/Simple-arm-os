@@ -17,19 +17,21 @@
  */
 
 #include <kernel/types.h>
-#include <kernel/kernel.h>
+#include <kernel/arch_platform.h>
+#include <kernel/string.h>
 #include <kernel/spinlock.h>
 #include <kernel/vfs.h>
 #include <kernel/userspace.h>
 #include <kernel/tty.h>
 #include <kernel/kprintf.h>
+#include <kernel/arch_barrier.h>
 
 /*
  * Avant l'activation de la MMU, l'UART doit etre accedee par son adresse
  * physique. early_init() bascule cette base vers l'alias prive TTBR1 des que
  * setup_mmu() a termine.
  */
-static uintptr_t uart_mmio_base = VIRT_UART_BASE;
+static uintptr_t uart_mmio_base;
 
 /* Registres PL011 UART */
 #define UART_REG(offset) (*(volatile uint32_t*)(uart_mmio_base + (offset)))
@@ -84,10 +86,38 @@ static uintptr_t uart_mmio_base = VIRT_UART_BASE;
 /* Variable globale */
 DEFINE_SPINLOCK(uart_lock);
 
+static void uart_configure_baud(void)
+{
+    uint32_t clock_hz = arch_platform_uart0_clock_hz();
+    uint32_t baud = arch_platform_uart0_baud();
+    uint32_t divisor64;
+
+    if (clock_hz == 0 || baud == 0)
+        return;
+
+    /*
+     * PL011 baud divisor:
+     *   bauddiv = uartclk / (16 * baud)
+     *   IBRD = floor(bauddiv)
+     *   FBRD = round((bauddiv - IBRD) * 64)
+     *
+     * Computing bauddiv * 64 is equivalent to uartclk * 4 / baud. Keeping the
+     * clock in the platform contract lets raspi2 provide its own value without
+     * touching the console driver.
+     */
+    divisor64 = ((clock_hz * 4u) + (baud / 2u)) / baud;
+    if (divisor64 == 0)
+        divisor64 = 1;
+
+    UART_IBRD = divisor64 / 64u;
+    UART_FBRD = divisor64 % 64u;
+}
+
 void uart_use_kernel_mmio_alias(void)
 {
-    uart_mmio_base = KERNEL_MMIO_UART_BASE;
-    __asm__ volatile("dsb; isb" ::: "memory");
+    uart_mmio_base = (uintptr_t)arch_platform_uart0_kernel_base();
+    arch_data_sync_barrier();
+    arch_instruction_sync_barrier();
 }
 
 /*
@@ -95,6 +125,9 @@ void uart_use_kernel_mmio_alias(void)
  */
 void uart_init(void)
 {
+    if (uart_mmio_base == 0)
+        uart_mmio_base = (uintptr_t)arch_platform_uart0_phys_base();
+
     /* Desactiver l'UART */
     UART_CR = 0;
     
@@ -103,14 +136,7 @@ void uart_init(void)
         (void)UART_DR;
     }
     
-    /* Configuration baud rate pour machine virt QEMU */
-    /* QEMU machine virt utilise une horloge differente */
-    /* Pour 115200 bps sur machine virt : */
-    UART_IBRD = 26;   /* Partie entiere */
-    UART_FBRD = 3;    /* Partie fractionnaire */
-    
-    /* Alternative plus s-re : desactiver completement le baud rate */
-    /* QEMU peut ignorer ces registres */
+    uart_configure_baud();
     
     /* Configurer le format de ligne */
     UART_LCRH = UART_LCRH_WLEN_8 | UART_LCRH_FEN;
@@ -396,15 +422,13 @@ void uart_flush(void)
     for (volatile int i = 0; i < 1000; i++);
 }
 
-// Pour QEMU machine virt qui utilise PL011
 bool uart_has_data(void) {
-    // PL011 Flag Register à offset 0x18
     uint32_t uart_flags = UART_FR;
     
-    // Bit 4 (RXFE) = 1 si RX FIFO vide, 0 si données disponibles
+    /* RXFE is set when the PL011 receive FIFO is empty. */
     bool rx_fifo_empty = (uart_flags & (1 << 4)) != 0;
     
-    return !rx_fifo_empty;  // Retourner true si données disponibles
+    return !rx_fifo_empty;
 }
 
 static const tty_backend_ops_t uart_tty_backend = {

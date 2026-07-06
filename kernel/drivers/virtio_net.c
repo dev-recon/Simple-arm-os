@@ -18,8 +18,9 @@
  *   sockets and TCP state machines are introduced.
  */
 
-#include <kernel/kernel.h>
 #include <kernel/types.h>
+#include <kernel/address_space.h>
+#include <kernel/fdt.h>
 #include <kernel/virtio_net.h>
 #include <kernel/virtio_block.h>
 #include <kernel/memory.h>
@@ -30,6 +31,8 @@
 #include <kernel/vfs.h>
 #include <kernel/timer.h>
 #include <kernel/task.h>
+#include <kernel/arch_barrier.h>
+#include <kernel/arch_platform.h>
 
 #define VIRTIO_NET_F_MAC      (1u << 5)
 
@@ -353,22 +356,13 @@ static bool net_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
     vq->qsize = qsize;
     vq->last_used_idx = 0;
 
-    clean_dcache_by_mva(va_base, npages * PAGE_SIZE);
+    arch_clean_dcache_by_mva(va_base, npages * PAGE_SIZE);
     return true;
 }
 
 static bool net_irq_from_mmio(paddr_t phys, uint32_t *out_irq)
 {
-    if (!out_irq)
-        return false;
-    if (phys < VIRT_VIRTIO_BASE)
-        return false;
-    if (((phys - VIRT_VIRTIO_BASE) % VIRT_VIRTIO_SIZE) != 0)
-        return false;
-
-    uint32_t index = (phys - VIRT_VIRTIO_BASE) / VIRT_VIRTIO_SIZE;
-    *out_irq = VIRT_VIRTIO_IRQ(index);
-    return true;
+    return arch_platform_virtio_irq_from_phys(phys, out_irq);
 }
 
 static bool net_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq, bool *out_edge)
@@ -384,8 +378,8 @@ static bool net_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq, bool *out_e
 
 static bool net_probe_fallback(paddr_t *out_phys, uint32_t *out_irq, bool *out_edge)
 {
-    paddr_t phys = VIRT_VIRTIO_NET;
-    volatile uint32_t *base = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+    paddr_t phys = arch_platform_virtio_net_phys();
+    volatile uint32_t *base = arch_platform_virtio_mmio_base(phys);
 
     if (!out_phys || !out_irq)
         return false;
@@ -396,7 +390,7 @@ static bool net_probe_fallback(paddr_t *out_phys, uint32_t *out_irq, bool *out_e
 
     *out_phys = phys;
     if (!net_irq_from_mmio(phys, out_irq))
-        *out_irq = VIRT_VIRTIO_NET_IRQ;
+        *out_irq = arch_platform_virtio_net_irq();
     if (out_edge)
         *out_edge = true;
     return true;
@@ -418,13 +412,13 @@ static void net_rx_post_desc(uint16_t id)
      * Clean+invalidate before posting so QEMU sees a coherent buffer and the
      * CPU later reloads the packet contents after the device writes them.
      */
-    clean_invalidate_dcache_by_mva(&net.rx_bufs[id], sizeof(net.rx_bufs[id]));
+    arch_clean_invalidate_dcache_by_mva(&net.rx_bufs[id], sizeof(net.rx_bufs[id]));
     avail->ring[idx % net.rx_vq.qsize] = id;
-    clean_dcache_by_mva((void *)net.rx_vq.va_avail, net.rx_vq.avail_size);
-    asm volatile("dmb ish" ::: "memory");
+    arch_clean_dcache_by_mva((void *)net.rx_vq.va_avail, net.rx_vq.avail_size);
+    arch_data_memory_barrier_inner_shareable();
     avail->idx = idx + 1;
-    clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
-    asm volatile("dsb ishst" ::: "memory");
+    arch_clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
+    arch_data_sync_barrier_inner_shareable_write();
 }
 
 static void net_rx_post_all(void)
@@ -463,7 +457,7 @@ static bool net_rx_queue_init(void)
         desc->flags = VRING_DESC_F_WRITE;
         desc->next = 0;
     }
-    clean_dcache_by_mva((void *)net.rx_vq.va_desc, sizeof(struct vring_desc) * qsize);
+    arch_clean_dcache_by_mva((void *)net.rx_vq.va_desc, sizeof(struct vring_desc) * qsize);
 
     mmio_write32(net.mmio, VIRTIO_MMIO_QUEUE_PFN, net.rx_vq.pa_base >> 12);
     net_rx_post_all();
@@ -498,7 +492,7 @@ static bool net_tx_queue_init(void)
         desc->next = 0;
         net.tx_in_use[i] = false;
     }
-    clean_dcache_by_mva((void *)net.tx_vq.va_desc, sizeof(struct vring_desc) * qsize);
+    arch_clean_dcache_by_mva((void *)net.tx_vq.va_desc, sizeof(struct vring_desc) * qsize);
 
     mmio_write32(net.mmio, VIRTIO_MMIO_QUEUE_PFN, net.tx_vq.pa_base >> 12);
     return true;
@@ -511,9 +505,9 @@ static void net_tx_process_used(void)
     if (!vq->qsize)
         return;
 
-    invalidate_dcache_by_mva((void *)vq->va_used,
+    arch_invalidate_dcache_by_mva((void *)vq->va_used,
         sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
-    asm volatile("dmb ish" ::: "memory");
+    arch_data_memory_barrier_inner_shareable();
 
     struct vring_used *used = net_used_ptr(vq);
     while (vq->last_used_idx != used->idx) {
@@ -566,17 +560,17 @@ static int net_send_frame(const uint8_t *frame, uint32_t frame_len)
     desc->len = sizeof(virtio_net_hdr_t) + frame_len;
     desc->flags = 0;
     desc->next = 0;
-    clean_dcache_by_mva(desc, sizeof(*desc));
-    clean_dcache_by_mva(buf, desc->len);
+    arch_clean_dcache_by_mva(desc, sizeof(*desc));
+    arch_clean_dcache_by_mva(buf, desc->len);
 
     struct vring_avail *avail = net_avail_ptr(&net.tx_vq);
     uint16_t idx = avail->idx;
     avail->ring[idx % net.tx_vq.qsize] = (uint16_t)id;
-    clean_dcache_by_mva((void *)net.tx_vq.va_avail, net.tx_vq.avail_size);
-    asm volatile("dmb ish" ::: "memory");
+    arch_clean_dcache_by_mva((void *)net.tx_vq.va_avail, net.tx_vq.avail_size);
+    arch_data_memory_barrier_inner_shareable();
     avail->idx = idx + 1;
-    clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
-    asm volatile("dsb ishst" ::: "memory");
+    arch_clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
+    arch_data_sync_barrier_inner_shareable_write();
 
     net.tx_packets++;
     net.tx_bytes += frame_len;
@@ -1385,9 +1379,9 @@ static void net_rx_process_used(void)
 {
     vq_legacy_t *vq = &net.rx_vq;
 
-    invalidate_dcache_by_mva((void *)vq->va_used,
+    arch_invalidate_dcache_by_mva((void *)vq->va_used,
         sizeof(struct vring_used) + vq->qsize * sizeof(struct vring_used_elem));
-    asm volatile("dmb ish" ::: "memory");
+    arch_data_memory_barrier_inner_shareable();
 
     struct vring_used *used = net_used_ptr(vq);
     while (vq->last_used_idx != used->idx) {
@@ -1401,7 +1395,7 @@ static void net_rx_process_used(void)
             continue;
         }
 
-        invalidate_dcache_by_mva(&net.rx_bufs[id], sizeof(net.rx_bufs[id]));
+        arch_invalidate_dcache_by_mva(&net.rx_bufs[id], sizeof(net.rx_bufs[id]));
         net.rx_last_len = len;
         /*
          * VirtIO-net prepends struct virtio_net_hdr to every received frame.
@@ -1565,7 +1559,7 @@ bool virtio_net_init(void)
     net.phys = phys;
     net.irq = irq;
     net.irq_edge_triggered = edge;
-    net.mmio = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+    net.mmio = arch_platform_virtio_mmio_base(phys);
 
     magic = mmio_read32(net.mmio, VIRTIO_MMIO_MAGIC);
     version = mmio_read32(net.mmio, VIRTIO_MMIO_VERSION);
@@ -1616,9 +1610,9 @@ bool virtio_net_init(void)
     net.initialized = true;
 
     if (net.irq_edge_triggered)
-        enable_irq(net.irq);
+        irq_enable(net.irq);
     else
-        enable_irq_level(net.irq);
+        irq_enable_level(net.irq);
 
     net_send_arp_request(VIRTIO_NET_GW_IP);
 

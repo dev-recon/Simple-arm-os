@@ -17,40 +17,14 @@
  */
 
 #include <kernel/spinlock.h>
+#include <kernel/arch_spinlock.h>
 #include <kernel/smp.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
-#include <asm/arm.h>
 
 static inline int spin_atomic_try_acquire(volatile uint32_t* locked)
 {
-    uint32_t old;
-    uint32_t status;
-
-    /*
-     * ARMv7 exclusive monitor sequence:
-     * - LDREX observes the current lock word.
-     * - If it is zero, STREX tries to store one.
-     * - STREX succeeds only if no other CPU modified the word meanwhile.
-     *
-     * CLREX is used on the already-locked path so this CPU does not keep a
-     * stale exclusive reservation while it goes into WFE.
-     */
-    __asm__ volatile(
-        "ldrex  %0, [%2]\n"
-        "cmp    %0, #0\n"
-        "bne    1f\n"
-        "strex  %1, %3, [%2]\n"
-        "b      2f\n"
-        "1:\n"
-        "clrex\n"
-        "mov    %1, #1\n"
-        "2:\n"
-        : "=&r"(old), "=&r"(status)
-        : "r"(locked), "r"(1U)
-        : "cc", "memory");
-
-    return old == 0 && status == 0;
+    return arch_spin_try_acquire(locked);
 }
 
 void init_spinlock(spinlock_t* lock)
@@ -85,10 +59,10 @@ void spin_lock(spinlock_t* lock)
          * Do not burn the interconnect while another CPU owns the lock.
          * spin_unlock() emits SEV after releasing the word.
          */
-        wait_for_event();
+        arch_spin_wait();
     }
 
-    data_memory_barrier();
+    arch_spin_memory_barrier();
     lock->owner = smp_processor_id();
     lock->count++;
 }
@@ -108,10 +82,10 @@ void spin_unlock(spinlock_t* lock)
     }
 
     lock->owner = SPINLOCK_NO_OWNER;
-    data_memory_barrier();
+    arch_spin_memory_barrier();
     lock->locked = 0;
-    data_sync_barrier();
-    send_event();
+    arch_spin_post_unlock_barrier();
+    arch_spin_wake();
 }
 
 int spin_trylock(spinlock_t* lock)
@@ -119,7 +93,7 @@ int spin_trylock(spinlock_t* lock)
     if (!lock) return 0;
     
     if (spin_atomic_try_acquire(&lock->locked)) {
-        data_memory_barrier();
+        arch_spin_memory_barrier();
         lock->owner = smp_processor_id();
         lock->count++;
         return 1;
@@ -132,18 +106,7 @@ void spin_lock_irqsave(spinlock_t* lock, unsigned long* flags)
 {
     if (!lock || !flags) return;
 
-    const unsigned long IF_MASK = 0xC0UL; /* bits 7 (I) et 6 (F) */
-    unsigned long cpsr;
-
-    __asm__ volatile(
-        "mrs %0, cpsr\n\t"
-        "cpsid i"
-        : "=r" (cpsr)
-        :
-        : "memory"
-    );
-
-    *flags = cpsr & IF_MASK;
+    *flags = arch_spin_irq_save();
     spin_lock(lock);
 }
 
@@ -153,20 +116,7 @@ void spin_unlock_irqrestore(spinlock_t* lock, unsigned long flags)
     
     spin_unlock(lock);
 
-    unsigned long cpsr_now, to_write;
-
-    __asm__ volatile("mrs %0, cpsr" : "=r"(cpsr_now) );
-
-    const unsigned long IF_MASK = 0xC0UL; /* bits 7 (I) et 6 (F) */
-
-    to_write = (cpsr_now & ~IF_MASK) | (flags & IF_MASK);
-
-    __asm__ volatile(
-        "msr cpsr_c, %0"
-        :
-        : "r" (to_write)
-        : "memory"
-    );
+    arch_spin_irq_restore(flags);
 }
 
 int spin_is_locked(spinlock_t* lock)

@@ -19,23 +19,9 @@
 #ifndef _KERNEL_MEMORY_H
 #define _KERNEL_MEMORY_H
 
+#include <kernel/arch_mmu.h>
 #include <kernel/types.h>
-
-/*
- * ARM short-descriptor page-table vocabulary.
- *
- * pgdir_t is still pointer-shaped because TTBR0/TTBR1 APIs historically pass
- * page-directory bases as uint32_t*.  Treat it as a physical table base unless
- * the name explicitly says "cpu": pgdir_cpu_t / l2_table_t are CPU-
- * dereferenceable views.
- */
-typedef uint32_t page_entry_t;
-typedef page_entry_t l1_entry_t;
-typedef page_entry_t l2_entry_t;
-typedef page_entry_t *pgdir_t;
-typedef page_entry_t *pgdir_cpu_t;
-typedef page_entry_t *l2_table_t;
-typedef page_entry_t *pte_ptr_t;
+#include <kernel/user_layout.h>
 
 typedef struct {
     uint32_t* bitmap;
@@ -80,6 +66,26 @@ typedef struct vm_space {
 #define USER_MMAP_START USER_SHM_END
 #define USER_MMAP_END   USER_STACK_BOTTOM
 
+/*
+ * Generic virtual-address split helpers.
+ *
+ * The split boundary is supplied by the active MMU backend. ARM32 currently
+ * implements it with split TTBR0/TTBR1; future architectures should keep the
+ * public meaning ("below is user, above is kernel") while providing their own
+ * backend value.
+ */
+vaddr_t get_split_boundary(void);
+
+static inline bool memory_is_user_address(vaddr_t addr)
+{
+    return addr < get_split_boundary();
+}
+
+static inline bool memory_is_kernel_address(vaddr_t addr)
+{
+    return addr >= get_split_boundary();
+}
+
 /* VMA flags */
 #define VMA_READ    (1 << 0)
 #define VMA_WRITE   (1 << 1)
@@ -88,39 +94,17 @@ typedef struct vm_space {
 #define VMA_SHARED  (1 << 4)
 #define VMA_LAZY    (1 << 5)
 
-/* ASID constants */
-#define ASID_KERNEL     254       /* ASID réservé pour le noyau */
-#define ASID_MIN_USER   1       /* Premier ASID utilisateur */
-#define ASID_MAX        255     /* ASID maximum (8 bits) */
+/*
+ * ASID aliases. The active MMU backend owns the concrete ASID width and the
+ * reserved kernel slot; generic code keeps using these names during the
+ * multi-arch split.
+ */
+#define ASID_KERNEL     ARCH_ASID_KERNEL
+#define ASID_MIN_USER   ARCH_ASID_MIN_USER
+#define ASID_MAX        ARCH_ASID_MAX
 
 #define MAX_TEMP_MAPPINGS 8
 
-/*
- * Configuration correcte des registres TTBR avec TTBCR.N=2
- */
-
-// Définitions des bits TTBR
-#define TTBR_RGN_OUTER_NC    (0b00 << 3)  // Non-cacheable
-#define TTBR_RGN_OUTER_WBWA  (0b01 << 3)  // Write-back write-allocate
-#define TTBR_RGN_OUTER_WT    (0b10 << 3)  // Write-through
-#define TTBR_RGN_OUTER_WB    (0b11 << 3)  // Write-back
-
-#define TTBR_SHAREABLE       (1 << 1)     // Bit S - Shareable
-#define TTBR_CACHEABLE       (1 << 0)     // Bit C - Cacheable
-
-// Pour TTBR avec TTBCR.N > 0, bits IRGN sont dans TTBCR, pas TTBR
-#define TTBCR_IRGN0_NC       (0b00 << 8)  // Inner non-cacheable TTBR0
-#define TTBCR_IRGN0_WBWA     (0b01 << 8)  // Inner write-back write-allocate TTBR0
-#define TTBCR_IRGN0_WT       (0b10 << 8)  // Inner write-through TTBR0
-#define TTBCR_IRGN0_WB       (0b11 << 8)  // Inner write-back TTBR0
-
-#define TTBCR_IRGN1_NC       (0b00 << 10) // Inner non-cacheable TTBR1
-#define TTBCR_IRGN1_WBWA     (0b01 << 10) // Inner write-back write-allocate TTBR1
-#define TTBCR_IRGN1_WT       (0b10 << 10) // Inner write-through TTBR1
-#define TTBCR_IRGN1_WB       (0b11 << 10) // Inner write-back TTBR1
-
-extern pgdir_cpu_t kernel_pgdir;  /* CPU view of kernel page directory (TTBR1) */
-extern pgdir_cpu_t ttbr0_pgdir;   /* CPU view of boot/minimal TTBR0 */
 extern uint32_t kernel_memory_size;
 
 typedef struct kernel_context_save {
@@ -176,6 +160,9 @@ vaddr_t vm_find_free_range(vm_space_t* vm, vaddr_t hint, uint32_t size,
                            vaddr_t base, vaddr_t limit);
 int vm_unmap_range(vm_space_t* vm, vaddr_t start, uint32_t size);
 vma_t* find_vma(vm_space_t* vm, vaddr_t addr);
+uint32_t vm_virtual_kb(vm_space_t* vm);
+uint32_t vm_resident_kb(vm_space_t* vm);
+uint32_t vm_page_table_count(vm_space_t* vm);
 int handle_cow_fault(vaddr_t fault_addr);
 int handle_user_stack_fault(vaddr_t fault_addr);
 int handle_lazy_anon_fault(vaddr_t fault_addr, bool is_write);
@@ -195,21 +182,15 @@ int map_user_page_readonly(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr, uint
 int remap_user_page(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr, uint32_t vma_flags, uint32_t asid);
 int set_user_page_readonly(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid);
 int set_user_page_writable(pgdir_t pgdir, vaddr_t vaddr, uint32_t asid);
-pte_ptr_t get_user_pte(pgdir_t pgdir, vaddr_t vaddr);
 paddr_t get_physical_address(pgdir_t pgdir, vaddr_t vaddr);
 void debug_mmu_state(void);
 void unmap_temp_pages_contiguous(vaddr_t base_vaddr, int num_pages);
 vaddr_t map_temp_pages_contiguous(paddr_t phys_addr, int num_pages);
 
-pte_ptr_t get_page_entry_arm(pgdir_t pgdir, vaddr_t vaddr);
-int check_page_permissions(pgdir_t pgdir, vaddr_t vaddr);
 uint32_t get_current_ttrb0(void);
 
 vaddr_t map_user_to_kernel(pgdir_t pgdir, vaddr_t vaddr);
 void unmap_temp_user_page(void);
-paddr_t get_phys_addr_from_pgdir(pgdir_t pgdir, vaddr_t vaddr);
-
-uint32_t read_l2_entry(pgdir_t pgdir, vaddr_t vaddr);
 
 /* MMU helper functions - implémentées dans mmu.c */
 void invalidate_tlb_all(void);
@@ -217,16 +198,9 @@ void invalidate_tlb_page(vaddr_t vaddr);
 void invalidate_tlb_page_asid(vaddr_t vaddr, uint32_t asid);  /* NOUVEAU */
 void invalidate_tlb_asid(uint32_t asid);                       /* NOUVEAU */
 
-/* TTBR access functions */
+/* Address-space register access functions */
 uint32_t get_ttbr0(void);
-pgdir_cpu_t get_kernel_ttbr0(void);
 void set_ttbr0(uint32_t ttbr0);
-uint32_t get_L1_index(vaddr_t vaddr);
-//uint32_t get_ttbr1(void);    /* NOUVEAU */
-//void set_ttbr1(uint32_t ttbr1);    /* NOUVEAU */
-
-/* Fonctions d'accès aux page directories */
-pgdir_cpu_t get_kernel_pgdir(void);        /* NOUVEAU - retourne TTBR1 */
 
 /* ASID management functions */
 uint32_t vm_allocate_asid(void);

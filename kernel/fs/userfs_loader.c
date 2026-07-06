@@ -17,6 +17,7 @@
  */
 
 #include <kernel/userfs_loader.h>
+#include <kernel/arch_memory.h>
 #include <kernel/ramfs.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
@@ -24,12 +25,14 @@
 #if(0)
 bool load_userfs_from_memory2(void)
 {
+    vaddr_t load_addr = arch_userfs_load_address();
+
     KINFO("=== LOADING USERFS FROM MEMORY ===\n");
     
     /* Check if data exists at the expected address */
-    volatile userfs_header_t* header = (volatile userfs_header_t*)USERFS_LOAD_ADDR;
+    volatile userfs_header_t* header = (volatile userfs_header_t*)load_addr;
     
-    KINFO("Checking userfs at address %p...\n", USERFS_LOAD_ADDR);
+    KINFO("Checking userfs at address %p...\n", load_addr);
     
     /* Verify magic signature */
     uint64_t magic = header->magic;
@@ -50,7 +53,7 @@ bool load_userfs_from_memory2(void)
         KWARN("No userfs found at memory address (wrong magic)\n");
         
         /* Debug: afficher les premiers octets */
-        uint8_t* addr = (uint8_t*)USERFS_LOAD_ADDR;
+        uint8_t* addr = (uint8_t*)load_addr;
         KINFO("First 16 bytes at address:\n");
         for (int i = 0; i < 16; i++) {
             KINFO("  [%02d] = 0x%02X", i, addr[i]);

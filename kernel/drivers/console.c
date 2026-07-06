@@ -19,7 +19,6 @@
 #include <kernel/vfs.h>
 #include <kernel/display.h>
 #include <kernel/keyboard.h>
-#include <kernel/kernel.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
 

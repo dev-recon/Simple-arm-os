@@ -16,8 +16,9 @@
  * - Device ordering and cache coherency matter under preemption.
  */
 
-#include <kernel/kernel.h>
 #include <kernel/types.h>
+#include <kernel/address_space.h>
+#include <kernel/fdt.h>
 #include <kernel/virtio_input.h>
 #include <kernel/virtio_block.h>
 #include <kernel/tty.h>
@@ -26,7 +27,8 @@
 #include <kernel/kprintf.h>
 #include <kernel/interrupt.h>
 #include <kernel/display.h>
-#include <asm/arm.h>
+#include <kernel/arch_barrier.h>
+#include <kernel/arch_platform.h>
 
 #define VIRTIO_ID_INPUT        18
 #define VIRTIO_INPUT_VQ_SIZE   32
@@ -187,7 +189,7 @@ static bool input_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
     vq->qsize = qsize;
     vq->last_used_idx = 0;
 
-    clean_dcache_by_mva(va_base, npages * PAGE_SIZE);
+    arch_clean_dcache_by_mva(va_base, npages * PAGE_SIZE);
     return true;
 }
 
@@ -387,13 +389,13 @@ static void input_post_desc(uint16_t id)
     struct vring_avail *avail = input_avail_ptr(&input.vq);
     uint16_t idx = avail->idx;
 
-    clean_invalidate_dcache_by_mva(&input.events[id], sizeof(input.events[id]));
+    arch_clean_invalidate_dcache_by_mva(&input.events[id], sizeof(input.events[id]));
     avail->ring[idx % input.vq.qsize] = id;
-    clean_dcache_by_mva((void *)input.vq.va_avail, input.vq.avail_size);
-    asm volatile("dmb ish" ::: "memory");
+    arch_clean_dcache_by_mva((void *)input.vq.va_avail, input.vq.avail_size);
+    arch_data_memory_barrier_inner_shareable();
     avail->idx = idx + 1;
-    clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
-    asm volatile("dsb ishst" ::: "memory");
+    arch_clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
+    arch_data_sync_barrier_inner_shareable_write();
 }
 
 static void input_post_all(void)
@@ -414,9 +416,9 @@ void virtio_input_irq_handler(void)
     if (irq_status)
         mmio_write32(input.mmio, VIRTIO_MMIO_INTERRUPT_ACK, irq_status);
 
-    invalidate_dcache_by_mva((void *)input.vq.va_used,
+    arch_invalidate_dcache_by_mva((void *)input.vq.va_used,
         sizeof(struct vring_used) + input.vq.qsize * sizeof(struct vring_used_elem));
-    asm volatile("dmb ish" ::: "memory");
+    arch_data_memory_barrier_inner_shareable();
 
     struct vring_used *used = input_used_ptr(&input.vq);
     while (input.vq.last_used_idx != used->idx) {
@@ -425,7 +427,7 @@ void virtio_input_irq_handler(void)
         uint16_t id = (uint16_t)elem->id;
 
         if (id < input.vq.qsize && elem->len >= sizeof(virtio_input_event_t)) {
-            invalidate_dcache_by_mva(&input.events[id], sizeof(input.events[id]));
+            arch_invalidate_dcache_by_mva(&input.events[id], sizeof(input.events[id]));
             input.used_count++;
             input_process_event(&input.events[id].event);
             input_post_desc(id);
@@ -493,7 +495,7 @@ bool virtio_input_init(int tty_id)
     input.phys = phys;
     input.irq = irq;
     input.irq_edge_triggered = irq_edge;
-    input.mmio = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+    input.mmio = arch_platform_virtio_mmio_base(phys);
 
     uint32_t magic = mmio_read32(input.mmio, VIRTIO_MMIO_MAGIC);
     uint32_t version = mmio_read32(input.mmio, VIRTIO_MMIO_VERSION);
@@ -539,16 +541,16 @@ bool virtio_input_init(int tty_id)
         desc->flags = VRING_DESC_F_WRITE;
         desc->next = 0;
     }
-    clean_dcache_by_mva((void *)input.vq.va_desc, sizeof(struct vring_desc) * qsize);
+    arch_clean_dcache_by_mva((void *)input.vq.va_desc, sizeof(struct vring_desc) * qsize);
 
     mmio_write32(input.mmio, VIRTIO_MMIO_QUEUE_PFN, input.vq.pa_base >> 12);
     input.initialized = true;
     mmio_write32(input.mmio, VIRTIO_MMIO_STATUS,
                  mmio_read32(input.mmio, VIRTIO_MMIO_STATUS) | VIRTIO_STATUS_DRIVER_OK);
     if (input.irq_edge_triggered)
-        enable_irq(input.irq);
+        irq_enable(input.irq);
     else
-        enable_irq_level(input.irq);
+        irq_enable_level(input.irq);
     input_post_all();
 
     KINFO("VirtIO keyboard initialized: phys=0x%08X irq=%u %s tty%d\n",

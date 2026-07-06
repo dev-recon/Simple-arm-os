@@ -20,7 +20,6 @@
 #include <kernel/vfs.h>
 #include <kernel/fat32.h>
 #include <kernel/file.h>
-#include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/memory.h>
 #include <kernel/string.h>

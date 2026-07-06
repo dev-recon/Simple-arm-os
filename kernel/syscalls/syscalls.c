@@ -19,8 +19,9 @@
 #include <kernel/syscalls.h>
 #include <kernel/process.h>
 #include <kernel/vfs.h>
-#include <kernel/kernel.h>
 #include <kernel/kprintf.h>
+#include <kernel/stddef.h>
+#include <kernel/string.h>
 #include <kernel/task.h>
 #include <kernel/elf32.h>
 #include <kernel/userspace.h>
@@ -31,8 +32,8 @@
 #include <kernel/file.h>
 #include <kernel/mount.h>
 #include <kernel/virtio_net.h>
-#include <asm/mmu.h>
-#include <asm/arm.h>
+#include <kernel/arch_barrier.h>
+#include <kernel/arch_cpu.h>
 #include <kernel/timer.h>
 
 /* Syscall table */
@@ -321,12 +322,11 @@ void dump_svc_stack(task_t *task, uint32_t *sp) {
 }
 
 void print_cpu_mode(void){
-     uint32_t cpsr = get_cpsr();
-     cpsr &= 0x1F;
+    uint32_t mode = arch_current_mode();
     
     kprintf("\n\n**************************************\n");
     kprintf("Current CPU MODE = Mode: 0x%02X, -->: %s\n", 
-            cpsr , cpsr == ARM_MODE_USR ? "USR" : cpsr == ARM_MODE_SVC ? "SVC" : "UNKNOWN" );
+            mode, arch_mode_name(mode));
     kprintf("**************************************\n\n");
 
 }
@@ -391,79 +391,6 @@ fail:
     return NULL;
 }
 
-void check_instruction(vaddr_t test_vaddr, paddr_t phys_addr, uint32_t instruction)
-{
-    uint32_t l1_index = get_L1_index(test_vaddr);  // 0 
-    uint32_t l2_index = L2_INDEX(test_vaddr);  // 8 
-
-    KDEBUG("  Testing user mapping 0x%08X:\n", test_vaddr);
-
-        KDEBUG("    L1 index: %u, L2 index: %u\n", l1_index, l2_index);
-
-
-    /* Lire depuis le pgdir actuel (maintenant 0x41538000) */
-    uint32_t current_ttbr0;
-    asm volatile("mrc p15, 0, %0, c2, c0, 0" : "=r"(current_ttbr0));
-    pgdir_cpu_t active_pgdir = (pgdir_cpu_t)phys_to_virt((paddr_t)(current_ttbr0 & ~0x7F));
-
-    uint32_t l1_entry = active_pgdir[l1_index];
-    KDEBUG("Current TTBR0 = 0x%08X\n", (uint32_t)active_pgdir);
-    //for (int i = 0 ; i < 16 ; i++) {
-    //    uint32_t entry = active_pgdir[i];
-    //    KDEBUG("    L1[%u] = 0x%08X\n", i, entry);
-    //}
-
-    if (l1_entry & 0x1) {  // Page table entry
-        KDEBUG("    User area properly mapped via page table\n");
-    } else {
-        KERROR("    User area not mapped!\n");
-    }
-
-    KDEBUG("=== FINAL INSTRUCTION CHECK ===\n"); 
-
-    uint32_t first_instruction;
-    paddr_t paddr = phys_addr;
-    uint32_t* phys_code = (uint32_t*)phys_to_virt(paddr);
-    first_instruction = *phys_code;
-
-    KDEBUG("  First instruction at 0x8000: user code (phys 0x%08X): 0x%08X\n",
-        paddr, first_instruction);
-    KDEBUG("  Expected: 0x%08X\n", instruction);
-
-    if (first_instruction == instruction) {
-        KDEBUG("  Instruction correct, ready for execution\n");
-    } else {
-        KERROR("  Instruction mismatch!\n");
-    }  
-
-    /* Lire l'instruction à l'adresse virtuelle 0x8000 */
-    vaddr_t vaddr = test_vaddr;
-    uint32_t* user_code = (uint32_t*)vaddr;
-    KDEBUG("=== USER CODE OK === user code 0x%08X \n", *user_code); 
-}
-
-
-void dbg_dump_pte_0x8000(void){
-    // L1 base (ttbr0_base_pa & ~0x3FFF)
-    uint32_t *l1 = (uint32_t*)map_temp_page(get_ttbr0() & 0xFFFFC000u);
-    uint32_t e1 = l1[0];
-    kprintf("DBG L1[0]=0x%08X for TTBRO = 0x%08X\n", e1, get_ttbr0());
-    //hexdump((void *)get_ttbr0(),32);
-    //hexdump((void *)0x7F001000, 32);
-
-    if ((e1 & 3u) == 1u){
-        uint32_t l2_pa_1kb = e1 & 0xFFFFFC00u;
-        paddr_t l2_page_pa = l2_pa_1kb & ~0x3FFu;
-        uint32_t l2_off = l2_pa_1kb & 0x3FFu;
-
-        uint8_t *l2p = (uint8_t*)map_temp_page(l2_page_pa);
-        volatile uint32_t *l2 = (volatile uint32_t*)(l2p + l2_off);
-        kprintf("DBG L2[8]=0x%08X (L2_page_pa=0x%08X)\n", l2[8], l2_page_pa);
-        unmap_temp_page((void*)l2p);
-    }
-    unmap_temp_page((void*)l1);
-}
-
 /**
  * sys_execve - Executer un nouveau programme - ADAPTe
  */
@@ -497,10 +424,8 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         return -EINVAL;
     }
 
-    uint32_t spsr = read_spsr();
-    uint32_t caller_mode = spsr & 0x1f;   // 0x10 = USR
-
-    bool from_user = (caller_mode == ARM_MODE_USR);  // tu n’utilises pas SYS ici
+    uint32_t caller_mode = arch_saved_mode();
+    bool from_user = arch_mode_is_user(caller_mode);  // tu n’utilises pas SYS ici
 
     result = count_exec_vector(argv, from_user, &argc);
     if (result < 0)
@@ -609,31 +534,18 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     /* Reinitialiser le contexte CPU - ADAPTe a VOTRE STRUCTURE */
     memset(&proc->context, 0, sizeof(task_context_t));
 
-    //proc->context.pc = elf_header.e_entry;              /* Point d'entree */
-    proc->context.is_first_run = 1;                     /* Pas la premiere fois */
-    proc->context.ttbr0 = (uint32_t)new_vm->pgdir;
-    proc->context.asid = new_vm->asid;
-    proc->context.returns_to_user = 1;
-    proc->context.cpsr = 0x60000010;                          /* Mode USER */
-
-        /* Configuration KERNEL (pour les syscalls futurs) */
-    proc->context.svc_sp_top = (uint32_t)proc->stack_top; /* Pile kernel pour cette tâche */
-    proc->context.sp = proc->context.svc_sp_top - 512;             /* Stack pointer */
-    proc->context.sp &= ~7;
-    proc->context.svc_sp = proc->context.sp;
-
-
-    /* Configuration USER - CORRECTION CRITIQUE */
-    proc->context.usr_pc = elf_header.e_entry;         /* Point d'entrée USER */
-    //proc->context.usr_sp = new_vm->stack_start + USER_STACK_SIZE - 512;        /* Stack USER */
-    proc->context.usr_sp = new_vm->stack_start;        /* Points at argc for crt0 */
-    proc->context.usr_cpsr = 0x60000010;               /* MODE USER + IRQ enabled */
+    arch_task_context_init_user_entry(&proc->context,
+                                      (uintptr_t)new_vm->pgdir,
+                                      new_vm->asid,
+                                      (vaddr_t)(uintptr_t)proc->stack_top,
+                                      elf_header.e_entry,
+                                      new_vm->stack_start);
 
     /* Arguments initiaux (argc, argv, etc.) */
-    proc->context.usr_r[0] = (uint32_t)kernel_filename;                     /* r0 = argc */
-    proc->context.usr_r[1] = (uint32_t)kernel_argv;     /* r1 = argv */
-    proc->context.usr_r[2] = (uint32_t)kernel_envp;     /* r2 = envp */
-    proc->context.usr_r[3] = argc;     /* r3 = argc */
+    arch_task_context_set_user_register(&proc->context, 0, (uint32_t)kernel_filename);
+    arch_task_context_set_user_register(&proc->context, 1, (uint32_t)kernel_argv);
+    arch_task_context_set_user_register(&proc->context, 2, (uint32_t)kernel_envp);
+    arch_task_context_set_user_register(&proc->context, 3, argc);
 
    /* Fermer tous les fichiers CLOEXEC - ACCeS CORRECT */
     close_cloexec_files(proc);
@@ -642,8 +554,8 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     destroy_vm_space(old_vm);
 
     //tlb_flush_all_debug();
-    data_memory_barrier();
-    instruction_sync_barrier();
+    arch_data_memory_barrier();
+    arch_instruction_sync_barrier();
 
     rename_task_from_exec_path(proc, kernel_filename);
     if (exec_mode & S_ISUID)
@@ -672,13 +584,9 @@ int sys_fork(void)
     task_t* parent = task_current_local();
     task_t* child;
 
-    uint32_t return_address;
-    __asm__ volatile("mov %0, lr" : "=r"(return_address));
-
-    uint32_t spsr = read_spsr();
-    uint32_t caller_mode = spsr & 0x1f;   // 0x10 = USR
-
-    bool from_user = (caller_mode == ARM_MODE_USR);  // tu n’utilises pas SYS ici
+    uint32_t return_address = arch_current_link_register();
+    uint32_t caller_mode = arch_saved_mode();
+    bool from_user = arch_mode_is_user(caller_mode);  // tu n’utilises pas SYS ici
     
     if (!parent || parent->type != TASK_TYPE_PROCESS) {
         KERROR("sys_fork: Current task is not a process\n");
@@ -723,51 +631,22 @@ int sys_fork(void)
 
     init_process_signals(child);
 
-    //parent->context.usr_lr = return_address ;    /* Adresse après SWI */
-    child->context.ttbr0 = (uint32_t)child->process->vm->pgdir;
-    child->context.asid = child->process->vm->asid;
-
     if( from_user )
     {
-        // Reprendre au même point utilisateur que le parent (après SVC)
-        child->context.usr_pc   = parent->context.usr_pc;
-
-        // Même pile utilisateur que le parent (copy-on-write dans ta VM)
-        child->context.usr_sp   = parent->context.usr_sp;
-
-        // Marquer premier run
-        child->context.is_first_run = 1;
-        child->context.returns_to_user = 1;
-
-        /* CRITIQUE: Copier le contexte de reprise du parent */
-        child->context.usr_lr = parent->context.usr_lr;    /*  Adresse après SWI */
-        child->context.usr_cpsr = read_spsr_svc(); /*  Mode user */
-        
-        /* Copier tous les registres user SAUF r0 */
-        memcpy(child->context.usr_r, parent->context.usr_r, sizeof(parent->context.usr_r));
-        child->context.usr_r[0] = 0;            /*  Enfant retourne 0 */
-
-        child->context.r0 = 0;
-        child->context.lr = return_address;
-        child->context.pc = return_address;
-        //child->context.usr_lr   = parent->context.usr_pc;
-        //child->context.usr_pc   = parent->context.usr_pc;
-
-        child->context.spsr = read_spsr_svc();
-
+        arch_task_context_prepare_user_fork(&child->context,
+                                            &parent->context,
+                                            (uintptr_t)child->process->vm->pgdir,
+                                            child->process->vm->asid,
+                                            return_address,
+                                            arch_saved_svc_status());
     }
     else{
-        /* L'enfant retourne 0 dans r0 */
-        child->context.r0 = 0;
-        child->context.is_first_run = 1;
-        child->context.pc = return_address;       /* Après sys_fork() dans C */
-        child->context.lr = return_address;       /* LR cohérent */
-        child->context.returns_to_user = 0;
-        child->context.spsr = read_spsr_svc();
-
-        /* Copier tous les registres user SAUF r0 */
-        memcpy(child->context.usr_r, parent->context.usr_r, sizeof(parent->context.usr_r));
-        child->context.usr_r[0] = 0;            /*  Enfant retourne 0 */
+        arch_task_context_prepare_kernel_fork(&child->context,
+                                              &parent->context,
+                                              (uintptr_t)child->process->vm->pgdir,
+                                              child->process->vm->asid,
+                                              return_address,
+                                              arch_saved_svc_status());
     }
 
     add_to_ready_queue(child);
@@ -812,6 +691,8 @@ void sys_exit(int status)
     }
     //task_set_state(proc, TASK_ZOMBIE);
     if (proc->state != TASK_ZOMBIE) {
+        proc->sched_debt = 0;
+        proc->ready_since_tick = 0;
         proc->state = TASK_ZOMBIE;           /* Pas TASK_TERMINATED ! */
         proc->process->state = (proc_state_t)PROC_ZOMBIE;
         /*
@@ -849,7 +730,7 @@ void sys_exit(int status)
     
     /* Boucle d'urgence pour eviter la corruption */
     while (1) {
-        __asm__ volatile("wfi");
+        arch_wait_for_interrupt();
     }
 }
 
@@ -1109,46 +990,6 @@ int sys_wait4(pid_t pid, int* status, int options, struct rusage_kernel* rusage)
     return result;
 }
 
-static inline void get_usr_regs(uint32_t usr_r[13]) {
-    __asm__ volatile(
-        "stmia %0, {r0-r12}"
-        : //"=m" (*usr_r)   // sortie : écrit dans usr_r[0..12]
-        : "r" (usr_r)    // entrée : adresse du tableau
-        : "memory"
-    );
-}
-
-static inline void read_user_sp_lr(uint32_t *usp, uint32_t *ulr)
-{
-    __asm__ volatile(
-        "cps    #0x1F      \n"   /* SYSTEM */
-        "mov    %0, sp     \n"
-        "mov    %1, lr     \n"
-        "cps    #0x13      \n"   /* SVC */
-        : "=r"(*usp), "=r"(*ulr)
-        :
-        : "memory","cc"
-    );
-}
-
-void store_usr_regs(task_context_t *ctx, uint32_t usr_r[13]) {
-
-    ctx->r0 = usr_r[0];
-    ctx->r1 = usr_r[1];
-    ctx->r2 = usr_r[2];
-    ctx->r3 = usr_r[3];
-    ctx->r4 = usr_r[4];
-    ctx->r5 = usr_r[5];
-    ctx->r6 = usr_r[6];
-    ctx->r7 = usr_r[7];
-    ctx->r8 = usr_r[8];
-    ctx->r9 = usr_r[9];
-    ctx->r10 = usr_r[10];
-    ctx->r11 = usr_r[11];
-    ctx->r12 = usr_r[12];
-}
-
-
 void print_task_offsets(void) {
     KDEBUG("=== TASK STRUCTURE OFFSETS ===\n");
     KDEBUG("task_id: %zu\n", offsetof(task_t, task_id));
@@ -1262,7 +1103,7 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
      * construire une eventuelle frame signal. rt_sigreturn a deja restaure r0.
      */
     if (proc && syscall_num != __NR_rt_sigreturn) {
-        proc->context.usr_r[0] = (uint32_t)result;
+        arch_task_context_set_user_register(&proc->context, 0, (uint32_t)result);
     }
 
     if (proc && syscall_num != __NR_rt_sigreturn) {
@@ -1505,7 +1346,7 @@ int sys_print(const char* msg) {
 
     char *str = NULL;
 
-    bool user_mode = IS_USER_ADDR((vaddr_t)msg);
+    bool user_mode = memory_is_user_address((vaddr_t)msg);
 
     if(user_mode){
         str = copy_string_from_user(msg);

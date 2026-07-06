@@ -12,8 +12,8 @@ an UART-backed rescue TTY, and an optional VirtIO-GPU graphical TTY.
 ## Boot And DTB Detection
 
 QEMU passes a Device Tree Blob (DTB/FDT) pointer to the kernel at boot. ArmOS
-saves that pointer very early in `kernel/boot.S`, before clearing `.bss`, into
-the global `dtb_address`.
+saves that pointer very early in `arch/arm32/boot/boot.S`, before clearing
+`.bss`, into the global `dtb_address`.
 
 Current boot contract:
 
@@ -44,7 +44,7 @@ detection, not as a complete generic device model.
 
 ### Memory Detection From DTB
 
-`kernel/memory/memory_detect.c` first tries to read the `/memory` node and its
+`arch/arm32/memory/memory_detect.c` first tries to read the `/memory` node and its
 `reg` property. On QEMU `virt`, that gives the RAM base and size.
 
 Expected memory shape:
@@ -969,7 +969,7 @@ architecture port. The useful groundwork is now in place:
 - generated assembly offsets for C structures consumed from ARM assembly;
 - `paddr_t`, `vaddr_t`, and `pfn_t` names for address categories;
 - a shared FDT parser used by platform/device discovery;
-- more ARM-specific helpers isolated behind `include/asm/`;
+- more ARM-specific helpers isolated under `arch/arm32/include/asm/`;
 - clearer documentation of boot identity, explicit RAM direct-map, and MMIO
   assumptions.
 

@@ -21,14 +21,14 @@
 #include <kernel/types.h>
 #include <kernel/task.h>
 #include <kernel/process.h>
-#include <kernel/virtio_block.h>
+#include <kernel/platform_devices.h>
 #include <kernel/vfs.h>
 #include <kernel/signal.h>
 #include <kernel/timer.h>
 #include <kernel/smp.h>
-#include <asm/arm.h>
+#include <kernel/arch_cpu.h>
+#include <kernel/arch_power.h>
 
-#define PSCI_0_2_FN_SYSTEM_OFF 0x84000008u
 #define SHUTDOWN_TERM_GRACE_MS 200
 #define SHUTDOWN_KILL_GRACE_MS 100
 #define SHUTDOWN_SMP_PARK_GRACE_MS 1000
@@ -188,7 +188,7 @@ static void shutdown_drivers(void)
         KERROR("Shutdown: VFS shutdown completed with errors\n");
 
     kprintf("Shutdown: flushing and stopping block device\n");
-    virtio_blk_shutdown();
+    platform_block_shutdown();
     kprintf("Shutdown: block device stopped\n");
 }
 
@@ -215,31 +215,10 @@ static void shutdown_park_secondary_cpus(void)
         kprintf("Shutdown: secondary CPUs parked\n");
 }
 
-static void psci_system_off(void) __attribute__((noreturn));
-
-static void psci_system_off(void)
-{
-    __asm__ volatile("cpsid if\n"
-                     "dsb\n"
-                     "isb\n"
-                     ::: "memory", "cc");
-
-    register uint32_t function_id __asm__("r0") = PSCI_0_2_FN_SYSTEM_OFF;
-    __asm__ volatile("hvc #0"
-                     : "+r"(function_id)
-                     :
-                     : "r1", "r2", "r3", "memory");
-
-    KERROR("PSCI SYSTEM_OFF returned: 0x%08X\n", function_id);
-    for (;;) {
-        __asm__ volatile("wfi");
-    }
-}
-
 void kernel_poweroff(void)
 {
     if (shutdown_in_progress) {
-        psci_system_off();
+        arch_system_off();
     }
 
     shutdown_in_progress = true;
@@ -248,10 +227,10 @@ void kernel_poweroff(void)
     shutdown_processes();
     shutdown_park_secondary_cpus();
     shutdown_drivers();
-    disable_interrupts();
+    arch_disable_interrupts();
     kprintf("Shutdown: interrupts disabled\n");
-    kprintf("Shutdown: entering PSCI SYSTEM_OFF\n");
-    psci_system_off();
+    kprintf("Shutdown: entering platform poweroff\n");
+    arch_system_off();
     __builtin_unreachable();
 }
 

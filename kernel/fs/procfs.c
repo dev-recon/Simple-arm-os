@@ -28,14 +28,14 @@
 #include <kernel/tty.h>
 #include <kernel/virtio_input.h>
 #include <kernel/interrupt.h>
-#include <kernel/kernel.h>
 #include <kernel/virtio_block.h>
 #include <kernel/virtio_net.h>
 #include <kernel/ext2.h>
 #include <kernel/syscalls.h>
 #include <kernel/smp.h>
 #include <kernel/tlb.h>
-#include <asm/arm.h>
+#include <kernel/arch_cpu.h>
+#include <kernel/arch_platform.h>
 
 extern uint32_t task_count;
 extern task_t* task_list_head;
@@ -196,57 +196,6 @@ static process_t* proc_task_process(task_t* task)
     return NULL;
 }
 
-static uint32_t proc_vm_virtual_kb(vm_space_t* vm)
-{
-    uint32_t bytes = 0;
-
-    for (vma_t* vma = vm ? vm->vma_list : NULL; vma; vma = vma->next) {
-        if (vma->end > vma->start)
-            bytes += vma->end - vma->start;
-    }
-
-    return bytes / 1024;
-}
-
-static uint32_t proc_vm_rss_kb(vm_space_t* vm)
-{
-    uint32_t pages = 0;
-    pgdir_cpu_t pgdir_v;
-
-    if (!vm || !vm->pgdir) return 0;
-    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
-
-    for (uint32_t i = 0; i < 1024; i++) {
-        l1_entry_t l1_entry = pgdir_v[i];
-        if ((l1_entry & 0x3) != 0x1)
-            continue;
-
-        l2_table_t l2_table = (l2_table_t)phys_to_virt((paddr_t)(l1_entry & 0xFFFFFC00));
-        for (uint32_t j = 0; j < 256; j++) {
-            if ((l2_table[j] & 0x3) != 0)
-                pages++;
-        }
-    }
-
-    return (pages * PAGE_SIZE) / 1024;
-}
-
-static uint32_t proc_vm_l2_tables(vm_space_t* vm)
-{
-    uint32_t count = 0;
-    pgdir_cpu_t pgdir_v;
-
-    if (!vm || !vm->pgdir) return 0;
-    pgdir_v = (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
-
-    for (uint32_t i = 0; i < 1024; i++) {
-        if ((pgdir_v[i] & 0x3) == 0x1)
-            count++;
-    }
-
-    return count;
-}
-
 static task_t* proc_find_task_locked(pid_t pid)
 {
     task_t* task = task_list_head;
@@ -297,20 +246,6 @@ static pid_t proc_current_pid(void)
     if (task && task->process)
         return task->process->pid;
     return 0;
-}
-
-static uint32_t proc_read_midr(void)
-{
-    uint32_t id;
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 0" : "=r"(id));
-    return id;
-}
-
-static uint32_t proc_read_mpidr(void)
-{
-    uint32_t id;
-    __asm__ volatile("mrc p15, 0, %0, c0, c0, 5" : "=r"(id));
-    return id;
 }
 
 static void proc_append(char* buf, size_t cap, size_t* len, const char* fmt, ...)
@@ -678,17 +613,21 @@ static void proc_fill_mounts(char* buf, size_t cap, size_t* len)
 
 static void proc_fill_cpuinfo(char* buf, size_t cap, size_t* len)
 {
+    arch_cpuinfo_t cpuinfo;
+
+    arch_get_cpuinfo(&cpuinfo);
+
     proc_append(buf, cap, len, "processor\t: 0\n");
-    proc_append(buf, cap, len, "model name\t: ARM Cortex-A15 @ QEMU virt\n");
+    proc_append(buf, cap, len, "model name\t: %s\n", cpuinfo.model_name);
     proc_append(buf, cap, len, "BogoMIPS\t: 125.00\n");
-    proc_append(buf, cap, len, "Features\t: swp half thumb fastmult vfp edsp neon vfpv4 tls\n");
-    proc_append(buf, cap, len, "CPU implementer\t: 0x%02x\n", (proc_read_midr() >> 24) & 0xff);
-    proc_append(buf, cap, len, "CPU architecture: 7\n");
-    proc_append(buf, cap, len, "CPU part\t: 0x%03x\n", (proc_read_midr() >> 4) & 0xfff);
-    proc_append(buf, cap, len, "CPU revision\t: %u\n", proc_read_midr() & 0xf);
-    proc_append(buf, cap, len, "Hardware\t: ArmOS QEMU virt\n");
+    proc_append(buf, cap, len, "Features\t: %s\n", cpuinfo.features);
+    proc_append(buf, cap, len, "CPU implementer\t: 0x%02x\n", cpuinfo.implementer);
+    proc_append(buf, cap, len, "CPU architecture: %u\n", cpuinfo.architecture);
+    proc_append(buf, cap, len, "CPU part\t: 0x%03x\n", cpuinfo.part);
+    proc_append(buf, cap, len, "CPU revision\t: %u\n", cpuinfo.revision);
+    proc_append(buf, cap, len, "Hardware\t: %s\n", cpuinfo.hardware);
     proc_append(buf, cap, len, "Revision\t: 0000\n");
-    proc_append(buf, cap, len, "MPIDR\t\t: 0x%08x\n", proc_read_mpidr());
+    proc_append(buf, cap, len, "MPIDR\t\t: 0x%08x\n", cpuinfo.mpidr);
 }
 
 static void proc_fill_smp(char* buf, size_t cap, size_t* len)
@@ -785,30 +724,45 @@ static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
 {
     uint32_t virtio_irq = virtio_blk_get_irq();
     uint32_t virtio_net_irq = virtio_net_get_irq();
+    uint32_t timer_irq = arch_platform_timer_irq();
+    uint32_t uart_irq = arch_platform_uart_irq();
+    const char* irq_name = irq_controller_name();
 
     proc_append(buf, cap, len, "           CPU0\n");
-    proc_append(buf, cap, len, "%3u: %10u GICv2  ipi-tlb\n",
-                IRQ_SGI_TLB_SHOOTDOWN,
-                gic_get_irq_count(IRQ_SGI_TLB_SHOOTDOWN));
-    proc_append(buf, cap, len, "%3u: %10u GICv2  timer\n",
-                VIRT_TIMER_NS_EL1_IRQ,
-                gic_get_irq_count(VIRT_TIMER_NS_EL1_IRQ));
-    proc_append(buf, cap, len, "%3u: %10u GICv2  uart0\n",
-                VIRT_UART_IRQ,
-                gic_get_irq_count(VIRT_UART_IRQ));
-    proc_append(buf, cap, len, "%3u: %10u GICv2  uart0-legacy\n",
-                IRQ_KEYBOARD,
-                gic_get_irq_count(IRQ_KEYBOARD));
-    proc_append(buf, cap, len, "%3u: %10u GICv2  virtio-blk\n",
-                virtio_irq,
-                gic_get_irq_count(virtio_irq));
-    if (virtio_net_is_initialized()) {
-        proc_append(buf, cap, len, "%3u: %10u GICv2  virtio-net\n",
-                    virtio_net_irq,
-                    gic_get_irq_count(virtio_net_irq));
+    if (IRQ_SGI_TLB_SHOOTDOWN != 0u) {
+        proc_append(buf, cap, len, "%3u: %10u %s  ipi-tlb\n",
+                    IRQ_SGI_TLB_SHOOTDOWN,
+                    irq_get_count(IRQ_SGI_TLB_SHOOTDOWN),
+                    irq_name);
     }
-    proc_append(buf, cap, len, "TOT: %10u\n", gic_get_total_irq_count());
-    proc_append(buf, cap, len, "LAST:%10u\n", gic_get_last_irq_id());
+    proc_append(buf, cap, len, "%3u: %10u %s  timer\n",
+                timer_irq,
+                irq_get_count(timer_irq),
+                irq_name);
+    proc_append(buf, cap, len, "%3u: %10u %s  uart0\n",
+                uart_irq,
+                irq_get_count(uart_irq),
+                irq_name);
+    if (IRQ_KEYBOARD != 0u) {
+        proc_append(buf, cap, len, "%3u: %10u %s  uart0-legacy\n",
+                    IRQ_KEYBOARD,
+                    irq_get_count(IRQ_KEYBOARD),
+                    irq_name);
+    }
+    if (virtio_irq != 0u) {
+        proc_append(buf, cap, len, "%3u: %10u %s  virtio-blk\n",
+                    virtio_irq,
+                    irq_get_count(virtio_irq),
+                    irq_name);
+    }
+    if (virtio_net_is_initialized() && virtio_net_irq != 0u) {
+        proc_append(buf, cap, len, "%3u: %10u %s  virtio-net\n",
+                    virtio_net_irq,
+                    irq_get_count(virtio_net_irq),
+                    irq_name);
+    }
+    proc_append(buf, cap, len, "TOT: %10u\n", irq_get_total_count());
+    proc_append(buf, cap, len, "LAST:%10u\n", irq_get_last_id());
 }
 
 static void proc_fill_net_dev(char* buf, size_t cap, size_t* len)
@@ -1480,7 +1434,7 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
     }
 
     proc_append(buf, cap, len, "cpu  0 0 0 %u 0 0 0 0 0 0\n", get_system_ticks());
-    proc_append(buf, cap, len, "intr %u\n", gic_get_total_irq_count());
+    proc_append(buf, cap, len, "intr %u\n", irq_get_total_count());
     task_t *task = task_current_local();
     proc_append(buf, cap, len, "ctxt %u\n",
                 task ? task->switch_count : 0);
@@ -1651,9 +1605,9 @@ static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "KStack:\t%u kB\n", KERNEL_TASK_STACK_SIZE / 1024);
     proc_append(buf, cap, len, "Heap:\t%u kB\n",
                 (vm && vm->brk >= vm->heap_start) ? ((vm->brk - vm->heap_start) / 1024u) : 0);
-    proc_append(buf, cap, len, "VmSize:\t%u kB\n", proc_vm_virtual_kb(vm));
-    proc_append(buf, cap, len, "VmRSS:\t%u kB\n", proc_vm_rss_kb(vm));
-    proc_append(buf, cap, len, "L2Tables:\t%u\n", proc_vm_l2_tables(vm));
+    proc_append(buf, cap, len, "VmSize:\t%u kB\n", vm_virtual_kb(vm));
+    proc_append(buf, cap, len, "VmRSS:\t%u kB\n", vm_resident_kb(vm));
+    proc_append(buf, cap, len, "L2Tables:\t%u\n", vm_page_table_count(vm));
     proc_append(buf, cap, len, "CtxSwitches:\t%u\n", task->switch_count);
     proc_append(buf, cap, len, "RuntimeTicks:\t%u\n", (uint32_t)task_runtime_ticks(task));
     proc_append(buf, cap, len, "PageFaults:\t%u\n", task->page_faults);
@@ -1888,12 +1842,12 @@ static ssize_t procfs_write(file_t* file, const void* buffer, size_t count)
     }
 
     if (strcmp(cmd, "self") == 0 || strcmp(cmd, "0") == 0) {
-        gic_send_sgi(1u << smp_boot_cpu_id(), IRQ_SGI_TLB_SHOOTDOWN);
+        irq_send_ipi(1u << smp_boot_cpu_id(), IRQ_SGI_TLB_SHOOTDOWN);
         return (ssize_t)count;
     }
 
     if (strcmp(cmd, "others") == 0) {
-        gic_send_sgi_others(IRQ_SGI_TLB_SHOOTDOWN);
+        irq_send_ipi_others(IRQ_SGI_TLB_SHOOTDOWN);
         return (ssize_t)count;
     }
 

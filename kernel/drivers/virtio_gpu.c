@@ -16,8 +16,9 @@
  * - Device ordering and cache coherency matter under preemption.
  */
 
-#include <kernel/kernel.h>
 #include <kernel/types.h>
+#include <kernel/address_space.h>
+#include <kernel/fdt.h>
 #include <kernel/virtio_gpu.h>
 #include <kernel/virtio_block.h>
 #include <kernel/display.h>
@@ -27,7 +28,9 @@
 #include <kernel/timer.h>
 #include <kernel/spinlock.h>
 #include <kernel/task.h>
-#include <asm/arm.h>
+#include <kernel/arch_barrier.h>
+#include <kernel/arch_cpu.h>
+#include <kernel/arch_platform.h>
 
 #define VIRTIO_ID_GPU 16
 
@@ -50,7 +53,12 @@
 #define VIRTIO_GPU_RESOURCE_ID                 1
 #define VIRTIO_GPU_SCANOUT_ID                  0
 #define VIRTIO_GPU_VQ_SIZE                     8
-#define VIRTIO_GPU_TIMEOUT_MS                  1000
+/*
+ * GPU flushes are not on a correctness-critical path like block I/O.  Give
+ * QEMU enough room under SMP/host load, then fail the graphics backend cleanly
+ * instead of reusing descriptors from an uncertain control queue.
+ */
+#define VIRTIO_GPU_TIMEOUT_MS                  3000
 
 /* VirtIO MMIO interrupt status bits. */
 #define VIRTIO_GPU_INT_USED_RING               0x1u
@@ -132,6 +140,7 @@ typedef struct {
     uint16_t next_desc;
     uint32_t framebuffer_size;
     bool initialized;
+    bool failed;
 } virtio_gpu_state_t;
 
 static virtio_gpu_state_t gpu = {0};
@@ -203,7 +212,7 @@ static bool gpu_vq_alloc(vq_legacy_t *vq, uint16_t qsize)
     vq->qsize = qsize;
     vq->last_used_idx = 0;
 
-    clean_dcache_by_mva(va_base, npages * PAGE_SIZE);
+    arch_clean_dcache_by_mva(va_base, npages * PAGE_SIZE);
     return true;
 }
 
@@ -221,20 +230,20 @@ static bool gpu_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq)
 
 static int gpu_wait_used(uint16_t prev_used)
 {
-    uint32_t freq = get_cntfrq();
+    uint32_t freq = arch_timer_frequency();
     if (freq == 0)
-        freq = QEMU_TIMER_FREQ;
+        freq = TIMER_FALLBACK_FREQ;
 
     uint64_t timeout_ticks = (uint64_t)VIRTIO_GPU_TIMEOUT_MS * (uint64_t)(freq / 1000);
-    uint64_t start = get_cntpct();
+    uint64_t start = arch_timer_counter();
 
-    while ((get_cntpct() - start) < timeout_ticks) {
-        invalidate_dcache_by_mva((void *)(uintptr_t)gpu.vq.va_used,
+    while ((arch_timer_counter() - start) < timeout_ticks) {
+        arch_invalidate_dcache_by_mva((void *)(uintptr_t)gpu.vq.va_used,
             sizeof(struct vring_used) + gpu.vq.qsize * sizeof(struct vring_used_elem));
-        asm volatile("dmb ish" ::: "memory");
+        arch_data_memory_barrier_inner_shareable();
         if (gpu_used_ptr(&gpu.vq)->idx != prev_used)
             return 0;
-        asm volatile("yield" ::: "memory");
+        arch_cpu_relax();
     }
 
     return -1;
@@ -269,8 +278,32 @@ static int gpu_acquire(void)
         if (task)
             yield();
         else
-            asm volatile("yield" ::: "memory");
+            arch_cpu_relax();
     }
+}
+
+static void gpu_mark_failed(const char *reason, uint32_t cmd_type)
+{
+    unsigned long flags;
+    bool first_failure = false;
+
+    spin_lock_irqsave(&gpu_lock, &flags);
+    if (!gpu.failed) {
+        gpu.failed = true;
+        first_failure = true;
+    }
+    gpu.initialized = false;
+    spin_unlock_irqrestore(&gpu_lock, flags);
+
+    if (!first_failure)
+        return;
+
+    KERROR("virtio_gpu: disabling device after %s (cmd=0x%08X)\n",
+           reason ? reason : "queue failure", cmd_type);
+    if (gpu.mmio)
+        mmio_write32(gpu.mmio, VIRTIO_MMIO_STATUS,
+                     mmio_read32(gpu.mmio, VIRTIO_MMIO_STATUS) |
+                     VIRTIO_STATUS_FAILED);
 }
 
 static void gpu_release(void)
@@ -292,13 +325,19 @@ static void gpu_release(void)
 static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len)
 {
     int ret = -1;
+    uint32_t cmd_type = cmd ? ((virtio_gpu_ctrl_hdr_t *)cmd)->type : 0;
 
-    if (!gpu.initialized || !cmd || cmd_len == 0 || !resp || resp_len == 0)
+    if (!gpu.initialized || gpu.failed || !cmd || cmd_len == 0 ||
+        !resp || resp_len == 0)
         return -1;
     if (gpu.vq.qsize < 2)
         return -1;
     if (gpu_acquire() < 0)
         return -1;
+    if (!gpu.initialized || gpu.failed) {
+        gpu_release();
+        return -1;
+    }
 
     unsigned d0 = gpu.next_desc;
     unsigned d1 = (gpu.next_desc + 1) % gpu.vq.qsize;
@@ -319,41 +358,40 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
     desc1->flags = VRING_DESC_F_WRITE;
     desc1->next = 0;
 
-    clean_dcache_by_mva((void *)gpu.vq.va_desc, sizeof(struct vring_desc) * gpu.vq.qsize);
-    clean_dcache_by_mva(cmd, cmd_len);
-    clean_invalidate_dcache_by_mva(resp, resp_len);
-    asm volatile("dmb ish" ::: "memory");
+    arch_clean_dcache_by_mva((void *)gpu.vq.va_desc, sizeof(struct vring_desc) * gpu.vq.qsize);
+    arch_clean_dcache_by_mva(cmd, cmd_len);
+    arch_clean_invalidate_dcache_by_mva(resp, resp_len);
+    arch_data_memory_barrier_inner_shareable();
 
     uint16_t prev_used = gpu.vq.last_used_idx;
     struct vring_avail *avail = gpu_avail_ptr(&gpu.vq);
     uint16_t old_idx = avail->idx;
     avail->ring[old_idx % gpu.vq.qsize] = d0;
-    clean_dcache_by_mva((void *)gpu.vq.va_avail, gpu.vq.avail_size);
-    asm volatile("dmb ish" ::: "memory");
+    arch_clean_dcache_by_mva((void *)gpu.vq.va_avail, gpu.vq.avail_size);
+    arch_data_memory_barrier_inner_shareable();
     avail->idx = old_idx + 1;
-    clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
-    asm volatile("dsb ishst" ::: "memory");
+    arch_clean_dcache_by_mva(&avail->idx, sizeof(avail->idx));
+    arch_data_sync_barrier_inner_shareable_write();
 
     mmio_write32(gpu.mmio, VIRTIO_MMIO_QUEUE_NOTIFY, 0);
 
     if (gpu_wait_used(prev_used) < 0) {
-        KERROR("virtio_gpu: command timeout type=0x%08X\n",
-               ((virtio_gpu_ctrl_hdr_t *)cmd)->type);
+        gpu_mark_failed("control queue timeout", cmd_type);
         goto out;
     }
 
     struct vring_used *used = gpu_used_ptr(&gpu.vq);
     if ((uint16_t)(used->idx - prev_used) != 1) {
-        KERROR("virtio_gpu: unexpected used ring advance\n");
+        gpu_mark_failed("unexpected used ring advance", cmd_type);
         goto out;
     }
     if (used->ring[prev_used % gpu.vq.qsize].id != d0) {
-        KERROR("virtio_gpu: unexpected used descriptor id\n");
+        gpu_mark_failed("unexpected used descriptor id", cmd_type);
         goto out;
     }
 
     gpu.vq.last_used_idx = used->idx;
-    invalidate_dcache_by_mva(resp, resp_len);
+    arch_invalidate_dcache_by_mva(resp, resp_len);
 
     /*
      * Only acknowledge the used-ring bit here. Acking the whole status word
@@ -469,7 +507,7 @@ int virtio_gpu_flush_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t heigh
     for (uint32_t row = 0; row < height; row++) {
         uint8_t *line = framebuffer_base +
             ((y + row) * FB_WIDTH + x) * (FB_BPP / 8);
-        clean_dcache_by_mva(line, width * (FB_BPP / 8));
+        arch_clean_dcache_by_mva(line, width * (FB_BPP / 8));
     }
 
     virtio_gpu_transfer_to_host_2d_t tx;
@@ -635,7 +673,7 @@ bool virtio_gpu_init(void)
 
     gpu.phys = phys;
     gpu.irq = irq;
-    gpu.mmio = (volatile uint32_t *)KERNEL_MMIO_VIRTIO_ADDR(phys);
+    gpu.mmio = arch_platform_virtio_mmio_base(phys);
     gpu.framebuffer_size = FB_WIDTH * FB_HEIGHT * (FB_BPP / 8);
 
     KINFO("VirtIO GPU found: phys=0x%08X mmio=%p irq=%u\n",

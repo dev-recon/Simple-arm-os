@@ -53,20 +53,21 @@ addresses, but that is not the general RAM contract.
 
 Kernel entry and architecture:
 
-- `kernel/boot.S`
+- `arch/arm32/boot/boot.S`
+- `arch/arm32/interrupt/interrupt.S`
+- `arch/arm32/task/task_switch.S`
+- `arch/arm32/syscall/syscall.S`
 - `kernel/main.c`
 - `kernel/interrupt/`
-- `kernel/task/task_switch.S`
-- `kernel/syscalls/syscall.S`
 
 Memory:
 
-- `kernel/memory/mmu.c`
-- `kernel/memory/virtual.c`
+- `arch/arm32/mmu/mmu.c`
+- `arch/arm32/mmu/virtual.c`
 - `kernel/memory/physical.c`
 - `kernel/memory/kmalloc.c`
 - `include/kernel/memory.h`
-- `include/asm/mmu.h`
+- `arch/arm32/include/asm/mmu.h`
 
 Processes and scheduler:
 

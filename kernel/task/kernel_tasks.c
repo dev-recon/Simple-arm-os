@@ -19,7 +19,6 @@
 #include <kernel/kernel_tasks.h>
 #include <kernel/task.h>
 #include <kernel/memory.h>
-#include <kernel/kernel.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
 #include <kernel/syscalls.h>
@@ -27,6 +26,7 @@
 #include <kernel/timer.h>
 #include <kernel/file.h>
 #include <kernel/uart.h>
+#include <kernel/arch_cpu.h>
 
 /* === VARIABLES STATIQUES === */
 static volatile bool system_shutdown = false;
@@ -138,8 +138,7 @@ void system_monitor_task(void* arg)
     (void)arg;
     
     /* Verification de la stack des le debut */
-    vaddr_t current_sp;
-    __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+    (void)arch_current_stack_pointer();
     //KINFO("System monitor task started, SP=0x%08X\n", current_sp);
     
     /* Test d'acces memoire de base */
@@ -381,7 +380,7 @@ void minimal_test_func(void* arg)
         
         /* Test de l'integrite de la stack */
         vaddr_t current_sp;
-        __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+        current_sp = arch_current_stack_pointer();
         KINFO("- Current SP in task: 0x%08X\n", current_sp);
         
         /* Variable locale pour tester la stack */
@@ -408,7 +407,8 @@ void ultra_simple_test(void)
     /* Afficher l'etat actuel */
     task_t* current = task_current_local();
     KINFO("Current task: %s\n", current ? current->name : "NULL");
-    KINFO("Current SP: 0x%08X\n", current ? current->context.sp : 0);
+    KINFO("Current SP: 0x%08X\n",
+          current ? arch_task_context_kernel_sp(&current->context) : 0);
     //task_dump_stacks_detailed();
     
     /* Creer une tache qui ne fait rien */
@@ -453,7 +453,8 @@ void ultra_simple_func(void* arg)
     task_destroy(NULL);  // Detruire la tache courante
     
     // Ne devrait jamais arriver ici
-    while(1) __asm__ volatile("wfe");
+    while (1)
+        wait_for_event();
     /* Terminaison immediate */
 }
 

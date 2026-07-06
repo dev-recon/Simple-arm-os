@@ -1,4 +1,4 @@
-# ARM32 Kernel Makefile
+# ArmOS kernel Makefile
 
 CROSS_COMPILE = arm-none-eabi-
 CC = $(CROSS_COMPILE)gcc
@@ -9,37 +9,53 @@ OBJDUMP = $(CROSS_COMPILE)objdump
 QEMU ?= qemu-system-arm
 SMP_CPUS ?= 1
 BUILD_DIR = build
-ASM_OFFSETS_SRC = kernel/asm-offsets.c
+TARGET_ARCH ?= arm32
+TARGET_PLATFORM ?= qemu-virt
+ARCH_DIR = arch/$(TARGET_ARCH)
+ARCH_INCLUDE = $(ARCH_DIR)/include
+ASM_OFFSETS_SRC = $(ARCH_DIR)/asm-offsets.c
 ASM_OFFSETS_S = $(BUILD_DIR)/asm-offsets.s
 ASM_OFFSETS_H = $(BUILD_DIR)/generated/asm-offsets.h
+TARGET_ARCH_DISPLAY = $(TARGET_ARCH)/$(TARGET_PLATFORM)
+TARGET_PLATFORM_DIR = $(subst -,_,$(TARGET_PLATFORM))
+PLATFORM_DIR = $(ARCH_DIR)/platform/$(TARGET_PLATFORM_DIR)
+PLATFORM_MK = $(PLATFORM_DIR)/platform.mk
 
-ARCH_FLAGS = -mcpu=cortex-a15 -marm
-FPU_FLAGS = -mfpu=neon-vfpv4 -mfloat-abi=soft
+ifeq ($(TARGET_ARCH),arm32)
+ARCH_CFLAGS = -marm -mfpu=neon-vfpv4 -mfloat-abi=soft \
+              -mno-unaligned-access -DARMV7A_KERNEL -DARMOS_ARCH_BITS=32
+else
+$(error Unsupported TARGET_ARCH '$(TARGET_ARCH)')
+endif
+
+ifeq ($(wildcard $(PLATFORM_MK)),)
+$(error Unsupported TARGET_PLATFORM '$(TARGET_PLATFORM)' for TARGET_ARCH '$(TARGET_ARCH)')
+endif
+include $(PLATFORM_MK)
+
 # CORRECTION 2: Flags specifiques pour corriger les operations mathematiques
 MATH_FLAGS = -fno-builtin-div -fno-builtin-mod
 
-# CORRECTION 3: Flags pour forcer l'utilisation de vraies instructions ARM
-ARM_MATH_FLAGS = -mno-unaligned-access
-
 # Flags de compilation
-ASFLAGS = -g -Iinclude -I$(BUILD_DIR)/generated
+ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated
 
-CFLAGS = -std=gnu99 $(ARCH_FLAGS) $(FPU_FLAGS) $(MATH_FLAGS) $(ARM_MATH_FLAGS) \
+CFLAGS = -std=gnu99 $(ARCH_CFLAGS) $(PLATFORM_CFLAGS) $(MATH_FLAGS) \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
          -Wall -Wextra -Werror -g -O0 -fno-omit-frame-pointer -Wformat -Wformat-security \
          -fno-builtin -fstack-protector -Wno-unused-function \
          -MMD -MP \
          -fno-pic -fno-pie \
-         -Iinclude \
-         -DARMV7A_KERNEL
+         -I$(ARCH_INCLUDE) \
+         -Iinclude
 # Flags du linker
 LDFLAGS = -T linker.ld -nostdlib -Map=kernel.map
 
 TASK_OBJS = kernel/task/task.o \
-            kernel/task/task_switch.o \
+            $(ARCH_DIR)/task/task_switch.o \
+            $(ARCH_DIR)/task/context_debug.o \
             kernel/task/task_test.o \
 			kernel/task/kernel_tasks.o \
-            kernel/smp.o \
+            $(ARCH_DIR)/smp/smp.o \
             kernel/sync/spinlock.o
 
 # Objets de la bibliotheque
@@ -47,20 +63,23 @@ LIB_OBJ = kernel/lib/kprintf.o kernel/lib/string.o kernel/lib/fdt.o kernel/lib/f
 
 # Objets du noyau
 KERNEL_OBJS = \
-	kernel/boot.o \
+	$(ARCH_DIR)/boot/boot.o \
 	kernel/main.o \
+	$(ARCH_DIR)/cpu/cpu.o \
 	kernel/internals/ls_process.o \
-	kernel/memory/helpers.o \
+	$(ARCH_DIR)/mmu/helpers.o \
 	kernel/memory/physical.o \
-	kernel/memory/virtual.o \
-	kernel/memory/mmu.o \
-	kernel/memory/tlb.o \
+	$(ARCH_DIR)/mmu/virtual.o \
+	$(ARCH_DIR)/mmu/mmu.o \
+	$(ARCH_DIR)/mmu/debug.o \
+	$(ARCH_DIR)/mmu/tlb.o \
 	kernel/memory/kmalloc.o \
-	kernel/memory/memory_detect.o \
+	$(ARCH_DIR)/memory/memory_detect.o \
 	kernel/process/process.o \
 	kernel/process/fork.o \
 	kernel/process/exec.o \
 	kernel/process/signal.o \
+	$(ARCH_DIR)/process/exec.o \
 	kernel/fs/vfs.o \
 	kernel/fs/mount.o \
 	kernel/fs/fat32.o \
@@ -69,32 +88,24 @@ KERNEL_OBJS = \
 	kernel/fs/ext2_vfs.o \
 	kernel/fs/procfs.o \
 	kernel/fs/userfs_loader.o \
-	kernel/drivers/ata.o \
-	kernel/drivers/keyboard.o \
-	kernel/drivers/display.o \
 	kernel/drivers/console.o \
-	kernel/drivers/virtio_gpu.o \
-	kernel/drivers/virtio_input.o \
-	kernel/drivers/virtio_net.o \
 	kernel/drivers/uart.o \
 	kernel/drivers/tty.o \
 	kernel/drivers/null.o \
 	kernel/drivers/power.o \
-	kernel/drivers/ide.o \
 	kernel/drivers/ramfs.o \
 	kernel/drivers/tar_parser_ramfs.o \
-	kernel/drivers/virtio_block.o \
-	kernel/interrupt/exception.o \
-	kernel/interrupt/interrupt.o \
-	kernel/interrupt/irq_return.o \
-	kernel/interrupt/gic.o \
-	kernel/interrupt/timer.o \
-	kernel/syscalls/syscall.o \
+	$(PLATFORM_OBJS) \
+	$(ARCH_DIR)/interrupt/exception.o \
+	$(ARCH_DIR)/interrupt/interrupt.o \
+	$(ARCH_DIR)/interrupt/irq_return.o \
+	$(ARCH_DIR)/timer/timer.o \
+	$(ARCH_DIR)/syscall/syscall.o \
 	kernel/syscalls/syscalls.o \
 	kernel/syscalls/file.o \
 	kernel/syscalls/shm.o \
 	kernel/syscalls/process_syscalls.o \
-	kernel/user/userspace.o
+	$(ARCH_DIR)/user/userspace.o
 
 # Tous les objets
 ALL_OBJS = $(KERNEL_OBJS) $(LIB_OBJ) $(TASK_OBJS)
@@ -277,12 +288,12 @@ $(DISK_IMG): $(FAT32_IMG) $(EXT2_IMG) $(MBR_TOOL)
 $(USERFS_DIR):
 	@echo "Creating $(USERFS_DIR) directory with test files..."
 	mkdir -p $(USERFS_DIR)
-	echo "Hello from the ARM32 OS!" > $(USERFS_DIR)/hello.txt
+	echo "Hello from ArmOS ($(TARGET_ARCH_DISPLAY))!" > $(USERFS_DIR)/hello.txt
 	echo "This is a test file for the kernel" > $(USERFS_DIR)/test.txt
-	echo "ARM32 Kernel" > $(USERFS_DIR)/readme.txt
+	echo "ArmOS kernel ($(TARGET_ARCH_DISPLAY))" > $(USERFS_DIR)/readme.txt
 	echo "#!/bin/sh" > $(USERFS_DIR)/init.sh
 	echo "echo 'System initialization...'" >> $(USERFS_DIR)/init.sh
-	echo "echo 'Welcome to ARM32 OS'" >> $(USERFS_DIR)/init.sh
+	echo "echo 'Welcome to ArmOS ($(TARGET_ARCH_DISPLAY))'" >> $(USERFS_DIR)/init.sh
 	chmod +x $(USERFS_DIR)/init.sh
 	
 	# Creer des sous-repertoires
@@ -292,9 +303,9 @@ $(USERFS_DIR):
 	echo "Binary placeholder" > $(USERFS_DIR)/usr/bin/hello
 	
 	mkdir -p $(USERFS_DIR)/etc
-	echo "# ARM32 OS Configuration" > $(USERFS_DIR)/etc/os.conf
+	echo "# ArmOS Configuration" > $(USERFS_DIR)/etc/os.conf
 	echo "version=1.0" >> $(USERFS_DIR)/etc/os.conf
-	echo "architecture=arm32" >> $(USERFS_DIR)/etc/os.conf
+	echo "architecture=$(TARGET_ARCH)" >> $(USERFS_DIR)/etc/os.conf
 	
 	mkdir -p $(USERFS_DIR)/tmp
 	echo "Temporary files directory" > $(USERFS_DIR)/tmp/README
@@ -313,10 +324,10 @@ userfs.bin: $(wildcard userfs/**/*)
 
 # Run avec userfs loader
 run-userfs: $(KERNEL_BIN)
-	$(QEMU) -M virt -cpu cortex-a15 \
+	$(QEMU) -M $(QEMU_MACHINE) -cpu $(QEMU_CPU) \
 		-m 2G -smp $(SMP_CPUS) \
-		-drive file=disk.img,if=none,format=raw,id=hd0 \
-		-device virtio-blk-device,drive=hd0 \
+		$(QEMU_BOOT_DRIVE) \
+		$(QEMU_BOOT_DEVICE) \
 		-kernel $(KERNEL_BIN) \
 		-nographic
 
@@ -325,10 +336,10 @@ run-userfs: $(KERNEL_BIN)
 #-device loader,file=userfs.bin,addr=0x41000000
 
 debug-run-userfs: $(KERNEL_BIN) userfs.bin
-	$(QEMU) -M virt -cpu cortex-a15 \
+	$(QEMU) -M $(QEMU_MACHINE) -cpu $(QEMU_CPU) \
 		-m 2G -smp $(SMP_CPUS) \
-		-drive file=disk.img,if=none,format=raw,id=hd0 \
-		-device virtio-blk-device,drive=hd0 \
+		$(QEMU_BOOT_DRIVE) \
+		$(QEMU_BOOT_DEVICE) \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
 		-device loader,file=userfs.bin,addr=0x50000000 -s -S
@@ -431,30 +442,30 @@ run-trace: $(KERNEL_BIN) $(DISK_IMG)
 		-D qemu-virtio.log 
 
 run-mmio: $(KERNEL_BIN) $(DISK_IMG)
-	$(QEMU) -M virt -cpu cortex-a15 \
+	$(QEMU) -M $(QEMU_MACHINE) -cpu $(QEMU_CPU) \
 		-m 1G -smp 1 \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
-		-drive file=$(DISK_IMG),format=raw,if=none,id=disk0 \
-		-device virtio-blk-device,drive=disk0,bus=virtio-mmio-bus.0 \
+		$(QEMU_MMIO_DRIVE) \
+		$(QEMU_MMIO_DEVICE) \
 		-d int,guest_errors,unimp -D qemu.log
 
 run: $(KERNEL_BIN) $(DISK_IMG)
-	$(QEMU) -M virt,highmem=off -cpu cortex-a15 \
+	$(QEMU) -M $(QEMU_RUN_MACHINE) -cpu $(QEMU_CPU) \
 		-m 1G -smp 1 \
 		-kernel $(KERNEL_BIN) \
 		-nographic \
-		-drive file=disk.img,if=virtio,format=raw
+		$(QEMU_SIMPLE_DRIVE)
 
 #-machine secure=on \
 #-bios bl1.bin \
 #-global virtio-mmio.force-legacy=true
 
 debug: $(KERNEL_BIN) $(DISK_IMG)
-	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine $(QEMU_MACHINE) -cpu $(QEMU_CPU) -m 128M \
 		-kernel $(KERNEL_BIN) -nographic -s -S \
-		-drive file=$(DISK_IMG),format=raw,if=none,id=disk0 \
-		-device virtio-blk-device,drive=disk0
+		$(QEMU_MMIO_DRIVE) \
+		$(QEMU_DEBUG_DEVICE)
 #,bus=virtio-mmio-bus.0
 
 # Commandes d'aide
@@ -484,19 +495,19 @@ test-kernel: $(KERNEL_BIN)
 
 debug-verbose: $(KERNEL_BIN)
 	@echo "Running with verbose debug..."
-	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine $(QEMU_MACHINE) -cpu $(QEMU_CPU) -m 128M \
 		-kernel $(KERNEL_BIN) -nographic \
 		-d cpu,int,guest_errors
 
 debug-monitor: $(KERNEL_BIN)
 	@echo "Running with QEMU monitor (type 'info registers' then 'quit')..."
-	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine $(QEMU_MACHINE) -cpu $(QEMU_CPU) -m 128M \
 		-kernel $(KERNEL_BIN) -nographic \
 		-monitor stdio
 
 debug-trace: $(KERNEL_BIN)
 	@echo "Running with execution trace..."
-	$(QEMU) -machine virt -cpu cortex-a15 -m 128M \
+	$(QEMU) -machine $(QEMU_MACHINE) -cpu $(QEMU_CPU) -m 128M \
 		-kernel $(KERNEL_BIN) -nographic \
 		-d exec,cpu -D qemu.log
 	@echo "Check qemu.log for execution trace"

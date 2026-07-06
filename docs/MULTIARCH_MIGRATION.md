@@ -1,0 +1,229 @@
+# ArmOS Multi-Arch Migration
+
+This branch restarts the multi-arch work from the v0.6 baseline. The goal is
+not to invent a generic HAL up front. The goal is to make ARM32 dependencies
+visible, contained, and testable, then let the second concrete port define the
+interfaces that are actually needed.
+
+## Current Rule
+
+Keep the working ARM32/QEMU `virt` kernel boring while reducing architecture
+leaks in small commits.
+
+Good migration steps:
+
+- replace ambiguous address values with `paddr_t`, `vaddr_t`, and `pfn_t`;
+- move direct CP15, barrier, cache, timer, and exception details behind
+  architecture-local `<asm/...>` helpers;
+- keep generated `asm-offsets` as the only source of truth for C/ASM structure
+  offsets;
+- keep FDT discovery centralized;
+- preserve UART `tty0` as the recovery console.
+
+Bad migration steps:
+
+- create a speculative HAL without a second target;
+- change syscall ABI conventions in the name of portability;
+- hide ARM32 behavior behind vague names that lose ordering or cache semantics;
+- move many files at once without a green ARM32 build.
+
+## Phase A - Mechanical Cleanup
+
+Status: mostly complete for direct inline-assembly cleanup.
+
+Done in this branch:
+
+- Added explicit ARM32 helpers for:
+  - `cpu_relax()`;
+  - inner-shareable data memory barrier;
+  - inner-shareable data sync barrier;
+  - inner-shareable write data sync barrier.
+- Converted selected non-architecture code to use `<asm/arm.h>` instead of
+  inline assembly:
+  - VirtIO block;
+  - VirtIO GPU;
+  - VirtIO input;
+  - ELF exec cache maintenance.
+- Routed MMU, ASID, VBAR, PSCI/HVC, current-task register, IRQ diagnostic
+  register, stack-register, and CPU wait operations through ARM helper APIs.
+- Removed stale task-switch debug assembly hooks from generic task code.
+
+Still to audit:
+
+- expected architecture-local assembly only:
+  - `arch/arm32/asm-offsets.c`, which emits generated C/ASM offsets;
+  - the naked user-abort-to-SVC trampoline in the exception path;
+- ARM-specific timer helpers in generic-looking headers;
+- hardcoded ARM ELF checks before an AArch64 userland exists.
+
+## Phase B - ARM32 Containment
+
+Target shape:
+
+```text
+arch/arm32/
+  boot/
+  include/
+  mmu/
+  smp/
+  syscall/
+  task/
+  timer/
+```
+
+This should be introduced gradually. A file moves only when its dependencies are
+clear and the ARM32 build still compiles after the move.
+
+Done so far:
+
+- moved ARM32 CPU identity reads and `/proc/cpuinfo` data to
+  `arch/arm32/cpu/cpu.c`, behind `arch_get_cpuinfo()`;
+- moved ARM32 local boot CPU controls to `arch/arm32/cpu/cpu.c`, behind
+  `arch_cpu` hooks for IRQ enable/disable, WFI, timer frequency, and branch
+  predictor/MMU-control state;
+- introduced `include/kernel/arch_barrier.h` so VirtIO/IDE drivers use
+  architecture-neutral names for CPU relax, cache maintenance, and memory
+  ordering primitives instead of including ARM helper headers directly;
+- introduced `include/kernel/arch_irq.h` so generic task/process code treats
+  saved interrupt state as an opaque architecture token;
+- moved ARM32 boot assembly to `arch/arm32/boot/boot.S`;
+- moved ARM32 IRQ entry assembly to `arch/arm32/interrupt/interrupt.S`;
+- moved ARM32 exception/fault diagnostics to
+  `arch/arm32/interrupt/exception.c`;
+- moved ARM32 IRQ return-to-user work handling to
+  `arch/arm32/interrupt/irq_return.c`;
+- moved ARM32 GICv2 controller code to `arch/arm32/interrupt/gic.c`;
+- moved ARM32 generic timer code to `arch/arm32/timer/timer.c`;
+- moved ARM32 short-descriptor MMU/ASID code to `arch/arm32/mmu/mmu.c`;
+- moved ARM32 TLB shootdown code to `arch/arm32/mmu/tlb.c`;
+- moved the current ARM32 user-VM/page-table implementation to
+  `arch/arm32/mmu/virtual.c`. This is containment, not the final VM
+  abstraction boundary.
+- moved the current ARM32 user ABI/copy/user-stack helpers to
+  `arch/arm32/user/userspace.c`.
+- moved ARM32/QEMU-virt memory detection to
+  `arch/arm32/memory/memory_detect.c`.
+- moved ARM32 syscall entry assembly to `arch/arm32/syscall/syscall.S`;
+- moved ARM32 context-switch assembly to `arch/arm32/task/task_switch.S`;
+- moved ARM32 PSCI/secondary CPU bring-up to `arch/arm32/smp/smp.c`;
+- moved ARM32 PSCI `SYSTEM_OFF` to `arch/arm32/power/psci.c`, behind the
+  narrow `arch_system_off()` hook used by generic shutdown;
+- moved ARM32 exec machine validation and user-code cache maintenance to
+  `arch/arm32/process/exec.c`, behind narrow hooks used by the generic ELF
+  loader;
+- moved generated assembly-offset source to `arch/arm32/asm-offsets.c`;
+- moved ARM32 architecture headers to `arch/arm32/include/asm`;
+- moved ARM32 spinlock instruction primitives to
+  `arch/arm32/include/asm/spinlock.h`, leaving generic lock policy in
+  `kernel/sync/spinlock.c`;
+- taught the top-level `Makefile` to build these ARM32 architecture objects
+  from `arch/arm32` and to search architecture headers first.
+- introduced ARM32 platform fragments under `arch/arm32/platform/`, with
+  `TARGET_PLATFORM=qemu-virt` now loading
+  `arch/arm32/platform/qemu_virt/platform.mk` instead of hardcoding qemu-virt
+  objects and CPU flags in the root Makefile.
+- routed the default QEMU machine/CPU settings through the platform fragment
+  and matching boot-script environment variables (`QEMU_MACHINE`,
+  `QEMU_RUN_MACHINE`, `QEMU_CPU`).
+- moved QEMU block/GPU/input/net boot-script defaults into platform-owned
+  fragments (`platform.mk` and `qemu.sh`) so boot scripts can fail fast for an
+  unsupported platform instead of silently launching a `qemu-virt` shape.
+- made interrupt-target routing policy a named platform capability, currently
+  `ARMOS_PLATFORM_IRQ_TARGETS_AUTO_MANAGED`, instead of inferring behavior from
+  a hardcoded machine name.
+- moved IRQ controller identity and line-count reporting behind
+  `irq_controller_name()` / `irq_controller_line_count()`, so boot logs no
+  longer hardcode `GIC: v2, 288 IRQs`.
+- routed generic drivers through `irq_enable()` / `irq_enable_level()` instead
+  of calling the ARM32 GIC backend symbols directly. The old `enable_irq*`
+  helpers are now backend-private implementation details.
+- renamed the generic platform MMIO/physical window contract from GIC-specific
+  helpers to IRQ-controller helpers (`IRQCTRL`). QEMU virt still owns GICv2
+  details in its platform header and backend, but generic MMU/address-space
+  code no longer requires every platform to pretend it has a GIC.
+- made VirtIO platform fields optional at the `arch_platform_*` boundary.
+  Non-VirtIO boards should not publish fake MMIO values just to compile;
+  callers must use `arch_platform_has_virtio_mmio()` before mapping or probing
+  that optional window.
+- made PL050 keyboard and legacy IDE fields optional too. A platform that does
+  not expose those devices can omit their macros, and generic code must check
+  `arch_platform_has_pl050_keyboard()` or `arch_platform_has_legacy_ide()`
+  before touching the corresponding MMIO registers.
+- moved PL011 baud configuration into the platform contract
+  (`ARMOS_PLATFORM_UART0_CLOCK_HZ`, `ARMOS_PLATFORM_UART0_BAUD`) while keeping
+  the current qemu-virt divisor behavior unchanged.
+
+Kernel code that should remain architecture-neutral:
+
+- scheduler policy;
+- VFS and filesystems;
+- procfs formatting;
+- TTY core and line discipline;
+- process lifecycle above register-frame details;
+- signal policy above signal-frame layout;
+- userland build and root filesystem layout.
+
+## Phase C - Second ARM32 Platform
+
+Before AArch64, use a second ARM32 machine to force real platform boundaries.
+Candidates:
+
+- QEMU `raspi2b`;
+- real Raspberry Pi 2-class board;
+- another ARMv7 board with FDT, GIC/timer equivalents, and a usable UART.
+
+This phase validates platform interfaces without also changing pointer width,
+exception level, or page-table format.
+
+Current staging:
+
+- `arch/arm32/platform/raspi2/` exists as a non-buildable staging directory.
+  It intentionally has no `platform.mk`, so `TARGET_PLATFORM=raspi2` fails
+  until the actual board contract is implemented.
+- The first raspi2 milestone is UART-only boot with `tty0` preserved as the
+  recovery console. Graphics and input are later milestones.
+- The staging README lists the minimal files required before making `raspi2`
+  buildable: platform header, `platform.mk`, platform `devices.c`, and optional
+  QEMU launch defaults.
+- Do not make `raspi2` buildable by reusing the qemu-virt GIC fragment. The
+  next real step is a Raspberry Pi interrupt-controller backend that implements
+  the `arch_irq_*` contract used by generic drivers.
+- Do not add fake VirtIO, PL050, or legacy IDE constants to `raspi2`. Its first
+  milestone is allowed to be UART-only; optional helpers now have safe defaults
+  for platforms that do not expose those MMIO devices.
+
+## Phase D - AArch64
+
+AArch64 should start only after ARM32/QEMU `virt` and the second ARM32 target
+share the same platform seams.
+
+Expected new AArch64 pieces:
+
+- EL1 boot path;
+- AArch64 exception vectors;
+- long-descriptor MMU;
+- AArch64 syscall ABI;
+- AArch64 context switch;
+- AArch64 signal frame;
+- AArch64 toolchain/userland target.
+
+Expected reusable pieces:
+
+- FDT parser;
+- VirtIO MMIO drivers, after DMA/address cleanup;
+- VFS;
+- procfs;
+- scheduler policy;
+- TTY core;
+- newlib-oriented userland organization.
+
+## Validation Policy
+
+For this branch, the minimum validation after each mechanical extraction is:
+
+```text
+make kernel.bin ARCH=arm-none-eabi- CROSS_COMPILE=arm-none-eabi-
+```
+
+Do not run QEMU automatically from this branch unless explicitly requested. The
+interactive stress matrix remains user-driven while the code is being reshaped.

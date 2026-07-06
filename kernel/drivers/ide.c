@@ -20,6 +20,7 @@
 #include <kernel/ide.h>
 #include <kernel/kprintf.h>
 #include <kernel/interrupt.h>
+#include <kernel/arch_barrier.h>
 
 /* Variables globales */
 static volatile uint16_t* ide_base = (volatile uint16_t*)IDE_PRIMARY_BASE;
@@ -46,7 +47,7 @@ static void ide_write_reg(uint8_t reg, uint8_t value)
     }
     
     /* Barriere memoire */
-    __asm__ volatile("dsb sy" : : : "memory");
+    arch_data_sync_barrier();
 }
 
 /* FONCTION 3: Attendre que le drive soit pret */
@@ -106,13 +107,18 @@ void ide_irq_handler(void)
 bool init_ide(void)
 {
     kprintf("[IDE] === IDE CONTROLLER INITIALIZATION ===\n");
+
+    if (!arch_platform_has_legacy_ide()) {
+        kprintf("[IDE] legacy IDE not present on this platform\n");
+        return false;
+    }
     
     /* Verifier l'adresse de base */
     kprintf("[IDE] IDE Primary base: 0x%08X\n", IDE_PRIMARY_BASE);
     kprintf("[IDE] IDE Primary ctrl: 0x%08X\n", IDE_PRIMARY_CTRL);
     
     /* Activer IRQ IDE */
-    enable_irq(IDE_PRIMARY_IRQ);
+    irq_enable(IDE_PRIMARY_IRQ);
     kprintf("[IDE] IRQ %d enabled\n", IDE_PRIMARY_IRQ);
     
     /* Reset du controleur */
@@ -335,9 +341,14 @@ void ide_comprehensive_test(void)
 void ide_quick_test(void)
 {
     kprintf("\n- === QUICK IDE TEST ===\n");
+
+    if (!arch_platform_has_legacy_ide()) {
+        kprintf("[IDE] legacy IDE not present on this platform\n");
+        return;
+    }
     
     /* Test rapide sans identification complete */
-    enable_irq(IDE_PRIMARY_IRQ);
+    irq_enable(IDE_PRIMARY_IRQ);
     
     /* Reset simple */
     ide_write_reg(IDE_REG_CTRL, 0x04);

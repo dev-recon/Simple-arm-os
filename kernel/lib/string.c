@@ -25,9 +25,6 @@ void* memset(void* dest, int val, size_t len)
 {
     unsigned char* d = (unsigned char*)dest;
     size_t i; /* Declaration GNU89 */
-    uint32_t return_address;
-    __asm__ volatile("mov %0, lr" : "=r"(return_address));
-    //kprintf("mem setting %d from 0x%08X to 0x%08X --- Caller 0x%08X\n", val, (uint32_t)dest , (uint32_t)dest + len, return_address);
     
     for (i = 0; i < len; i++) {
         d[i] = (unsigned char)val;
@@ -41,11 +38,6 @@ void* memcpy(void* dest, const void* src, size_t len)
     const unsigned char* s = (const unsigned char*)src;
     unsigned char* d = (unsigned char*)dest;
     size_t i; /* Declaration GNU89 */
-    uint32_t return_address;
-    __asm__ volatile("mov %0, lr" : "=r"(return_address));
- 
-        
-    //kprintf("mem cpy from 0x%08X to 0x%08X  --- Caller 0x%08X\n", (uint32_t)src , (uint32_t)src + len, return_address);
 
     for (i = 0; i < len; i++) {
         d[i] = s[i];

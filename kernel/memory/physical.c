@@ -17,10 +17,11 @@
  */
 
 #include <kernel/memory.h>
-#include <kernel/kernel.h>
+#include <kernel/address_space.h>
 #include <kernel/kprintf.h>
+#include <kernel/string.h>
 #include <kernel/spinlock.h>
-#include <asm/arm.h>
+#include <kernel/arch_cpu.h>
 
 
 physical_allocator_t phys_alloc;
@@ -46,7 +47,7 @@ static void account_buddy_free(size_t pages);
 
 static bool mmu_is_enabled(void)
 {
-    return (get_sctlr() & SCTLR_M) != 0;
+    return arch_mmu_enabled();
 }
 
 void* early_alloc(uint32_t size, uint32_t align) {
@@ -84,7 +85,7 @@ void buddy_init()
     block->next = NULL;
     free_lists[MAX_ORDER] = block;
     uint32_t mem_size = detect_memory();
-    paddr_t ram_end = VIRT_RAM_START + mem_size;
+    paddr_t ram_end = physical_ram_start() + mem_size;
     uint32_t buddy_pages = (ram_end - buddy_base) / PAGE_SIZE;
 
     KINFO("[MEM] Buddy Allocator configuration:\n");
@@ -115,7 +116,7 @@ static uintptr_t buddy_of(uintptr_t addr, int order)
 
 void* buddy_alloc(size_t num_block) {
 
-    paddr_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
+    paddr_t ram_end = physical_ram_end();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
     unsigned long flags;
 
@@ -186,16 +187,11 @@ void* buddy_alloc(size_t num_block) {
 }
 
 static void buddy_free_locked(void* ptr) {
-
-    uint32_t caller;
-    __asm__ volatile("mov %0, lr" : "=r"(caller));
-
-    paddr_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
+    paddr_t ram_end = physical_ram_end();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
     paddr_t addr = (paddr_t)ptr;
 
     if (!ptr || (addr & (PAGE_SIZE - 1)) || addr < buddy_base || addr >= ram_end) {
-        //kprintf("[ERROR] buddy_free: invalid ptr 0x%08X caller=0x%08X\n", addr, caller);
         return;
     }
 
@@ -208,7 +204,6 @@ static void buddy_free_locked(void* ptr) {
 
     size_t block_size = page_infos[index].size;
     if (block_size == 0 || block_size > max_pages) {
-        //kprintf("[ERROR] buddy_free: Invalid size=%d at index %u\n --> caller &=0x%08X\n", block_size, index, caller);
         return;
     }
 
@@ -243,7 +238,7 @@ void buddy_free(void* ptr) {
 static struct page_info* buddy_page_info(void* ptr)
 {
     paddr_t addr = (paddr_t)ptr;
-    paddr_t ram_end = VIRT_RAM_START + get_kernel_memory_size();
+    paddr_t ram_end = physical_ram_end();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
     uint32_t index;
 
@@ -312,7 +307,7 @@ uint16_t page_ref_dec(void* page_addr)
 
 bool init_memory(void)
 {
-    paddr_t mem_start = VIRT_RAM_START;
+    paddr_t mem_start = physical_ram_start();
     uint32_t mem_size = detect_memory();    // UNCOMMENT FOR PROD
 
     // GDB DEBUG BLOCK - COMMENT FOR PROD
@@ -508,7 +503,7 @@ static void reserve_dtb_pages(void)
     paddr_t dtb_end = dtb_start + dtb_size;
 
     
-    KINFO("[MEM] DTB layout from QEMU:\n");
+    KINFO("[MEM] DTB layout from %s:\n", arch_platform_name());
     KINFO("[MEM]   DTB start:  0x%08X\n", dtb_start);
     KINFO("[MEM]   DTB end:    0x%08X\n", dtb_start + dtb_size);
     KINFO("[MEM]   DTB size:   %u bytes (%u KB)\n", dtb_size, dtb_size / 1024);
@@ -691,12 +686,9 @@ void* allocate_page(void)
 
 void free_page(void* page_addr)
 {
-    uint32_t caller;
     unsigned long flags;
     struct page_info* info;
-    __asm__ volatile("mov %0, lr" : "=r"(caller));
 
-    //KDEBUG("free_page: caller &=0x%08X\n", caller);
     if (!page_addr) {
         return;
     }
@@ -704,8 +696,6 @@ void free_page(void* page_addr)
     spin_lock_irqsave(&buddy_lock, &flags);
     info = buddy_page_info(page_addr);
     if (!info) {
-        //KERROR("free_page: invalid page 0x%08X caller=0x%08X\n", (uint32_t)page_addr, caller);
-        (void)caller;
         spin_unlock_irqrestore(&buddy_lock, flags);
         return;
     }

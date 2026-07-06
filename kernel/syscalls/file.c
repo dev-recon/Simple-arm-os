@@ -21,7 +21,6 @@
 #include <kernel/vfs.h>
 #include <kernel/process.h>
 #include <kernel/memory.h>
-#include <kernel/kernel.h>
 #include <kernel/string.h>
 #include <kernel/userspace.h>
 #include <kernel/kprintf.h>
@@ -33,7 +32,6 @@
 #include <kernel/null.h>
 #include <kernel/virtio_net.h>
 #include <kernel/spinlock.h>
-#include <asm/mmu.h>
 
 #define SYSCALL_IO_BOUNCE_SIZE 16384u
 
@@ -105,7 +103,7 @@ int sys_read(int fd, void* buf, size_t count)
      * prevents a partially unmapped user buffer from aborting the kernel
      * inside a filesystem or driver memcpy().
      */
-    if (IS_KERNEL_ADDR((vaddr_t)(uintptr_t)buf)) {
+    if (memory_is_kernel_address((vaddr_t)(uintptr_t)buf)) {
         result = file->f_op->read(file, buf, count);
         return (int)result;
     }
@@ -147,7 +145,7 @@ int sys_write(int fd, const void* buf, size_t count)
     if (!can_write(file)) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
 
-    if (IS_KERNEL_ADDR((vaddr_t)(uintptr_t)buf)) {
+    if (memory_is_kernel_address((vaddr_t)(uintptr_t)buf)) {
         result = file->f_op->write(file, buf, count);
         return (int)result;
     }
@@ -1213,7 +1211,7 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         return -EINVAL;
     }
 
-    if (!IS_KERNEL_ADDR((vaddr_t)(uintptr_t)dirp) &&
+    if (!memory_is_kernel_address((vaddr_t)(uintptr_t)dirp) &&
         kernel_count > SYSCALL_IO_BOUNCE_SIZE)
         kernel_count = SYSCALL_IO_BOUNCE_SIZE;
     
@@ -1227,7 +1225,7 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         return -ENOSYS;
     }
 
-    if (IS_KERNEL_ADDR((vaddr_t)(uintptr_t)dirp)) {
+    if (memory_is_kernel_address((vaddr_t)(uintptr_t)dirp)) {
         buf_ptr = (char *)dirp;
     } else {
         kbuf = kmalloc(kernel_count);

@@ -19,6 +19,9 @@
 #ifndef _KERNEL_TYPES_H
 #define _KERNEL_TYPES_H
 
+#include <kernel/arch_cache.h>
+#include <kernel/arch_page.h>
+
 /* === TYPES DE BASE === */
 
 typedef unsigned char      uint8_t;
@@ -49,12 +52,28 @@ typedef uint32_t           time_t;
 
 /* === TYPES POUR ADRESSES === */
 
+#ifndef ARMOS_ARCH_BITS
+#define ARMOS_ARCH_BITS 32
+#endif
+
 /* Pour les calculs d'adresses et pointeurs */
-typedef uint32_t           uintptr_t;    /* ARM32 = 32-bit addresses */
-typedef int32_t            intptr_t;     /* Version signee */
-typedef uint32_t           paddr_t;      /* Physical address, 32-bit on ARMv7 */
-typedef uint32_t           vaddr_t;      /* Virtual address, 32-bit on ARMv7 */
-typedef uint32_t           pfn_t;        /* Physical page frame number */
+#if ARMOS_ARCH_BITS == 32
+typedef uint32_t           uintptr_t;
+typedef int32_t            intptr_t;
+typedef uint32_t           paddr_t;
+typedef uint32_t           vaddr_t;
+typedef uint32_t           pfn_t;
+#elif ARMOS_ARCH_BITS == 64
+typedef uint64_t           uintptr_t;
+typedef int64_t            intptr_t;
+typedef uint64_t           paddr_t;
+typedef uint64_t           vaddr_t;
+typedef uint64_t           pfn_t;
+#else
+#error "Unsupported ARMOS_ARCH_BITS value"
+#endif
+
+typedef void*              pgdir_t;      /* Opaque architecture page-directory handle */
 typedef paddr_t            phys_addr_t;  /* Legacy alias; prefer paddr_t */
 typedef vaddr_t            virt_addr_t;  /* Legacy alias; prefer vaddr_t */
 
@@ -69,23 +88,17 @@ typedef enum {
 
 #define NULL ((void*)0)
 
-/* Tailles de page pour machine virt */
-#define PAGE_SIZE       4096
-#define PAGE_SHIFT      12
-/* Note: PAGE_MASK defini dans kernel.h pour eviter les conflits */
+/* Page geometry supplied by the active architecture backend. */
+#define PAGE_SIZE        ARCH_PAGE_SIZE
+#define PAGE_SHIFT       ARCH_PAGE_SHIFT
+#define PAGE_OFFSET_MASK ARCH_PAGE_OFFSET_MASK
+#define PAGE_MASK        ARCH_PAGE_MASK
 
 /* Limites systeme */
 #define MAX_FILES       256
 #define MAX_ARGS        32
 #define MAX_PATH        256
 #define MAX_NAME        255
-
-/* Constantes pour machine virt - defaut si pas redefinies */
-//#ifndef CACHE_LINE_SIZE
-//#define L1_CACHE_SIZE   32      /* Cortex-A15 L1 cache line */
-//#define L2_CACHE_SIZE   64      /* Cortex-A15 L2 cache line */
-//#define CACHE_LINE_SIZE L2_CACHE_SIZE
-//#endif
 
 /* === CODES D'ERREUR === */
 
@@ -138,7 +151,7 @@ typedef struct {
     uint32_t owner;                      /* 4 bytes - CPU proprietaire */
     uint32_t count;                      /* 4 bytes - compteur recursif */
     uint32_t padding[5];                 /* 20 bytes - alignement cache line */
-} __attribute__((aligned(64))) spinlock_tt;  /* Aligne sur cache line A15 */
+} __attribute__((aligned(ARCH_CACHE_LINE_SIZE))) spinlock_tt;  /* Aligne sur cache line arch */
 
 /* Mutex simple */
 typedef struct {
@@ -287,6 +300,11 @@ typedef uint32_t in_addr_t;
 #define MB(x)                   ((x) * 1024 * 1024)
 #define GB(x)                   ((x) * 1024 * 1024 * 1024)
 
+/* Public cache-line aliases used by generic alignment macros. */
+#define L1_CACHE_LINE_SIZE      ARCH_L1_CACHE_LINE_SIZE
+#define L2_CACHE_LINE_SIZE      ARCH_L2_CACHE_LINE_SIZE
+#define CACHE_LINE_SIZE         ARCH_CACHE_LINE_SIZE
+
 /* === ATTRIBUTS COMPILATEUR === */
 
 /* Attributs pour l'optimisation */
@@ -297,22 +315,11 @@ typedef uint32_t in_addr_t;
 #define LIKELY(x)               __builtin_expect(!!(x), 1)
 #define UNLIKELY(x)             __builtin_expect(!!(x), 0)
 
-/* === VeRIFICATIONS DE COHeRENCE === */
-
-/* Verifications a la compilation */
-#if PAGE_SIZE != 4096
-#error "PAGE_SIZE must be 4096 for ARM32"
-#endif
-
-//#if CACHE_LINE_SIZE != 64
-//#error "CACHE_LINE_SIZE should be 64 for Cortex-A15"
-//#endif
-
 /* Verifications des tailles */
 typedef char size_check_uint8_t[sizeof(uint8_t) == 1 ? 1 : -1];
 typedef char size_check_uint16_t[sizeof(uint16_t) == 2 ? 1 : -1];
 typedef char size_check_uint32_t[sizeof(uint32_t) == 4 ? 1 : -1];
 typedef char size_check_uint64_t[sizeof(uint64_t) == 8 ? 1 : -1];
-typedef char size_check_uintptr_t[sizeof(uintptr_t) == 4 ? 1 : -1];
+typedef char size_check_uintptr_t[sizeof(uintptr_t) == (ARMOS_ARCH_BITS / 8) ? 1 : -1];
 
 #endif /* _KERNEL_TYPES_H */

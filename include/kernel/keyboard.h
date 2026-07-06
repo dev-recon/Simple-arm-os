@@ -19,25 +19,26 @@
 #ifndef _KERNEL_KEYBOARD_H
 #define _KERNEL_KEYBOARD_H
 
+#include <kernel/arch_platform.h>
 #include <kernel/types.h>
 #include <kernel/task.h>
 
-/* PL050 Keyboard */
-#define KBD_BASE        0x09060000
-#define KBD_DATA        (KBD_BASE + 0x00)
-#define KBD_STAT        (KBD_BASE + 0x04)
-#define KBD_CTRL        (KBD_BASE + 0x08)
-#define KBD_CLKDIV      (KBD_BASE + 0x0C)
-#define KBD_IRQ         (KBD_BASE + 0x10)
+/* Legacy PL050 keyboard fallback selected by the current platform. */
+#define KBD_BASE        ARMOS_PLATFORM_PL050_KBD_BASE
+#define KBD_DATA        (KBD_BASE + 0x00u)
+#define KBD_STAT        (KBD_BASE + 0x04u)
+#define KBD_CTRL        (KBD_BASE + 0x08u)
+#define KBD_CLKDIV      (KBD_BASE + 0x0Cu)
+#define KBD_IRQ         (KBD_BASE + 0x10u)
 
 typedef struct {
     bool shift_pressed;
     bool ctrl_pressed;
     bool alt_pressed;
     bool caps_lock;
-    bool fn_pressed;        /* Pour Mac */
-    bool cmd_pressed;       /* Touche Cmd Mac */
-    bool opt_pressed;       /* Touche Option Mac */
+    bool fn_pressed;        /* Mac Fn key */
+    bool cmd_pressed;       /* Mac Command key */
+    bool opt_pressed;       /* Mac Option key */
     
     char buffer[256];
     uint32_t head;

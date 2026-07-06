@@ -19,7 +19,6 @@
 #include <kernel/task.h>
 #include <kernel/vfs.h>
 #include <kernel/fat32.h>
-#include <kernel/kernel.h>
 #include <kernel/memory.h>
 #include <kernel/string.h>
 #include <kernel/kprintf.h>
@@ -239,25 +238,19 @@ pid_t spawn_ls_process(void)
  */
 static void setup_ls_process_context(task_t* ls_proc)
 {
-    /* Initialiser les registres */
-    memset(&ls_proc->context, 0, sizeof(ls_proc->context));
-    
-    /* Point d'entree du processus ls */
-    ls_proc->context.pc = (uint32_t)ls_process_main;  /* PC */
-    ls_proc->context.sp = USER_STACK_TOP - 16;        /* SP */
-    ls_proc->context.lr = 0xDEADBEEF;                          /* LR */
-    
-    /* CORRECTION: Passer "/" comme premier argument dans r0 */
-    /* Allouer une zone memoire pour le path */
-    char* root_path = "/";
-    //ls_proc->registers[0] = (uint32_t)root_path;         /* r0 = path argument */
-    ls_proc->context.r0 = (uint32_t)root_path;         /* r0 = path argument */
+    static const char root_path[] = "/";
 
-    /* Mode utilisateur */
-    ls_proc->context.cpsr = 0x13;  /* User mode, ARM state */
-    
-    KDEBUG("[LS] Contexte configure - PC: 0x%08X, SP: 0x%08X\n", 
-           ls_proc->context.pc, ls_proc->context.sp);
+    memset(&ls_proc->context, 0, sizeof(ls_proc->context));
+
+    arch_task_context_init_kernel_entry(&ls_proc->context,
+                                        (void (*)(void *))ls_process_main,
+                                        (void *)root_path,
+                                        (vaddr_t)(uintptr_t)ls_proc->stack_top);
+    arch_task_context_set_kernel_lr(&ls_proc->context, 0xDEADBEEFu);
+
+    KDEBUG("[LS] Contexte configure - PC: 0x%08X, SP: 0x%08X\n",
+           arch_task_context_kernel_pc(&ls_proc->context),
+           arch_task_context_kernel_sp(&ls_proc->context));
 }
 
 /**

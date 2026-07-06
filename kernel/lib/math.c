@@ -16,7 +16,6 @@
  * - Must remain safe before userland and full runtime services exist.
  */
 
-#include <kernel/kernel.h>
 #include <kernel/types.h>
 #include <kernel/kprintf.h>
 

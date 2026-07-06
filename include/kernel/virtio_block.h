@@ -19,20 +19,22 @@
 #ifndef _KERNEL_VIRTIO_BLOCK_H
 #define _KERNEL_VIRTIO_BLOCK_H
 
+#include <kernel/arch_platform.h>
 #include <kernel/types.h>
-//#include <kernel/kernel.h>
+#include <kernel/arch_barrier.h>
 
-/* VirtIO Block Device - CORRECTION ADRESSE */
-#define VIRTIO_BLK_IRQ      17  /* IRQ 17 pour machine virt */
+/* VirtIO block-device slot exposed through the active platform map. */
+#define VIRTIO_BLK_IRQ          arch_platform_virtio_block_irq()
 
-/* Adresses VirtIO pour machine virt (depuis kernel.h) */
-#define VIRTIO_BLOCK_BASE       KERNEL_MMIO_VIRTIO_ADDR(VIRT_VIRTIO_BLOCK)
-#define VIRTIO_BLOCK_IRQ        VIRT_VIRTIO_BLOCK_IRQ   /* IRQ 17 */
-#define VIRTIO_BLOCK_SIZE       VIRT_VIRTIO_SIZE        /* 512 bytes */
+/* VirtIO block MMIO window selected by the current platform. */
+#define VIRTIO_BLOCK_BASE \
+    ((vaddr_t)(uintptr_t)arch_platform_virtio_mmio_base(arch_platform_virtio_block_phys()))
+#define VIRTIO_BLOCK_IRQ        arch_platform_virtio_block_irq()
+#define VIRTIO_BLOCK_SIZE       arch_platform_virtio_mmio_size()
 
 #define VIRTIO_BLOCK_TIMEOUT    1000    /* Timeout for block operations - 1s */
 
-/* Registres VirtIO MMIO (offsets depuis base) */
+/* VirtIO MMIO registers, relative to VIRTIO_BLOCK_BASE. */
 #define VIRTIO_REG_MAGIC        0x000   /* Magic value */
 #define VIRTIO_REG_VERSION      0x004   /* Version */
 #define VIRTIO_REG_DEVICE_ID    0x008   /* Device ID */
@@ -241,13 +243,13 @@ void virtio_write_reg(uint32_t reg, uint32_t value);
 
 static inline void mmio_write32(volatile uint32_t *base, uint32_t off, uint32_t val){
     // Évite que des écritures mémoire précédentes passent après l’accès MMIO
-    asm volatile("dmb ish" ::: "memory");
+    arch_data_memory_barrier_inner_shareable();
 
     *(volatile uint32_t *)((uintptr_t)base + off) = val;
 
     // S’assure que l’écriture est poussée vers le périphérique
     // et ne sera pas retardée avant des opérations suivantes (interruptions, etc.)
-    asm volatile("dsb ishst" ::: "memory");
+    arch_data_sync_barrier_inner_shareable_write();
 }
 
 
@@ -255,7 +257,7 @@ static inline uint32_t mmio_read32(volatile uint32_t *base, uint32_t off){
 
     volatile uint32_t *p = (volatile uint32_t *)((uintptr_t)base + off);
     uint32_t v = *p;
-    asm volatile("dmb ish" ::: "memory");
+    arch_data_memory_barrier_inner_shareable();
     return v;
 }
 
