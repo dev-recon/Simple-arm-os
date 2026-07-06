@@ -602,6 +602,7 @@ static bool setup_signal_handler(task_t* proc, int sig, sigaction_t* action)
 static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
                                vaddr_t signal_sp, uint32_t old_blocked)
 {
+    arch_task_user_context_t user;
     user_signal_frame_t frame;
     vaddr_t final_sp;
     
@@ -621,11 +622,12 @@ static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
         return false;
     }
 
-    memcpy(frame.r, proc->context.usr_r, sizeof(frame.r));
-    frame.sp = proc->context.usr_sp;
-    frame.lr = proc->context.usr_lr;
-    frame.pc = proc->context.usr_pc;
-    frame.cpsr = proc->context.usr_cpsr;
+    arch_task_context_capture_user(&proc->context, &user);
+    memcpy(frame.r, user.r, sizeof(frame.r));
+    frame.sp = user.sp;
+    frame.lr = user.lr;
+    frame.pc = user.pc;
+    frame.cpsr = user.cpsr;
     frame.old_blocked = old_blocked;
     frame.sig = (uint32_t)sig;
 
@@ -634,12 +636,12 @@ static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
         return false;
     }
 
-    proc->context.usr_r[0] = (uint32_t)sig;
-    proc->context.usr_sp = final_sp;
-    proc->context.usr_lr = (uint32_t)action->sa_restorer;
-    proc->context.usr_pc = (uint32_t)action->sa_handler;
-    proc->context.usr_cpsr = (frame.cpsr & ~0x1fu) | 0x10u;
-    proc->context.returns_to_user = 1;
+    arch_task_context_enter_signal_handler(&proc->context,
+                                           (uint32_t)sig,
+                                           (vaddr_t)(uintptr_t)action->sa_handler,
+                                           (vaddr_t)(uintptr_t)action->sa_restorer,
+                                           final_sp,
+                                           frame.cpsr);
     return true;
 }
 
@@ -865,6 +867,7 @@ void sys_sigreturn(void)
 {
     task_t* proc = task_current_local();
     signal_state_t* sig_state;
+    arch_task_user_context_t user;
     user_signal_frame_t frame;
     
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
@@ -874,17 +877,17 @@ void sys_sigreturn(void)
     
     sig_state = &proc->process->signals;
 
-    if (copy_from_user(&frame, (void *)proc->context.usr_sp, sizeof(frame)) < 0) {
+    if (copy_from_user(&frame, (void *)arch_task_context_user_sp(&proc->context), sizeof(frame)) < 0) {
         KERROR("[SIGNAL] sys_sigreturn: Invalid signal frame\n");
         return;
     }
 
-    memcpy(proc->context.usr_r, frame.r, sizeof(frame.r));
-    proc->context.usr_sp = frame.sp;
-    proc->context.usr_lr = frame.lr;
-    proc->context.usr_pc = frame.pc;
-    proc->context.usr_cpsr = (frame.cpsr & ~0x1fu) | 0x10u;
-    proc->context.returns_to_user = 1;
+    memcpy(user.r, frame.r, sizeof(user.r));
+    user.sp = frame.sp;
+    user.lr = frame.lr;
+    user.pc = frame.pc;
+    user.cpsr = frame.cpsr;
+    arch_task_context_restore_user(&proc->context, &user);
 
     sig_state->blocked = frame.old_blocked;
     sig_state->in_handler &= ~(1u << frame.sig);

@@ -57,6 +57,14 @@ typedef struct task_context {
     uint32_t svc_lr_saved;
 } __attribute__((aligned(8))) task_context_t;
 
+typedef struct arch_task_user_context {
+    uint32_t r[13];
+    vaddr_t sp;
+    vaddr_t lr;
+    vaddr_t pc;
+    uint32_t cpsr;
+} arch_task_user_context_t;
+
 #define ARCH_TASK_KERNEL_CPSR          0x13u
 #define ARCH_TASK_USER_CPSR            0x60000010u
 #define ARCH_TASK_STACK_ALIGNMENT      8u
@@ -104,12 +112,64 @@ static inline void arch_task_context_set_address_space(task_context_t *ctx,
     ctx->asid = asid;
 }
 
+static inline uint32_t arch_task_context_user_cpsr(uint32_t cpsr)
+{
+    return (cpsr & ~0x1fu) | 0x10u;
+}
+
 static inline void arch_task_context_set_user_register(task_context_t *ctx,
                                                        uint32_t reg,
                                                        uint32_t value)
 {
     if (reg < 13u)
         ctx->usr_r[reg] = value;
+}
+
+static inline vaddr_t arch_task_context_user_sp(const task_context_t *ctx)
+{
+    return (vaddr_t)ctx->usr_sp;
+}
+
+static inline void arch_task_context_capture_user(const task_context_t *ctx,
+                                                  arch_task_user_context_t *user)
+{
+    uint32_t i;
+
+    for (i = 0; i < 13u; i++)
+        user->r[i] = ctx->usr_r[i];
+    user->sp = (vaddr_t)ctx->usr_sp;
+    user->lr = (vaddr_t)ctx->usr_lr;
+    user->pc = (vaddr_t)ctx->usr_pc;
+    user->cpsr = ctx->usr_cpsr;
+}
+
+static inline void arch_task_context_restore_user(task_context_t *ctx,
+                                                  const arch_task_user_context_t *user)
+{
+    uint32_t i;
+
+    for (i = 0; i < 13u; i++)
+        ctx->usr_r[i] = user->r[i];
+    ctx->usr_sp = (uint32_t)user->sp;
+    ctx->usr_lr = (uint32_t)user->lr;
+    ctx->usr_pc = (uint32_t)user->pc;
+    ctx->usr_cpsr = arch_task_context_user_cpsr(user->cpsr);
+    arch_task_context_set_returns_to_user(ctx, true);
+}
+
+static inline void arch_task_context_enter_signal_handler(task_context_t *ctx,
+                                                          uint32_t sig,
+                                                          vaddr_t handler,
+                                                          vaddr_t restorer,
+                                                          vaddr_t frame_sp,
+                                                          uint32_t saved_cpsr)
+{
+    arch_task_context_set_user_register(ctx, 0, sig);
+    ctx->usr_sp = (uint32_t)frame_sp;
+    ctx->usr_lr = (uint32_t)restorer;
+    ctx->usr_pc = (uint32_t)handler;
+    ctx->usr_cpsr = arch_task_context_user_cpsr(saved_cpsr);
+    arch_task_context_set_returns_to_user(ctx, true);
 }
 
 static inline void arch_task_context_init_user_entry(task_context_t *ctx,
