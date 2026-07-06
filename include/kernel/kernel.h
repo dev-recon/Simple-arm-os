@@ -23,6 +23,8 @@
 #include <kernel/string.h>
 #include <kernel/fdt.h>
 #include <kernel/compiler.h>
+#include <kernel/stddef.h>
+#include <kernel/fd.h>
 #include <kernel/linker.h>
 #include <asm/cpu_features.h>
 #include <asm/platform.h>
@@ -213,14 +215,7 @@ void print_cpu_mode(void);
 #define HAS_GENERIC_TIMER       ARCH_HAS_GENERIC_TIMER
 #define HAS_LARGE_PHYS_ADDR     ARCH_HAS_LARGE_PHYS_ADDR
 
-#define STDIN_FILENO            0
-#define STDOUT_FILENO           1
-#define STDERR_FILENO           2
-
-
 /* ARM privileged register/cache helpers are exposed through <asm/arm.h>. */
-
-#define offsetof(type, member) ((size_t)&((type*)0)->member)
 
 //extern const uint32_t TASK_CONTEXT_OFF;
 
