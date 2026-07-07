@@ -20,7 +20,6 @@
  */
 
 #include <kernel/display.h>
-#include <kernel/ata.h>
 #include <kernel/disk_layout.h>
 #include <kernel/kprintf.h>
 #include <kernel/keyboard.h>
@@ -76,12 +75,12 @@ bool platform_block_init(void)
     uint64_t disk_sectors;
     uint32_t disk_mb;
 
-    if (!init_ata()) {
+    if (!init_blk()) {
         KBOOT_WARN("Block: virtio0 unavailable");
         return false;
     }
 
-    disk_sectors = ata_get_capacity_sectors();
+    disk_sectors = blk_get_capacity_sectors();
     disk_mb = (uint32_t)(disk_sectors / 2048u);
     KBOOT_OKF("Block: virtio0 %uMB, irq %u", disk_mb, virtio_blk_get_irq());
 

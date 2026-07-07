@@ -18,6 +18,4 @@
 #ifndef _KERNEL_CONFIG_H
 #define _KERNEL_CONFIG_H
 
-#define USE_RAMFS 1
-
 #endif /* _KERNEL_CONFIG_H */

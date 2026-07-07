@@ -1,8 +1,7 @@
 # ArmOS ARM32 Raspberry Pi 2 platform fragment.
 #
-# First milestone: QEMU raspi2b UART-only boot. Generic drivers stay linkable
-# because shared kernel code references their public APIs, but platform init
-# does not advertise or initialize absent qemu-virt devices.
+# First milestone: QEMU raspi2b UART-only boot. Platform init only advertises
+# devices that exist on this board.
 
 PLATFORM_CPU_CFLAGS = -mcpu=cortex-a7
 PLATFORM_CFLAGS = $(PLATFORM_CPU_CFLAGS) -DARMOS_PLATFORM_RASPI2
@@ -21,13 +20,11 @@ PLATFORM_OBJS = \
 	$(PLATFORM_DIR)/irq.o \
 	$(PLATFORM_DIR)/power.o \
 	kernel/drivers/mmc/bcm2835_emmc.o \
-	kernel/drivers/ata.o \
 	kernel/drivers/keyboard.o \
 	kernel/drivers/display.o \
 	kernel/drivers/virtio_gpu.o \
 	kernel/drivers/virtio_input.o \
 	kernel/drivers/virtio_net.o \
-	kernel/drivers/ide.o \
 	kernel/drivers/virtio_block.o
 
 QEMU_MACHINE ?= raspi2b

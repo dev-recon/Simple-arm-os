@@ -195,6 +195,8 @@ void tty_input_char(char c);
 void tty_input_char_to_id(int tty_id, char c);
 bool tty_has_pending_output(void);
 void tty_drain_output(void);
+bool tty_console_output_lock(unsigned long *flags);
+void tty_console_output_unlock(unsigned long flags);
 ssize_t tty_read(char *buf, size_t count);
 ssize_t tty_write(const char *buf, size_t count);
 bool tty_read_ready_for_id(int tty_id);

@@ -19,30 +19,18 @@
 #include <kernel/fat32.h>
 #include <kernel/config.h>
 #include <kernel/block_device.h>
-#include <kernel/ata.h>
 #include <kernel/memory.h>
 #include <kernel/string.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
-#ifdef USE_RAMFS
-#include <kernel/ramfs.h>
-#endif
 
-#ifdef USE_RAMFS
-    #define storage_read_sectors(lba, count, buffer) blk_read_sectors(lba, count, buffer)
-    #define storage_write_sectors(lba, count, buffer) blk_write_sectors(lba, count, buffer)
-    #define storage_is_initialized() blk_is_initialized()
-#else
-    #define storage_read_sectors(lba, count, buffer) ata_read_sectors(lba, count, buffer)
-    #define storage_write_sectors(lba, count, buffer) ata_write_sectors(lba, count, buffer)
-    #define storage_is_initialized() ata_is_initialized()
-#endif
+
+#define storage_read_sectors(lba, count, buffer) blk_read_sectors(lba, count, buffer)
+#define storage_write_sectors(lba, count, buffer) blk_write_sectors(lba, count, buffer)
+#define storage_is_initialized() blk_is_initialized()
+
 
 fat32_fs_t fat32_fs = {0};
-bool test_ata_before_fat32(void) ;
-int ata_read_sectors_debug(uint64_t lba, uint32_t count, void* buffer);
-void fat32_parse_boot_sector_ultra_safe(fat32_boot_sector_t* dst, const fat32_raw_sector_t* raw);
-void run_pointer_arithmetic_test(const fat32_raw_sector_t* raw) ;
 
 extern bool is_fat_dirty(void);
 extern bool is_dirty_inodes(void);
@@ -60,7 +48,6 @@ static uint16_t read_le16(const uint8_t* p) {
 static uint32_t read_le32(const uint8_t* p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
-
 
 
 void fat32_parse_boot_sector(fat32_boot_sector_t* dst, const fat32_raw_sector_t* raw)
@@ -108,71 +95,7 @@ void fat32_parse_boot_sector(fat32_boot_sector_t* dst, const fat32_raw_sector_t*
     dst->boot_signature_55aa  = read_le16(src + 0x1FE);
 }
 
-int ata_read_sectors_debug(uint64_t lba, uint32_t count, void* buffer)
-{
-    KDEBUG("=== ATA READ DEBUG ===\n");
-    KDEBUG("ata_read_sectors called:\n");
-    KDEBUG("  LBA: %u\n", (uint32_t)lba);
-    KDEBUG("  Count: %u\n", count);
-    KDEBUG("  Buffer: %p\n", buffer);
-    KDEBUG("  Device initialized: %s\n", ata_is_initialized() ? "YES" : "NO");
-    KDEBUG("  Device capacity: %u sectors\n", (uint32_t)ata_get_capacity_sectors());
-    
-    if (!ata_is_initialized()) {
-        KERROR("ATA: Device not initialized\n");
-        return -1;
-    }
-    
-    if (!buffer) {
-        KERROR("ATA: Invalid buffer\n");
-        return -1;
-    }
-    
-    if (lba >= ata_get_capacity_sectors()) {
-        KERROR("ATA: LBA %u >= capacity %u\n", (uint32_t)lba, (uint32_t)ata_get_capacity_sectors());
-        return -1;
-    }
-    
-    /* IMPORTANT: Votre ata_read_sectors actuel est probablement un STUB ! */
-    /* Verifiez le code de ata_read_sectors() dans votre ata.c */
-    
-    KDEBUG("Calling real ata_read_sectors...\n");
-    int result = ata_read_sectors(lba, count, buffer);
-    KDEBUG("ata_read_sectors returned: %d\n", result);
-    
-    if (result > 0) {
-        /* Analyser ce qui a ete lu */
-        uint8_t* bytes = (uint8_t*)buffer;
-        KDEBUG("First 32 bytes read:\n");
-        KDEBUG("  ");
-        for (int i = 0; i < 32; i++) {
-            kprintf("%02X ", bytes[i]);
-            if ((i + 1) % 16 == 0) {
-                kprintf("\n");
-                if (i < 31) KDEBUG("  ");
-            }
-        }
-        kprintf("\n");
-        
-        /* Verifier si c'est tout zero */
-        bool all_zero = true;
-        for (int i = 0; i < 512; i++) {
-            if (bytes[i] != 0) {
-                all_zero = false;
-                break;
-            }
-        }
-        
-        if (all_zero) {
-            KERROR("ATA: Read returned all zeros - VirtIO read not working!\n");
-        } else {
-            KINFO("ATA: Read returned real data OK\n");
-        }
-    }
-    
-    KDEBUG("=== END ATA READ DEBUG ===\n");
-    return result;
-}
+
 
 extern int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer);
 extern int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer);
@@ -326,49 +249,6 @@ bool fat32_mount_at(uint64_t lba_start){
     kfree(raw);
     return true;
 
-}
-
-/* Fonction utilitaire pour tester l'ATA avant FAT32 */
-bool test_ata_before_fat32(void)
-{
-    KINFO("Testing ATA device before FAT32 mount...\n");
-    
-    if (!ata_is_initialized()) {
-        KERROR("ATA device not initialized\n");
-        return false;
-    }
-    
-    /* Test de lecture du premier secteur */
-    static uint8_t test_buffer[516] __attribute__((aligned(8)));
-    KINFO("\n\n********************************\n");
-    
-    KDEBUG("Reading sector 0 for test...\n");
-    extern void read_sector0_and_print(void);
-    read_sector0_and_print();
-
-    if (ata_read_sectors_debug(0, 1, test_buffer) < 0) {
-        KERROR("Failed to read test sector\n");
-        return false;
-    }
-
-    KINFO("\n\n********************************\n");
-    
-    /* Verifier que ce n'est pas tout zero */
-    bool all_zero = true;
-    for (int i = 0; i < 512; i++) {
-        if (test_buffer[i] != 0) {
-            all_zero = false;
-            break;
-        }
-    }
-    
-    if (all_zero) {
-        KERROR("Sector 0 is all zeros - disk may be empty\n");
-        return false;
-    }
-    
-    KINFO("ATA test passed - sector 0 contains data\n");
-    return true;
 }
 
 
@@ -696,120 +576,6 @@ bool is_fat32_mounted(void)
 
 
 
-void debug_src_pointer_issue(const fat32_raw_sector_t* raw)
-{
-    extern int kprintf(const char *format, ...);
-    
-    kprintf("=== DEBUGGING SRC POINTER ===\n");
-    
-    /* Test 1: Verifier raw */
-    kprintf("raw = 0x%08X\n", (vaddr_t)(uintptr_t)raw);
-    
-    /* Test 2: Verifier raw->data SANS arithmetique */
-    const uint8_t* src = raw->data;
-    kprintf("src = 0x%08X\n", (vaddr_t)(uintptr_t)src);
-    
-    /* Test 3: Verifier que src est valide AVANT arithmetique */
-    kprintf("Testing src validity...\n");
-    
-    /* Test d'acces direct a src[0] */
-    kprintf("About to read src[0]...\n");
-    uint8_t test_byte = src[0];  /* Peut crasher ICI */
-    kprintf("src[0] = 0x%02X\n", test_byte);
-    
-    /* Test d'acces a src[11] DIRECTEMENT */
-    kprintf("About to read src[11]...\n");
-    uint8_t test_byte11 = src[11];  /* Peut crasher ICI */
-    kprintf("src[11] = 0x%02X\n", test_byte11);
-    
-    /* Test arithmetique simple */
-    kprintf("About to test pointer arithmetic...\n");
-    const uint8_t* test_ptr = src + 1;  /* Peut crasher ICI */
-    kprintf("src + 1 = 0x%08X\n", (vaddr_t)(uintptr_t)test_ptr);
-    
-    const uint8_t* test_ptr11 = src + 11;  /* Peut crasher ICI */
-    kprintf("src + 11 = 0x%08X\n", (vaddr_t)(uintptr_t)test_ptr11);
-    
-    kprintf("=== END DEBUG ===\n");
-}
-
-/* === SOLUTION: VALIDATION COMPLeTE DE src === */
-
-bool validate_src_pointer(const fat32_raw_sector_t* raw)
-{
-    extern int kprintf(const char *format, ...);
-    
-    kprintf("=== VALIDATING SRC POINTER ===\n");
-    
-    /* Verification 1: raw n'est pas NULL */
-    if (!raw) {
-        kprintf("KO raw is NULL\n");
-        return false;
-    }
-    kprintf("OK raw is valid: 0x%08X\n", (vaddr_t)(uintptr_t)raw);
-    
-    /* Verification 2: Adresse raw dans la plage valide */
-    vaddr_t raw_addr = (vaddr_t)(uintptr_t)raw;
-    if (raw_addr < 0x60000000 || raw_addr > 0x80000000) {
-        kprintf("KO raw outside valid memory: 0x%08X\n", raw_addr);
-        return false;
-    }
-    kprintf("OK raw in valid memory range\n");
-    
-    /* Verification 3: raw->data accessible */
-    const uint8_t* src;
-    
-    /* Access raw->data through C so the compiler owns the load semantics. */
-    src = raw->data;
-    
-    kprintf("src (raw->data) = 0x%08X\n", (vaddr_t)(uintptr_t)src);
-    
-    /* Verification 4: src dans la plage valide */
-    vaddr_t src_addr = (vaddr_t)(uintptr_t)src;
-    if (src_addr < 0x60000000 || src_addr > 0x80000000) {
-        kprintf("KO src outside valid memory: 0x%08X\n", src_addr);
-        return false;
-    }
-    kprintf("OK src in valid memory range\n");
-    
-    /* Verification 5: Test d'acces direct sans arithmetique */
-    kprintf("Testing direct access without arithmetic...\n");
-    
-    uint8_t first_byte = src[0];
-    kprintf("src[0] = 0x%02X\n", first_byte);
-    
-    /* Verification 6: Test de tous les offsets critiques un par un */
-    kprintf("Testing critical offsets...\n");
-    
-    for (int offset = 0; offset <= 0x20; offset++) {
-        uint8_t test_byte = src[offset];  /* Peut crasher */
-        if (offset == 0x0B) {
-            kprintf("OK src[0x%02X] = 0x%02X (bytes_per_sector LSB)\n", offset, test_byte);
-        }
-    }
-
-    run_pointer_arithmetic_test(raw);
-    
-    kprintf("OK All offset tests passed\n");
-    return true;
-}
-
-
-/* === TEST DE DIAGNOSTIC === */
-
-void run_pointer_arithmetic_test(const fat32_raw_sector_t* raw)
-{
-    extern int kprintf(const char *format, ...);
-    
-    kprintf("\nDEBUG === POINTER ARITHMETIC DIAGNOSTIC === DEBUG\n");
-    
-    /* Test progressif pour identifier ou ca crash */
-    debug_src_pointer_issue(raw);
-    
-    kprintf("DEBUG === END DIAGNOSTIC === DEBUG\n\n");
-}
-
-
 /**
  * Initialise FAT32 sans monter - juste preparer les structures
  */
@@ -831,7 +597,7 @@ int init_fat32(void)
 }
 
 /**
- * Monte le systeme de fichiers FAT32 depuis RAMFS
+ * Mount the FAT32 filesystem from the active block device.
  */
 int mount_fat32_filesystem(void)
 {
@@ -840,49 +606,15 @@ int mount_fat32_filesystem(void)
 
 int mount_fat32_filesystem_at(uint64_t lba_start)
 {
-    KINFO("[FAT32] Montage du systeme de fichiers a LBA %u...\n",
+    KINFO("[FAT32] Mounting filesystem at LBA %u...\n",
           (uint32_t)lba_start);
     
     if (!fat32_mount_at(lba_start)) {
-        KERROR("[FAT32] echec du montage\n");
+        KERROR("[FAT32] Mouting failed\n");
         return -1;
     }
-
-    //KDEBUG("=== TESTING FAT TABLE ===\n");
-
-    /* Vérifier les premières entrées de la FAT */
-    //for (uint32_t i = 0; i < 10; i++) {
-    //    uint32_t fat_entry = fat32_fs.fat_table[i] & 0x0FFFFFFF;
-    //    KDEBUG("FAT[%u] = 0x%08X\n", i, fat_entry);
-    //}
-
-    /* Test spécifique du root cluster */
-    //uint32_t root_next = fat32_get_next_cluster(fat32_fs.root_dir_cluster);
-    //KDEBUG("Root cluster %u -> next cluster %u\n", fat32_fs.root_dir_cluster, root_next);
-
-    //KDEBUG("=== END FAT TABLE TEST ===\n");
-
-        /* À la fin de fat32_mount, avant return true */
-    //KDEBUG("=== TESTING CLUSTER CONVERSION ===\n");
-
-    /* Tester la conversion cluster→secteur */
-/*     for (uint32_t test_cluster = 2; test_cluster <= 10; test_cluster++) {
-        uint32_t test_sector = cluster_to_sector(test_cluster);
-        KDEBUG("Cluster %u -> sector %u\n", test_cluster, test_sector);
-        
-        // Test de lecture directe
-        char test_buf[512];
-        if (ramfs_read_sectors(test_sector, 1, test_buf)) {
-            KDEBUG("  Sector %u readable: %02X %02X %02X %02X\n",
-                test_sector, test_buf[0], test_buf[1], test_buf[2], test_buf[3]);
-        } else {
-            KDEBUG("  Sector %u NOT readable\n", test_sector);
-        }
-    }
-
-    KDEBUG("=== END CLUSTER TEST ===\n"); */
     
-    KINFO("[FAT32] Systeme de fichiers monte avec succes\n");
+    KINFO("[FAT32] Filesystem mounted successfully\n");
     KINFO("[FAT32]   Root cluster: %u\n", fat32_fs.root_dir_cluster);
     KINFO("[FAT32]   Data start: secteur %u\n", fat32_fs.data_start_sector);
     KINFO("[FAT32]   Bytes per cluster: %u\n", fat32_fs.bytes_per_cluster);

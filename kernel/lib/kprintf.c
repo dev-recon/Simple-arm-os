@@ -18,6 +18,7 @@
 
 #include <kernel/types.h>
 #include <kernel/uart.h>
+#include <kernel/tty.h>
 #include <kernel/stdarg.h>
 #include <kernel/kprintf.h>
 #include <kernel/spinlock.h>
@@ -442,13 +443,18 @@ int kvprintf(const char *format, va_list args) {
 int kprintf(const char *format, ...) {
     va_list args;
     unsigned long flags;
+    unsigned long console_flags = 0;
+    bool console_locked;
     int result;
 
     va_start(args, format);
 
+    console_locked = tty_console_output_lock(&console_flags);
     spin_lock_irqsave(&kprintf_lock, &flags);
     result = kprintf_vlocked(format, args);
     spin_unlock_irqrestore(&kprintf_lock, flags);
+    if (console_locked)
+        tty_console_output_unlock(console_flags);
 
     va_end(args);
     return result;
@@ -463,6 +469,9 @@ void kboot_statusf(const char* status, const char* format, ...)
         return;
 
     unsigned long flags;
+    unsigned long console_flags = 0;
+    bool console_locked = tty_console_output_lock(&console_flags);
+
     spin_lock_irqsave(&kprintf_lock, &flags);
 
     va_start(args, format);
@@ -479,6 +488,8 @@ void kboot_statusf(const char* status, const char* format, ...)
     putchar_kernel('\n');
 
     spin_unlock_irqrestore(&kprintf_lock, flags);
+    if (console_locked)
+        tty_console_output_unlock(console_flags);
 }
 
 /* Fonctions de gestion du debug */

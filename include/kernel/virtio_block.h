@@ -162,7 +162,7 @@ typedef struct {
 
 
 extern volatile uint32_t *virtio_mmio_base; /* pointer to mmio (set lors init) */
-extern uint32_t ata_sector_size; /* initialisé à l'init du blk */
+extern uint32_t blk_sector_size; /* initialisé à l'init du blk */
 
 
 // Offsets EN OCTETS
@@ -235,6 +235,7 @@ bool blk_is_readonly(void);
 uint32_t virtio_blk_get_irq(void);
 int virtio_blk_flush(void);
 void virtio_blk_shutdown(void);
+bool init_blk(void);
 
 /* Fonctions utilitaires */
 uint32_t virtio_read_reg(uint32_t reg);

@@ -1,6 +1,43 @@
 {
     "tasks": [
         {
+            "label": "ArmOS: build qemu-virt kernel",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "platform-kernel",
+                "TARGET_ARCH=arm32",
+                "TARGET_PLATFORM=qemu-virt"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "ArmOS: build raspi2 kernel",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "platform-kernel",
+                "TARGET_ARCH=arm32",
+                "TARGET_PLATFORM=raspi2"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": "build"
+        },
+        {
             "type": "cppbuild",
             "label": "C/C++: arm-none-eabi-gcc générer le fichier actif",
             "command": "arm-none-eabi-gcc",
@@ -32,7 +69,7 @@
             ],
             "group": {
                 "kind": "build",
-                "isDefault": true
+                "isDefault": false
             },
             "detail": "Tâche générée par le débogueur."
         }

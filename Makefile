@@ -56,7 +56,6 @@ LDFLAGS = $(PLATFORM_LDFLAGS) -T linker.ld -nostdlib -Map=kernel.map
 TASK_OBJS = kernel/task/task.o \
             $(ARCH_DIR)/task/task_switch.o \
             $(ARCH_DIR)/task/context_debug.o \
-            kernel/task/task_test.o \
 			kernel/task/kernel_tasks.o \
             $(ARCH_DIR)/smp/smp.o \
             kernel/sync/spinlock.o
@@ -69,7 +68,6 @@ KERNEL_OBJS = \
 	$(ARCH_DIR)/boot/boot.o \
 	kernel/main.o \
 	$(ARCH_DIR)/cpu/cpu.o \
-	kernel/internals/ls_process.o \
 	$(ARCH_DIR)/mmu/helpers.o \
 	kernel/memory/physical.o \
 	$(ARCH_DIR)/mmu/virtual.o \
@@ -90,15 +88,12 @@ KERNEL_OBJS = \
 	kernel/fs/disk_layout.o \
 	kernel/fs/ext2_vfs.o \
 	kernel/fs/procfs.o \
-	kernel/fs/userfs_loader.o \
 	kernel/drivers/console.o \
 	kernel/drivers/block_device.o \
 	kernel/drivers/uart.o \
 	kernel/drivers/tty.o \
 	kernel/drivers/null.o \
 	kernel/drivers/power.o \
-	kernel/drivers/ramfs.o \
-	kernel/drivers/tar_parser_ramfs.o \
 	$(PLATFORM_OBJS) \
 	$(ARCH_DIR)/interrupt/exception.o \
 	$(ARCH_DIR)/interrupt/interrupt.o \

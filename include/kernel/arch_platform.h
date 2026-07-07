@@ -128,32 +128,12 @@
 #define ARMOS_PLATFORM_KEYBOARD_IRQ 0u
 #endif
 
-#ifndef ARMOS_PLATFORM_ATA_IRQ
-#define ARMOS_PLATFORM_ATA_IRQ 0u
-#endif
-
 #ifndef ARMOS_PLATFORM_PL050_KBD_BASE
 #define ARMOS_PLATFORM_PL050_KBD_BASE 0u
 #endif
 
-#ifndef ARMOS_PLATFORM_IDE_PRIMARY_BASE
-#define ARMOS_PLATFORM_IDE_PRIMARY_BASE 0u
-#endif
-
-#ifndef ARMOS_PLATFORM_IDE_PRIMARY_CTRL
-#define ARMOS_PLATFORM_IDE_PRIMARY_CTRL 0u
-#endif
-
-#ifndef ARMOS_PLATFORM_IDE_PRIMARY_IRQ
-#define ARMOS_PLATFORM_IDE_PRIMARY_IRQ 0u
-#endif
-
 #ifndef ARMOS_PLATFORM_PCIE_PIO_BASE
 #define ARMOS_PLATFORM_PCIE_PIO_BASE 0u
-#endif
-
-#ifndef ARMOS_PLATFORM_IDE_LEGACY_IO_BASE
-#define ARMOS_PLATFORM_IDE_LEGACY_IO_BASE 0u
 #endif
 
 #ifndef ARMOS_PLATFORM_IRQ_TARGETS_AUTO_MANAGED
@@ -299,13 +279,6 @@ static inline bool arch_platform_has_psci(void)
 static inline bool arch_platform_has_pl050_keyboard(void)
 {
     return ARMOS_PLATFORM_PL050_KBD_BASE != 0u && ARMOS_PLATFORM_KEYBOARD_IRQ != 0u;
-}
-
-static inline bool arch_platform_has_legacy_ide(void)
-{
-    return ARMOS_PLATFORM_IDE_PRIMARY_BASE != 0u &&
-           ARMOS_PLATFORM_IDE_PRIMARY_CTRL != 0u &&
-           ARMOS_PLATFORM_IDE_PRIMARY_IRQ != 0u;
 }
 
 static inline paddr_t arch_platform_irqctrl_phys_start(void)

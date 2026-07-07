@@ -35,9 +35,6 @@
 #include <kernel/memory.h>
 #include <kernel/debug_print.h>
 #include <kernel/stdarg.h>
-#include <kernel/ide.h>
-#include <kernel/ramfs.h>
-#include <kernel/userfs_loader.h>
 #include <kernel/disk_layout.h>
 
 #include <kernel/task.h>
@@ -183,8 +180,6 @@ void kernel_main(void)
     KBOOT_OKF("CPU: %s", boot_cpuinfo.model_name ? boot_cpuinfo.model_name : "unknown");
     KBOOT_OKF("Calibrating delay loop... %u.%02u BogoMIPS",
                 bogo_x100 / 100, bogo_x100 % 100);
-
-    //arch_disable_branch_predictor();
     
     init_memory();  // <- Allocateur physique EN PREMIER
 
@@ -214,11 +209,6 @@ void kernel_main(void)
 
     /* Phase 4: Peripheriques d'entree/sortie */
     platform_devices = platform_devices_init();
-      
-    //kprintf("Initialize IDE ... ");
-    //init_ide();
-    //ide_comprehensive_test();
-    //kprintf("OK\n");
 
     /* Phase 6: Activation des interruptions */
     timer_enable_scheduling();
@@ -226,14 +216,6 @@ void kernel_main(void)
     arch_enable_interrupts();
 
     /* Phase 7: Systemes de fichiers (OPTIONNEL) */
-#ifdef USE_RAMFS
-    if (/*init_ramfs()*/0) { 
-        KBOOT_OK("RAMFS: initialized");
-    } else {
-        KINFO("RAMFS: not available\n");
-    }
-#endif
-
     block_ready = platform_block_init();
 
     if (!block_ready) {
@@ -255,7 +237,6 @@ void kernel_main(void)
         rootfs_ready = true;
     }    
 
-    //trigger_timer_interrupt();
     /* Phase 5: Gestion des processus (APReS allocateurs) */
     if (rootfs_ready) {
         init_process_system();

@@ -58,7 +58,10 @@
  * QEMU enough room under SMP/host load, then fail the graphics backend cleanly
  * instead of reusing descriptors from an uncertain control queue.
  */
-#define VIRTIO_GPU_TIMEOUT_MS                  3000
+#define VIRTIO_GPU_TIMEOUT_MS                  10000
+#define VIRTIO_GPU_DMA_BUF_SIZE                512
+#define VIRTIO_GPU_WAIT_SPIN_BUDGET            1024
+#define VIRTIO_GPU_DRIFT_WARN_LIMIT            4
 
 /* VirtIO MMIO interrupt status bits. */
 #define VIRTIO_GPU_INT_USED_RING               0x1u
@@ -147,6 +150,15 @@ static virtio_gpu_state_t gpu = {0};
 static spinlock_t gpu_lock = SPINLOCK_INIT("virtio_gpu");
 static volatile bool gpu_busy = false;
 static task_t *gpu_owner = NULL;
+static uint32_t gpu_used_drift_warnings;
+
+/*
+ * The control queue is single-flight, so one dedicated request/response pair is
+ * enough. Keep DMA targets away from kernel stacks: invalidating a cache line
+ * around a stack-local response can discard unrelated live stack data.
+ */
+static uint8_t gpu_cmd_dma[VIRTIO_GPU_DMA_BUF_SIZE] __attribute__((aligned(PAGE_SIZE)));
+static uint8_t gpu_resp_dma[VIRTIO_GPU_DMA_BUF_SIZE] __attribute__((aligned(PAGE_SIZE)));
 
 static struct vring_desc *gpu_desc_ptr(vq_legacy_t *vq, unsigned i)
 {
@@ -231,6 +243,7 @@ static bool gpu_probe_from_dtb(paddr_t *out_phys, uint32_t *out_irq)
 static int gpu_wait_used(uint16_t prev_used)
 {
     uint32_t freq = arch_timer_frequency();
+    uint32_t spins = 0;
     if (freq == 0)
         freq = TIMER_FALLBACK_FREQ;
 
@@ -243,10 +256,61 @@ static int gpu_wait_used(uint16_t prev_used)
         arch_data_memory_barrier_inner_shareable();
         if (gpu_used_ptr(&gpu.vq)->idx != prev_used)
             return 0;
-        arch_cpu_relax();
+
+        if (spins++ < VIRTIO_GPU_WAIT_SPIN_BUDGET) {
+            arch_cpu_relax();
+            continue;
+        }
+
+        spins = 0;
+        if (task_current_local())
+            task_sleep_ms(1);
+        else
+            arch_cpu_relax();
     }
 
     return -1;
+}
+
+static int gpu_drain_used_ring(uint16_t prev_used, uint16_t expected_id,
+                               uint16_t *out_used_idx)
+{
+    struct vring_used *used;
+    uint16_t used_idx;
+    uint16_t delta;
+    bool found = false;
+
+    arch_invalidate_dcache_by_mva((void *)gpu.vq.va_used,
+        sizeof(struct vring_used) + gpu.vq.qsize * sizeof(struct vring_used_elem));
+    arch_data_memory_barrier_inner_shareable();
+
+    used = gpu_used_ptr(&gpu.vq);
+    used_idx = used->idx;
+    delta = (uint16_t)(used_idx - prev_used);
+    if (delta == 0)
+        return -1;
+    if (delta > gpu.vq.qsize)
+        return -1;
+
+    for (uint16_t i = 0; i < delta; i++) {
+        struct vring_used_elem *elem =
+            &used->ring[(uint16_t)(prev_used + i) % gpu.vq.qsize];
+        if (elem->id == expected_id)
+            found = true;
+    }
+
+    if (!found)
+        return -1;
+
+    if (delta != 1 && gpu_used_drift_warnings < VIRTIO_GPU_DRIFT_WARN_LIMIT) {
+        gpu_used_drift_warnings++;
+        KWARN("virtio_gpu: drained %u used-ring entries while waiting id=%u\n",
+              delta, expected_id);
+    }
+
+    if (out_used_idx)
+        *out_used_idx = used_idx;
+    return 0;
 }
 
 static int gpu_acquire(void)
@@ -330,6 +394,8 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
     if (!gpu.initialized || gpu.failed || !cmd || cmd_len == 0 ||
         !resp || resp_len == 0)
         return -1;
+    if (cmd_len > VIRTIO_GPU_DMA_BUF_SIZE || resp_len > VIRTIO_GPU_DMA_BUF_SIZE)
+        return -1;
     if (gpu.vq.qsize < 2)
         return -1;
     if (gpu_acquire() < 0)
@@ -347,20 +413,22 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
     struct vring_desc *desc1 = gpu_desc_ptr(&gpu.vq, d1);
 
     memset(resp, 0, resp_len);
+    memcpy(gpu_cmd_dma, cmd, cmd_len);
+    memset(gpu_resp_dma, 0, resp_len);
 
-    desc0->addr = (uint64_t)virt_to_phys((vaddr_t)cmd);
+    desc0->addr = (uint64_t)virt_to_phys((vaddr_t)gpu_cmd_dma);
     desc0->len = cmd_len;
     desc0->flags = VRING_DESC_F_NEXT;
     desc0->next = d1;
 
-    desc1->addr = (uint64_t)virt_to_phys((vaddr_t)resp);
+    desc1->addr = (uint64_t)virt_to_phys((vaddr_t)gpu_resp_dma);
     desc1->len = resp_len;
     desc1->flags = VRING_DESC_F_WRITE;
     desc1->next = 0;
 
     arch_clean_dcache_by_mva((void *)gpu.vq.va_desc, sizeof(struct vring_desc) * gpu.vq.qsize);
-    arch_clean_dcache_by_mva(cmd, cmd_len);
-    arch_clean_invalidate_dcache_by_mva(resp, resp_len);
+    arch_clean_dcache_by_mva(gpu_cmd_dma, cmd_len);
+    arch_clean_invalidate_dcache_by_mva(gpu_resp_dma, resp_len);
     arch_data_memory_barrier_inner_shareable();
 
     uint16_t prev_used = gpu.vq.last_used_idx;
@@ -375,23 +443,28 @@ static int gpu_submit(void *cmd, uint32_t cmd_len, void *resp, uint32_t resp_len
 
     mmio_write32(gpu.mmio, VIRTIO_MMIO_QUEUE_NOTIFY, 0);
 
+    uint16_t new_used_idx = 0;
     if (gpu_wait_used(prev_used) < 0) {
-        gpu_mark_failed("control queue timeout", cmd_type);
+        /*
+         * Avoid failing the graphics backend on a boundary race where QEMU
+         * posts the used element just as the timeout expires.
+         */
+        if (gpu_drain_used_ring(prev_used, (uint16_t)d0, &new_used_idx) < 0) {
+            gpu_mark_failed("control queue timeout", cmd_type);
+            goto out;
+        }
+        goto complete;
+    }
+
+    if (gpu_drain_used_ring(prev_used, (uint16_t)d0, &new_used_idx) < 0) {
+        gpu_mark_failed("used ring did not contain expected descriptor", cmd_type);
         goto out;
     }
 
-    struct vring_used *used = gpu_used_ptr(&gpu.vq);
-    if ((uint16_t)(used->idx - prev_used) != 1) {
-        gpu_mark_failed("unexpected used ring advance", cmd_type);
-        goto out;
-    }
-    if (used->ring[prev_used % gpu.vq.qsize].id != d0) {
-        gpu_mark_failed("unexpected used descriptor id", cmd_type);
-        goto out;
-    }
-
-    gpu.vq.last_used_idx = used->idx;
-    arch_invalidate_dcache_by_mva(resp, resp_len);
+complete:
+    gpu.vq.last_used_idx = new_used_idx;
+    arch_invalidate_dcache_by_mva(gpu_resp_dma, resp_len);
+    memcpy(resp, gpu_resp_dma, resp_len);
 
     /*
      * Only acknowledge the used-ring bit here. Acking the whole status word

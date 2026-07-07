@@ -136,10 +136,10 @@ static paddr_t choose_buddy_base(void)
         base = ALIGN_UP(buddy_base, PAGE_SIZE);
 
     /*
-     * qemu-virt historically keeps a fixed USERFS/RAMFS staging area below
-     * the buddy allocator. Keep that floor only on platforms where it is
-     * actually RAM. Raspberry Pi 2 RAM ends before this address, so the floor
-     * must not leak into that port.
+     * qemu-virt historically kept a fixed high-memory staging area below the
+     * buddy allocator. Keep that floor only on platforms where it is actually
+     * RAM. Raspberry Pi 2 RAM ends before this address, so the floor must not
+     * leak into that port.
      */
     if ((paddr_t)BUDDY_BASE >= ram_start &&
         (paddr_t)BUDDY_BASE < ram_end &&

@@ -25,11 +25,9 @@
 #include <kernel/task.h>
 #include <kernel/process.h>
 #include <kernel/syscalls.h>
-#include <kernel/ramfs.h>
 
 /* Declarations forward */
 void ls_process_main(const char* path);
-void test_ramfs_cluster_content(void);
 static void setup_ls_process_context(task_t* ls_proc);
 int ls_read_directory(const char* path);
 //void format_file_entry(dirent_t* entry);
@@ -389,72 +387,4 @@ void test_process_system_with_ls(void)
     schedule();
     
     kprintf("=== Fin des tests ===\n\n");
-}
-
-
-
-void test_ramfs_cluster_content(void)
-{
-    KINFO("[TEST] === Test contenu RAMFS cluster racine ===\n");
-
-    extern void debug_memory_layout_ramfs(void);
-    extern void debug_ramfs_creation_step_by_step(void);
-    extern void ramfs_test(void);
-
-    debug_memory_layout_ramfs();
-    //debug_ramfs_creation_step_by_step();
-    ramfs_tar_test();
-
-    
-    uint32_t root_cluster = get_fat32_root_cluster();
-    uint32_t bytes_per_cluster = get_fat32_bytes_per_cluster();
-    
-    KINFO("[TEST] Cluster racine: %u\n", root_cluster);
-    KINFO("[TEST] Bytes par cluster: %u\n", bytes_per_cluster);
-    
-    /* Calculer le secteur du cluster racine */
-    uint32_t sector = cluster_to_sector(root_cluster);
-    KINFO("[TEST] Secteur calcule: %u\n", sector);
-    
-    /* Lire directement avec RAMFS */
-    static uint8_t direct_buffer[512];
-    int result = ramfs_read_sectors(sector, 1, direct_buffer);
-    
-    KINFO("[TEST] ramfs_read_sectors resultat: %d\n", result);
-    
-    if (result > 0) {
-        KINFO("[TEST] OK Lecture directe RAMFS reussie\n");
-        
-        KINFO("[TEST] Contenu brut du secteur:\n");
-        for (int i = 0; i < 64; i += 16) {
-            KINFO("[TEST] %04X: ", i);
-            for (int j = 0; j < 16; j++) {
-                kprintf("%02X ", direct_buffer[i + j]);
-            }
-            kprintf(" | ");
-            for (int j = 0; j < 16; j++) {
-                char c = direct_buffer[i + j];
-                kprintf("%c", (c >= 32 && c <= 126) ? c : '.');
-            }
-            kprintf("\n");
-        }
-        
-        /* Analyser comme entrees FAT32 */
-        fat32_dir_entry_t* entries = (fat32_dir_entry_t*)direct_buffer;
-        
-        KINFO("[TEST] Analyse comme entrees FAT32:\n");
-        for (int i = 0; i < 4; i++) {
-            fat32_dir_entry_t* entry = &entries[i];
-            
-            if (entry->name[0] == 0) {
-                KINFO("[TEST] Entree %d: FIN\n", i);
-                break;
-            }
-            
-            KINFO("[TEST] Entree %d: name='%.11s', attr=0x%02X\n", 
-                  i, entry->name, entry->attr);
-        }
-    } else {
-        KERROR("[TEST] KO echec lecture directe RAMFS\n");
-    }
 }

@@ -1,44 +1,96 @@
 {
     "configurations": [
         {
-            "name": "ARM",
+            "name": "ArmOS arm32/qemu-virt",
             "compilerPath": "arm-none-eabi-gcc",
             "defines": [
                 "ARMV7A_KERNEL",
+                "ARMOS_ARCH_BITS=32",
+                "ARMOS_PLATFORM_QEMU_VIRT",
                 "_FORTIFY_SOURCE=0",
                 "__NO_BUILTIN"
             ],
             "includePath": [
-                "./arch/arm32/include",
-                "./include",
-                "./build/generated",
-                "./build/include",
-                "./libc/include",
-                "./build/newlib-sysroot/arm-none-eabi/include",
-                "./userland/include",
-                "./userland/system/mash/include",
-                "./userland/opt/tcc/include",
-                "./userland/opt/tcc/src/include",
-                "./userland/legacy/myshell/include"
+                "${workspaceFolder}/arch/arm32/include",
+                "${workspaceFolder}/include",
+                "${workspaceFolder}/build/generated",
+                "${workspaceFolder}/build/include",
+                "${workspaceFolder}/build/newlib-sysroot/arm-none-eabi/include",
+                "${workspaceFolder}/userland/include",
+                "${workspaceFolder}/userland/system/mash/include",
+                "${workspaceFolder}/userland/opt/tcc/include",
+                "${workspaceFolder}/userland/opt/tcc/src/include"
             ],
             "browse": {
                 "path": [
-                    "./arch/arm32/include",
-                    "./include",
-                    "./build/generated",
-                    "./build/include",
-                    "./libc/include",
-                    "./build/newlib-sysroot/arm-none-eabi/include",
-                    "./userland/include",
-                    "./userland/system/mash/include",
-                    "./userland/opt/tcc/include",
-                    "./userland/opt/tcc/src/include",
-                    "./userland/legacy/myshell/include"
+                    "${workspaceFolder}/arch/arm32/include",
+                    "${workspaceFolder}/include",
+                    "${workspaceFolder}/build/generated",
+                    "${workspaceFolder}/build/include",
+                    "${workspaceFolder}/build/newlib-sysroot/arm-none-eabi/include",
+                    "${workspaceFolder}/userland/include",
+                    "${workspaceFolder}/userland/system/mash/include",
+                    "${workspaceFolder}/userland/opt/tcc/include",
+                    "${workspaceFolder}/userland/opt/tcc/src/include",
+                    "${workspaceFolder}/legacy/kernel/ata-ramfs/include"
                 ],
                 "limitSymbolsToIncludedHeaders": true
             },
             "compilerArgs": [
                 "-mcpu=cortex-a15",
+                "-marm",
+                "-mfpu=neon-vfpv4",
+                "-mfloat-abi=soft",
+                "-fno-builtin",
+                "-nostdlib",
+                "-nostdinc"
+            ],
+            "macFrameworkPath": [
+                "/System/Library/Frameworks",
+                "/Library/Frameworks"
+            ],
+            "intelliSenseMode": "gcc-arm",
+            "cStandard": "gnu99",
+            "cppStandard": "c++14"
+        },
+        {
+            "name": "ArmOS arm32/raspi2",
+            "compilerPath": "arm-none-eabi-gcc",
+            "defines": [
+                "ARMV7A_KERNEL",
+                "ARMOS_ARCH_BITS=32",
+                "ARMOS_PLATFORM_RASPI2",
+                "_FORTIFY_SOURCE=0",
+                "__NO_BUILTIN"
+            ],
+            "includePath": [
+                "${workspaceFolder}/arch/arm32/include",
+                "${workspaceFolder}/include",
+                "${workspaceFolder}/build/generated",
+                "${workspaceFolder}/build/include",
+                "${workspaceFolder}/build/newlib-sysroot/arm-none-eabi/include",
+                "${workspaceFolder}/userland/include",
+                "${workspaceFolder}/userland/system/mash/include",
+                "${workspaceFolder}/userland/opt/tcc/include",
+                "${workspaceFolder}/userland/opt/tcc/src/include"
+            ],
+            "browse": {
+                "path": [
+                    "${workspaceFolder}/arch/arm32/include",
+                    "${workspaceFolder}/include",
+                    "${workspaceFolder}/build/generated",
+                    "${workspaceFolder}/build/include",
+                    "${workspaceFolder}/build/newlib-sysroot/arm-none-eabi/include",
+                    "${workspaceFolder}/userland/include",
+                    "${workspaceFolder}/userland/system/mash/include",
+                    "${workspaceFolder}/userland/opt/tcc/include",
+                    "${workspaceFolder}/userland/opt/tcc/src/include",
+                    "${workspaceFolder}/legacy/kernel/ata-ramfs/include"
+                ],
+                "limitSymbolsToIncludedHeaders": true
+            },
+            "compilerArgs": [
+                "-mcpu=cortex-a7",
                 "-marm",
                 "-mfpu=neon-vfpv4",
                 "-mfloat-abi=soft",

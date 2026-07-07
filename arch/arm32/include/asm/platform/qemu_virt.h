@@ -68,7 +68,6 @@
 /* SGI/PPI/SPI IDs used by the current interrupt backend. */
 #define VIRT_SGI_TLB_SHOOTDOWN_IRQ 14
 #define VIRT_UART_LEGACY_IRQ    33
-#define VIRT_ATA_LEGACY_IRQ     34
 
 /* Legacy PL050 keyboard fallback. Normal graphical input uses virtio-input. */
 #define VIRT_PL050_KBD_BASE     0x09060000u
@@ -123,16 +122,6 @@
 #define VIRT_PCIE_PIO_SIZE      0x00010000u
 #define VIRT_PCIE_ECAM_BASE     0x3F000000u
 #define VIRT_PCIE_ECAM_SIZE     0x01000000u
-
-/*
- * Legacy IDE probing constants. The current ARM32 QEMU virt configuration
- * still exposes this path for the old IDE fallback driver; keep the exact
- * historical values here so generic storage headers do not own platform MMIO.
- */
-#define VIRT_IDE_PRIMARY_BASE   0x3F000000u
-#define VIRT_IDE_PRIMARY_CTRL   0x3F00000Eu
-#define VIRT_IDE_PRIMARY_IRQ    14
-#define VIRT_IDE_LEGACY_IO_BASE (VIRT_PCIE_PIO_BASE + 0x1F0u)
 
 /* ARM generic timer interrupt IDs on QEMU virt. */
 #define VIRT_TIMER_NS_EL1_IRQ   30
@@ -199,15 +188,10 @@
 #define ARMOS_PLATFORM_SGI_TLB_SHOOTDOWN_IRQ     VIRT_SGI_TLB_SHOOTDOWN_IRQ
 #define ARMOS_PLATFORM_TIMER_IRQ                 VIRT_TIMER_NS_EL1_IRQ
 #define ARMOS_PLATFORM_KEYBOARD_IRQ              VIRT_UART_LEGACY_IRQ
-#define ARMOS_PLATFORM_ATA_IRQ                   VIRT_ATA_LEGACY_IRQ
 
 #define ARMOS_PLATFORM_PL050_KBD_BASE            VIRT_PL050_KBD_BASE
 
-#define ARMOS_PLATFORM_IDE_PRIMARY_BASE          VIRT_IDE_PRIMARY_BASE
-#define ARMOS_PLATFORM_IDE_PRIMARY_CTRL          VIRT_IDE_PRIMARY_CTRL
-#define ARMOS_PLATFORM_IDE_PRIMARY_IRQ           VIRT_IDE_PRIMARY_IRQ
 #define ARMOS_PLATFORM_PCIE_PIO_BASE             VIRT_PCIE_PIO_BASE
-#define ARMOS_PLATFORM_IDE_LEGACY_IO_BASE        VIRT_IDE_LEGACY_IO_BASE
 
 #define ARMOS_PLATFORM_VIRTIO_PHYS_START         VIRT_VIRTIO_BASE
 #define ARMOS_PLATFORM_VIRTIO_MMIO_SIZE          VIRT_VIRTIO_SIZE

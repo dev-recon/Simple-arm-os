@@ -24,6 +24,7 @@
 #include <kernel/signal.h>
 #include <kernel/timer.h>
 #include <kernel/memory.h>
+#include <kernel/smp.h>
 
 struct tty_struct tty0;
 struct tty_struct tty1;
@@ -31,6 +32,7 @@ struct tty_struct tty1;
 #define TTY_TX_DRAIN_BUDGET 64
 
 static int active_tty_id = TTY_CONSOLE_ID;
+static bool tty_initialized = false;
 
 static bool tty_output_empty_locked(struct tty_struct *tty);
 static void tty_wake_reader(task_t *reader);
@@ -233,8 +235,32 @@ static void tty_init_one(struct tty_struct *tty, int id)
 }
 
 void tty_init(void) {
+    tty_initialized = false;
     tty_init_one(&tty0, TTY_CONSOLE_ID);
     tty_init_one(&tty1, TTY_GRAPHICS_ID);
+    tty_initialized = true;
+}
+
+bool tty_console_output_lock(unsigned long *flags)
+{
+    if (!tty_initialized || !flags)
+        return false;
+
+    /*
+     * kprintf normally serializes with user writes through tty0.write_lock.
+     * If a diagnostic is emitted while the current CPU already owns that lock,
+     * skip the extra lock rather than deadlocking the rescue console path.
+     */
+    if (tty0.write_lock.locked && tty0.write_lock.owner == smp_processor_id())
+        return false;
+
+    spin_lock_irqsave(&tty0.write_lock, flags);
+    return true;
+}
+
+void tty_console_output_unlock(unsigned long flags)
+{
+    spin_unlock_irqrestore(&tty0.write_lock, flags);
 }
 
 static int tty_signal_process_group(pid_t pgid, int sig)

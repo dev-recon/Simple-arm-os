@@ -58,7 +58,7 @@ void virtio_blk_read_capacity(volatile uint32_t *mmio_base,
 }
 
 vq_legacy_t global_vq = {0};
-uint32_t ata_sector_size = 0;
+uint32_t blk_sector_size = 0;
 static uint64_t virtio_capacity_sectors = 0;
 static bool virtio_blk_failed = false;
 static bool virtio_blk_readonly = false;
@@ -257,7 +257,7 @@ static void virtio_blk_ack_interrupts(volatile uint32_t *mmio_base)
 
 static bool virtio_blk_request_in_bounds(uint64_t sector, uint32_t nsectors)
 {
-    if (virtio_blk_failed || ata_sector_size != 512 || virtio_capacity_sectors == 0)
+    if (virtio_blk_failed || blk_sector_size != 512 || virtio_capacity_sectors == 0)
         return false;
     if (nsectors == 0)
         return false;
@@ -425,7 +425,7 @@ bool virtio_blk_init_legacy(vaddr_t base_addr)
         return false;
     }
 
-    ata_sector_size = sector_size;
+    blk_sector_size = sector_size;
     virtio_capacity_sectors = capacity;
     virtio_block_dev.capacity_sectors = capacity;
     virtio_block_dev.sector_size = sector_size;
@@ -850,7 +850,7 @@ int virtio_blk_read_sectors(volatile uint32_t *mmio_base,
                             void *buf /* va kernel */,
                             unsigned timeout_ms)
 {
-    uint32_t sector_size = ata_sector_size;
+    uint32_t sector_size = blk_sector_size;
     if (!mmio_base || !vq) return -1;
     if (!buf) return -1;
     if (!virtio_blk_request_in_bounds(sector, nsectors)) return -1;
@@ -926,7 +926,7 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
                              const void *buf /* va kernel */,
                              unsigned timeout_ms)
 {
-    uint32_t sector_size = ata_sector_size;
+    uint32_t sector_size = blk_sector_size;
     if (!mmio_base || !vq) return -1;
     if (!buf) return -1;
     if (!virtio_blk_request_in_bounds(sector, nsectors)) return -1;
@@ -990,7 +990,7 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
 
 int virtio_blk_flush(void)
 {
-    if (ata_sector_size == 0 || virtio_capacity_sectors == 0 || virtio_blk_failed)
+    if (blk_sector_size == 0 || virtio_capacity_sectors == 0 || virtio_blk_failed)
         return -1;
     if (!virtio_blk_flush_supported)
         return 0;
@@ -1023,7 +1023,7 @@ int virtio_blk_flush(void)
 
 void virtio_blk_shutdown(void)
 {
-    if (ata_sector_size == 0 || virtio_capacity_sectors == 0 || virtio_blk_failed)
+    if (blk_sector_size == 0 || virtio_capacity_sectors == 0 || virtio_blk_failed)
         return;
 
     int ret = virtio_blk_flush();
@@ -1073,14 +1073,12 @@ static void virtio_blockdev_shutdown(block_device_t *dev)
 
 void read_sector0_and_print(void)
 {
-    if (ata_sector_size == 0) {
-        // Remplace par ta condition réelle, ex: ata_device.initialized
-        // if (!ata_device.initialized) { KERROR("blk not initialized\n"); return; }
+    if (blk_sector_size == 0) {
         KERROR("blk not initialized\n");
         return;
     }
 
-    uint32_t sec_size = ata_sector_size ? ata_sector_size : 512;
+    uint32_t sec_size = blk_sector_size ? blk_sector_size : 512;
     if (sec_size > 4096) {
         KERROR("unexpected sector_size=%u\n", sec_size);
         return;
@@ -1130,4 +1128,22 @@ void read_sector0_and_print(void)
     } else {
         kprintf("sector size < 512, skipping MBR parse\n");
     }
+}
+
+
+bool init_blk(void)
+{
+    KINFO("Initializing VirtIO block device...\n");
+
+    if (!virtio_blk_init_legacy((vaddr_t)virtio_mmio_base)) {
+        KERROR("KO VirtIO block initialization failed\n");
+        return false;
+    }
+    if (!blk_is_initialized()) {
+        KERROR("KO VirtIO block driver did not become ready\n");
+        return false;
+    }
+
+    KINFO("OK VirtIO block device initialized successfully!\n");
+    return true;
 }
