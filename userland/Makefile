@@ -8,6 +8,11 @@ CC := $(ARCH)gcc
 STRIP := $(ARCH)strip
 
 BUILD_DIR := ../build/userland
+OUT_DIR := $(BUILD_DIR)/out
+OUT_BIN := $(OUT_DIR)/bin
+OUT_SBIN := $(OUT_DIR)/sbin
+OUT_USR_BIN := $(OUT_DIR)/usr/bin
+OUT_OPT := $(OUT_DIR)/opt
 NEWLIB_PORT := ../newlib-port
 USERFS_ROOT := ../userfs
 USERFS_BIN := $(USERFS_ROOT)/bin
@@ -34,11 +39,11 @@ PORT_OBJECTS := $(NEWLIB_PORT)/build/crt0_newlib.o \
 
 COREUTIL_SRCS := $(wildcard coreutils/src/*.c)
 COREUTILS := $(sort $(patsubst coreutils/src/%.c,%,$(COREUTIL_SRCS)))
-COREUTIL_TARGETS := $(COREUTILS:%=nl-%)
+COREUTIL_TARGETS := $(COREUTILS:%=$(OUT_BIN)/%)
 
 SYSTEM_TOOL_SRCS := $(wildcard system/tools/*.c)
 SYSTEM_TOOLS := $(sort $(patsubst system/tools/%.c,%,$(SYSTEM_TOOL_SRCS)))
-SYSTEM_TOOL_TARGETS := $(SYSTEM_TOOLS:%=nl-%)
+SYSTEM_TOOL_TARGETS := $(SYSTEM_TOOLS:%=$(OUT_SBIN)/%)
 
 PROGRAM_DIRS := $(sort $(dir $(wildcard programs/*/*.c)))
 PROGRAMS := $(patsubst programs/%/,%,$(PROGRAM_DIRS))
@@ -52,10 +57,10 @@ ifneq ($(ENABLE_TCC),1)
 PROGRAMS := $(filter-out tcc,$(PROGRAMS))
 endif
 
-PROGRAM_TARGETS := $(PROGRAMS:%=nl-%)
-EXTERNAL_TARGETS := $(EXTERNALS:%=nl-%)
+PROGRAM_TARGETS := $(PROGRAMS:%=$(OUT_USR_BIN)/%)
+EXTERNAL_TARGETS := $(foreach name,$(EXTERNALS),$(OUT_OPT)/$(name)/bin/$(name))
 
-SYSTEM_TARGETS := nl-init nl-mash $(SYSTEM_TOOL_TARGETS)
+SYSTEM_TARGETS := $(OUT_SBIN)/init $(OUT_SBIN)/mash $(SYSTEM_TOOL_TARGETS)
 TARGETS := $(SYSTEM_TARGETS) $(COREUTIL_TARGETS) $(PROGRAM_TARGETS) $(EXTERNAL_TARGETS)
 
 MASH_SRCS := $(wildcard system/mash/src/*.c)
@@ -63,7 +68,8 @@ MASH_OBJECTS := $(patsubst system/mash/src/%.c,$(BUILD_DIR)/system/mash/%.o,$(MA
 INIT_SRCS := $(wildcard system/init/*.c)
 INIT_OBJECTS := $(patsubst system/init/%.c,$(BUILD_DIR)/system/init/%.o,$(INIT_SRCS))
 
-.PHONY: all clean install check-newlib newlib-port list
+.PHONY: all clean install check-newlib newlib-port list init mash
+.PHONY: $(COREUTILS) $(SYSTEM_TOOLS) $(PROGRAMS) $(EXTERNALS)
 
 all: check-newlib $(TARGETS)
 
@@ -81,6 +87,12 @@ newlib-port:
 
 list:
 	@printf '%s\n' $(TARGETS)
+
+init: $(OUT_SBIN)/init
+mash: $(OUT_SBIN)/mash
+$(SYSTEM_TOOLS): %: $(OUT_SBIN)/%
+$(COREUTILS): %: $(OUT_BIN)/%
+$(PROGRAMS): %: $(OUT_USR_BIN)/%
 
 $(BUILD_DIR):
 	mkdir -p $@
@@ -113,7 +125,8 @@ define PROGRAM_RULE
 $(1)_SRCS := $$(wildcard programs/$(1)/*.c)
 $(1)_OBJECTS := $$(patsubst programs/$(1)/%.c,$$(BUILD_DIR)/programs/$(1)/%.o,$$($(1)_SRCS))
 
-nl-$(1): newlib-port $$($(1)_OBJECTS)
+$(OUT_USR_BIN)/$(1): newlib-port $$($(1)_OBJECTS)
+	mkdir -p $$(@D)
 	$$(CC) $$(LDFLAGS) -o $$@ $$(PORT_OBJECTS) $$($(1)_OBJECTS) "$$(NEWLIB_LIBC)" "$$(LIBGCC)"
 endef
 
@@ -123,56 +136,63 @@ define EXTERNAL_RULE
 $(1)_EXTERNAL_SRCS := $$(wildcard opt/$(1)/src/*.c)
 $(1)_EXTERNAL_OBJECTS := $$(patsubst opt/%.c,$$(BUILD_DIR)/opt/%.o,$$($(1)_EXTERNAL_SRCS))
 
-nl-$(1): newlib-port $$($(1)_EXTERNAL_OBJECTS)
+$(OUT_OPT)/$(1)/bin/$(1): newlib-port $$($(1)_EXTERNAL_OBJECTS)
+	mkdir -p $$(@D)
 	$$(CC) $$(LDFLAGS) -o $$@ $$(PORT_OBJECTS) $$($(1)_EXTERNAL_OBJECTS) "$$(NEWLIB_LIBC)" "$$(LIBGCC)"
+
+$(1): $(OUT_OPT)/$(1)/bin/$(1)
 endef
 
 $(foreach prog,$(EXTERNALS),$(eval $(call EXTERNAL_RULE,$(prog))))
 
-nl-init: newlib-port $(INIT_OBJECTS)
+$(OUT_SBIN)/init: newlib-port $(INIT_OBJECTS)
+	mkdir -p $(@D)
 	$(CC) $(LDFLAGS) -o $@ $(PORT_OBJECTS) $(INIT_OBJECTS) "$(NEWLIB_LIBC)" "$(LIBGCC)"
 
-nl-mash: newlib-port $(MASH_OBJECTS)
+$(OUT_SBIN)/mash: newlib-port $(MASH_OBJECTS)
+	mkdir -p $(@D)
 	$(CC) $(LDFLAGS) -o $@ $(PORT_OBJECTS) $(MASH_OBJECTS) "$(NEWLIB_LIBC)" "$(LIBGCC)"
 
-$(SYSTEM_TOOL_TARGETS): nl-%: newlib-port $(BUILD_DIR)/system/tools/%.o
+$(OUT_SBIN)/%: newlib-port $(BUILD_DIR)/system/tools/%.o
+	mkdir -p $(@D)
 	$(CC) $(LDFLAGS) -o $@ $(PORT_OBJECTS) $(BUILD_DIR)/system/tools/$*.o "$(NEWLIB_LIBC)" "$(LIBGCC)"
 
-nl-%: newlib-port $(BUILD_DIR)/coreutils/%.o
+$(OUT_BIN)/%: newlib-port $(BUILD_DIR)/coreutils/%.o
+	mkdir -p $(@D)
 	$(CC) $(LDFLAGS) -o $@ $(PORT_OBJECTS) $(BUILD_DIR)/coreutils/$*.o "$(NEWLIB_LIBC)" "$(LIBGCC)"
 
 install: $(TARGETS)
 	mkdir -p $(USERFS_BIN) $(USERFS_SBIN) $(USERFS_USR_BIN) $(USERFS_OPT)
 	rm -rf $(USERFS_ROOT)/opt/newlib
 	@for name in init mash; do \
-		cp nl-$$name $(USERFS_SBIN)/$$name; \
+		cp $(OUT_SBIN)/$$name $(USERFS_SBIN)/$$name; \
 		rm -f $(USERFS_BIN)/$$name $(USERFS_USR_BIN)/$$name; \
 		$(STRIP) --strip-all $(USERFS_SBIN)/$$name; \
 	done
 	@for name in $(SYSTEM_TOOLS); do \
-		cp nl-$$name $(USERFS_SBIN)/$$name; \
+		cp $(OUT_SBIN)/$$name $(USERFS_SBIN)/$$name; \
 		rm -f $(USERFS_BIN)/$$name $(USERFS_USR_BIN)/$$name; \
 		rm -f $(USERFS_OPT)/$$name/bin/$$name; \
 		$(STRIP) --strip-all $(USERFS_SBIN)/$$name; \
 	done
 	@for name in $(COREUTILS); do \
-		cp nl-$$name $(USERFS_BIN)/$$name; \
+		cp $(OUT_BIN)/$$name $(USERFS_BIN)/$$name; \
 		rm -f $(USERFS_SBIN)/$$name $(USERFS_USR_BIN)/$$name; \
 		rm -f $(USERFS_OPT)/$$name/bin/$$name; \
 		$(STRIP) --strip-all $(USERFS_BIN)/$$name; \
 	done
 	@for name in $(PROGRAMS); do \
-		cp nl-$$name $(USERFS_USR_BIN)/$$name; \
+		cp $(OUT_USR_BIN)/$$name $(USERFS_USR_BIN)/$$name; \
 		rm -f $(USERFS_BIN)/$$name $(USERFS_SBIN)/$$name; \
 		rm -f $(USERFS_OPT)/$$name/bin/$$name; \
 		$(STRIP) --strip-all $(USERFS_USR_BIN)/$$name; \
 	done
 	@for name in $(EXTERNALS); do \
 		mkdir -p $(USERFS_OPT)/$$name/bin; \
-		cp nl-$$name $(USERFS_OPT)/$$name/bin/$$name; \
+		cp $(OUT_OPT)/$$name/bin/$$name $(USERFS_OPT)/$$name/bin/$$name; \
 		rm -f $(USERFS_BIN)/$$name $(USERFS_SBIN)/$$name $(USERFS_USR_BIN)/$$name; \
 		$(STRIP) --strip-all $(USERFS_OPT)/$$name/bin/$$name; \
 	done
 
 clean:
-	rm -rf $(BUILD_DIR) $(TARGETS)
+	rm -rf $(BUILD_DIR)

@@ -187,8 +187,8 @@ Stage it into the generated filesystem manually for now:
 
 ```sh
 rsync -a build/tcc-native/bundle/opt/tcc/ userfs/opt/tcc/
-make -C userland nl-tcc ENABLE_TCC=1
-cp userland/nl-tcc userfs/usr/bin/tcc
+make -C userland tcc ENABLE_TCC=1
+cp build/userland/out/usr/bin/tcc userfs/usr/bin/tcc
 ```
 
 Rebuild the disk:

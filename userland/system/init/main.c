@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -47,6 +48,31 @@ static volatile sig_atomic_t init_term_sent = 0;
 static int shell_pid = -1;
 static int root_shell_pid = -1;
 
+static void init_write_all(const char *s)
+{
+    size_t len;
+
+    if (!s)
+        return;
+
+    len = strlen(s);
+    while (len > 0) {
+        ssize_t written = write(STDERR_FILENO, s, len);
+        if (written <= 0)
+            return;
+        s += written;
+        len -= (size_t)written;
+    }
+}
+
+static void init_log_pid(const char *prefix, int pid)
+{
+    char buf[96];
+
+    snprintf(buf, sizeof(buf), "%s%d\n", prefix, pid);
+    init_write_all(buf);
+}
+
 static void on_shutdown_signal(int sig)
 {
     (void)sig;
@@ -59,7 +85,7 @@ static void request_shell_shutdown(void)
         return;
 
     init_term_sent = 1;
-    fprintf(stderr, "init: shutdown requested, stopping login shells\n");
+    init_write_all("init: shutdown requested, stopping login shells\n");
 
     if (shell_pid > 0)
         kill(shell_pid, SIGTERM);
@@ -167,7 +193,7 @@ int main(void)
         if (!init_shutting_down && shell_pid < 0) {
             shell_pid = spawn_shell();
             if (shell_pid > 0)
-                fprintf(stderr, "init: tty0 shell pid %d\n", shell_pid);
+                init_log_pid("init: tty0 shell pid ", shell_pid);
         }
 
         if (!init_shutting_down && root_shell_pid < 0)
@@ -190,15 +216,15 @@ int main(void)
 
         if (waited == shell_pid) {
             if (init_shutting_down)
-                fprintf(stderr, "init: tty0 shell stopped for shutdown\n");
+                init_write_all("init: tty0 shell stopped for shutdown\n");
             else
-                fprintf(stderr, "init: tty0 shell exited, restarting\n");
+                init_write_all("init: tty0 shell exited, restarting\n");
             shell_pid = -1;
         } else if (waited == root_shell_pid) {
             if (init_shutting_down)
-                fprintf(stderr, "init: tty1 shell stopped for shutdown\n");
+                init_write_all("init: tty1 shell stopped for shutdown\n");
             else
-                fprintf(stderr, "init: tty1 shell exited, restarting\n");
+                init_write_all("init: tty1 shell exited, restarting\n");
             root_shell_pid = -1;
         }
 

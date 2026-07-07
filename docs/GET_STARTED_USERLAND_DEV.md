@@ -112,14 +112,17 @@ The full project build is normally:
 
 The userland Makefile discovers many programs with wildcards:
 
-- `userland/coreutils/src/foo.c` becomes `nl-foo` and installs as `/bin/foo`;
-- `userland/system/tools/foo.c` becomes `nl-foo` and installs as `/sbin/foo`;
-- `userland/programs/foo/*.c` becomes `nl-foo` and installs as `/usr/bin/foo`;
-- `userland/opt/foo/src/*.c` becomes `nl-foo` and installs as
-  `/opt/foo/bin/foo`.
+- `userland/coreutils/src/foo.c` builds as `build/userland/out/bin/foo` and
+  installs as `/bin/foo`;
+- `userland/system/tools/foo.c` builds as `build/userland/out/sbin/foo` and
+  installs as `/sbin/foo`;
+- `userland/programs/foo/*.c` builds as `build/userland/out/usr/bin/foo` and
+  installs as `/usr/bin/foo`;
+- `userland/opt/foo/src/*.c` builds as `build/userland/out/opt/foo/bin/foo`
+  and installs as `/opt/foo/bin/foo`.
 
-The `nl-` prefix is a build artifact name. Installed binaries do not keep the
-prefix.
+There is no `nl-` transition prefix anymore. Newlib is the official ArmOS libc,
+so build artifact names match the installed program names.
 
 ## Newlib Port
 
@@ -215,7 +218,7 @@ int main(int argc, char **argv)
 3. Build:
 
 ```sh
-make -C userland nl-name
+make -C userland name
 ```
 
 4. Install through the normal full flow:

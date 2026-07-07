@@ -597,9 +597,6 @@ static void shell_load_startup_files(void) {
 
     snprintf(path, sizeof(path), "%s/.mashrc", home);
     shell_load_rc_file(path);
-
-    snprintf(path, sizeof(path), "%s/.nl-mashrc", home);
-    shell_load_rc_file(path);
 }
 
 static int build_exec_path_from_dir(const char* dir, int dir_len,

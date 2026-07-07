@@ -217,6 +217,12 @@ Important invariant:
 - The shell/init ancestor chain that invoked shutdown must not be killed early.
   If it is killed during the grace period, userland init may restart a shell
   while the kernel is already powering off.
+- Shutdown logs should remain readable on UART `tty0`. Userland `shutdown` and
+  init write their shutdown status lines through single `write(2)` calls so the
+  TTY write lock can serialize them against kernel logs and other processes.
+- `/sbin/shutdown` gives init/mash a short grace period before entering the
+  kernel poweroff path so login shells can persist command history before VFS
+  sync/unmount.
 
 Manual validation:
 
