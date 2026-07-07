@@ -1,0 +1,26 @@
+diff --git a/newlib/Makefile.in b/newlib/Makefile.in
+--- a/newlib/Makefile.in
++++ b/newlib/Makefile.in
+@@ -2334,6 +2334,12 @@
+ @HAVE_LIBC_MACHINE_Z8K_TRUE@	libc/machine/z8k/libc_a-memcmp.$(OBJEXT)
+ am_libc_a_OBJECTS = $(am__objects_1) \
+ 	libc/stdlib/libc_a-__adjust.$(OBJEXT) \
++	libc/posix/libc_a-collate.$(OBJEXT) \
++	libc/posix/libc_a-collcmp.$(OBJEXT) \
++	libc/posix/libc_a-regcomp.$(OBJEXT) \
++	libc/posix/libc_a-regerror.$(OBJEXT) \
++	libc/posix/libc_a-regexec.$(OBJEXT) \
++	libc/posix/libc_a-regfree.$(OBJEXT) \
+ 	libc/stdlib/libc_a-__atexit.$(OBJEXT) \
+ 	libc/stdlib/libc_a-__call_atexit.$(OBJEXT) \
+ 	libc/stdlib/libc_a-__exp10.$(OBJEXT) \
+@@ -4057,6 +4063,9 @@
+ 	libm_a-s_copysign.o libm_a-sf_copysign.o
+ 
+ libc_a_SOURCES = $(am__append_5) libc/stdlib/__adjust.c \
++	libc/posix/collate.c libc/posix/collcmp.c \
++	libc/posix/regcomp.c libc/posix/regerror.c \
++	libc/posix/regexec.c libc/posix/regfree.c \
+ 	libc/stdlib/__atexit.c libc/stdlib/__call_atexit.c \
+ 	libc/stdlib/__exp10.c libc/stdlib/__ten_mu.c \
+ 	libc/stdlib/_Exit.c libc/stdlib/abort.c libc/stdlib/abs.c \

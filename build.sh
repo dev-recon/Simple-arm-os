@@ -9,6 +9,7 @@ TARGET_ARCH="${TARGET_ARCH:-arm32}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
 BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 BUILD_TCC="${BUILD_TCC:-1}"
+BUILD_BSD="${BUILD_BSD:-0}"
 BUILD_NCURSES="${BUILD_NCURSES:-0}"
 BUILD_NANO="${BUILD_NANO:-0}"
 DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
@@ -62,6 +63,13 @@ if [ "$BUILD_TCC" = "1" ]; then
     echo "=== Building native TinyCC bundle ==="
     ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_tcc_native.sh
     rsync -a build/tcc-native/bundle/opt/tcc/ userfs/opt/tcc/
+fi
+
+if [ "$BUILD_BSD" = "1" ]; then
+    echo "=== Building BSD tools bundle ==="
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bmake.sh
+    rsync -a build/bmake/bundle/ userfs/
+    cp build/bmake/bundle/opt/bmake/bin/bmake userfs/usr/bin/bmake
 fi
 
 if [ "$BUILD_NCURSES" = "1" ]; then

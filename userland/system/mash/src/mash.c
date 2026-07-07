@@ -2938,11 +2938,27 @@ void shell_run(void) {
 
 int main(int argc, char **argv, char **envp) {
     int version = 11 ;
-
-    (void)argc;
-    (void)argv;
+    int result;
 
     shell_init_env(envp);
+
+    if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
+        char command[SHELL_BUFFER_SIZE];
+        size_t len = strlen(argv[2]);
+
+        command_init();
+        if (len >= sizeof(command)) {
+            printf("mash: -c command too long\n");
+            exit(2);
+        }
+        memcpy(command, argv[2], len + 1);
+
+        result = shell_execute_line(command);
+        if (result == SHELL_EXIT)
+            result = 0;
+        exit(result);
+    }
+
     shell_load_startup_files();
     shell_line_edit_init();
     setpgid(0, 0);

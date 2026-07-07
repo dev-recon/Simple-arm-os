@@ -51,7 +51,10 @@ PROGRAMS := $(patsubst programs/%/,%,$(PROGRAM_DIRS))
 EXTERNAL_DIRS := $(sort $(dir $(wildcard opt/*/src/*.c)))
 EXTERNALS := $(patsubst opt/%/src/,%,$(EXTERNAL_DIRS))
 
-EXTERNALS := $(filter-out tcc,$(EXTERNALS))
+# These tools have their own configure/build flow and are staged by dedicated
+# top-level build switches.  The generic "one directory -> one binary" rule is
+# intentionally too small for them.
+EXTERNALS := $(filter-out bmake tcc,$(EXTERNALS))
 
 ifneq ($(ENABLE_TCC),1)
 PROGRAMS := $(filter-out tcc,$(PROGRAMS))

@@ -1125,6 +1125,67 @@ int _execve(const char *pathname, char *const argv[], char *const envp[])
     return ret_errno(sys_execve(pathname, argv, envp));
 }
 
+int execv(const char *pathname, char *const argv[])
+{
+    return _execve(pathname, argv, environ);
+}
+
+int execvp(const char *file, char *const argv[])
+{
+    const char *path;
+    const char *entry;
+    int saw_eacces = 0;
+
+    if (!file || !*file) {
+        errno = ENOENT;
+        return -1;
+    }
+
+    if (strchr(file, '/'))
+        return execv(file, argv);
+
+    path = getenv("PATH");
+    if (!path || !*path)
+        path = "/bin:/usr/bin:/sbin:/opt/kilo/bin";
+
+    entry = path;
+    while (1) {
+        const char *colon = strchr(entry, ':');
+        size_t dir_len = colon ? (size_t)(colon - entry) : strlen(entry);
+        size_t file_len = strlen(file);
+        char candidate[PATH_MAX];
+
+        if (dir_len == 0) {
+            if (file_len + 1 > sizeof(candidate)) {
+                errno = ENAMETOOLONG;
+                return -1;
+            }
+            memcpy(candidate, file, file_len + 1);
+        } else {
+            if (dir_len + 1 + file_len + 1 > sizeof(candidate)) {
+                errno = ENAMETOOLONG;
+                return -1;
+            }
+            memcpy(candidate, entry, dir_len);
+            candidate[dir_len] = '/';
+            memcpy(candidate + dir_len + 1, file, file_len + 1);
+        }
+
+        execv(candidate, argv);
+        if (errno == EACCES)
+            saw_eacces = 1;
+        else if (errno != ENOENT && errno != ENOTDIR)
+            return -1;
+
+        if (!colon)
+            break;
+        entry = colon + 1;
+    }
+
+    errno = saw_eacces ? EACCES : ENOENT;
+    return -1;
+}
+
 int _wait(int *status)
 {
     long ret = sys_waitpid(-1, status, 0);
