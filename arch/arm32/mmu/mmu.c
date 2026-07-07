@@ -325,7 +325,7 @@ uint32_t get_optimal_ttbcr_n(void)
 
 vaddr_t get_split_boundary(void)
 {
-    int n = 2;
+    uint32_t n = get_optimal_ttbcr_n() & 0x7u;
     switch(n) {
         case 0: return 0xFFFFFFFF;  // Pas de split
         case 1: return 0x80000000;  // 2GB  
@@ -603,6 +603,22 @@ static void map_kernel_mmio_alias(vaddr_t vaddr, paddr_t paddr)
                              0x00010000;   /* Shareable */
 }
 
+static vaddr_t boot_identity_limit(void)
+{
+    vaddr_t limit = KERNEL_BOOT_IDENTITY_END;
+    paddr_t ram_start = arch_platform_ram_start();
+    paddr_t ram_end = physical_ram_end();
+    paddr_t device_start = arch_platform_device_start();
+
+    if (device_start > ram_start && limit > device_start)
+        limit = device_start;
+
+    if (ram_end > ram_start && limit > ram_end)
+        limit = ram_end;
+
+    return limit;
+}
+
 
 static void setup_kernel_space(void)
 {
@@ -680,10 +696,7 @@ static void setup_kernel_space(void)
      * early boot metadata.  General RAM is accessed through the direct map
      * below; do not extend this back to all RAM.
      */
-    uint64_t identity_end = KERNEL_BOOT_IDENTITY_END;
-    if (identity_end > ram_end) {
-        identity_end = ram_end;
-    }
+    uint64_t identity_end = boot_identity_limit();
 
     for (uint64_t addr64 = split_boundary; addr64 < identity_end; addr64 += 0x100000) {
         vaddr_t addr = (vaddr_t)addr64;
@@ -742,16 +755,22 @@ static void setup_kernel_space(void)
     vaddr_t mmio_irqctrl_base = arch_platform_kernel_mmio_irqctrl_base();
     vaddr_t mmio_uart_base = arch_platform_kernel_mmio_uart_base();
     vaddr_t mmio_virtio_base = arch_platform_kernel_mmio_virtio_base();
+    vaddr_t mmio_emmc_base = arch_platform_kernel_mmio_emmc_base();
 
     map_kernel_mmio_alias(mmio_irqctrl_base, arch_platform_irqctrl_phys_start());
-    map_kernel_mmio_alias(mmio_uart_base, arch_platform_uart0_phys_base());
+    map_kernel_mmio_alias(mmio_uart_base, arch_platform_uart0_phys_section_base());
+    if (arch_platform_has_emmc()) {
+        map_kernel_mmio_alias(mmio_emmc_base, arch_platform_emmc_phys_section_base());
+    }
     if (arch_platform_has_virtio_mmio()) {
         map_kernel_mmio_alias(mmio_virtio_base, arch_platform_virtio_phys_start());
-        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X UART=0x%08X VirtIO=0x%08X\n",
-              mmio_irqctrl_base, mmio_uart_base, mmio_virtio_base);
+        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X UART=0x%08X VirtIO=0x%08X EMMC=0x%08X\n",
+              mmio_irqctrl_base, mmio_uart_base, mmio_virtio_base,
+              arch_platform_has_emmc() ? mmio_emmc_base : 0u);
     } else {
-        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X UART=0x%08X\n",
-              mmio_irqctrl_base, mmio_uart_base);
+        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X UART=0x%08X EMMC=0x%08X\n",
+              mmio_irqctrl_base, mmio_uart_base,
+              arch_platform_has_emmc() ? mmio_emmc_base : 0u);
     }
 
     /* 3. NOUVEAU: Pré-allouer et configurer les temp mappings ICI */
@@ -995,7 +1014,7 @@ uint32_t vm_get_current_asid(void)
 static bool is_valid_vaddr(vaddr_t vaddr)
 {
     /* Current low-linked kernel and early boot metadata identity window. */
-    if (vaddr >= arch_platform_ram_start() && vaddr < KERNEL_BOOT_IDENTITY_END) {
+    if (vaddr >= arch_platform_ram_start() && vaddr < boot_identity_limit()) {
         return true;
     }
 

@@ -11,11 +11,13 @@ SMP_CPUS ?= 1
 BUILD_DIR = build
 TARGET_ARCH ?= arm32
 TARGET_PLATFORM ?= qemu-virt
+IMAGE_DIR ?= $(BUILD_DIR)/images
 ARCH_DIR = arch/$(TARGET_ARCH)
 ARCH_INCLUDE = $(ARCH_DIR)/include
 ASM_OFFSETS_SRC = $(ARCH_DIR)/asm-offsets.c
 ASM_OFFSETS_S = $(BUILD_DIR)/asm-offsets.s
 ASM_OFFSETS_H = $(BUILD_DIR)/generated/asm-offsets.h
+BUILD_CONFIG_STAMP = $(BUILD_DIR)/active-build-config.stamp
 TARGET_ARCH_DISPLAY = $(TARGET_ARCH)/$(TARGET_PLATFORM)
 TARGET_PLATFORM_DIR = $(subst -,_,$(TARGET_PLATFORM))
 PLATFORM_DIR = $(ARCH_DIR)/platform/$(TARGET_PLATFORM_DIR)
@@ -47,8 +49,9 @@ CFLAGS = -std=gnu99 $(ARCH_CFLAGS) $(PLATFORM_CFLAGS) $(MATH_FLAGS) \
          -fno-pic -fno-pie \
          -I$(ARCH_INCLUDE) \
          -Iinclude
-# Flags du linker
-LDFLAGS = -T linker.ld -nostdlib -Map=kernel.map
+# Flags du linker. Platform --defsym values must precede -T so linker.ld sees
+# them while evaluating parametric addresses.
+LDFLAGS = $(PLATFORM_LDFLAGS) -T linker.ld -nostdlib -Map=kernel.map
 
 TASK_OBJS = kernel/task/task.o \
             $(ARCH_DIR)/task/task_switch.o \
@@ -89,6 +92,7 @@ KERNEL_OBJS = \
 	kernel/fs/procfs.o \
 	kernel/fs/userfs_loader.o \
 	kernel/drivers/console.o \
+	kernel/drivers/block_device.o \
 	kernel/drivers/uart.o \
 	kernel/drivers/tty.o \
 	kernel/drivers/null.o \
@@ -115,10 +119,17 @@ DEPFILES = $(ALL_OBJS:.o=.d)
 DISK_IMG     = disk.img
 FAT32_IMG    = fat32.img
 EXT2_IMG     = ext2.img
+IMAGE_SUFFIX ?= $(TARGET_PLATFORM)
+PLATFORM_KERNEL_ELF = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).elf
+PLATFORM_KERNEL_BIN = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).bin
+PLATFORM_KERNEL_MAP = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).map
+PLATFORM_KERNEL_DIS = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).dis
+PLATFORM_DISK_IMG   = $(IMAGE_DIR)/disk-$(IMAGE_SUFFIX).img
 FAT32_SIZE_MB = 64
 EXT2_SIZE_MB = 512
 DISK_RESERVED_MB = 1
 DISK_SIZE_MB = $(shell echo $$(($(DISK_RESERVED_MB) + $(EXT2_SIZE_MB) + $(FAT32_SIZE_MB))))
+PLATFORM_DISK_SIZE_MB ?= $(DISK_SIZE_MB)
 DISK_MB_SECTORS = 2048
 DISK_EXT2_START_MB = $(DISK_RESERVED_MB)
 DISK_FAT32_START_MB = $(shell echo $$(($(DISK_EXT2_START_MB) + $(EXT2_SIZE_MB))))
@@ -143,7 +154,9 @@ TARGET = kernel
 KERNEL_ELF = $(TARGET).elf
 KERNEL_BIN = $(TARGET).bin
 
-all: $(KERNEL_BIN) $(DISK_IMG)
+.PHONY: FORCE platform-kernel platform-disk
+
+all: platform-kernel platform-disk
 
 # Linkage
 $(KERNEL_ELF): $(ALL_OBJS) linker.ld
@@ -154,10 +167,33 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
 	$(OBJDUMP) -d $(KERNEL_ELF) > kernel.dis
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+$(PLATFORM_KERNEL_BIN): $(KERNEL_BIN)
+	@mkdir -p $(IMAGE_DIR)
+	cp $(KERNEL_ELF) $(PLATFORM_KERNEL_ELF)
+	cp $(KERNEL_BIN) $(PLATFORM_KERNEL_BIN)
+	cp kernel.map $(PLATFORM_KERNEL_MAP)
+	cp kernel.dis $(PLATFORM_KERNEL_DIS)
+	@echo "Platform kernel image: $(PLATFORM_KERNEL_BIN)"
 
-$(ASM_OFFSETS_H): $(ASM_OFFSETS_SRC) include/kernel/task.h
+platform-kernel: $(PLATFORM_KERNEL_BIN)
+
+$(BUILD_CONFIG_STAMP): FORCE
+	@mkdir -p $(BUILD_DIR)
+	@tmp="$@.tmp"; \
+	{ \
+		echo "TARGET_ARCH=$(TARGET_ARCH)"; \
+		echo "TARGET_PLATFORM=$(TARGET_PLATFORM)"; \
+		echo "CROSS_COMPILE=$(CROSS_COMPILE)"; \
+		echo "CFLAGS=$(CFLAGS)"; \
+		echo "LDFLAGS=$(LDFLAGS)"; \
+	} > "$$tmp"; \
+	if ! cmp -s "$$tmp" "$@"; then \
+		mv "$$tmp" "$@"; \
+	else \
+		rm -f "$$tmp"; \
+	fi
+
+$(ASM_OFFSETS_H): $(ASM_OFFSETS_SRC) include/kernel/task.h $(BUILD_CONFIG_STAMP)
 	@mkdir -p $(BUILD_DIR) $(dir $@)
 	$(CC) $(CFLAGS) -S $(ASM_OFFSETS_SRC) -o $(ASM_OFFSETS_S)
 	@awk '/->/ { \
@@ -170,7 +206,10 @@ $(ASM_OFFSETS_H): $(ASM_OFFSETS_SRC) include/kernel/task.h
 		printf ".equ %-24s %s\n", f[1] ",", value; \
 	}' $(ASM_OFFSETS_S) > $@
 
-%.o: %.S $(ASM_OFFSETS_H)
+%.o: %.c $(BUILD_CONFIG_STAMP)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+%.o: %.S $(ASM_OFFSETS_H) $(BUILD_CONFIG_STAMP)
 	$(AS) $(ASFLAGS) $< -o $@
 
 # Partition FAT32 montee sous /mnt. Elle reste volontairement minimale :
@@ -283,6 +322,21 @@ $(DISK_IMG): $(FAT32_IMG) $(EXT2_IMG) $(MBR_TOOL)
 	dd if=$(EXT2_IMG) of=$(DISK_IMG) bs=1048576 seek=$(DISK_EXT2_START_MB) conv=notrunc 2>/dev/null
 	dd if=$(FAT32_IMG) of=$(DISK_IMG) bs=1048576 seek=$(DISK_FAT32_START_MB) conv=notrunc 2>/dev/null
 	@echo "Disk image $(DISK_IMG) created ($(DISK_SIZE_MB) MB)"
+
+$(PLATFORM_DISK_IMG): $(DISK_IMG) Makefile
+	@mkdir -p $(IMAGE_DIR)
+	cp $(DISK_IMG) $(PLATFORM_DISK_IMG)
+	@if [ "$(PLATFORM_DISK_SIZE_MB)" -lt "$(DISK_SIZE_MB)" ]; then \
+		echo "Error: PLATFORM_DISK_SIZE_MB ($(PLATFORM_DISK_SIZE_MB)) is smaller than disk layout ($(DISK_SIZE_MB))"; \
+		exit 1; \
+	fi
+	@if [ "$(PLATFORM_DISK_SIZE_MB)" != "$(DISK_SIZE_MB)" ]; then \
+		dd if=/dev/zero of=$(PLATFORM_DISK_IMG) bs=1048576 seek=$$(($(PLATFORM_DISK_SIZE_MB) - 1)) count=1 conv=notrunc 2>/dev/null; \
+		echo "Platform disk image padded to $(PLATFORM_DISK_SIZE_MB) MB"; \
+	fi
+	@echo "Platform disk image: $(PLATFORM_DISK_IMG)"
+
+platform-disk: $(PLATFORM_DISK_IMG)
 
 # Creer le repertoire userfs avec des fichiers de test
 $(USERFS_DIR):

@@ -43,11 +43,36 @@ static struct page_info* buddy_page_info(void* ptr);
 static void buddy_free_locked(void* ptr);
 static void account_buddy_alloc(size_t pages);
 static void account_buddy_free(size_t pages);
+static paddr_t choose_buddy_base(void);
 //static void reserve_mmu_pages(void);
 
 static bool mmu_is_enabled(void)
 {
     return arch_mmu_enabled();
+}
+
+static struct page_info* page_info_array(void)
+{
+    paddr_t phys = (paddr_t)page_infos;
+
+    if (!page_infos) {
+        return NULL;
+    }
+
+    /*
+     * page_infos is allocated while the boot identity mapping is still active.
+     * Once the MMU is enabled, the allocator metadata must be reached through
+     * the RAM direct-map instead of assuming VA == PA.
+     */
+    if (mmu_is_enabled()) {
+        if (!phys_in_direct_map(phys)) {
+            KERROR("buddy: page metadata 0x%08X outside direct map\n", phys);
+            return NULL;
+        }
+        return (struct page_info*)phys_to_virt(phys);
+    }
+
+    return page_infos;
 }
 
 void* early_alloc(uint32_t size, uint32_t align) {
@@ -62,6 +87,7 @@ void* early_alloc(uint32_t size, uint32_t align) {
 
 void buddy_init()
 {
+    buddy_base = choose_buddy_base();
 
     uint32_t page_info_size = phys_alloc.free_pages * sizeof(struct page_info);
 
@@ -78,7 +104,7 @@ void buddy_init()
         free_lists[i] = NULL;
     }
 
-    buddy_base = ALIGN_UP(BUDDY_BASE,PAGE_SIZE);
+    buddy_base = ALIGN_UP(buddy_base, PAGE_SIZE);
 
     // Toute la mémoire est d'abord un seul gros bloc
     buddy_block_t* block = (buddy_block_t*)buddy_base;
@@ -94,6 +120,42 @@ void buddy_init()
     KINFO("[MEM]   Buddy Size: %u\n", ram_end - buddy_base);
     KINFO("[MEM]   Buddy pages: %u\n", buddy_pages);
 
+}
+
+static paddr_t choose_buddy_base(void)
+{
+    paddr_t ram_start = physical_ram_start();
+    paddr_t ram_end = physical_ram_end();
+    paddr_t base = ALIGN_UP((paddr_t)FREE_MEMORY_START, PAGE_SIZE);
+
+    /*
+     * reserve_dtb_pages() may advance buddy_base past a boot DTB. Preserve it
+     * when it is inside platform RAM.
+     */
+    if (buddy_base >= ram_start && buddy_base < ram_end && buddy_base > base)
+        base = ALIGN_UP(buddy_base, PAGE_SIZE);
+
+    /*
+     * qemu-virt historically keeps a fixed USERFS/RAMFS staging area below
+     * the buddy allocator. Keep that floor only on platforms where it is
+     * actually RAM. Raspberry Pi 2 RAM ends before this address, so the floor
+     * must not leak into that port.
+     */
+    if ((paddr_t)BUDDY_BASE >= ram_start &&
+        (paddr_t)BUDDY_BASE < ram_end &&
+        (paddr_t)BUDDY_BASE > base) {
+        base = ALIGN_UP((paddr_t)BUDDY_BASE, PAGE_SIZE);
+    }
+
+    if (base < ram_start)
+        base = ram_start;
+
+    if (base >= ram_end) {
+        KWARN("[MEM] buddy base 0x%08X outside RAM, falling back to free memory start\n", base);
+        base = ALIGN_UP((paddr_t)FREE_MEMORY_START, PAGE_SIZE);
+    }
+
+    return base;
 }
 
 static int get_order(size_t size)
@@ -119,6 +181,7 @@ void* buddy_alloc(size_t num_block) {
     paddr_t ram_end = physical_ram_end();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
     unsigned long flags;
+    struct page_info *infos;
 
     //kprintf("\n***********************************************************************\n");
     //kprintf("\n***********************************************************************\n");
@@ -129,6 +192,11 @@ void* buddy_alloc(size_t num_block) {
     }
 
     spin_lock_irqsave(&buddy_lock, &flags);
+    infos = page_info_array();
+    if (!infos) {
+        spin_unlock_irqrestore(&buddy_lock, flags);
+        return NULL;
+    }
 
     size_t run_start = 0;
     size_t run_length = 0;
@@ -140,7 +208,7 @@ void* buddy_alloc(size_t num_block) {
      * valait zero et la recherche bouclait indefiniment.
      */
     for (size_t index = 0; index < max_pages; ++index) {
-        if (!page_infos[index].used && !page_infos[index].reserved) {
+        if (!infos[index].used && !infos[index].reserved) {
             if (run_length == 0) {
                 run_start = index;
             }
@@ -154,10 +222,10 @@ void* buddy_alloc(size_t num_block) {
 
             // Marque les pages comme utilisées
             for (size_t j = 0; j < num_block; ++j) {
-                page_infos[run_start + j].used = 1;
-                page_infos[run_start + j].start = addr;
-                page_infos[run_start + j].size = num_block;
-                page_infos[run_start + j].refcount = 1;
+                infos[run_start + j].used = 1;
+                infos[run_start + j].start = addr;
+                infos[run_start + j].size = num_block;
+                infos[run_start + j].refcount = 1;
             }
 
             account_buddy_alloc(num_block);
@@ -190,8 +258,14 @@ static void buddy_free_locked(void* ptr) {
     paddr_t ram_end = physical_ram_end();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
     paddr_t addr = (paddr_t)ptr;
+    struct page_info *infos;
 
     if (!ptr || (addr & (PAGE_SIZE - 1)) || addr < buddy_base || addr >= ram_end) {
+        return;
+    }
+
+    infos = page_info_array();
+    if (!infos) {
         return;
     }
 
@@ -202,12 +276,12 @@ static void buddy_free_locked(void* ptr) {
     //kprintf("Free requested for 0x%08X\n", addr);
     //kprintf("Size to be freed %u at index %u\n", page_infos[index].size, index);
 
-    size_t block_size = page_infos[index].size;
+    size_t block_size = infos[index].size;
     if (block_size == 0 || block_size > max_pages) {
         return;
     }
 
-    paddr_t start_addr = page_infos[index].start;
+    paddr_t start_addr = infos[index].start;
     if (start_addr != addr) {
         index = (start_addr - buddy_base) / PAGE_SIZE;
         //kprintf("PTR is not at the start of the allocated region\n");
@@ -216,13 +290,13 @@ static void buddy_free_locked(void* ptr) {
     }
 
     for (size_t i = 0; i < block_size; ++i) {
-        page_infos[index + i].used = 0;
-        page_infos[index + i].size = 0;
-        page_infos[index + i].refcount = 0;
+        infos[index + i].used = 0;
+        infos[index + i].size = 0;
+        infos[index + i].refcount = 0;
     }
 
-    page_infos[index].start = 0;
-    page_infos[index].size = 0;
+    infos[index].start = 0;
+    infos[index].size = 0;
 
     account_buddy_free(block_size);
 }
@@ -240,18 +314,23 @@ static struct page_info* buddy_page_info(void* ptr)
     paddr_t addr = (paddr_t)ptr;
     paddr_t ram_end = physical_ram_end();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
+    struct page_info *infos = page_info_array();
     uint32_t index;
+
+    if (!infos) {
+        return NULL;
+    }
 
     if (!ptr || (addr & (PAGE_SIZE - 1)) || addr < buddy_base || addr >= ram_end) {
         return NULL;
     }
 
     index = (addr - buddy_base) / PAGE_SIZE;
-    if (index >= max_pages || page_infos[index].reserved || !page_infos[index].used) {
+    if (index >= max_pages || infos[index].reserved || !infos[index].used) {
         return NULL;
     }
 
-    return &page_infos[index];
+    return &infos[index];
 }
 
 bool page_is_buddy_page(void* page_addr)
@@ -320,40 +399,24 @@ bool init_memory(void)
     uint32_t bitmap_size_bytes;
     uint32_t i;
 
-    /* NOUVEAU: Exclure la zone heap de la RAM allouable */
-    extern uint8_t* heap_base;
-    extern size_t heap_size;
-    
-    paddr_t heap_start = (paddr_t)heap_base;
-    paddr_t heap_end = heap_start + heap_size;
-    
-    /* Si le heap est dans la RAM detectee, reduire la RAM allouable */
-    if (heap_start >= mem_start && heap_start < mem_start + mem_size) {
-        KINFO("[MEM] Heap detected in RAM zone, adjusting...\n");
-        KINFO("[MEM]   Original RAM: 0x%08X - 0x%08X\n", mem_start, mem_start + mem_size);
-        KINFO("[MEM]   Heap zone:    0x%08X - 0x%08X\n", heap_start, heap_end);
-        
-        /* Utiliser seulement la RAM avant le heap */
-        mem_size = heap_start - mem_start;
-        
-        KINFO("[MEM]   Adjusted RAM: 0x%08X - 0x%08X (%u MB)\n", 
-              mem_start, mem_start + mem_size, mem_size / (1024*1024));
-    }
-
-    
     KINFO("[MEM] Initializing physical memory allocator...\n");
     KINFO("[MEM] RAM: 0x%08X - 0x%08X (%u MB)\n", 
             mem_start, mem_start + mem_size, mem_size / (1024*1024));
 
     paddr_t bitmap_start = mem_start;
-    
-    phys_alloc.start_addr = bitmap_start + (phys_alloc.bitmap_pages * PAGE_SIZE);;
-    phys_alloc.total_pages = mem_size / PAGE_SIZE;
+    paddr_t ram_end = mem_start + mem_size;
     
     /* Bitmap: 1 bit per page */
+    phys_alloc.total_pages = mem_size / PAGE_SIZE;
     bitmap_size_words = (phys_alloc.total_pages + 31) / 32;
     bitmap_size_bytes = bitmap_size_words * 4;
     phys_alloc.bitmap_pages = (bitmap_size_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+    phys_alloc.start_addr = bitmap_start + (phys_alloc.bitmap_pages * PAGE_SIZE);
+    if (phys_alloc.start_addr > ram_end) {
+        KERROR("[MEM] Bitmap consumes all platform RAM!\n");
+        return false;
+    }
+    phys_alloc.total_pages = (ram_end - phys_alloc.start_addr) / PAGE_SIZE;
     
     /* Placer le bitmap APReS le kernel et heap, pas a la fin de la RAM */
     //extern uint32_t __free_memory_start;
@@ -501,6 +564,8 @@ static void reserve_dtb_pages(void)
     paddr_t dtb_start = dtb_address;
     uint32_t dtb_size = (uint32_t)0x100000;
     paddr_t dtb_end = dtb_start + dtb_size;
+    paddr_t managed_start = phys_alloc.start_addr;
+    paddr_t ram_end = phys_alloc.start_addr + phys_alloc.total_pages * PAGE_SIZE;
 
     
     KINFO("[MEM] DTB layout from %s:\n", arch_platform_name());
@@ -508,22 +573,25 @@ static void reserve_dtb_pages(void)
     KINFO("[MEM]   DTB end:    0x%08X\n", dtb_start + dtb_size);
     KINFO("[MEM]   DTB size:   %u bytes (%u KB)\n", dtb_size, dtb_size / 1024);
     
-    /* Verifications de securite */
-    if (dtb_start < phys_alloc.start_addr) {
-        KERROR("[MEM] DTB starts before RAM!\n");
-        KINFO("[MEM]   DTB: 0x%08X, RAM: 0x%08X\n", dtb_start, phys_alloc.start_addr);
+    if (dtb_start == 0) {
+        KWARN("[MEM] No boot DTB address recorded, skipping DTB reservation\n");
         return;
     }
-    
-    paddr_t ram_end = phys_alloc.start_addr + phys_alloc.total_pages * PAGE_SIZE;
-    if (dtb_end > ram_end) {
-        KERROR("[MEM] Kernel extends beyond RAM!\n");
-        KINFO("[MEM]   Kernel end: 0x%08X, RAM end: 0x%08X\n", dtb_end, ram_end);
+
+    if (dtb_end <= managed_start || dtb_start >= ram_end) {
+        KWARN("[MEM] DTB outside managed RAM, skipping reservation\n");
+        KINFO("[MEM]   DTB: 0x%08X-0x%08X, managed RAM: 0x%08X-0x%08X\n",
+              dtb_start, dtb_end, managed_start, ram_end);
         return;
     }
+
+    if (dtb_start < managed_start)
+        dtb_start = managed_start;
+    if (dtb_end > ram_end)
+        dtb_end = ram_end;
     
     /* Reserver depuis le debut de la RAM jusqu'a la fin du kernel */
-    paddr_t dtb_start_page = dtb_start;  /* Debut de la DTB */
+    paddr_t dtb_start_page = ALIGN_DOWN(dtb_start, PAGE_SIZE);
     paddr_t dtb_end_page = ALIGN_UP(dtb_end, PAGE_SIZE);
     buddy_base = ALIGN_UP(dtb_end_page + PAGE_SIZE, PAGE_SIZE) ; 
     
@@ -563,9 +631,21 @@ static void reserve_bitmap_pages(void)
     
     paddr_t bitmap_start = (paddr_t)phys_alloc.bitmap;
     paddr_t bitmap_end = bitmap_start + (phys_alloc.bitmap_pages * PAGE_SIZE);
+    paddr_t managed_start = phys_alloc.start_addr;
+    paddr_t ram_end = phys_alloc.start_addr + phys_alloc.total_pages * PAGE_SIZE;
     
     KINFO("[MEM] Bitmap region: 0x%08X - 0x%08X (%u pages)\n",
             bitmap_start, bitmap_end, phys_alloc.bitmap_pages);
+
+    if (bitmap_end <= managed_start || bitmap_start >= ram_end) {
+        KINFO("[MEM] Bitmap is outside managed page range, already excluded\n");
+        return;
+    }
+
+    if (bitmap_start < managed_start)
+        bitmap_start = managed_start;
+    if (bitmap_end > ram_end)
+        bitmap_end = ram_end;
     
     uint32_t pages_reserved = 0;
     paddr_t addr;
@@ -598,11 +678,25 @@ static void reserve_heap_pages(void)
     
     paddr_t heap_start = (paddr_t)heap_base;
     paddr_t heap_end = heap_start + heap_size;
+    paddr_t managed_start = phys_alloc.start_addr;
+    paddr_t ram_end = phys_alloc.start_addr + phys_alloc.total_pages * PAGE_SIZE;
     
     KINFO("[MEM] === HEAP RESERVATION ===\n");
     KINFO("[MEM]   Heap start: 0x%08X\n", heap_start);
     KINFO("[MEM]   Heap end:   0x%08X\n", heap_end);
     KINFO("[MEM]   Heap size:  %u MB\n", heap_size / (1024*1024));
+
+    if (heap_end <= managed_start || heap_start >= ram_end) {
+        KWARN("[MEM] Heap outside managed RAM, skipping reservation\n");
+        KINFO("[MEM]   Heap: 0x%08X-0x%08X, managed RAM: 0x%08X-0x%08X\n",
+              heap_start, heap_end, managed_start, ram_end);
+        return;
+    }
+
+    if (heap_start < managed_start)
+        heap_start = managed_start;
+    if (heap_end > ram_end)
+        heap_end = ram_end;
     
     uint32_t reserved_count = 0;
     for (paddr_t addr = heap_start; addr < heap_end; addr += PAGE_SIZE) {

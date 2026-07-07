@@ -18,6 +18,7 @@
 
 #include <kernel/types.h>
 #include <kernel/address_space.h>
+#include <kernel/block_device.h>
 #include <kernel/fdt.h>
 #include <kernel/virtio_block.h>
 #include <kernel/memory.h>
@@ -75,6 +76,25 @@ typedef struct {
 } virtio_blk_pending_t;
 
 static virtio_blk_pending_t virtio_blk_pending = {0};
+static int virtio_blockdev_read(block_device_t *dev, uint64_t lba,
+                                uint32_t count, void *buffer);
+static int virtio_blockdev_write(block_device_t *dev, uint64_t lba,
+                                 uint32_t count, const void *buffer);
+static int virtio_blockdev_flush(block_device_t *dev);
+static void virtio_blockdev_shutdown(block_device_t *dev);
+
+static const block_device_ops_t virtio_block_ops = {
+    .read_sectors = virtio_blockdev_read,
+    .write_sectors = virtio_blockdev_write,
+    .flush = virtio_blockdev_flush,
+    .shutdown = virtio_blockdev_shutdown,
+};
+
+static block_device_t virtio_block_dev = {
+    .name = "virtio0",
+    .sector_size = 512,
+    .ops = &virtio_block_ops,
+};
 
 static void virtio_blk_acquire(void)
 {
@@ -407,6 +427,14 @@ bool virtio_blk_init_legacy(vaddr_t base_addr)
 
     ata_sector_size = sector_size;
     virtio_capacity_sectors = capacity;
+    virtio_block_dev.capacity_sectors = capacity;
+    virtio_block_dev.sector_size = sector_size;
+    virtio_block_dev.read_only = virtio_blk_readonly;
+    virtio_block_dev.driver_data = NULL;
+    if (!blk_register(&virtio_block_dev)) {
+        virtio_blk_mark_failed(base, "block core registration failed");
+        return false;
+    }
     
     KINFO("Device capacity: %u sectors (%u MB)\n", 
           (uint32_t)capacity, 
@@ -960,48 +988,9 @@ int virtio_blk_write_sectors(volatile uint32_t *mmio_base,
     return 0;
 }
 
-int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer) {
-
-    return virtio_blk_read_sectors( virtio_mmio_base, &global_vq, lba, count, buffer, VIRTIO_BLOCK_TIMEOUT);
-}
-
-int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer) {
-
-    return virtio_blk_write_sectors( virtio_mmio_base, &global_vq, lba, count, buffer, VIRTIO_BLOCK_TIMEOUT);
-}
-
-int blk_read_sector(uint64_t lba, void* buffer) {
-
-    return virtio_blk_read_sectors( virtio_mmio_base, &global_vq, lba, 1, buffer, VIRTIO_BLOCK_TIMEOUT);
-}
-
-int blk_write_sector(uint64_t lba, void* buffer) {
-
-    return virtio_blk_write_sectors( virtio_mmio_base, &global_vq, lba, 1, buffer, VIRTIO_BLOCK_TIMEOUT);
-}
-
-bool blk_is_initialized(void) {
-    return ata_sector_size > 0 && virtio_capacity_sectors > 0 && !virtio_blk_failed;
-}
-
-uint64_t blk_get_capacity_sectors(void)
-{
-    return virtio_capacity_sectors;
-}
-
-uint32_t blk_get_sector_size(void)
-{
-    return ata_sector_size;
-}
-
-bool blk_is_readonly(void)
-{
-    return virtio_blk_readonly;
-}
-
 int virtio_blk_flush(void)
 {
-    if (!blk_is_initialized())
+    if (ata_sector_size == 0 || virtio_capacity_sectors == 0 || virtio_blk_failed)
         return -1;
     if (!virtio_blk_flush_supported)
         return 0;
@@ -1034,7 +1023,7 @@ int virtio_blk_flush(void)
 
 void virtio_blk_shutdown(void)
 {
-    if (!blk_is_initialized())
+    if (ata_sector_size == 0 || virtio_capacity_sectors == 0 || virtio_blk_failed)
         return;
 
     int ret = virtio_blk_flush();
@@ -1045,11 +1034,40 @@ void virtio_blk_shutdown(void)
     mmio_write32(virtio_mmio_base, VIRTIO_MMIO_STATUS, 0);
     arch_data_sync_barrier();
     arch_instruction_sync_barrier();
+    blk_unregister(&virtio_block_dev);
 }
 
 uint32_t virtio_blk_get_irq(void)
 {
     return virtio_blk_irq;
+}
+
+static int virtio_blockdev_read(block_device_t *dev, uint64_t lba,
+                                uint32_t count, void *buffer)
+{
+    (void)dev;
+    return virtio_blk_read_sectors(virtio_mmio_base, &global_vq, lba, count,
+                                   buffer, VIRTIO_BLOCK_TIMEOUT);
+}
+
+static int virtio_blockdev_write(block_device_t *dev, uint64_t lba,
+                                 uint32_t count, const void *buffer)
+{
+    (void)dev;
+    return virtio_blk_write_sectors(virtio_mmio_base, &global_vq, lba, count,
+                                    (void *)buffer, VIRTIO_BLOCK_TIMEOUT);
+}
+
+static int virtio_blockdev_flush(block_device_t *dev)
+{
+    (void)dev;
+    return virtio_blk_flush();
+}
+
+static void virtio_blockdev_shutdown(block_device_t *dev)
+{
+    (void)dev;
+    virtio_blk_shutdown();
 }
 
 

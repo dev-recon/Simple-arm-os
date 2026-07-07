@@ -20,6 +20,7 @@
 #define _KERNEL_VIRTIO_BLOCK_H
 
 #include <kernel/arch_platform.h>
+#include <kernel/block_device.h>
 #include <kernel/types.h>
 #include <kernel/arch_barrier.h>
 

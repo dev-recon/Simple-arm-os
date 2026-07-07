@@ -36,8 +36,36 @@
 #define ARMOS_PLATFORM_KERNEL_MMIO_RTC_BASE 0u
 #endif
 
+#ifndef ARMOS_PLATFORM_HAS_PSCI
+#define ARMOS_PLATFORM_HAS_PSCI 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_UART0_PHYS_SECTION_BASE
+#define ARMOS_PLATFORM_UART0_PHYS_SECTION_BASE ARMOS_PLATFORM_UART0_PHYS_BASE
+#endif
+
 #ifndef ARMOS_PLATFORM_KERNEL_MMIO_VIRTIO_BASE
 #define ARMOS_PLATFORM_KERNEL_MMIO_VIRTIO_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_KERNEL_MMIO_EMMC_BASE
+#define ARMOS_PLATFORM_KERNEL_MMIO_EMMC_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_HAS_EMMC
+#define ARMOS_PLATFORM_HAS_EMMC 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_EMMC_PHYS_BASE
+#define ARMOS_PLATFORM_EMMC_PHYS_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_EMMC_PHYS_SECTION_BASE
+#define ARMOS_PLATFORM_EMMC_PHYS_SECTION_BASE ARMOS_PLATFORM_EMMC_PHYS_BASE
+#endif
+
+#ifndef ARMOS_PLATFORM_EMMC_KERNEL_BASE
+#define ARMOS_PLATFORM_EMMC_KERNEL_BASE 0u
 #endif
 
 #ifndef ARMOS_PLATFORM_VIRTIO_PHYS_START
@@ -149,6 +177,11 @@ static inline paddr_t arch_platform_uart0_phys_base(void)
     return (paddr_t)ARMOS_PLATFORM_UART0_PHYS_BASE;
 }
 
+static inline paddr_t arch_platform_uart0_phys_section_base(void)
+{
+    return (paddr_t)ARMOS_PLATFORM_UART0_PHYS_SECTION_BASE;
+}
+
 static inline vaddr_t arch_platform_uart0_kernel_base(void)
 {
     return (vaddr_t)ARMOS_PLATFORM_UART0_KERNEL_BASE;
@@ -219,9 +252,24 @@ static inline vaddr_t arch_platform_kernel_mmio_virtio_base(void)
     return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_VIRTIO_BASE;
 }
 
+static inline vaddr_t arch_platform_kernel_mmio_emmc_base(void)
+{
+    return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_EMMC_BASE;
+}
+
 static inline bool arch_platform_has_virtio_mmio(void)
 {
     return ARMOS_PLATFORM_VIRTIO_MMIO_SIZE != 0u;
+}
+
+static inline bool arch_platform_has_emmc(void)
+{
+    return ARMOS_PLATFORM_HAS_EMMC != 0u;
+}
+
+static inline bool arch_platform_has_psci(void)
+{
+    return ARMOS_PLATFORM_HAS_PSCI != 0u;
 }
 
 static inline bool arch_platform_has_pl050_keyboard(void)
@@ -275,6 +323,10 @@ static inline bool arch_platform_virtio_irq_from_phys(paddr_t phys, uint32_t* ou
 {
     if (!out_irq)
         return false;
+#if ARMOS_PLATFORM_VIRTIO_MMIO_SIZE == 0u
+    (void)phys;
+    return false;
+#else
     if (!arch_platform_has_virtio_mmio())
         return false;
     if (phys < arch_platform_virtio_phys_start())
@@ -285,6 +337,7 @@ static inline bool arch_platform_virtio_irq_from_phys(paddr_t phys, uint32_t* ou
     uint32_t index = (phys - arch_platform_virtio_phys_start()) / ARMOS_PLATFORM_VIRTIO_MMIO_SIZE;
     *out_irq = ARMOS_PLATFORM_VIRTIO_IRQ(index);
     return true;
+#endif
 }
 
 static inline paddr_t arch_platform_virtio_net_phys(void)
@@ -317,6 +370,21 @@ static inline uint32_t arch_platform_virtio_mmio_size(void)
     return ARMOS_PLATFORM_VIRTIO_MMIO_SIZE;
 }
 
+static inline paddr_t arch_platform_emmc_phys_base(void)
+{
+    return (paddr_t)ARMOS_PLATFORM_EMMC_PHYS_BASE;
+}
+
+static inline paddr_t arch_platform_emmc_phys_section_base(void)
+{
+    return (paddr_t)ARMOS_PLATFORM_EMMC_PHYS_SECTION_BASE;
+}
+
+static inline vaddr_t arch_platform_emmc_kernel_base(void)
+{
+    return (vaddr_t)ARMOS_PLATFORM_EMMC_KERNEL_BASE;
+}
+
 static inline bool arch_platform_phys_is_device(paddr_t phys)
 {
     return phys >= arch_platform_device_start() &&
@@ -325,10 +393,15 @@ static inline bool arch_platform_phys_is_device(paddr_t phys)
 
 static inline bool arch_platform_phys_is_virtio(paddr_t phys)
 {
+#if ARMOS_PLATFORM_VIRTIO_MMIO_SIZE == 0u
+    (void)phys;
+    return false;
+#else
     if (!arch_platform_has_virtio_mmio())
         return false;
     paddr_t start = arch_platform_virtio_phys_start();
     return phys >= start && phys < (start + ARMOS_PLATFORM_VIRTIO_MMIO_SIZE * 8u);
+#endif
 }
 
 static inline bool arch_platform_phys_is_irqctrl(paddr_t phys)

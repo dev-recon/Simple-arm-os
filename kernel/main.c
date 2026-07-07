@@ -164,6 +164,8 @@ void kernel_main(void)
     uint32_t total_mb;
     uint32_t available_mb;
     platform_devices_state_t platform_devices;
+    bool block_ready;
+    bool rootfs_ready = false;
 
     /* Phase 0: etats du processeur */
     enable_async_abort_irq_fiq();
@@ -232,9 +234,11 @@ void kernel_main(void)
     }
 #endif
 
-    platform_block_init();
+    block_ready = platform_block_init();
 
-    if (!init_vfs()) {
+    if (!block_ready) {
+        KBOOT_WARN("VFS: skipped, no block device");
+    } else if (!init_vfs()) {
         KBOOT_WARN("VFS: mount failed");
     } else {
         const disk_partition_t* ext2_part = disk_partition_get(DISK_PART_EXT2_ROOT);
@@ -248,16 +252,24 @@ void kernel_main(void)
         KBOOT_OKF("VFS: mounted ext2 on /");
         KBOOT_OKF("VFS: mounted proc on /proc");
         KBOOT_OKF("VFS: fat32 available on /mnt (manual)");
+        rootfs_ready = true;
     }    
 
     //trigger_timer_interrupt();
     /* Phase 5: Gestion des processus (APReS allocateurs) */
-    init_process_system();
+    if (rootfs_ready) {
+        init_process_system();
+    } else {
+        init_kernel_task_system();
+        KBOOT_WARN("Init: skipped, no root filesystem");
+    }
 
-    if (coredumpd_start() == 0)
-        KBOOT_OK("Core: coredump daemon");
-    else
-        KBOOT_WARN("Core: coredump daemon unavailable");
+    if (rootfs_ready) {
+        if (coredumpd_start() == 0)
+            KBOOT_OK("Core: coredump daemon");
+        else
+            KBOOT_WARN("Core: coredump daemon unavailable");
+    }
 
     if (platform_devices.tty1_graphics_ready) {
         if (display_start_daemon() == 0)

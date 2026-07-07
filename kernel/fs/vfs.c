@@ -271,7 +271,7 @@ int vfs_sync(void)
         ret = -EIO;
     if (ext2_sync() < 0)
         ret = -EIO;
-    if (virtio_blk_flush() < 0)
+    if (blk_flush() < 0)
         ret = -EIO;
 
     return ret;

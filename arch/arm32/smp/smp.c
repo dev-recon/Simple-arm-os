@@ -28,6 +28,7 @@
 #include <kernel/interrupt.h>
 #include <kernel/task.h>
 #include <kernel/timer.h>
+#include <kernel/arch_platform.h>
 #include <asm/arm.h>
 
 #define PSCI_0_2_FN_CPU_ON 0x84000003u
@@ -134,6 +135,16 @@ void smp_init_boot_cpu(void)
 void smp_start_secondary_cpus(void)
 {
     uint32_t entry = (uint32_t)smp_secondary_entry;
+
+    if (!arch_platform_has_psci()) {
+        for (uint32_t cpu = 0; cpu < possible_cpu_count; cpu++) {
+            if (cpu == boot_cpu_id)
+                continue;
+            smp_cpu_infos[cpu].state = SMP_CPU_OFFLINE;
+            smp_cpu_infos[cpu].start_result = -ENOSYS;
+        }
+        return;
+    }
 
     for (uint32_t cpu = 0; cpu < possible_cpu_count; cpu++) {
         if (cpu == boot_cpu_id)

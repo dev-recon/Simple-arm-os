@@ -73,6 +73,50 @@ static void configure_idle_task_for_cpu(uint32_t cpu_id, task_t* task)
     arch_task_context_set_returns_to_user(&task->context, false);
 }
 
+static void create_idle_tasks(void)
+{
+    extern void idle_task_func(void* arg);
+
+    idle_task = task_create_process("idle", idle_task_func, NULL, 255, TASK_TYPE_KERNEL);
+    if (!idle_task) {
+        panic("Failed to create idle task");
+    }
+    configure_idle_task_for_cpu(smp_boot_cpu_id(), idle_task);
+
+    for (uint32_t cpu = 0; cpu < smp_possible_cpu_count(); cpu++) {
+        char idle_name[TASK_NAME_MAX];
+        task_t* secondary_idle;
+
+        if (cpu == smp_boot_cpu_id())
+            continue;
+
+        snprintf(idle_name, sizeof(idle_name), "idle%u", cpu);
+        secondary_idle = task_create_process(idle_name, idle_task_func, NULL,
+                                             TASK_IDLE_PRIORITY, TASK_TYPE_KERNEL);
+        if (!secondary_idle) {
+            KWARN("SMP: failed to create idle task for CPU%u\n", cpu);
+            continue;
+        }
+
+        configure_idle_task_for_cpu(cpu, secondary_idle);
+        /*
+         * Secondary idle tasks are not runnable from the global runqueue, but
+         * they must be fully published before a secondary CPU can switch to its
+         * private idle context and before /proc walks the task list.
+         */
+        add_task_to_list(secondary_idle);
+        task_set_blocked(secondary_idle);
+    }
+}
+
+void init_kernel_task_system(void)
+{
+    init_signal_stack_allocator();
+    init_task_system();
+    create_idle_tasks();
+    add_to_ready_queue(idle_task);
+}
+
 void init_process_system(void)
 {
     /* Initialiser le gestionnaire de signal stacks */
@@ -108,39 +152,7 @@ void init_process_system(void)
     /* Configurer le contexte d'init avec votre fonction existante */
     //setup_task_context(init_process);
 
-    extern void idle_task_func(void* arg);
-    /* Creer la tache idle */
-    //idle_task = task_create("idle", idle_task_func, NULL, 255); /* Priorite la plus basse */
-    idle_task = task_create_process("idle", idle_task_func, NULL, 255, TASK_TYPE_KERNEL);
-    if (!idle_task) {
-        panic("Failed to create idle task");
-    }
-    configure_idle_task_for_cpu(smp_boot_cpu_id(), idle_task);
-
-    for (uint32_t cpu = 0; cpu < smp_possible_cpu_count(); cpu++) {
-        char idle_name[TASK_NAME_MAX];
-        task_t* secondary_idle;
-
-        if (cpu == smp_boot_cpu_id())
-            continue;
-
-        snprintf(idle_name, sizeof(idle_name), "idle%u", cpu);
-        secondary_idle = task_create_process(idle_name, idle_task_func, NULL,
-                                             TASK_IDLE_PRIORITY, TASK_TYPE_KERNEL);
-        if (!secondary_idle) {
-            KWARN("SMP: failed to create idle task for CPU%u\n", cpu);
-            continue;
-        }
-
-        configure_idle_task_for_cpu(cpu, secondary_idle);
-        /*
-         * Secondary idle tasks are not runnable from the global runqueue, but
-         * they must be fully published before a secondary CPU can switch to its
-         * private idle context and before /proc walks the task list.
-         */
-        add_task_to_list(secondary_idle);
-        task_set_blocked(secondary_idle);
-    }
+    create_idle_tasks();
 
 
     /* Mettre init dans la liste des taches pretes */
