@@ -32,7 +32,7 @@
 
 bool is_valid_user_ptr(const void* ptr)
 {
-    return IS_USER_ADDR((vaddr_t)(uintptr_t)ptr);
+    return memory_is_user_address((vaddr_t)(uintptr_t)ptr);
 }
 
 
@@ -151,6 +151,10 @@ bool is_valid_user_range(const void* ptr, size_t size)
     
     /* Verifier que la fin est dans l'espace utilisateur */
     if (!is_valid_user_ptr((void*)(end - 1))) {
+        return false;
+    }
+
+    if (memory_range_overlaps_low_kernel_alias(start, end)) {
         return false;
     }
     
@@ -356,7 +360,7 @@ int copy_to_user(void* to, const void* from, size_t n)
     }
     
     /* Verifier que 'from' est dans l'espace kernel */
-    if (!IS_KERNEL_ADDR(from_addr)) {
+    if (!memory_is_kernel_address(from_addr)) {
         KERROR("[COPY] ERROR: copy_to_user source 0x%08X not in kernel space\n", 
                 from_addr);
         return -1;
@@ -411,7 +415,7 @@ int copy_from_user(void* to, const void* from, size_t n)
     }
     
     /* Verifier que 'to' est dans l'espace kernel */
-    if (!IS_KERNEL_ADDR(to_addr)) {
+    if (!memory_is_kernel_address(to_addr)) {
         KERROR("[COPY] ERROR: copy_from_user destination 0x%08X not in kernel space\n", 
                 to_addr);
         return -1;

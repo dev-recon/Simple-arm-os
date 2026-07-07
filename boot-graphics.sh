@@ -1,5 +1,5 @@
 #!/bin/bash
-# boot-graphics.sh - boot an existing kernel.bin + disk.img with a QEMU
+# boot-graphics.sh - boot an existing platform kernel + disk image with a QEMU
 # graphics window for framebuffer/GPU experiments.
 #
 # This script keeps the PL011 UART console on stdio as tty0 and opens a
@@ -55,7 +55,7 @@ select_display() {
 QEMU="$(select_qemu "${1:-}")"
 . "$ROOT_DIR/tools/qemu_platform_env.sh"
 QEMU_DISPLAY="$(select_display)"
-SMP_CPUS="${SMP_CPUS:-1}"
+SMP_CPUS="${SMP_CPUS:-${QEMU_SMP}}"
 
 GPU_DEVICE="${QEMU_GPU_DEVICE}"
 if [ -n "${GPU_XRES:-}" ] || [ -n "${GPU_YRES:-}" ]; then
@@ -64,13 +64,15 @@ if [ -n "${GPU_XRES:-}" ] || [ -n "${GPU_YRES:-}" ]; then
     GPU_DEVICE="${GPU_DEVICE},xres=${GPU_XRES},yres=${GPU_YRES}"
 fi
 
-if [ ! -f kernel.bin ]; then
-    echo "Error: kernel.bin not found. Run ./run.sh first to build everything."
+if [ ! -f "${QEMU_KERNEL_IMAGE}" ]; then
+    echo "Error: kernel image not found: ${QEMU_KERNEL_IMAGE}"
+    echo "Run ./run.sh or ./build.sh for TARGET_PLATFORM=${TARGET_PLATFORM} first."
     exit 1
 fi
 
-if [ ! -f disk.img ]; then
-    echo "Error: disk.img not found. Run ./run.sh first to create the disk image."
+if [ "${QEMU_BLOCK_ENABLED}" != "0" ] && [ ! -f "${QEMU_DISK_IMAGE}" ]; then
+    echo "Error: disk image not found: ${QEMU_DISK_IMAGE}"
+    echo "Run ./run.sh or ./build.sh for TARGET_PLATFORM=${TARGET_PLATFORM} first."
     exit 1
 fi
 
@@ -79,21 +81,67 @@ if ! command -v "$QEMU" >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "=== Booting existing kernel.bin + disk.img with virtio-gpu ==="
+if [ -z "${GPU_DEVICE}" ]; then
+    echo "Error: platform '${TARGET_ARCH}/${TARGET_PLATFORM}' does not define a QEMU GPU device"
+    exit 1
+fi
+
+if [ -z "${QEMU_INPUT_DEVICE}" ]; then
+    echo "Error: platform '${TARGET_ARCH}/${TARGET_PLATFORM}' does not define a QEMU input device"
+    exit 1
+fi
+
+echo "=== Booting existing ${QEMU_KERNEL_IMAGE} with virtio-gpu ==="
 echo "UART console stays on this terminal; graphics output opens in a QEMU window."
 echo "QEMU: $("$QEMU" --version | head -n 1)"
 echo "Platform: ${TARGET_ARCH}/${TARGET_PLATFORM}"
 echo "Machine: ${QEMU_MACHINE}, CPU: ${QEMU_CPU}"
+echo "Memory: ${QEMU_MEMORY}"
+echo "Kernel: ${QEMU_KERNEL_IMAGE}"
 echo "GPU: ${GPU_DEVICE}, display=${QEMU_DISPLAY}"
+if [ "${QEMU_BLOCK_ENABLED}" != "0" ]; then
+    echo "Disk: ${QEMU_DISK_IMAGE}"
+    if [ -n "${QEMU_BLOCK_DEVICE}" ]; then
+        echo "Block: ${QEMU_BLOCK_IF} ${QEMU_BLOCK_DEVICE}"
+    else
+        echo "Block: ${QEMU_BLOCK_IF}"
+    fi
+else
+    echo "Block: disabled for this platform"
+fi
+if [ -n "${QEMU_KERNEL_LOADER_ADDR}" ]; then
+    echo "Kernel loader: ${QEMU_KERNEL_LOADER_ADDR}"
+fi
 echo "SMP: ${SMP_CPUS} CPU(s)"
-"$QEMU" -M "${QEMU_MACHINE}" -cpu "${QEMU_CPU}" \
-    -m 2G -smp "${SMP_CPUS}" \
-    -drive file=disk.img,if=none,format=raw,id=hd0 \
-    -device "${QEMU_BLOCK_DEVICE}" \
-    -device "${GPU_DEVICE}" \
-    -device "${QEMU_INPUT_DEVICE}" \
-    -chardev stdio,id=uart0,signal=off \
-    -serial chardev:uart0 \
-    -monitor none \
-    -kernel kernel.bin \
+
+QEMU_KERNEL_ARGS=(-kernel "${QEMU_KERNEL_IMAGE}")
+if [ -n "${QEMU_KERNEL_LOADER_ADDR}" ]; then
+    QEMU_KERNEL_ARGS=(-device "loader,file=${QEMU_KERNEL_IMAGE},addr=${QEMU_KERNEL_LOADER_ADDR},cpu-num=0")
+fi
+
+QEMU_ARGS=(-M "${QEMU_MACHINE}" -cpu "${QEMU_CPU}" -m "${QEMU_MEMORY}" -smp "${SMP_CPUS}")
+if [ "${QEMU_BLOCK_ENABLED}" != "0" ]; then
+    case "${QEMU_BLOCK_IF}" in
+        sd)
+            QEMU_ARGS+=(-drive "file=${QEMU_DISK_IMAGE},if=sd,format=raw")
+            ;;
+        virtio-mmio)
+            QEMU_ARGS+=(-drive "file=${QEMU_DISK_IMAGE},if=none,format=raw,id=hd0" -device "${QEMU_BLOCK_DEVICE}")
+            ;;
+        *)
+            echo "Error: unsupported QEMU_BLOCK_IF='${QEMU_BLOCK_IF}'" >&2
+            exit 1
+            ;;
+    esac
+fi
+QEMU_ARGS+=(
+    -device "${GPU_DEVICE}"
+    -device "${QEMU_INPUT_DEVICE}"
+    -chardev stdio,id=uart0,signal=off
+    -serial chardev:uart0
+    -monitor none
+    "${QEMU_KERNEL_ARGS[@]}"
     -display "${QEMU_DISPLAY}"
+)
+
+"$QEMU" "${QEMU_ARGS[@]}"

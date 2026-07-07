@@ -1,13 +1,17 @@
 ENTRY(_start)
 
+KERNEL_LINK_ADDR = DEFINED(KERNEL_LINK_ADDR) ? KERNEL_LINK_ADDR : 0x40010000;
+RAM_BASE_ADDR = DEFINED(RAM_BASE_ADDR) ? RAM_BASE_ADDR : 0x40000000;
+RAM_END_ADDR = DEFINED(RAM_END_ADDR) ? RAM_END_ADDR : 0xC0000000;
+
 MEMORY
 {
-    RAM (rwx) : ORIGIN = 0x40010000, LENGTH = 2000M
+    RAM (rwx) : ORIGIN = KERNEL_LINK_ADDR, LENGTH = RAM_END_ADDR - KERNEL_LINK_ADDR
 }
 
 SECTIONS
 {
-    . = 0x40010000;
+    . = KERNEL_LINK_ADDR;
 
     /* Vecteurs d'interruptions ARM (alignes 32 bytes) */
     .vectors ALIGN(32) : {
@@ -160,8 +164,8 @@ SECTIONS
     __heap_size = __heap_end - __heap_start;
     
     /* Limite de la RAM pour machine virt */
-    __ram_start = 0x40000000;
-    __ram_end = 0x140000000;  /* 4GB pour virt */
+    __ram_start = RAM_BASE_ADDR;
+    __ram_end = RAM_END_ADDR;
     __ram_size = __ram_end - __ram_start;
     
     /* Sections de debug */

@@ -16,6 +16,9 @@ USERFS_DIR="userfs"
 USERLAND_DIR="userland"
 BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 BUILD_TCC="${BUILD_TCC:-1}"
+TARGET_ARCH="${TARGET_ARCH:-arm32}"
+TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
+ARCH="${ARCH:-arm-none-eabi-}"
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
@@ -38,6 +41,7 @@ select_qemu() {
 QEMU="$(select_qemu "${1:-}")"
 
 echo "=== RUN KERNEL SCRIPT ==="
+echo "Target: ${TARGET_ARCH}/${TARGET_PLATFORM}"
 
 cd "$ROOT_DIR"
 
@@ -48,7 +52,7 @@ for dir in "$USERFS_DIR" "$USERLAND_DIR"; do
     fi
 done
 
-for tool in make python3 arm-none-eabi-gcc arm-none-eabi-ld arm-none-eabi-objcopy arm-none-eabi-objdump mkfs.fat mcopy mmd mke2fs debugfs; do
+for tool in make python3 "${ARCH}gcc" "${ARCH}ld" "${ARCH}objcopy" "${ARCH}objdump" mkfs.fat mcopy mmd mke2fs debugfs; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Error: required tool '$tool' not found in PATH"
         exit 1
@@ -63,7 +67,7 @@ fi
 if [ "$BUILD_NEWLIB" = "1" ]; then
     if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_SYSROOT/lib/libc.a" ]; then
         echo "=== Building repo-local newlib sysroot ==="
-        NEWLIB_INSTALL_ROOT="$ROOT_DIR/build/newlib-sysroot" ./tools/build_newlib.sh
+        ARCH="$ARCH" NEWLIB_INSTALL_ROOT="$ROOT_DIR/build/newlib-sysroot" ./tools/build_newlib.sh
     fi
 fi
 
@@ -72,21 +76,22 @@ make -C "$USERLAND_DIR" clean
 make -C "$USERLAND_DIR" install \
     BUILD_NEWLIB="$BUILD_NEWLIB" \
     ENABLE_TCC="$BUILD_TCC" \
+    ARCH="$ARCH" \
     NEWLIB_SYSROOT="$NEWLIB_SYSROOT"
 
 if [ "$BUILD_TCC" = "1" ]; then
     echo "=== Building native TinyCC bundle ==="
-    NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_tcc_native.sh
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_tcc_native.sh
     rsync -a build/tcc-native/bundle/opt/tcc/ userfs/opt/tcc/
 fi
 
 echo "=== Rebuilding kernel ==="
-make kernel.bin
+make platform-kernel ARCH="$ARCH" CROSS_COMPILE="$ARCH" TARGET_ARCH="$TARGET_ARCH" TARGET_PLATFORM="$TARGET_PLATFORM"
 
 echo "=== Recreating disk image ==="
-rm -f disk.img fat32.img ext2.img
-make disk.img
+rm -f disk.img fat32.img ext2.img "build/images/disk-${TARGET_PLATFORM}.img"
+make platform-disk ARCH="$ARCH" CROSS_COMPILE="$ARCH" TARGET_ARCH="$TARGET_ARCH" TARGET_PLATFORM="$TARGET_PLATFORM"
 
 echo "=== Booting QEMU ==="
 echo "QEMU: $("$QEMU" --version | head -n 1)"
-make run-userfs QEMU="$QEMU"
+QEMU="$QEMU" TARGET_ARCH="$TARGET_ARCH" TARGET_PLATFORM="$TARGET_PLATFORM" ./boot.sh

@@ -5,6 +5,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARCH="${ARCH:-arm-none-eabi-}"
+TARGET_ARCH="${TARGET_ARCH:-arm32}"
+TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
 BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 BUILD_TCC="${BUILD_TCC:-1}"
 BUILD_NCURSES="${BUILD_NCURSES:-0}"
@@ -24,6 +26,7 @@ fi
 cd "$ROOT_DIR"
 
 echo "=== BUILD ARMOS ==="
+echo "Target: ${TARGET_ARCH}/${TARGET_PLATFORM}"
 
 for dir in userfs userland kernel newlib-port; do
     if [ ! -d "$dir" ]; then
@@ -79,12 +82,14 @@ if [ "$BUILD_NANO" = "1" ]; then
 fi
 
 echo "=== Rebuilding kernel ==="
-make kernel.bin ARCH="$ARCH" CROSS_COMPILE="$ARCH"
+make platform-kernel ARCH="$ARCH" CROSS_COMPILE="$ARCH" TARGET_ARCH="$TARGET_ARCH" TARGET_PLATFORM="$TARGET_PLATFORM"
 
 echo "=== Recreating disk image ==="
-rm -f disk.img fat32.img ext2.img
-make disk.img ARCH="$ARCH" CROSS_COMPILE="$ARCH"
+rm -f disk.img fat32.img ext2.img "build/images/disk-${TARGET_PLATFORM}.img"
+make platform-disk ARCH="$ARCH" CROSS_COMPILE="$ARCH" TARGET_ARCH="$TARGET_ARCH" TARGET_PLATFORM="$TARGET_PLATFORM"
 
 echo "=== BUILD DONE ==="
+echo "Kernel image: build/images/kernel-${TARGET_PLATFORM}.bin"
+echo "Disk image:   build/images/disk-${TARGET_PLATFORM}.img"
 echo "Boot existing build with: ./boot.sh"
 echo "Rebuild and boot with:    ./run.sh"

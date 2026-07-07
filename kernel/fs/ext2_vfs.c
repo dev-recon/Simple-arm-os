@@ -639,7 +639,7 @@ int ext2_sync(void)
     }
 
     if (ext2_dirty) {
-        ret = virtio_blk_flush();
+        ret = blk_flush();
         if (ret < 0) {
             ext2_stats.sync_errors++;
             ret = -EIO;

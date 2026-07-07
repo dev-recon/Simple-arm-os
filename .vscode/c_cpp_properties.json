@@ -2,18 +2,46 @@
     "configurations": [
         {
             "name": "ARM",
-            "compilerPath": "/opt/homebrew/bin/arm-none-eabi-gcc",
+            "compilerPath": "arm-none-eabi-gcc",
             "defines": [
+                "ARMV7A_KERNEL",
                 "_FORTIFY_SOURCE=0",
                 "__NO_BUILTIN"
             ],
             "includePath": [
-                "./include/",
-                "./libc/include",
+                "./arch/arm32/include",
+                "./include",
+                "./build/generated",
                 "./build/include",
-                "./userland/myshell/include"
+                "./libc/include",
+                "./build/newlib-sysroot/arm-none-eabi/include",
+                "./userland/include",
+                "./userland/system/mash/include",
+                "./userland/opt/tcc/include",
+                "./userland/opt/tcc/src/include",
+                "./userland/legacy/myshell/include"
             ],
+            "browse": {
+                "path": [
+                    "./arch/arm32/include",
+                    "./include",
+                    "./build/generated",
+                    "./build/include",
+                    "./libc/include",
+                    "./build/newlib-sysroot/arm-none-eabi/include",
+                    "./userland/include",
+                    "./userland/system/mash/include",
+                    "./userland/opt/tcc/include",
+                    "./userland/opt/tcc/src/include",
+                    "./userland/legacy/myshell/include"
+                ],
+                "limitSymbolsToIncludedHeaders": true
+            },
             "compilerArgs": [
+                "-mcpu=cortex-a15",
+                "-marm",
+                "-mfpu=neon-vfpv4",
+                "-mfloat-abi=soft",
                 "-fno-builtin",
                 "-nostdlib",
                 "-nostdinc"
@@ -22,7 +50,7 @@
                 "/System/Library/Frameworks",
                 "/Library/Frameworks"
             ],
-            "intelliSenseMode": "macos-clang-x64",
+            "intelliSenseMode": "gcc-arm",
             "cStandard": "gnu99",
             "cppStandard": "c++14"
         }

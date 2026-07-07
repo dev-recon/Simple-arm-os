@@ -33,6 +33,7 @@
 #include <kernel/smp.h>
 #include <kernel/arch_barrier.h>
 #include <kernel/arch_cpu.h>
+#include <kernel/arch_memory.h>
 #include <kernel/file.h>
 
 _Static_assert(offsetof(task_t, context) == 48,
@@ -1742,9 +1743,16 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
             return NULL;
         }
 
+        /*
+         * A newly-created process still starts in a kernel entry function
+         * (init launcher, shell launcher, etc.).  Keep its CPU context on the
+         * kernel TTBR0 until execve() has built a real user context.  This is
+         * required on platforms where the kernel link address sits below the
+         * TTBR split.
+         */
         arch_task_context_set_address_space(&task->context,
-                                            (uintptr_t)task->process->vm->pgdir,
-                                            task->process->vm->asid);
+                                            arch_kernel_address_space_context(),
+                                            ASID_KERNEL);
         
         /* Initialiser les fichiers */
         memset(task->process->files, 0, sizeof(task->process->files));

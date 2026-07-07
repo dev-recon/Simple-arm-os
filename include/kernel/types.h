@@ -141,6 +141,7 @@ typedef enum {
 #define ELOOP          40       /* Too many symbolic links */
 #define EADDRINUSE     98       /* Address already in use */
 #define ENOTCONN      107       /* Transport endpoint is not connected */
+#define ETIMEDOUT     110       /* Connection timed out */
 #define EINPROGRESS   115       /* Operation now in progress */
 
 /* === TYPES DE SYNCHRONISATION === */

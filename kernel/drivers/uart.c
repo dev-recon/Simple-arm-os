@@ -33,6 +33,12 @@
  */
 static uintptr_t uart_mmio_base;
 
+static inline void uart_ensure_mmio_base(void)
+{
+    if (uart_mmio_base == 0)
+        uart_mmio_base = (uintptr_t)arch_platform_uart0_phys_base();
+}
+
 /* Registres PL011 UART */
 #define UART_REG(offset) (*(volatile uint32_t*)(uart_mmio_base + (offset)))
 #define UART_DR         UART_REG(0x00)  /* Data */
@@ -95,6 +101,8 @@ static void uart_configure_baud(void)
     if (clock_hz == 0 || baud == 0)
         return;
 
+    uart_ensure_mmio_base();
+
     /*
      * PL011 baud divisor:
      *   bauddiv = uartclk / (16 * baud)
@@ -125,8 +133,7 @@ void uart_use_kernel_mmio_alias(void)
  */
 void uart_init(void)
 {
-    if (uart_mmio_base == 0)
-        uart_mmio_base = (uintptr_t)arch_platform_uart0_phys_base();
+    uart_ensure_mmio_base();
 
     /* Desactiver l'UART */
     UART_CR = 0;
@@ -156,6 +163,7 @@ void uart_init(void)
 void uart_putc(char c)
 {
     unsigned long flags;
+    uart_ensure_mmio_base();
     spin_lock_irqsave(&uart_lock, &flags);
 
     int timeout = 100000;
@@ -174,6 +182,7 @@ void uart_putc(char c)
 
 bool uart_tx_ready(void)
 {
+    uart_ensure_mmio_base();
     return (UART_FR & UART_FR_TXFF) == 0;
 }
 
@@ -182,6 +191,7 @@ bool uart_try_putc(char c)
     unsigned long flags;
     bool written = false;
 
+    uart_ensure_mmio_base();
     spin_lock_irqsave(&uart_lock, &flags);
     if ((UART_FR & UART_FR_TXFF) == 0) {
         UART_DR = c;
@@ -196,6 +206,7 @@ void uart_set_tx_irq_enabled(bool enabled)
 {
     unsigned long flags;
 
+    uart_ensure_mmio_base();
     spin_lock_irqsave(&uart_lock, &flags);
     if (enabled)
         UART_IMSC |= UART_INT_TX;
@@ -225,6 +236,8 @@ void uart_puts(const char* str)
  */
 int uart_getc(void)
 {
+    uart_ensure_mmio_base();
+
     /* Verifier si des donnees sont disponibles */
     if (UART_FR & UART_FR_RXFE) {
         return -1;  /* Pas de donnees */
@@ -349,6 +362,8 @@ bool uart_test_loopback(void)
 {
     const char test_char = 'A';
     char received;
+
+    uart_ensure_mmio_base();
     
     /* Activer le mode loopback */
     UART_CR |= UART_CR_LBE;
@@ -373,6 +388,8 @@ bool uart_test_loopback(void)
  */
 void uart_dump_registers(void)
 {
+    uart_ensure_mmio_base();
+
     uart_puts("\n=== etat UART PL011 ===\n");
     
     uart_puts("FR (Flag):     0x");
@@ -411,6 +428,8 @@ void putchar_kernel(char c) {
 void uart_flush(void)
 {
     int timeout = 100000;
+
+    uart_ensure_mmio_base();
     
     /* Utiliser directement UART_FR qui est deja defini */
     while (!(UART_FR & UART_FR_TXFE) && timeout > 0) {
@@ -423,6 +442,8 @@ void uart_flush(void)
 }
 
 bool uart_has_data(void) {
+    uart_ensure_mmio_base();
+
     uint32_t uart_flags = UART_FR;
     
     /* RXFE is set when the PL011 receive FIFO is empty. */

@@ -33,7 +33,6 @@ typedef struct {
     uint32_t debug_features;
 } cpu_memory_info_t;
 
-/* Fonctions de detection */
 static uint32_t detect_memory_from_dtb(void* dtb_ptr);
 static cpu_memory_info_t get_cpu_memory_info(void);
 static void print_cpu_memory_features(void);
@@ -49,6 +48,23 @@ void init_memory_detection(void)
 
 uint32_t get_kernel_memory_size(void){
     return kernel_memory_size;
+}
+
+static uint32_t clamp_memory_to_platform_window(uint32_t size)
+{
+    paddr_t ram_start = arch_platform_ram_start();
+    paddr_t device_start = arch_platform_device_start();
+    uint64_t ram_end = (uint64_t)ram_start + size;
+
+    /*
+     * Some ARM boards, notably Raspberry Pi 2, expose MMIO inside what a DTB
+     * may otherwise describe as a broad RAM span. Never let generic RAM
+     * mapping/probing cross into the first platform device window.
+     */
+    if (device_start > ram_start && ram_end > device_start)
+        return device_start - ram_start;
+
+    return size;
 }
 
 /* Fonction principale exportee */
@@ -69,6 +85,7 @@ uint32_t detect_memory(void)
     if (dtb && dtb != (void*)0) {
         uint32_t dtb_memory = detect_memory_from_dtb(dtb);
         if (dtb_memory > 0) {
+            dtb_memory = clamp_memory_to_platform_window(dtb_memory);
             KINFO("Memory from DTB: %d MB\n", dtb_memory / (1024*1024));
             kernel_memory_size = dtb_memory ;
             return dtb_memory;
@@ -77,6 +94,7 @@ uint32_t detect_memory(void)
     
     /* 3. Detection intelligente par sondage */
     uint32_t detected = detect_memory_intelligent();
+    detected = clamp_memory_to_platform_window(detected);
     KINFO("Total detected memory: %d MB\n", detected / (1024*1024));
     kernel_memory_size = detected;
     return detected;
@@ -111,12 +129,30 @@ static uint32_t detect_memory_from_dtb(void* dtb_ptr)
         uint32_t len;
         uint32_t* reg = (uint32_t*)fdt_get_property(dtb_ptr, node, "reg", &len);
         if (reg) {
-            uint64_t base64 = ((uint64_t)fdt32_to_cpu(reg[0]) << 32) | fdt32_to_cpu(reg[1]);
-            uint64_t size64 = ((uint64_t)fdt32_to_cpu(reg[2]) << 32) | fdt32_to_cpu(reg[3]);
+            uint64_t base64;
+            uint64_t size64;
+
+            /*
+             * QEMU virt uses #address-cells/#size-cells = <2>/<2>, while
+             * Raspberry Pi style trees commonly use <1>/<1> for /memory.
+             * Decode the common forms explicitly; reading four cells from a
+             * two-cell property turns the following FDT tokens into a bogus
+             * RAM size.
+             */
+            if (len >= 16) {
+                base64 = ((uint64_t)fdt32_to_cpu(reg[0]) << 32) | fdt32_to_cpu(reg[1]);
+                size64 = ((uint64_t)fdt32_to_cpu(reg[2]) << 32) | fdt32_to_cpu(reg[3]);
+            } else if (len >= 8) {
+                base64 = fdt32_to_cpu(reg[0]);
+                size64 = fdt32_to_cpu(reg[1]);
+            } else {
+                KWARN("Memory reg property too short: %u bytes\n", len);
+                return 0;
+            }
 
             if ((base64 >> 32) != 0 || (size64 >> 32) != 0) {
                 KERROR("64-bit memory range not supported on ARMv7: base=0x%llx, size=0x%llx\n", base64, size64);
-                return -1;
+                return 0;
             }
 
             paddr_t base = (paddr_t)(base64 & 0xFFFFFFFF);

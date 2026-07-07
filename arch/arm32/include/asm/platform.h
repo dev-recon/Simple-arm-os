@@ -23,8 +23,10 @@
 
 #if defined(ARMOS_PLATFORM_QEMU_VIRT)
 #include <asm/platform/qemu_virt.h>
+#elif defined(ARMOS_PLATFORM_RASPI2)
+#include <asm/platform/raspi2.h>
 #else
-#error "No ARM32 platform selected. Define ARMOS_PLATFORM_QEMU_VIRT or add a new platform header."
+#error "No ARM32 platform selected. Define ARMOS_PLATFORM_QEMU_VIRT, ARMOS_PLATFORM_RASPI2, or add a new platform header."
 #endif
 
 #endif /* _ASM_PLATFORM_H */

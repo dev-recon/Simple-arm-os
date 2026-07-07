@@ -20,6 +20,7 @@
 #define _KERNEL_MEMORY_H
 
 #include <kernel/arch_mmu.h>
+#include <kernel/linker.h>
 #include <kernel/types.h>
 #include <kernel/user_layout.h>
 
@@ -76,14 +77,42 @@ typedef struct vm_space {
  */
 vaddr_t get_split_boundary(void);
 
+static inline vaddr_t memory_low_kernel_alias_start(void)
+{
+    return KERNEL_START & 0xFFF00000u;
+}
+
+static inline vaddr_t memory_low_kernel_alias_end(void)
+{
+    vaddr_t end = (KERNEL_HEAP_END + 0xFFFFFu) & 0xFFF00000u;
+    vaddr_t split = get_split_boundary();
+
+    return end > split ? split : end;
+}
+
+static inline bool memory_range_overlaps_low_kernel_alias(vaddr_t start,
+                                                          vaddr_t end_exclusive)
+{
+    if (KERNEL_START >= get_split_boundary() || end_exclusive <= start)
+        return false;
+
+    return start < memory_low_kernel_alias_end() &&
+           end_exclusive > memory_low_kernel_alias_start();
+}
+
+static inline bool memory_is_low_kernel_alias(vaddr_t addr)
+{
+    return memory_range_overlaps_low_kernel_alias(addr, addr + 1);
+}
+
 static inline bool memory_is_user_address(vaddr_t addr)
 {
-    return addr < get_split_boundary();
+    return addr < get_split_boundary() && !memory_is_low_kernel_alias(addr);
 }
 
 static inline bool memory_is_kernel_address(vaddr_t addr)
 {
-    return addr >= get_split_boundary();
+    return addr >= get_split_boundary() || memory_is_low_kernel_alias(addr);
 }
 
 /* VMA flags */

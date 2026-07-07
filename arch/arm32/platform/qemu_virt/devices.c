@@ -71,14 +71,14 @@ platform_devices_state_t platform_devices_init(void)
     return state;
 }
 
-void platform_block_init(void)
+bool platform_block_init(void)
 {
     uint64_t disk_sectors;
     uint32_t disk_mb;
 
     if (!init_ata()) {
         KBOOT_WARN("Block: virtio0 unavailable");
-        return;
+        return false;
     }
 
     disk_sectors = ata_get_capacity_sectors();
@@ -87,6 +87,8 @@ void platform_block_init(void)
 
     if (!disk_layout_init_from_mbr())
         KBOOT_WARN("Partition: using compiled fallback layout");
+
+    return true;
 }
 
 void platform_block_shutdown(void)
