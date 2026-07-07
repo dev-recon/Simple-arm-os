@@ -493,7 +493,6 @@ void init_temp_mapping_system(void)
     }
     
     KINFO("Temporary mapping system initialized and validated\n");
-    //debug_all_temp_slots();
 }
 
 /**

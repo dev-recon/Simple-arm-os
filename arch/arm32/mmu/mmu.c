@@ -66,7 +66,7 @@ static void setup_kernel_space(void);
 static void setup_user_template(void);
 static void map_kernel_mmio_alias(vaddr_t vaddr, paddr_t paddr);
 static bool is_valid_vaddr(vaddr_t vaddr);
-paddr_t allocate_l2_page(bool is_kernel);
+paddr_t allocate_l2_page(void);
 void check_address_content(paddr_t phys_addr, const char* step);
 static int map_user_page_with_perm(pgdir_t pgdir, vaddr_t vaddr,
                                    paddr_t phys_addr, uint32_t vma_flags,
@@ -185,114 +185,6 @@ static int update_user_pte(pgdir_t pgdir, vaddr_t vaddr, paddr_t phys_addr,
     return 0;
 }
 
-
-
-void setup_kernel_asid_context(void)
-{    
-    KDEBUG("Setting up ASID %d kernel context...\n", ASID_KERNEL);
-    
-    /*
-     * The kernel stores TTBR0 page tables in real platform RAM, while TTBR0
-     * describes the low user address space below the architecture split.
-     * Keep those two domains explicit: physical page-table storage is not the
-     * same thing as the virtual user addresses it describes.
-     */
-    
-    /* Allouer une page physique réelle pour la table TTBR0 */
-    //void* ttbr0_phys_page = allocate_pages(2);  // Retourne adresse physique >= 0x40000000
-    //if (!ttbr0_phys_page) {
-    //    panic("Cannot allocate physical page for TTBR0 table");
-   // }
-    
-    /* Vérifier l'alignement 4KB requis pour les tables de pages ARM */
-    //if (ttbr0_phys_addr & 0xFFF) {
-         /* Forcer l'alignement si nécessaire */
-        //KDEBUG("  Forced alignment: 0x%08X -> 0x%08X\n", ttbr0_phys_addr, aligned_addr);
-        
-        /* Vérifier que l'adresse alignée est dans la zone allouée */
-        //if (aligned_addr >= ttbr0_phys_addr && aligned_addr < ttbr0_phys_addr + (2 * PAGE_SIZE)) {
-        //    ttbr0_phys_addr = aligned_addr;
-        //    KINFO("create_vm_space: Using aligned address 0x%08X\n", aligned_addr);
-        //}
-        //else{
-        //    panic("Cannot align 4KB physical page for TTBR0 table");
-       // }
-    //}
-    
-    /* 
-     * Stocker l'adresse physique pour configurer le registre TTBR0
-     * Le processeur utilisera cette adresse physique directement
-     */
-    //kernel_ttbr0 = (uint32_t*)ttbr0_phys_addr;  // Adresse physique de la table
-    //ttbr0_pgdir = kernel_ttbr0;
-    
-    KDEBUG("kernel_ttbr0 (physical) set to: 0x%08X\n", (uint32_t)kernel_ttbr0);
-    
-    /*
-     * Pour initialiser la table, nous devons y accéder via un mapping temporaire
-     * car nous sommes en mode kernel (TTBR1) et la table est en RAM physique
-     */
-    //uint32_t ttbr0_virt = map_temp_page(ttbr0_phys_addr);
-    uint32_t* ttbr0_table = ttbr0_pgdir;
-    
-    KDEBUG("TTBR0 table temporarily mapped at virtual: 0x%08X\n", (uint32_t)ttbr0_table);
-    
-    /* Initialiser la table (16KB = 4096 entrées de 32-bit) */
-    //memset(ttbr0_table, 0, 16 * 1024);  // Vider toute la table
-
-#if(0)
-    /*
-     * Mapper quelques sections critiques dans l'espace TTBR0 (< 0x40000000)
-     * Ces mappings pointent vers la RAM physique (>= 0x40000000)
-     */
-    int mapped_sections = 0;
-    
-    /* Exemple : mapper 16MB d'espace user (0x01000000-0x01FFFFFF) 
-     * vers de la RAM physique libre */
-    void* user_ram = allocate_pages(16);  // 16 pages = 64KB pour commencer
-    if (user_ram) {
-        uint32_t user_phys_base = (uint32_t)user_ram;
-        
-        /* Mapper section 0x01000000 vers la RAM user allouée */
-        uint32_t virt_section = 0x01000000;  // 16MB dans l'espace TTBR0
-        uint32_t phys_section = user_phys_base & 0xFFF00000;  // Aligner sur 1MB
-        uint32_t section_index = virt_section >> 20;  // Index dans la table
-        
-        /* Créer l'entrée de section : physique | permissions */
-        ttbr0_table[section_index] = phys_section | 
-                                    0x00000002 |  // Section entry
-                                    0x00000C00 |  // AP[2:1] = 11 (full access)
-                                    0x00000010 |  // User accessible
-                                    0x00001000;   // Cacheable
-        
-        mapped_sections++;
-        KDEBUG("User RAM at 0x%08X\n", user_ram);
-        KDEBUG("Mapped TTBR0 section 0x%08X -> 0x%08X\n", virt_section, phys_section);
-    }
-    
-    /* Mapper les périphériques critiques (UART par exemple) pour debug userspace */
-    uint32_t uart_virt = 0x09000000;  // Même adresse virtuelle que physique
-    uint32_t uart_phys = 0x09000000;  // UART physique
-    uint32_t uart_index = uart_virt >> 20;
-    
-    ttbr0_table[uart_index] = uart_phys | 
-                             0x00000002 |  // Section entry
-                             0x00000C00 |  // AP[2:1] = 11
-                             0x00000010 |  // User accessible  
-                             0x00000004;   // Device memory (non-cacheable)
-    
-    mapped_sections++;
-    KDEBUG("Mapped UART for userspace: 0x%08X -> 0x%08X\n", uart_virt, uart_phys);
-#endif
-    /* Libérer le mapping temporaire */
-    //unmap_temp_page((void*)ttbr0_virt);
-    
-    KDEBUG("Kernel ASID %d context configured:\n", ASID_KERNEL);
-    KDEBUG("  TTBR0 physical table: 0x%08X\n", (uint32_t)kernel_ttbr0);
-    //KDEBUG("  Sections mapped: %d\n", mapped_sections);
-    KDEBUG("  Ready to handle userspace virtual addresses < 0x%08X\n",
-           (uint32_t)get_split_boundary());
-}
 
 void dump_l1(vaddr_t va) {
     //uint32_t N = 2; // tu l'as déjà
@@ -415,14 +307,9 @@ bool setup_mmu(void)
 {
     check_endianness();
 
-    setup_kernel_asid_context();
-
     setup_kernel_space();
 
-    //preallocate_temp_mapping_system();  // Pendant qu'on a l'identity mapping
-    //create_l2_access_zone();            // Idem
-
-        // 3. Configurer TTBR0 (userspace)
+    // 3. Configurer TTBR0 (userspace)
     uint32_t ttbr0_value = (uint32_t)ttbr0_pgdir |
                           TTBR_RGN_OUTER_WBWA |  // Outer write-back write-allocate
                           TTBR_SHAREABLE |       // Shareable
@@ -454,17 +341,17 @@ bool setup_mmu(void)
     data_sync_barrier();
     instruction_sync_barrier();
 
-// Vérifier immédiatement
-uint32_t ttbcr_check;
-ttbcr_check = get_ttbcr();
-KDEBUG("TTBCR written: 0x%08X, read back: 0x%08X\n", ttbcr_value, ttbcr_check);
+    // Vérifier immédiatement
+    uint32_t ttbcr_check;
+    ttbcr_check = get_ttbcr();
+    KDEBUG("TTBCR written: 0x%08X, read back: 0x%08X\n", ttbcr_value, ttbcr_check);
 
-if (ttbcr_check != ttbcr_value) {
-    KERROR("TTBCR write failed!\n");
-    KERROR("  Written: 0x%08X\n", ttbcr_value);
-    KERROR("  Read:    0x%08X\n", ttbcr_check);
-    while(1);
-}
+    if (ttbcr_check != ttbcr_value) {
+        KERROR("TTBCR write failed!\n");
+        KERROR("  Written: 0x%08X\n", ttbcr_value);
+        KERROR("  Read:    0x%08X\n", ttbcr_check);
+        while(1);
+    }
 
     // Synchronisation
     data_sync_barrier();
@@ -507,34 +394,34 @@ if (ttbcr_check != ttbcr_value) {
         while (1);
     }
 
-// 2. Vérifier les registres TTBR
-uint32_t check_ttbr0, check_ttbr1, check_ttbcr;
-check_ttbr0 = get_ttbr0();
-check_ttbr1 = get_ttbr1();
-check_ttbcr = get_ttbcr();
+    // 2. Vérifier les registres TTBR
+    uint32_t check_ttbr0, check_ttbr1, check_ttbcr;
+    check_ttbr0 = get_ttbr0();
+    check_ttbr1 = get_ttbr1();
+    check_ttbcr = get_ttbcr();
 
-KDEBUG("TTBR0 reg: 0x%08X (expected: 0x%08X)\n", check_ttbr0, ttbr0_value);
-KDEBUG("TTBR1 reg: 0x%08X (expected: 0x%08X)\n", check_ttbr1, ttbr1_value);
-KDEBUG("TTBCR reg: 0x%08X (expected: 0x%08X)\n", check_ttbcr, ttbcr_value);
+    KDEBUG("TTBR0 reg: 0x%08X (expected: 0x%08X)\n", check_ttbr0, ttbr0_value);
+    KDEBUG("TTBR1 reg: 0x%08X (expected: 0x%08X)\n", check_ttbr1, ttbr1_value);
+    KDEBUG("TTBCR reg: 0x%08X (expected: 0x%08X)\n", check_ttbcr, ttbcr_value);
 
-// 3. Vérifier l'alignement des tables
-if ((uint32_t)ttbr0_pgdir & 0xFFF) {
-    KERROR("TTBR0 table not 4KB aligned: 0x%08X\n", (uint32_t)ttbr0_pgdir);
-    while(1);
-}
+    // 3. Vérifier l'alignement des tables
+    if ((uint32_t)ttbr0_pgdir & 0xFFF) {
+        KERROR("TTBR0 table not 4KB aligned: 0x%08X\n", (uint32_t)ttbr0_pgdir);
+        while(1);
+    }
 
-if ((uint32_t)kernel_page_dir & 0x3FFF) {
-    KERROR("TTBR1 table not 16KB aligned: 0x%08X\n", (uint32_t)kernel_page_dir);
-    while(1);
-}
+    if ((uint32_t)kernel_page_dir & 0x3FFF) {
+        KERROR("TTBR1 table not 16KB aligned: 0x%08X\n", (uint32_t)kernel_page_dir);
+        while(1);
+    }
 
-// 4. Vérifier quelques entrées critiques
-//KDEBUG("TTBR0 entry [0]: 0x%08X\n", ttbr0_pgdir[0]);  // 0x00000000
-//KDEBUG("TTBR0 entry [1]: 0x%08X\n", ttbr0_pgdir[1]);  // 0x00100000
-//KDEBUG("Kernel entry [0]: 0x%08X\n", kernel_page_dir[0]);  // 0x40000000
-//KDEBUG("Kernel entry [1]: 0x%08X\n", kernel_page_dir[1]);  // 0x40100000
+    // 4. Vérifier quelques entrées critiques
+    //KDEBUG("TTBR0 entry [0]: 0x%08X\n", ttbr0_pgdir[0]);  // 0x00000000
+    //KDEBUG("TTBR0 entry [1]: 0x%08X\n", ttbr0_pgdir[1]);  // 0x00100000
+    //KDEBUG("Kernel entry [0]: 0x%08X\n", kernel_page_dir[0]);  // 0x40000000
+    //KDEBUG("Kernel entry [1]: 0x%08X\n", kernel_page_dir[1]);  // 0x40100000
 
-KDEBUG("All checks passed, proceeding with MMU activation...\n");
+    KDEBUG("All checks passed, proceeding with MMU activation...\n");
 
     /* === Activer la MMU === */
     set_sctlr(sctlr);
@@ -561,8 +448,13 @@ KDEBUG("All checks passed, proceeding with MMU activation...\n");
     configure_alignment_policy();
 
     /* Initialiser ASID par défaut pour le noyau */
-    set_current_asid(ASID_KERNEL);  /* ASID 0 pour le noyau */
+    set_current_asid(ASID_KERNEL);  /* ASID pour le noyau */
 
+    /*
+     * setup_temp_mapping_slots() wires the page tables before MMU enable;
+     * this runtime init publishes the slot metadata and lock used by
+     * map_temp_page() after MMU enable.
+     */
     init_temp_mapping_system();
     
     if (sctlr_final & 0x00000001) {
@@ -903,8 +795,6 @@ void set_current_asid(uint32_t asid)
         KERROR("CONTEXTIDR value corruption detected!\n");
         return;
     }
-
-    //debug_mmu_state();
     
     /* NOUVEAU: Barrières avant l'écriture critique */
     data_sync_barrier();
@@ -957,8 +847,6 @@ void switch_address_space(pgdir_t pgdir)
         KERROR("Invalid pgdir alignment for switch\n");
         return;
     }
-
-    //KDEBUG("");    // FIX IT
     
     // Charger TTBR0 (base + attributs WBWA + Shareable)
     uint32_t ttbr0 = ttbr_attr_wbwa_share((paddr_t)pgdir);
@@ -982,10 +870,6 @@ void switch_address_space_with_asid(pgdir_t pgdir, uint32_t asid)
                asid, asid_hw(asid), asid_gen(asid));
         return;
     }
-
-    // Switch vers le contexte kernel pur
-    //set_ttbr0((uint32_t)pgdir);  // TTBR0 kernel minimal
-    //set_current_asid(asid);      // ASID 
 
     /* Switch ASID */
     set_current_asid(asid);
@@ -1097,15 +981,9 @@ void map_user_stack(void)
 }
 
 /* Fonctions inchangées du code original... */
-paddr_t allocate_l2_page(bool is_kernel) {
+paddr_t allocate_l2_page(void) {
     // Allouer une nouvelle table L2
     void* l2_page = NULL ;
-    (void)is_kernel;
-    
-    //if(is_kernel)
-    //    l2_page = allocate_page();
-    //else
-    //    l2_page = allocate_page();
 
     l2_page = allocate_page();
 
@@ -1113,9 +991,6 @@ paddr_t allocate_l2_page(bool is_kernel) {
         KERROR("map_user_page: Failed to allocate L2 table\n");
         return -1;
     }
-    //KDEBUG("map_user_page: L2 creation: Allocate Physical Page OK at 0x%08X\n", l2_page);
-
-    //check_address_content(0x48212000, "In allocate_l2_page, before map_temp_page");
     
     // Mapper temporairement pour initialiser
     vaddr_t l2_temp = map_temp_page((paddr_t)l2_page);
@@ -1459,9 +1334,6 @@ void check_memory_corruption(void)
         KERROR("KO BSS start > end!\n");
     }
     
-    //KDEBUG("MMU start:     0x%08X\n", (uint32_t)&__mmu_tables_start);
-    //KDEBUG("MMU end:       0x%08X\n", (uint32_t)&__mmu_tables_end);
-
 
     /* Verifier le heap */
     extern uint8_t* heap_base;

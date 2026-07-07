@@ -116,15 +116,6 @@ bool validate_elf_header(elf32_ehdr_t* header)
         !arch_validate_elf_header(header)) {
         return false;
     }
-
-    //KDEBUG("Check executable ARM Type %d - Machine %d OK\n", header->e_type, header->e_machine );
-    //KDEBUG("Executable entry point %p \n", header->e_entry );
-
-    // TO MODIFY!!!
-    /* Check entry point */
-    //if (!IS_USER_ADDR(header->e_entry)) {
-    //    return false;
-    //}
     
     return true;
 }
@@ -226,9 +217,6 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
             return -1;
         } 
         
-        /* Clear the entire page first */
-        //memset((void*)temp_vaddr, 0, PAGE_SIZE);   //// FIX IT
-        
         /* Calculate file data range for this page */
         uint32_t file_start_in_page = 0;
         uint32_t file_end_in_page = 0;
@@ -269,63 +257,16 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
             arch_sync_loaded_user_page(temp_vaddr, PAGE_SIZE,
                                        (vma_flags & VMA_EXEC) != 0);
 
-        /* Après la lecture réussie */
-
-            /* TEST IMMÉDIAT : vérifier les premiers bytes lus */
-            //uint8_t* byte_ptr = (uint8_t*)(temp_vaddr + file_start_in_page);
-            //KDEBUG("Raw bytes read: %02X %02X %02X %02X %02X %02X %02X %02X\n",
-            //    byte_ptr[0], byte_ptr[1], byte_ptr[2], byte_ptr[3],
-            //    byte_ptr[4], byte_ptr[5], byte_ptr[6], byte_ptr[7]);
-
-            /* Vérifier si c'est un problème d'endianness */
-            //uint32_t* word_ptr = (uint32_t*)(temp_vaddr + file_start_in_page);
-            //KDEBUG("As 32-bit words: 0x%08X 0x%08X 0x%08X 0x%08X\n",
-            //    word_ptr[0], word_ptr[1], word_ptr[2], word_ptr[3]);
-
-            /* Pour la page 0x8000, vérifier spécifiquement */
-/*             if (page_vaddr == 0x8000) {
-                uint32_t expected = 0xeb000006;
-                uint32_t actual = word_ptr[0];
-                KDEBUG("Entry point check: expected=0x%08X, actual=0x%08X\n", expected, actual);
-                
-                if (actual == 0) {
-                    KERROR("First instruction is zero - file read failed!\n");
-                    
-                    // Test : écrire une valeur de test 
-                    word_ptr[0] = 0xDEADBEEF;
-                    KDEBUG("Test write: wrote 0xDEADBEEF, readback=0x%08X\n", word_ptr[0]);
-                    
-                    // Si le test write/read fonctionne, c'est la lecture de fichier qui échoue 
-                }
-            } */
         } else {
             //KERROR("Page contains no file data (BSS or padding)\n");
+            /* This is not an error */
         }
         
-        /* Debug: show first few bytes of the page */
-        //uint32_t* debug_ptr = (uint32_t*)temp_vaddr;
-        //KDEBUG("Page 0x%08X content: 0x%08X 0x%08X 0x%08X 0x%08X\n", temp_vaddr,
-        //       debug_ptr[0], debug_ptr[1], debug_ptr[2], debug_ptr[3]);
         
         /* Unmap temporary mapping */
         unmap_temp_page((void*)temp_vaddr);
-
-
-
-        //phys_addr = get_physical_address(vm->pgdir, 0x00008000);
-        //KDEBUG("load_segment : Physical address returned = 0x%08X\n", phys_addr);
-        //if(phys_addr != 0)
-        //    check_address_content( phys_addr, "**************** INSIDE LOAD SEGEMNTS .....................................");
-    
-
-
-        //uint8_t* check = (uint8_t*)map_temp_page((uint32_t)phys_page);
-        //KDEBUG("Check page before map_user_page: %02X %02X %02X %02X\n", check[0], check[1], check[2], check[3]);
-        //hexdump(check,8);
-        //unmap_temp_page(check);
         
         /* Map page in user space with correct permissions */
-        //KDEBUG("Mapping user page 0x%08X -> %p\n", page_vaddr, phys_page);
         if (map_user_page(vm->pgdir, page_vaddr, (paddr_t)phys_page, vma_flags, vm->asid) < 0) {
             KERROR("Failed to map user page 0x%08X\n", page_vaddr);
             free_page(phys_page);
@@ -333,26 +274,9 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
             return -1;
         }
 
-        //uint32_t temp = get_physical_address(vm->pgdir, page_vaddr);
-        //hexdump((void*)temp, (size_t)0x800);
-
         arch_sync_loaded_user_page(page_vaddr, PAGE_SIZE,
-                                   (vma_flags & VMA_EXEC) != 0);
+                                    (vma_flags & VMA_EXEC) != 0);
 
-        //uint8_t* check2 = (uint8_t*)map_temp_page((uint32_t)phys_page);
-        //KDEBUG("Check N2 page after map_user_page: %02X %02X %02X %02X\n", check2[0], check2[1], check2[2], check2[3]);
-        //unmap_temp_page(check);
-
-
-        //uint32_t phys = get_physical_address(vm->pgdir, 0x00008000);
-        //uint8_t *data = (uint8_t *)map_temp_page((uint32_t)phys);
-        //KDEBUG("Post-mapping PA 0x%08X @ 0x00008000: %02X %02X %02X %02X\n", phys, data[0], data[1], data[2], data[3]);
-        //unmap_temp_page(data);
-
-        //hexdump((void *)vm->pgdir,32);
-        //hexdump((void *)0x7F001000, 32);
-        
-        //KINFO("Successfully mapped page 0x%08X to phys 0x%08X in pgdir 0x%08X\n", page_vaddr, phys_page, vm->pgdir);
     }
     
     //KINFO("Segment loaded successfully\n");
