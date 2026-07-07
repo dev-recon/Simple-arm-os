@@ -305,7 +305,7 @@ static void test_cross_fs(void)
         return;
     }
 
-    if (mount("/dev/virtio0p2", "/mnt", "fat32", 0, NULL) < 0 && errno != EBUSY) {
+    if (mount("/dev/fat32", "/mnt", "fat32", 0, NULL) < 0 && errno != EBUSY) {
         ko("cross-fs mount fat32 /mnt", errno);
         return;
     }

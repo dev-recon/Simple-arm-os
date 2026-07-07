@@ -52,6 +52,35 @@ extern bool asid_map[]; /* Déclaré dans mmu.c */
 
 #define PGDIR_SIZE 7
 
+static void install_low_kernel_aliases(vm_space_t *vm)
+{
+    pgdir_cpu_t pgdir_v = vm_pgdir_cpu_view(vm);
+    vaddr_t split = get_split_boundary();
+    vaddr_t start = memory_low_kernel_alias_start();
+    vaddr_t end = memory_low_kernel_alias_end();
+
+    if (!pgdir_v || KERNEL_START >= split)
+        return;
+
+    if (end > split)
+        end = split;
+
+    /*
+     * Low-linked platforms execute kernel text/data/heap below the TTBR split.
+     * While a user process is active, exceptions keep TTBR0 selected, so those
+     * sections must be visible in the process page directory as privileged-only
+     * aliases. User mode still faults if it tries to touch them.
+     */
+    for (vaddr_t addr = start; addr < end; addr += 0x100000u) {
+        uint32_t index = get_L1_index(addr);
+        pgdir_v[index] = addr |
+                         0x00000002u |  /* Section descriptor. */
+                         0x00000400u |  /* AP[1:0] = 01: privileged RW. */
+                         0x00000004u |  /* B: bufferable. */
+                         0x00000008u;   /* C: cacheable. */
+    }
+}
+
 vm_space_t *create_vm_space(void)
 {
     vm_space_t *vm = kmalloc(sizeof(vm_space_t));
@@ -123,8 +152,7 @@ vm_space_t *create_vm_space(void)
      */
     memset(vm_pgdir_cpu_view(vm), 0, PAGE_SIZE);
 
-    /* Les mappings noyau sont dans TTBR1, pas besoin de les copier */
-    /* TTBR0 ne contiendra que les mappings utilisateur */
+    install_low_kernel_aliases(vm);
 
     vm->vma_list = NULL;
     vm->heap_start = USER_HEAP_START;

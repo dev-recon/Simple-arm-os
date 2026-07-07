@@ -310,16 +310,13 @@ void dump_l1(vaddr_t va) {
 // REMPLACER les constantes fixes par :
 uint32_t get_optimal_ttbcr_n(void)
 {
-    extern uint32_t __start;
-    vaddr_t kernel_start = (vaddr_t)(uintptr_t)&__start;
-    
-    // Déterminer le split optimal basé sur où se trouve le noyau
-    if (kernel_start >= 0xC0000000) return 2;  // N=2: split 3GB (noyau à 3GB+)
-    if (kernel_start >= 0x80000000) return 1;  // N=1: split 2GB (noyau à 2GB+) 
-    if (kernel_start >= 0x40000000) return 2;  // N=0: split 1GB (noyau à 1GB+)
-    
-    // Si noyau < 1GB, pas de split TTBR (utiliser TTBR0 uniquement)
-    return 7;  // Valeur d'erreur
+    /*
+     * ArmOS userland ABI currently reserves 0x00000000..0x3FFFFFFF for TTBR0
+     * user mappings.  Platforms that link the kernel below that boundary keep
+     * those low kernel sections as privileged-only aliases in each user TTBR0
+     * instead of shrinking the user address space dynamically.
+     */
+    return 2;  /* N=2: split at 0x40000000. */
 }
 
 
@@ -501,7 +498,8 @@ if (ttbcr_check != ttbcr_value) {
     uint32_t next_index = get_L1_index(next_pc);
 
     KDEBUG("MMU: Next Index = %d\n", next_index);
-    uint32_t next_entry = kernel_page_dir[next_index];
+    pgdir_cpu_t active_table = (next_pc < get_split_boundary()) ? ttbr0_pgdir : kernel_page_dir;
+    uint32_t next_entry = active_table[next_index];
     KDEBUG("MMU: Next Entry = 0x%08X\n", next_entry);
 
     if ((next_entry & 0x3) != 0x2) {
@@ -756,20 +754,29 @@ static void setup_kernel_space(void)
     vaddr_t mmio_uart_base = arch_platform_kernel_mmio_uart_base();
     vaddr_t mmio_virtio_base = arch_platform_kernel_mmio_virtio_base();
     vaddr_t mmio_emmc_base = arch_platform_kernel_mmio_emmc_base();
+    vaddr_t mmio_irqctrl2_base = arch_platform_kernel_mmio_irqctrl2_base();
 
     map_kernel_mmio_alias(mmio_irqctrl_base, arch_platform_irqctrl_phys_start());
+    if (arch_platform_has_irqctrl2_alias()) {
+        map_kernel_mmio_alias(mmio_irqctrl2_base,
+                              arch_platform_irqctrl2_phys_section_base());
+    }
     map_kernel_mmio_alias(mmio_uart_base, arch_platform_uart0_phys_section_base());
     if (arch_platform_has_emmc()) {
         map_kernel_mmio_alias(mmio_emmc_base, arch_platform_emmc_phys_section_base());
     }
     if (arch_platform_has_virtio_mmio()) {
         map_kernel_mmio_alias(mmio_virtio_base, arch_platform_virtio_phys_start());
-        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X UART=0x%08X VirtIO=0x%08X EMMC=0x%08X\n",
-              mmio_irqctrl_base, mmio_uart_base, mmio_virtio_base,
+        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X IRQ2=0x%08X UART=0x%08X VirtIO=0x%08X EMMC=0x%08X\n",
+              mmio_irqctrl_base,
+              arch_platform_has_irqctrl2_alias() ? mmio_irqctrl2_base : 0u,
+              mmio_uart_base, mmio_virtio_base,
               arch_platform_has_emmc() ? mmio_emmc_base : 0u);
     } else {
-        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X UART=0x%08X EMMC=0x%08X\n",
-              mmio_irqctrl_base, mmio_uart_base,
+        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X IRQ2=0x%08X UART=0x%08X EMMC=0x%08X\n",
+              mmio_irqctrl_base,
+              arch_platform_has_irqctrl2_alias() ? mmio_irqctrl2_base : 0u,
+              mmio_uart_base,
               arch_platform_has_emmc() ? mmio_emmc_base : 0u);
     }
 
@@ -796,8 +803,12 @@ static void setup_ttbr_split(void)
     
     //kprintf("MMU: Configuring TTBCR for 2GB split (N=%d)\n", TTBCR_N_SPLIT_2GB);
     
-    /* Set TTBR0 (processus utilisateur - 0-2GB) - NULL au boot */
-    set_ttbr0(0x00000000);
+    /*
+     * Keep the boot/kernel TTBR0 active while enabling the split.  Low-linked
+     * platforms execute kernel code below the TTBR boundary, so clearing TTBR0
+     * here would immediately unmap the currently executing code.
+     */
+    set_ttbr0((uint32_t)ttbr0_pgdir);
     
     /* Set TTBR1 (noyau - 2GB-4GB) */  
     uint32_t ttbr1 = ((uint32_t)kernel_page_dir) | (0b00 << 0) | (1 << 1); // IRGN=0b00 (WBWA), S=0, RGN=0

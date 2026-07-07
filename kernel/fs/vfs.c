@@ -20,6 +20,7 @@
 #include <kernel/fat32.h>
 #include <kernel/ext2.h>
 #include <kernel/procfs.h>
+#include <kernel/block_device.h>
 #include <kernel/disk_layout.h>
 #include <kernel/mount.h>
 #include <kernel/memory.h>
@@ -29,7 +30,6 @@
 #include <kernel/kprintf.h>
 #include <kernel/task.h>
 #include <kernel/file.h>
-#include <kernel/virtio_block.h>
 
 #define MAX_INODES 1024
 #define MAX_SYMLINK_DEPTH 8
@@ -51,6 +51,13 @@ typedef struct {
 static mount_entry_t mount_table[MAX_MOUNTS];
 static int mount_count = 0;
 
+static const char* vfs_partition_name(disk_partition_id_t id, const char* fallback)
+{
+    const disk_partition_t* part = disk_partition_get(id);
+
+    return part && part->name ? part->name : fallback;
+}
+
 static void vfs_mount_defaults(const char* path, char* source, size_t source_size,
                                char* fstype, size_t fstype_size,
                                char* options, size_t options_size)
@@ -60,7 +67,9 @@ static void vfs_mount_defaults(const char* path, char* source, size_t source_siz
         strncpy(fstype, "proc", fstype_size - 1);
         strncpy(options, "rw,nosuid,nodev,noexec", options_size - 1);
     } else if (strcmp(path, "/mnt") == 0) {
-        strncpy(source, "virtio0p2", source_size - 1);
+        strncpy(source,
+                vfs_partition_name(DISK_PART_FAT32_MNT, "fat32"),
+                source_size - 1);
         strncpy(fstype, "fat32", fstype_size - 1);
         strncpy(options, "rw", options_size - 1);
     } else {
@@ -205,7 +214,8 @@ static void vfs_mounts_append(char* buf, size_t cap, size_t* len,
 
 void vfs_format_mounts(char* buf, size_t cap, size_t* len)
 {
-    vfs_mounts_append(buf, cap, len, "virtio0p1 / ext2 rw 0 0\n");
+    vfs_mounts_append(buf, cap, len, "%s / ext2 rw 0 0\n",
+                      vfs_partition_name(DISK_PART_EXT2_ROOT, "root"));
 
     for (int i = 0; i < mount_count; i++) {
         vfs_mounts_append(buf, cap, len, "%s %s %s %s 0 0\n",
@@ -282,7 +292,8 @@ int vfs_shutdown(void)
     int ret;
 
     kprintf("Shutdown: VFS mounted filesystems\n");
-    kprintf("Shutdown:   virtio0p1 on / type ext2 (rw)\n");
+    kprintf("Shutdown:   %s on / type ext2 (rw)\n",
+            vfs_partition_name(DISK_PART_EXT2_ROOT, "root"));
     for (int i = 0; i < mount_count; i++) {
         kprintf("Shutdown:   %s on %s type %s (%s)\n",
               mount_table[i].source,

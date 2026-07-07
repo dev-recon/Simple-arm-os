@@ -244,10 +244,10 @@ void kernel_main(void)
         const disk_partition_t* ext2_part = disk_partition_get(DISK_PART_EXT2_ROOT);
         const disk_partition_t* fat32_part = disk_partition_get(DISK_PART_FAT32_MNT);
         KBOOT_OKF("Partition: %s ext2 %uMB",
-                  ext2_part ? ext2_part->name : "virtio0p1",
+                  ext2_part ? ext2_part->name : "disk0p1",
                   ext2_part ? (uint32_t)(ext2_part->sector_count / 2048ULL) : 0);
         KBOOT_OKF("Partition: %s fat32 %uMB",
-                  fat32_part ? fat32_part->name : "virtio0p2",
+                  fat32_part ? fat32_part->name : "disk0p2",
                   fat32_part ? (uint32_t)(fat32_part->sector_count / 2048ULL) : 0);
         KBOOT_OKF("VFS: mounted ext2 on /");
         KBOOT_OKF("VFS: mounted proc on /proc");

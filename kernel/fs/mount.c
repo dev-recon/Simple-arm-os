@@ -143,6 +143,14 @@ static const disk_partition_t* vfs_find_partition_by_device(const char* device)
         device += 5;
     }
 
+    if (strcmp(device, "root") == 0) {
+        return disk_partition_get(DISK_PART_EXT2_ROOT);
+    }
+
+    if (strcmp(device, "fat32") == 0 || strcmp(device, "mnt") == 0) {
+        return disk_partition_get(DISK_PART_FAT32_MNT);
+    }
+
     for (int i = 0; i < DISK_PART_COUNT; i++) {
         if (strcmp(device, kernel_disk_partitions[i].name) == 0) {
             return &kernel_disk_partitions[i];

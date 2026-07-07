@@ -11,9 +11,9 @@
  */
 
 #include <kernel/disk_layout.h>
+#include <kernel/block_device.h>
 #include <kernel/kprintf.h>
 #include <kernel/string.h>
-#include <kernel/virtio_block.h>
 
 #define MBR_PARTITION_OFFSET 446
 #define MBR_SIGNATURE_OFFSET 510
@@ -22,12 +22,15 @@
 #define MBR_TYPE_EXT2        0x83
 #define MBR_TYPE_FAT32_CHS   0x0B
 #define MBR_TYPE_FAT32_LBA   0x0C
+#define DISK_PART_NAME_LEN   16
+
+static char runtime_partition_names[DISK_PART_COUNT][DISK_PART_NAME_LEN];
 
 disk_partition_t kernel_disk_partitions[DISK_PART_COUNT] = {
     {
         .id = DISK_PART_EXT2_ROOT,
         .fs_type = DISK_FS_EXT2,
-        .name = "virtio0p1",
+        .name = "disk0p1",
         .mountpoint = "/",
         .lba_start = DISK_MB_TO_SECTORS(DISK_EXT2_START_MB),
         .sector_count = DISK_MB_TO_SECTORS(DISK_EXT2_SIZE_MB),
@@ -35,12 +38,28 @@ disk_partition_t kernel_disk_partitions[DISK_PART_COUNT] = {
     {
         .id = DISK_PART_FAT32_MNT,
         .fs_type = DISK_FS_FAT32,
-        .name = "virtio0p2",
+        .name = "disk0p2",
         .mountpoint = "/mnt",
         .lba_start = DISK_MB_TO_SECTORS(DISK_FAT32_START_MB),
         .sector_count = DISK_MB_TO_SECTORS(DISK_FAT32_SIZE_MB),
     },
 };
+
+static void disk_layout_refresh_names(void)
+{
+    const char* block_name = blk_get_name();
+
+    if (!block_name || block_name[0] == '\0' || strcmp(block_name, "none") == 0) {
+        block_name = "disk0";
+    }
+
+    for (uint32_t i = 0; i < DISK_PART_COUNT; i++) {
+        snprintf(runtime_partition_names[i],
+                 sizeof(runtime_partition_names[i]),
+                 "%sp%u", block_name, i + 1);
+        kernel_disk_partitions[i].name = runtime_partition_names[i];
+    }
+}
 
 static uint32_t read_le32(const uint8_t* p)
 {
@@ -69,6 +88,8 @@ bool disk_layout_init_from_mbr(void)
     uint8_t sector[512];
     bool found_ext2 = false;
     bool found_fat32 = false;
+
+    disk_layout_refresh_names();
 
     if (blk_read_sectors(0, 1, sector) < 0) {
         KERROR("[DISK] Could not read MBR sector; using compiled layout\n");

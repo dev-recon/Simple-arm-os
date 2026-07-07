@@ -18,6 +18,7 @@
 
 #include <kernel/fat32.h>
 #include <kernel/config.h>
+#include <kernel/block_device.h>
 #include <kernel/ata.h>
 #include <kernel/memory.h>
 #include <kernel/string.h>
@@ -26,14 +27,6 @@
 #ifdef USE_RAMFS
 #include <kernel/ramfs.h>
 #endif
-
-extern int blk_read_sectors(uint64_t lba, uint32_t count, void* buffer);
-extern int blk_write_sectors(uint64_t lba, uint32_t count, void* buffer);
-extern int blk_read_sector(uint64_t lba, void* buffer);
-extern int blk_write_sector(uint64_t lba, void* buffer);
-
-bool blk_is_initialized(void);
-
 
 #ifdef USE_RAMFS
     #define storage_read_sectors(lba, count, buffer) blk_read_sectors(lba, count, buffer)
@@ -191,16 +184,14 @@ bool fat32_mount(void)
 
 bool fat32_mount_at(uint64_t lba_start){
 
-    KDEBUG("Mounting FAT32 from VIRTIO MMIO BLK DEVICE at LBA %u...\n",
+    KDEBUG("Mounting FAT32 from active block device at LBA %u...\n",
            (uint32_t)lba_start);
     
-    /* Verifier que RAMFS est initialise */
-/*     if (!ramfs_is_initialized()) {
-        KERROR("FAT32: RAMFS not initialized\n");
+    if (!blk_is_initialized() || blk_get_sector_size() != FAT32_SECTOR_SIZE) {
+        KERROR("FAT32: block device not ready or invalid sector size (%u)\n",
+               blk_get_sector_size());
         return false;
-    } */
-    extern uint32_t ata_sector_size;
-    if( ata_sector_size == 0) return false;
+    }
 
     /* Allouer les structures */
     fat32_boot_sector_t *bs = kmalloc(sizeof(fat32_boot_sector_t));
