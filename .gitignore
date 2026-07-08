@@ -28,6 +28,7 @@ userfs/usr/sbin/
 userfs/legacy/bin-libc/
 userfs/opt/*/bin/*
 userfs/opt/tcc/
+userfs/opt/zlib/
 userfs/opt/ncurses/
 userfs/opt/nano/
 userfs/opt/bmake/

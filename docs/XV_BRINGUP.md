@@ -13,7 +13,8 @@ full Xorg port by default.
    - `fbtest` opens `/dev/fb0`, paints a deterministic pattern, reads back the
      first pixel, and prints `FBTEST_OK`.
 3. Port image/display dependencies only after the raw display path is stable.
-   - Likely early dependencies: `libjpeg`, `libpng`, `zlib`, `libtiff`.
+   - First dependency: `zlib` as `/opt/zlib/lib/libz.a`.
+   - Likely next dependencies: `libjpeg`, `libpng`, `libtiff`.
    - Avoid committing to a full Xorg server until `xv` has a proven build path.
 
 ## Current Smoke Test
@@ -27,4 +28,24 @@ Expected output:
 ```text
 fbtest: /dev/fb0 1024x768 pitch=4096 bpp=32 size=3145728 stat_size=3145728
 FBTEST_OK
+```
+
+## zlib Smoke Test
+
+Build and stage zlib with:
+
+```sh
+BUILD_ZLIB=1 BUILD_NEWLIB=0 BUILD_TCC=0 ./build.sh
+```
+
+Then run:
+
+```sh
+ztest
+```
+
+Expected output ends with:
+
+```text
+ZTEST_OK
 ```

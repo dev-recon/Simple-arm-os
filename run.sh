@@ -17,6 +17,7 @@ USERLAND_DIR="userland"
 BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 BUILD_TCC="${BUILD_TCC:-1}"
 BUILD_BSD="${BUILD_BSD:-0}"
+BUILD_ZLIB="${BUILD_ZLIB:-0}"
 TARGET_ARCH="${TARGET_ARCH:-arm32}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
 ARCH="${ARCH:-arm-none-eabi-}"
@@ -126,6 +127,12 @@ if [ "$BUILD_BSD" = "1" ]; then
     for tool in ar ranlib nm strip size; do
         ln -sfn ../../opt/bsdelftools/bin/$tool userfs/usr/bin/$tool
     done
+fi
+
+if [ "$BUILD_ZLIB" = "1" ]; then
+    echo "=== Building zlib bundle ==="
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_zlib.sh
+    rsync -a build/zlib/bundle/ userfs/
 fi
 
 echo "=== Rebuilding kernel ==="
