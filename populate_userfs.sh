@@ -94,14 +94,14 @@ echo "3. Creating user files..."
 
 cat > "$USERFS_DIR/home/user/profile.txt" << 'EOF'
 # User profile configuration for test kernel
-export PATH=/bin:/usr/bin
+export PATH=/bin:/usr/bin:/opt/kilo/bin:/opt/nano/bin
 export HOME=/home/user
 export PS1='user@kernel:$ '
 export TERM=vt100
 
 # Welcome message
 echo "Welcome to the kernel development environment!"
-echo "Available commands in /bin and /usr/bin"
+echo "Available commands in /bin, /usr/bin and /opt/*/bin"
 echo "Your files are in $HOME"
 
 # Aliases for development

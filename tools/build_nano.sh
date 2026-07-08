@@ -53,6 +53,23 @@ mkdir -p "$SRC_DIR" "$BUILD_DIR" "$BUNDLE_BIN" "$BUNDLE_ETC" "$BUNDLE_SYNTAX"
 
 tar -xJf "$SRC_ARCHIVE" -C "$SRC_DIR" --strip-components=1
 
+# ArmOS' current printw path does not support the C99 %z length modifier.
+# Nano's line-number margin goes through mvwprintw(), so use a plain long.
+patch -d "$SRC_DIR" -p1 <<'PATCH'
+diff --git a/src/winio.c b/src/winio.c
+--- a/src/winio.c
++++ b/src/winio.c
+@@ -2558,7 +2558,7 @@ void draw_row(int row, const char *converted, linestruct *line, size_t from_col)
+ 			mvwprintw(midwin, row, 0, "%*s", margin - 1, " ");
+ 		else
+ #endif
+-			mvwprintw(midwin, row, 0, "%*zd", margin - 1, line->lineno);
++			mvwprintw(midwin, row, 0, "%*ld", margin - 1, (long)line->lineno);
+ 		wattroff(midwin, interface_color_pair[LINE_NUMBER]);
+ #ifndef NANO_TINY
+ 		if (line->has_anchor && (from_col == 0 || !ISSET(SOFTWRAP)))
+PATCH
+
 cd "$BUILD_DIR"
 
 # Keep the first port intentionally small.  nano's configure script comes from
@@ -137,6 +154,7 @@ LIBS="$BUILD_DIR/armos_nano_compat.o $NCURSES_PREFIX/lib/libncurses.a $NEWLIB_LI
     --disable-utf8 \
     --disable-browser \
     --enable-nanorc \
+    --enable-linenumbers \
     --enable-color \
     --disable-extra \
     --disable-help \

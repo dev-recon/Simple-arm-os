@@ -1479,6 +1479,8 @@ static int run_builtin_with_redirs(command_entry_t* entry, int argc, char* argv[
 
 // Display the shell banner
 void shell_print_banner(void) {
+    const char* path = shell_getenv("PATH");
+
     printf("\n");
     printf("\033[1;36m");
     printf("  __  __    _    ____  _   _\n");
@@ -1488,7 +1490,10 @@ void shell_print_banner(void) {
     printf(" |_|  |_/_/   \\_\\____/|_| |_|\n");
     printf("\033[0m");
     printf(" arm-os shell on newlib\n");
-    printf(" type 'help' for builtins, PATH=/bin:/usr/bin:/opt/kilo/bin\n");
+    printf(" type 'help' for builtins");
+    if (path && *path)
+        printf(", PATH=%s", path);
+    printf("\n");
     printf("\n");
 }
 

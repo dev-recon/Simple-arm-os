@@ -26,7 +26,7 @@
 #endif
 
 static char *const init_envp[] = {
-    "PATH=/bin:/usr/bin:/opt/kilo/bin",
+    "PATH=/bin:/usr/bin:/opt/kilo/bin:/opt/nano/bin",
     "HOME=/home/user",
     "USER=user",
     "PS1=mash$> ",
@@ -34,7 +34,7 @@ static char *const init_envp[] = {
 };
 
 static char *const root_envp[] = {
-    "PATH=/bin:/usr/bin:/sbin:/opt/kilo/bin",
+    "PATH=/bin:/usr/bin:/sbin:/opt/kilo/bin:/opt/nano/bin",
     "HOME=/root",
     "USER=root",
     "PS1=root# ",
