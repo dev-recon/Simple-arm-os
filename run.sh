@@ -105,6 +105,22 @@ if [ "$BUILD_BSD" = "1" ]; then
     mkdir -p userfs/usr/bin userfs/usr/sbin
     ln -sfn ../../opt/bsdmtree/bin/mtree userfs/usr/bin/mtree
     ln -sfn ../../opt/bsdmtree/bin/mtree userfs/usr/sbin/mtree
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdxargs.sh
+    rsync -a build/bsdxargs/bundle/ userfs/
+    ln -sfn ../../opt/bsdxargs/bin/xargs userfs/usr/bin/xargs
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsddiff.sh
+    rsync -a build/bsddiff/bundle/ userfs/
+    ln -sfn ../../opt/bsddiff/bin/diff userfs/usr/bin/diff
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdpatch.sh
+    rsync -a build/bsdpatch/bundle/ userfs/
+    ln -sfn ../../opt/bsdpatch/bin/patch userfs/usr/bin/patch
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdpax.sh
+    rsync -a build/bsdpax/bundle/ userfs/
+    ln -sfn ../../opt/bsdpax/bin/pax userfs/usr/bin/pax
+    ln -sfn ../../opt/bsdpax/bin/tar userfs/usr/bin/tar
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdm4.sh
+    rsync -a build/bsdm4/bundle/ userfs/
+    ln -sfn ../../opt/bsdm4/bin/m4 userfs/usr/bin/m4
 fi
 
 echo "=== Rebuilding kernel ==="
