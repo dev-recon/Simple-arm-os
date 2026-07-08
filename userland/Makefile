@@ -54,7 +54,7 @@ EXTERNALS := $(patsubst opt/%/src/,%,$(EXTERNAL_DIRS))
 # These tools have their own configure/build flow and are staged by dedicated
 # top-level build switches.  The generic "one directory -> one binary" rule is
 # intentionally too small for them.
-EXTERNALS := $(filter-out bmake tcc,$(EXTERNALS))
+EXTERNALS := $(filter-out bmake bsdawk bsdinstall bsdmtree bsdsed tcc,$(EXTERNALS))
 
 ifneq ($(ENABLE_TCC),1)
 PROGRAMS := $(filter-out tcc,$(PROGRAMS))
@@ -168,23 +168,27 @@ install: $(TARGETS)
 	mkdir -p $(USERFS_BIN) $(USERFS_SBIN) $(USERFS_USR_BIN) $(USERFS_OPT)
 	rm -rf $(USERFS_ROOT)/opt/newlib
 	@for name in init mash; do \
+		rm -f $(USERFS_SBIN)/$$name; \
 		cp $(OUT_SBIN)/$$name $(USERFS_SBIN)/$$name; \
 		rm -f $(USERFS_BIN)/$$name $(USERFS_USR_BIN)/$$name; \
 		$(STRIP) --strip-all $(USERFS_SBIN)/$$name; \
 	done
 	@for name in $(SYSTEM_TOOLS); do \
+		rm -f $(USERFS_SBIN)/$$name; \
 		cp $(OUT_SBIN)/$$name $(USERFS_SBIN)/$$name; \
 		rm -f $(USERFS_BIN)/$$name $(USERFS_USR_BIN)/$$name; \
 		rm -f $(USERFS_OPT)/$$name/bin/$$name; \
 		$(STRIP) --strip-all $(USERFS_SBIN)/$$name; \
 	done
 	@for name in $(COREUTILS); do \
+		rm -f $(USERFS_BIN)/$$name; \
 		cp $(OUT_BIN)/$$name $(USERFS_BIN)/$$name; \
 		rm -f $(USERFS_SBIN)/$$name $(USERFS_USR_BIN)/$$name; \
 		rm -f $(USERFS_OPT)/$$name/bin/$$name; \
 		$(STRIP) --strip-all $(USERFS_BIN)/$$name; \
 	done
 	@for name in $(PROGRAMS); do \
+		rm -f $(USERFS_USR_BIN)/$$name; \
 		cp $(OUT_USR_BIN)/$$name $(USERFS_USR_BIN)/$$name; \
 		rm -f $(USERFS_BIN)/$$name $(USERFS_SBIN)/$$name; \
 		rm -f $(USERFS_OPT)/$$name/bin/$$name; \
@@ -192,6 +196,7 @@ install: $(TARGETS)
 	done
 	@for name in $(EXTERNALS); do \
 		mkdir -p $(USERFS_OPT)/$$name/bin; \
+		rm -f $(USERFS_OPT)/$$name/bin/$$name; \
 		cp $(OUT_OPT)/$$name/bin/$$name $(USERFS_OPT)/$$name/bin/$$name; \
 		rm -f $(USERFS_BIN)/$$name $(USERFS_SBIN)/$$name $(USERFS_USR_BIN)/$$name; \
 		$(STRIP) --strip-all $(USERFS_OPT)/$$name/bin/$$name; \

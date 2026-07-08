@@ -70,6 +70,20 @@ if [ "$BUILD_BSD" = "1" ]; then
     ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bmake.sh
     rsync -a build/bmake/bundle/ userfs/
     cp build/bmake/bundle/opt/bmake/bin/bmake userfs/usr/bin/bmake
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdsed.sh
+    rsync -a build/bsdsed/bundle/ userfs/
+    ln -sfn ../opt/bsdsed/bin/sed userfs/bin/sed
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdawk.sh
+    rsync -a build/bsdawk/bundle/ userfs/
+    ln -sfn ../opt/bsdawk/bin/awk userfs/bin/awk
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdinstall.sh
+    rsync -a build/bsdinstall/bundle/ userfs/
+    ln -sfn ../../opt/bsdinstall/bin/install userfs/usr/bin/install
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdmtree.sh
+    rsync -a build/bsdmtree/bundle/ userfs/
+    mkdir -p userfs/usr/bin userfs/usr/sbin
+    ln -sfn ../../opt/bsdmtree/bin/mtree userfs/usr/bin/mtree
+    ln -sfn ../../opt/bsdmtree/bin/mtree userfs/usr/sbin/mtree
 fi
 
 if [ "$BUILD_NCURSES" = "1" ]; then

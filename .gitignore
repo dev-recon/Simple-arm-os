@@ -24,12 +24,17 @@ newlib-port/build/
 userfs/bin/
 userfs/sbin/
 userfs/usr/bin/
+userfs/usr/sbin/
 userfs/legacy/bin-libc/
 userfs/opt/*/bin/*
 userfs/opt/tcc/
 userfs/opt/ncurses/
 userfs/opt/nano/
 userfs/opt/bmake/
+userfs/opt/bsdawk/
+userfs/opt/bsdinstall/
+userfs/opt/bsdmtree/
+userfs/opt/bsdsed/
 userland/*/*.o
 userland/nl-*
 userland/legacy/homegrown-libc/**/*.o
