@@ -29,6 +29,8 @@
 #include <kernel/spinlock.h>
 #include <kernel/arch_memory.h>
 
+extern file_t* create_file(void);
+
 /* displayd frame period: ~60 Hz coalesces bursts into one GPU flush. */
 #define DISPLAYD_FRAME_MS 16
 
@@ -1166,6 +1168,199 @@ ssize_t framebuffer_read(file_t* file, void* buffer, size_t count)
     file->offset += to_copy;
     
     return to_copy;
+}
+
+static uint32_t framebuffer_size_bytes(void)
+{
+    if (!framebuffer_base || display.width == 0 || display.height == 0 ||
+        display.pitch == 0 || display.bpp == 0)
+        return 0;
+    return display.pitch * display.height;
+}
+
+int framebuffer_get_info(struct armos_fb_info* info)
+{
+    if (!info)
+        return -EINVAL;
+    if (!framebuffer_base)
+        return -ENODEV;
+
+    info->width = display.width;
+    info->height = display.height;
+    info->pitch = display.pitch;
+    info->bpp = display.bpp;
+    info->size = framebuffer_size_bytes();
+    info->format = ARMOS_FB_FORMAT_ARGB8888;
+    return 0;
+}
+
+static ssize_t fb0_read(file_t* file, void* buffer, size_t count)
+{
+    uint32_t fb_size = framebuffer_size_bytes();
+    uint32_t offset;
+    uint32_t available;
+    uint32_t to_copy;
+
+    if (!framebuffer_base)
+        return -ENODEV;
+    if (!file || !buffer)
+        return -EINVAL;
+
+    offset = file->offset;
+    if (offset >= fb_size)
+        return 0;
+
+    available = fb_size - offset;
+    to_copy = MIN(count, available);
+    memcpy(buffer, framebuffer_base + offset, to_copy);
+    file->offset += to_copy;
+    return (ssize_t)to_copy;
+}
+
+static ssize_t fb0_write(file_t* file, const void* buffer, size_t count)
+{
+    uint32_t fb_size = framebuffer_size_bytes();
+    uint32_t offset;
+    uint32_t available;
+    uint32_t to_copy;
+
+    if (!framebuffer_base)
+        return -ENODEV;
+    if (!file || !buffer)
+        return -EINVAL;
+
+    offset = file->offset;
+    if (offset >= fb_size)
+        return 0;
+
+    available = fb_size - offset;
+    to_copy = MIN(count, available);
+    memcpy(framebuffer_base + offset, buffer, to_copy);
+    file->offset += to_copy;
+
+    framebuffer_mark_dirty(0, 0, display.width, display.height);
+    display_request_flush();
+    return (ssize_t)to_copy;
+}
+
+static off_t fb0_lseek(file_t* file, off_t offset, int whence)
+{
+    off_t base;
+    off_t next;
+    uint32_t fb_size = framebuffer_size_bytes();
+
+    if (!file)
+        return -EINVAL;
+
+    switch (whence) {
+    case SEEK_SET:
+        base = 0;
+        break;
+    case SEEK_CUR:
+        base = (off_t)file->offset;
+        break;
+    case SEEK_END:
+        base = (off_t)fb_size;
+        break;
+    default:
+        return -EINVAL;
+    }
+
+    next = base + offset;
+    if (next < 0 || next > (off_t)fb_size)
+        return -EINVAL;
+
+    file->offset = (uint32_t)next;
+    return next;
+}
+
+static file_operations_t fb0_file_ops = {
+    .read = fb0_read,
+    .write = fb0_write,
+    .open = NULL,
+    .close = NULL,
+    .lseek = fb0_lseek,
+    .readdir = NULL,
+    .truncate = NULL,
+};
+
+bool is_framebuffer_device_path(const char* path)
+{
+    return path && strcmp(path, "/dev/fb0") == 0;
+}
+
+void fill_framebuffer_device_stat(struct stat* st)
+{
+    uint32_t now;
+    uint32_t fb_size = framebuffer_size_bytes();
+
+    if (!st)
+        return;
+
+    now = get_current_time();
+    memset(st, 0, sizeof(*st));
+    st->st_dev = 0;
+    st->st_ino = DEV_FB0_RDEV;
+    st->st_mode = S_IFCHR | 0666;
+    st->st_nlink = 1;
+    st->st_uid = 0;
+    st->st_gid = 0;
+    st->st_rdev = DEV_FB0_RDEV;
+    st->st_size = fb_size ? (off_t)fb_size : (off_t)FB_SIZE;
+    st->st_blksize = display.pitch ? display.pitch : FB_WIDTH * (FB_BPP / 8);
+    st->st_blocks = (st->st_size + 511) / 512;
+    st->st_atime = now;
+    st->st_mtime = now;
+    st->st_ctime = now;
+}
+
+file_t* create_framebuffer_device_file(const char* name, int flags)
+{
+    file_t* file;
+    inode_t* inode;
+    struct stat st;
+
+    if (!framebuffer_base)
+        return NULL;
+
+    file = create_file();
+    if (!file)
+        return NULL;
+
+    inode = create_inode();
+    if (!inode) {
+        kfree(file);
+        return NULL;
+    }
+
+    fill_framebuffer_device_stat(&st);
+    inode->mode = st.st_mode;
+    inode->uid = st.st_uid;
+    inode->gid = st.st_gid;
+    inode->size = st.st_size;
+    inode->blocks = st.st_blocks;
+    inode->nlink = st.st_nlink;
+    inode->first_cluster = 0;
+    inode->parent_cluster = st.st_rdev;
+    inode->atime = st.st_atime;
+    inode->mtime = st.st_mtime;
+    inode->ctime = st.st_ctime;
+    inode->i_op = NULL;
+    inode->f_op = &fb0_file_ops;
+
+    file->f_op = &fb0_file_ops;
+    file->flags = flags;
+    file->type = FILE_TYPE_FRAMEBUFFER;
+    file->pos = 0;
+    file->offset = 0;
+    file->inode = inode;
+
+    if (name) {
+        strncpy(file->name, name, sizeof(file->name) - 1);
+        file->name[sizeof(file->name) - 1] = '\0';
+    }
+
+    return file;
 }
 
 static void framebuffer_tty_putc(char c)

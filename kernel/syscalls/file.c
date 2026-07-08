@@ -30,6 +30,7 @@
 #include <kernel/dirent.h>
 #include <kernel/tty.h>
 #include <kernel/null.h>
+#include <kernel/display.h>
 #include <kernel/virtio_net.h>
 #include <kernel/spinlock.h>
 
@@ -741,6 +742,7 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     char* full_path;
     file_t* tty_file;
     file_t* null_file;
+    file_t* fb_file;
     file_t* net_echo_file;
 
     int fd;
@@ -824,6 +826,31 @@ int sys_open(const char* pathname, int flags, mode_t mode)
         }
 
         task->process->files[fd] = null_file;
+        task->process->fd_flags[fd] = flags & O_CLOEXEC;
+        kfree(full_path);
+        return fd;
+    }
+
+    if (is_framebuffer_device_path(full_path)) {
+        if (flags & O_DIRECTORY) {
+            kfree(full_path);
+            return -ENOTDIR;
+        }
+
+        fd = allocate_fd(task);
+        if (fd < 0) {
+            kfree(full_path);
+            return fd;
+        }
+
+        fb_file = create_framebuffer_device_file("fb0", flags & ~O_CLOEXEC);
+        if (!fb_file) {
+            free_fd(task, fd);
+            kfree(full_path);
+            return -ENODEV;
+        }
+
+        task->process->files[fd] = fb_file;
         task->process->fd_flags[fd] = flags & O_CLOEXEC;
         kfree(full_path);
         return fd;
@@ -969,6 +996,15 @@ int sys_stat(const char* pathname, struct stat* statbuf)
         return 0;
     }
 
+    if (is_framebuffer_device_path(full_path)) {
+        fill_framebuffer_device_stat(&kstat);
+        kfree(full_path);
+        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
+
     if (is_net_echo_device_path(full_path)) {
         fill_net_echo_device_stat(&kstat);
         kfree(full_path);
@@ -1026,6 +1062,15 @@ int sys_lstat(const char* pathname, struct stat* statbuf)
 
     if (is_tty_device_path(full_path)) {
         fill_tty_device_stat(full_path, &kstat);
+        kfree(full_path);
+        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
+
+    if (is_framebuffer_device_path(full_path)) {
+        fill_framebuffer_device_stat(&kstat);
         kfree(full_path);
         if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
             return -EFAULT;

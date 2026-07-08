@@ -1,0 +1,30 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/include/sys/fb.h
+ * Layer: Userland / public header
+ * Description: Userspace ABI for the ArmOS framebuffer device.
+ */
+
+#ifndef ARM_OS_NEWLIB_SYS_FB_H
+#define ARM_OS_NEWLIB_SYS_FB_H
+
+#include <stdint.h>
+
+#define ARMOS_FBIOGET_INFO      0x4600u
+#define ARMOS_FB_FORMAT_ARGB8888 1u
+
+struct armos_fb_info {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint32_t size;
+    uint32_t format;
+};
+
+#endif

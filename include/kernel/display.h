@@ -34,6 +34,19 @@ extern uint8_t* framebuffer_base;  /* CPU virtual pointer to the framebuffer */
 extern paddr_t framebuffer_phys;   /* Physical/DMA address of framebuffer_base */
 
 #define FB_BASE         ((vaddr_t)(uintptr_t)framebuffer_base)
+#define DEV_FB0_RDEV   ((29u << 8) | 0u)
+
+#define ARMOS_FBIOGET_INFO      0x4600u
+#define ARMOS_FB_FORMAT_ARGB8888 1u
+
+struct armos_fb_info {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint32_t size;
+    uint32_t format;
+};
 
 typedef struct {
     uint32_t width;
@@ -82,5 +95,9 @@ void display_scrollback_down(uint32_t lines);
 /* Framebuffer file operations */
 ssize_t framebuffer_read(file_t* file, void* buffer, size_t count);
 ssize_t framebuffer_write(file_t* file, const void* buffer, size_t count);
+bool is_framebuffer_device_path(const char* path);
+void fill_framebuffer_device_stat(struct stat* st);
+int framebuffer_get_info(struct armos_fb_info* info);
+file_t* create_framebuffer_device_file(const char* name, int flags);
 
 #endif

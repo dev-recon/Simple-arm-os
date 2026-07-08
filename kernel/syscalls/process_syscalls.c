@@ -33,6 +33,7 @@
 #include <kernel/fat32.h>
 #include <kernel/tty.h>
 #include <kernel/null.h>
+#include <kernel/display.h>
 #include <kernel/virtio_net.h>
 #include <kernel/mount.h>
 #include <kernel/virtio_block.h>
@@ -868,7 +869,9 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
     file_t* file;
     struct termios tio;
     struct winsize wsz;
+    struct armos_fb_info fbinfo;
     int tty_id;
+    int fbret;
 
     if (!task || !task->process)
         return -EINVAL;
@@ -884,6 +887,16 @@ int sys_ioctl(int fd, uint32_t request, uint32_t arg)
         return tty_id;
 
     switch (request) {
+    case ARMOS_FBIOGET_INFO:
+        if (file->type != FILE_TYPE_FRAMEBUFFER)
+            return -ENOTTY;
+        if (!arg)
+            return -EFAULT;
+        fbret = framebuffer_get_info(&fbinfo);
+        if (fbret < 0)
+            return fbret;
+        return copy_to_user((void*)arg, &fbinfo, sizeof(fbinfo)) < 0 ? -EFAULT : 0;
+
     case TIOCGWINSZ:
         if (!file_is_tty(file))
             return -ENOTTY;
@@ -1776,6 +1789,7 @@ int sys_access(const char* pathname, int mode)
 
     if (is_null_device_path(full_path) ||
         is_tty_device_path(full_path) ||
+        is_framebuffer_device_path(full_path) ||
         is_net_echo_device_path(full_path)) {
         kfree(full_path);
         return (mode & MAY_EXEC) ? -EACCES : 0;
