@@ -9,6 +9,7 @@ TARGET_ARCH="${TARGET_ARCH:-arm32}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
 BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 BUILD_TCC="${BUILD_TCC:-1}"
+BUILD_BSD="${BUILD_BSD:-0}"
 BUILD_NCURSES="${BUILD_NCURSES:-0}"
 BUILD_NANO="${BUILD_NANO:-0}"
 DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
@@ -62,6 +63,48 @@ if [ "$BUILD_TCC" = "1" ]; then
     echo "=== Building native TinyCC bundle ==="
     ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_tcc_native.sh
     rsync -a build/tcc-native/bundle/opt/tcc/ userfs/opt/tcc/
+fi
+
+if [ "$BUILD_BSD" = "1" ]; then
+    echo "=== Building BSD tools bundle ==="
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bmake.sh
+    rsync -a build/bmake/bundle/ userfs/
+    cp build/bmake/bundle/opt/bmake/bin/bmake userfs/usr/bin/bmake
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdsed.sh
+    rsync -a build/bsdsed/bundle/ userfs/
+    ln -sfn ../opt/bsdsed/bin/sed userfs/bin/sed
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdawk.sh
+    rsync -a build/bsdawk/bundle/ userfs/
+    ln -sfn ../opt/bsdawk/bin/awk userfs/bin/awk
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdinstall.sh
+    rsync -a build/bsdinstall/bundle/ userfs/
+    ln -sfn ../../opt/bsdinstall/bin/install userfs/usr/bin/install
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdmtree.sh
+    rsync -a build/bsdmtree/bundle/ userfs/
+    mkdir -p userfs/usr/bin userfs/usr/sbin
+    ln -sfn ../../opt/bsdmtree/bin/mtree userfs/usr/bin/mtree
+    ln -sfn ../../opt/bsdmtree/bin/mtree userfs/usr/sbin/mtree
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdxargs.sh
+    rsync -a build/bsdxargs/bundle/ userfs/
+    ln -sfn ../../opt/bsdxargs/bin/xargs userfs/usr/bin/xargs
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsddiff.sh
+    rsync -a build/bsddiff/bundle/ userfs/
+    ln -sfn ../../opt/bsddiff/bin/diff userfs/usr/bin/diff
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdpatch.sh
+    rsync -a build/bsdpatch/bundle/ userfs/
+    ln -sfn ../../opt/bsdpatch/bin/patch userfs/usr/bin/patch
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdpax.sh
+    rsync -a build/bsdpax/bundle/ userfs/
+    ln -sfn ../../opt/bsdpax/bin/pax userfs/usr/bin/pax
+    ln -sfn ../../opt/bsdpax/bin/tar userfs/usr/bin/tar
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdm4.sh
+    rsync -a build/bsdm4/bundle/ userfs/
+    ln -sfn ../../opt/bsdm4/bin/m4 userfs/usr/bin/m4
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdelftools.sh
+    rsync -a build/bsdelftools/bundle/ userfs/
+    for tool in ar ranlib nm strip size; do
+        ln -sfn ../../opt/bsdelftools/bin/$tool userfs/usr/bin/$tool
+    done
 fi
 
 if [ "$BUILD_NCURSES" = "1" ]; then

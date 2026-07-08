@@ -35,6 +35,8 @@ filesystem now ships:
   from inside `mash`
 - optional static ncurses support with a custom `TERM=armos` terminfo entry
 - optional GNU nano support, cross-built as a small static ArmOS user program
+- optional BSD-style tool bundle with `bmake`, `sed`, `awk`, `install`,
+  `mtree`, `xargs`, `diff`, `patch`, `pax`/`tar`, and `m4`
 - a 512 MB ext2 root filesystem inside an MBR-partitioned `disk.img`
 - a more disciplined kernel portability foundation: generated assembly offsets,
   `paddr_t` / `vaddr_t` address types, and a shared FDT parser
@@ -82,6 +84,8 @@ ArmOS currently provides:
 - Userland source snapshot installed under `/usr/src/armos`, so ArmOS users can
   inspect, edit, and rebuild small programs from inside the running system
 - Optional ncurses and nano bundles for terminal UI experiments
+- Optional BSD-style tools for Makefile, text-processing, archive, patch, and
+  macro-processing workflows
 - Core utilities such as `cat`, `echo`, `pwd`, `ls`, `cp`, `mv`, `rm`,
   `mkdir`, `rmdir`, `touch`, `sleep`, `kill`, `ps`, `stat`, `head`,
   `grep`, `sed`, `sort`, `uniq`, `wc`, and `which`
@@ -143,8 +147,8 @@ Typical layout:
   experiments
 - `/bin` for core utilities, `/sbin` for system programs, `/usr/bin` for
   ArmOS user programs, and `/opt/<program>/bin` for imported external tools
-- `/opt/tcc`, `/opt/ncurses`, and `/opt/nano` for optional generated tool
-  bundles when those build flags are enabled
+- `/opt/tcc`, `/opt/ncurses`, `/opt/nano`, and `/opt/bsd*` for optional
+  generated/imported tool bundles when those build flags are enabled
 
 Ext2 supports normal files, directories, links, permissions, and writable
 operations used by the current userland. FAT32 remains useful as a compatibility
@@ -191,6 +195,16 @@ This installs ncurses under `/opt/ncurses`, a small `cursestest` program under
 `/usr/bin`, and nano under `/opt/nano/bin`. The generated bundles are build
 artifacts and are not tracked in Git.
 
+Optional BSD-style tools can be staged with:
+
+```sh
+BUILD_BSD=1 ./build.sh
+```
+
+This adds ports such as `bmake`, BSD `sed`/`awk`, `install`, `mtree`, `xargs`,
+`diff`, `patch`, `pax`/`tar`, and `m4`. See
+[`docs/BSD_USERLAND.md`](docs/BSD_USERLAND.md).
+
 ## Stability
 
 ArmOS has passed repeated stress runs such as:
@@ -208,6 +222,7 @@ See:
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`docs/GET_STARTED_KERNEL_DEV.md`](docs/GET_STARTED_KERNEL_DEV.md)
 - [`docs/GET_STARTED_USERLAND_DEV.md`](docs/GET_STARTED_USERLAND_DEV.md)
+- [`docs/BSD_USERLAND.md`](docs/BSD_USERLAND.md)
 - [`STABILITY.md`](STABILITY.md)
 - [`ROADMAP.md`](ROADMAP.md)
 

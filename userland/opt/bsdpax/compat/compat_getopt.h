@@ -1,0 +1,6 @@
+#ifndef ARMOS_BSDPAX_COMPAT_GETOPT_H
+#define ARMOS_BSDPAX_COMPAT_GETOPT_H
+
+#include <getopt.h>
+
+#endif /* ARMOS_BSDPAX_COMPAT_GETOPT_H */

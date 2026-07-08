@@ -316,6 +316,19 @@ Example:
 
 This keeps imported tools separate from native ArmOS core utilities.
 
+Larger imported tools may need a dedicated build script instead of the generic
+`userland/opt/<name>/src/*.c` rule. The BSD bundle follows this model:
+
+```text
+tools/build_bsdm4.sh
+userland/opt/bsdm4/src/
+userland/opt/bsdm4/compat/
+```
+
+When a port has its own build script, add it to the relevant top-level build
+flag in `build.sh` and `run.sh`, then exclude it from the generic external
+tool wildcard in `userland/Makefile`. See `docs/BSD_USERLAND.md`.
+
 ## Native Programming Inside ArmOS
 
 ArmOS installs a source snapshot into the root filesystem:

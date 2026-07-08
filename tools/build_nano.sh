@@ -19,6 +19,8 @@ BUILD_DIR="$WORK_DIR/build"
 BUNDLE_ROOT="$WORK_DIR/bundle"
 BUNDLE_PREFIX="$BUNDLE_ROOT/opt/nano"
 BUNDLE_BIN="$BUNDLE_PREFIX/bin"
+BUNDLE_ETC="$BUNDLE_PREFIX/etc"
+BUNDLE_SYNTAX="$BUNDLE_PREFIX/share/nano"
 
 ARM_FLAGS="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft"
 NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$ROOT_DIR/build/newlib-sysroot/arm-none-eabi}"
@@ -47,9 +49,26 @@ if [ ! -f "$SRC_ARCHIVE" ]; then
 fi
 
 rm -rf "$SRC_DIR" "$BUILD_DIR" "$BUNDLE_ROOT"
-mkdir -p "$SRC_DIR" "$BUILD_DIR" "$BUNDLE_BIN"
+mkdir -p "$SRC_DIR" "$BUILD_DIR" "$BUNDLE_BIN" "$BUNDLE_ETC" "$BUNDLE_SYNTAX"
 
 tar -xJf "$SRC_ARCHIVE" -C "$SRC_DIR" --strip-components=1
+
+# ArmOS' current printw path does not support the C99 %z length modifier.
+# Nano's line-number margin goes through mvwprintw(), so use a plain long.
+patch -d "$SRC_DIR" -p1 <<'PATCH'
+diff --git a/src/winio.c b/src/winio.c
+--- a/src/winio.c
++++ b/src/winio.c
+@@ -2558,7 +2558,7 @@ void draw_row(int row, const char *converted, linestruct *line, size_t from_col)
+ 			mvwprintw(midwin, row, 0, "%*s", margin - 1, " ");
+ 		else
+ #endif
+-			mvwprintw(midwin, row, 0, "%*zd", margin - 1, line->lineno);
++			mvwprintw(midwin, row, 0, "%*ld", margin - 1, (long)line->lineno);
+ 		wattroff(midwin, interface_color_pair[LINE_NUMBER]);
+ #ifndef NANO_TINY
+ 		if (line->has_anchor && (from_col == 0 || !ISSET(SOFTWRAP)))
+PATCH
 
 cd "$BUILD_DIR"
 
@@ -102,15 +121,29 @@ am_cv_func_iconv=no
 CACHE
 
 BUILD_TRIPLET="$("$SRC_DIR/config.guess" 2>/dev/null || echo unknown)"
+NANO_CPPFLAGS="-I$ROOT_DIR/userland/include -I$NEWLIB_SYSROOT/include -I$NCURSES_PREFIX/include -I$NCURSES_PREFIX/include/ncurses"
+NANO_CFLAGS="$ARM_FLAGS -Os -ffreestanding -fno-builtin -fno-stack-protector -DARM_OS_NEWLIB $NANO_CPPFLAGS"
+
+cat > "$BUILD_DIR/armos_nano_compat.c" <<'COMPAT'
+#include <unistd.h>
+
+char *
+getlogin(void)
+{
+    return "user";
+}
+COMPAT
+
+"$CC" $NANO_CFLAGS -c "$BUILD_DIR/armos_nano_compat.c" -o "$BUILD_DIR/armos_nano_compat.o"
 
 CC="$CC" \
 BUILD_CC="$HOST_CC" \
-CFLAGS="$ARM_FLAGS -Os -ffreestanding -fno-builtin -fno-stack-protector -DARM_OS_NEWLIB -I$ROOT_DIR/userland/include -I$NEWLIB_SYSROOT/include -I$NCURSES_PREFIX/include -I$NCURSES_PREFIX/include/ncurses" \
-CPPFLAGS="-I$ROOT_DIR/userland/include -I$NEWLIB_SYSROOT/include -I$NCURSES_PREFIX/include -I$NCURSES_PREFIX/include/ncurses" \
+CFLAGS="$NANO_CFLAGS" \
+CPPFLAGS="$NANO_CPPFLAGS" \
 NCURSES_CFLAGS="-I$NCURSES_PREFIX/include -I$NCURSES_PREFIX/include/ncurses" \
 NCURSES_LIBS="$NCURSES_PREFIX/lib/libncurses.a" \
 LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition $ROOT_DIR/newlib-port/build/crt0_newlib.o $ROOT_DIR/newlib-port/build/syscall_raw.o $ROOT_DIR/newlib-port/build/syscalls.o" \
-LIBS="$NCURSES_PREFIX/lib/libncurses.a $NEWLIB_LIBC $LIBGCC" \
+LIBS="$BUILD_DIR/armos_nano_compat.o $NCURSES_PREFIX/lib/libncurses.a $NEWLIB_LIBC $LIBGCC" \
 "$SRC_DIR/configure" \
     --cache-file="$BUILD_DIR/config.cache" \
     --build="$BUILD_TRIPLET" \
@@ -120,7 +153,9 @@ LIBS="$NCURSES_PREFIX/lib/libncurses.a $NEWLIB_LIBC $LIBGCC" \
     --disable-nls \
     --disable-utf8 \
     --disable-browser \
-    --disable-color \
+    --enable-nanorc \
+    --enable-linenumbers \
+    --enable-color \
     --disable-extra \
     --disable-help \
     --disable-histories \
@@ -135,6 +170,9 @@ LIBS="$NCURSES_PREFIX/lib/libncurses.a $NEWLIB_LIBC $LIBGCC" \
 
 make -j"${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 make DESTDIR="$BUNDLE_ROOT" install-exec
+
+cp "$SRC_DIR"/syntax/*.nanorc "$BUNDLE_SYNTAX"/
+printf 'include /opt/nano/share/nano/*.nanorc\n' > "$BUNDLE_ETC/nanorc"
 
 "$STRIP" --strip-all "$BUNDLE_BIN/nano" || true
 

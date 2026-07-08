@@ -1479,6 +1479,8 @@ static int run_builtin_with_redirs(command_entry_t* entry, int argc, char* argv[
 
 // Display the shell banner
 void shell_print_banner(void) {
+    const char* path = shell_getenv("PATH");
+
     printf("\n");
     printf("\033[1;36m");
     printf("  __  __    _    ____  _   _\n");
@@ -1488,7 +1490,10 @@ void shell_print_banner(void) {
     printf(" |_|  |_/_/   \\_\\____/|_| |_|\n");
     printf("\033[0m");
     printf(" arm-os shell on newlib\n");
-    printf(" type 'help' for builtins, PATH=/bin:/usr/bin:/opt/kilo/bin\n");
+    printf(" type 'help' for builtins");
+    if (path && *path)
+        printf(", PATH=%s", path);
+    printf("\n");
     printf("\n");
 }
 
@@ -2938,11 +2943,27 @@ void shell_run(void) {
 
 int main(int argc, char **argv, char **envp) {
     int version = 11 ;
-
-    (void)argc;
-    (void)argv;
+    int result;
 
     shell_init_env(envp);
+
+    if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
+        char command[SHELL_BUFFER_SIZE];
+        size_t len = strlen(argv[2]);
+
+        command_init();
+        if (len >= sizeof(command)) {
+            printf("mash: -c command too long\n");
+            exit(2);
+        }
+        memcpy(command, argv[2], len + 1);
+
+        result = shell_execute_line(command);
+        if (result == SHELL_EXIT)
+            result = 0;
+        exit(result);
+    }
+
     shell_load_startup_files();
     shell_line_edit_init();
     setpgid(0, 0);

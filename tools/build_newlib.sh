@@ -39,13 +39,43 @@ fi
 
 mkdir -p "$BUILD_ROOT/src" "$OBJ_DIR" "$INSTALL_ROOT"
 
+patch_state()
+{
+    if [ ! -f "$PATCH_SERIES" ]; then
+        return 0
+    fi
+
+    (
+        cd "$PATCH_DIR"
+        printf '%s\n' "series:"
+        cat series
+        while IFS= read -r patch_name || [ -n "$patch_name" ]; do
+            case "$patch_name" in
+                ""|\#*) continue ;;
+            esac
+            printf '\n%s\n' "$patch_name"
+            cat "$patch_name"
+        done < series
+    ) | shasum -a 256 | awk '{print $1}'
+}
+
+EXPECTED_PATCH_STATE="$(patch_state || true)"
+
+if [ -n "$EXPECTED_PATCH_STATE" ] &&
+   [ -d "$SRC_DIR" ] &&
+   { [ ! -f "$PATCH_STAMP" ] || [ "$(cat "$PATCH_STAMP")" != "$EXPECTED_PATCH_STATE" ]; }; then
+    echo "=== Newlib patch series changed; re-extracting clean sources ==="
+    rm -rf "$SRC_DIR" "$OBJ_DIR"
+    mkdir -p "$OBJ_DIR"
+fi
+
 if [ ! -d "$SRC_DIR" ]; then
     echo "=== Extracting newlib $NEWLIB_VERSION ==="
     tar -xzf "$ARCHIVE" -C "$BUILD_ROOT/src"
 fi
 
 if [ -f "$PATCH_SERIES" ]; then
-    if [ ! -f "$PATCH_STAMP" ]; then
+    if [ ! -f "$PATCH_STAMP" ] || [ "$(cat "$PATCH_STAMP")" != "$EXPECTED_PATCH_STATE" ]; then
         echo "=== Applying arm-os newlib patches ==="
         while IFS= read -r patch_name || [ -n "$patch_name" ]; do
             case "$patch_name" in
@@ -61,7 +91,7 @@ if [ -f "$PATCH_SERIES" ]; then
             echo "Applying $patch_name"
             patch -d "$SRC_DIR" -p1 < "$patch_file"
         done < "$PATCH_SERIES"
-        date -u +"%Y-%m-%dT%H:%M:%SZ" > "$PATCH_STAMP"
+        printf '%s\n' "$EXPECTED_PATCH_STATE" > "$PATCH_STAMP"
     else
         echo "=== arm-os newlib patches already applied ==="
     fi
