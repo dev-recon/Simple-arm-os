@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-- No unreleased changes yet.
+- Added an optional BSD-style userland tool bundle behind `BUILD_BSD=1`,
+  including `bmake`, BSD `sed`/`awk`, `install`, `mtree`, `xargs`, `diff`,
+  `patch`, `pax`/`tar`, and `m4`.
+- Documented the BSD bundle layout, visible command symlinks, port structure,
+  compatibility notes, and smoke tests in `docs/BSD_USERLAND.md`.
 
 ## ArmOS v0.6 - 2026-07-05
 
