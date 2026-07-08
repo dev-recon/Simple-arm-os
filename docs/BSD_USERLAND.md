@@ -58,6 +58,11 @@ Current BSD bundle entries:
 | `pax` | `/opt/bsdpax/bin/pax` | `/usr/bin/pax -> ../../opt/bsdpax/bin/pax` |
 | `tar` | `/opt/bsdpax/bin/tar` | `/usr/bin/tar -> ../../opt/bsdpax/bin/tar` |
 | `m4` | `/opt/bsdm4/bin/m4` | `/usr/bin/m4 -> ../../opt/bsdm4/bin/m4` |
+| `ar` | `/opt/bsdelftools/bin/ar` | `/usr/bin/ar -> ../../opt/bsdelftools/bin/ar` |
+| `ranlib` | `/opt/bsdelftools/bin/ranlib` | `/usr/bin/ranlib -> ../../opt/bsdelftools/bin/ranlib` |
+| `nm` | `/opt/bsdelftools/bin/nm` | `/usr/bin/nm -> ../../opt/bsdelftools/bin/nm` |
+| `strip` | `/opt/bsdelftools/bin/strip` | `/usr/bin/strip -> ../../opt/bsdelftools/bin/strip` |
+| `size` | `/opt/bsdelftools/bin/size` | `/usr/bin/size -> ../../opt/bsdelftools/bin/size` |
 
 ## Port Structure
 
@@ -86,6 +91,12 @@ clearly an ArmOS/newlib portability issue.
 - `pax` and `tar` currently use NetBSD's small pax profile; `cpio` mode and
   compression filters are intentionally not part of the first ArmOS bundle.
 - `m4` builds NetBSD's extended profile and uses `/sbin/mash` for `esyscmd`.
+- `ar`, `ranlib`, `nm`, `strip`, and `size` are ArmOS-local ELF32/archive
+  tools for self-hosting experiments. They are intentionally smaller than a
+  full GNU binutils or ELF Tool Chain import.
+- `strip` currently strips executable ELF32 files by removing section headers
+  and non-loaded trailing data. The stripped executable should keep running,
+  but `nm` and `size` may no longer inspect it afterward.
 
 ## Smoke Tests
 
@@ -132,4 +143,23 @@ cd out
 pax -r -f ../sample.tar
 diff -u ../src/a.txt src/a.txt
 diff -u ../src/sub/b.txt src/sub/b.txt
+```
+
+ELF/archive tools:
+
+```sh
+printf 'int answer(void){return 42;}\n' > answer.c
+printf 'extern int answer(void); int main(void){return answer() == 42 ? 0 : 1;}\n' > main.c
+tcc -c answer.c -o answer.o
+ar rcs libanswer.a answer.o
+ranlib libanswer.a
+ar t libanswer.a
+nm libanswer.a
+size answer.o
+tcc main.c libanswer.a -o answer-test
+./answer-test
+echo status=$?
+strip -o answer-test.stripped answer-test
+./answer-test.stripped
+echo stripped_status=$?
 ```

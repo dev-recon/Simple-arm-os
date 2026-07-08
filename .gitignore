@@ -32,6 +32,7 @@ userfs/opt/ncurses/
 userfs/opt/nano/
 userfs/opt/bmake/
 userfs/opt/bsdawk/
+userfs/opt/bsdelftools/
 userfs/opt/bsdinstall/
 userfs/opt/bsdmtree/
 userfs/opt/bsdsed/

@@ -4,7 +4,8 @@
 
 - Added an optional BSD-style userland tool bundle behind `BUILD_BSD=1`,
   including `bmake`, BSD `sed`/`awk`, `install`, `mtree`, `xargs`, `diff`,
-  `patch`, `pax`/`tar`, and `m4`.
+  `patch`, `pax`/`tar`, `m4`, and small ELF/archive tools: `ar`, `ranlib`,
+  `nm`, `strip`, and `size`.
 - Documented the BSD bundle layout, visible command symlinks, port structure,
   compatibility notes, and smoke tests in `docs/BSD_USERLAND.md`.
 

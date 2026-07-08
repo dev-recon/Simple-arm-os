@@ -100,6 +100,11 @@ if [ "$BUILD_BSD" = "1" ]; then
     ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdm4.sh
     rsync -a build/bsdm4/bundle/ userfs/
     ln -sfn ../../opt/bsdm4/bin/m4 userfs/usr/bin/m4
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_bsdelftools.sh
+    rsync -a build/bsdelftools/bundle/ userfs/
+    for tool in ar ranlib nm strip size; do
+        ln -sfn ../../opt/bsdelftools/bin/$tool userfs/usr/bin/$tool
+    done
 fi
 
 if [ "$BUILD_NCURSES" = "1" ]; then
