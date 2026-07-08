@@ -30,6 +30,7 @@ userfs/opt/*/bin/*
 userfs/opt/tcc/
 userfs/opt/zlib/
 userfs/opt/libjpeg/
+userfs/opt/libpng/
 userfs/opt/ncurses/
 userfs/opt/nano/
 userfs/opt/bmake/

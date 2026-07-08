@@ -15,7 +15,8 @@ full Xorg port by default.
 3. Port image/display dependencies only after the raw display path is stable.
    - First dependency: `zlib` as `/opt/zlib/lib/libz.a`.
    - Second dependency: `libjpeg` as `/opt/libjpeg/lib/libjpeg.a`.
-   - Likely next dependencies: `libpng`, `libtiff`.
+   - Third dependency: `libpng` as `/opt/libpng/lib/libpng.a`.
+   - Likely next dependency: `libtiff`.
    - Avoid committing to a full Xorg server until `xv` has a proven build path.
 
 ## Current Smoke Test
@@ -33,10 +34,19 @@ FBTEST_OK
 
 ## zlib Smoke Test
 
-Build and stage zlib with:
+The whole current dependency set can be built and staged with:
 
 ```sh
-BUILD_ZLIB=1 BUILD_NEWLIB=0 BUILD_TCC=0 ./build.sh
+BUILD_XV_DEPS=1 ./build.sh
+```
+
+This enables `zlib`, `libjpeg`, and `libpng`, while skipping the native TCC
+bundle unless `BUILD_TCC=1` is passed explicitly.
+
+Build and stage only zlib with:
+
+```sh
+BUILD_ZLIB=1 BUILD_TCC=0 ./build.sh
 ```
 
 Then run:
@@ -56,7 +66,7 @@ ZTEST_OK
 Build and stage libjpeg with:
 
 ```sh
-BUILD_LIBJPEG=1 BUILD_NEWLIB=0 BUILD_TCC=0 ./build.sh
+BUILD_LIBJPEG=1 BUILD_TCC=0 ./build.sh
 ```
 
 Then run:
@@ -69,4 +79,24 @@ Expected output ends with:
 
 ```text
 JPGTEST_OK
+```
+
+## libpng Smoke Test
+
+Build and stage libpng with:
+
+```sh
+BUILD_LIBPNG=1 BUILD_TCC=0 ./build.sh
+```
+
+Then run:
+
+```sh
+pngtest
+```
+
+Expected output ends with:
+
+```text
+PNGTEST_OK
 ```
