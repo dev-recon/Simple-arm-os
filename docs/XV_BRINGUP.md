@@ -14,7 +14,8 @@ full Xorg port by default.
      first pixel, and prints `FBTEST_OK`.
 3. Port image/display dependencies only after the raw display path is stable.
    - First dependency: `zlib` as `/opt/zlib/lib/libz.a`.
-   - Likely next dependencies: `libjpeg`, `libpng`, `libtiff`.
+   - Second dependency: `libjpeg` as `/opt/libjpeg/lib/libjpeg.a`.
+   - Likely next dependencies: `libpng`, `libtiff`.
    - Avoid committing to a full Xorg server until `xv` has a proven build path.
 
 ## Current Smoke Test
@@ -48,4 +49,24 @@ Expected output ends with:
 
 ```text
 ZTEST_OK
+```
+
+## libjpeg Smoke Test
+
+Build and stage libjpeg with:
+
+```sh
+BUILD_LIBJPEG=1 BUILD_NEWLIB=0 BUILD_TCC=0 ./build.sh
+```
+
+Then run:
+
+```sh
+jpgtest
+```
+
+Expected output ends with:
+
+```text
+JPGTEST_OK
 ```

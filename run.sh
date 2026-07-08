@@ -18,6 +18,7 @@ BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 BUILD_TCC="${BUILD_TCC:-1}"
 BUILD_BSD="${BUILD_BSD:-0}"
 BUILD_ZLIB="${BUILD_ZLIB:-0}"
+BUILD_LIBJPEG="${BUILD_LIBJPEG:-0}"
 TARGET_ARCH="${TARGET_ARCH:-arm32}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
 ARCH="${ARCH:-arm-none-eabi-}"
@@ -133,6 +134,12 @@ if [ "$BUILD_ZLIB" = "1" ]; then
     echo "=== Building zlib bundle ==="
     ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_zlib.sh
     rsync -a build/zlib/bundle/ userfs/
+fi
+
+if [ "$BUILD_LIBJPEG" = "1" ]; then
+    echo "=== Building libjpeg bundle ==="
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_libjpeg.sh
+    rsync -a build/libjpeg/bundle/ userfs/
 fi
 
 echo "=== Rebuilding kernel ==="

@@ -11,6 +11,7 @@ BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 BUILD_TCC="${BUILD_TCC:-1}"
 BUILD_BSD="${BUILD_BSD:-0}"
 BUILD_ZLIB="${BUILD_ZLIB:-0}"
+BUILD_LIBJPEG="${BUILD_LIBJPEG:-0}"
 BUILD_NCURSES="${BUILD_NCURSES:-0}"
 BUILD_NANO="${BUILD_NANO:-0}"
 DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
@@ -112,6 +113,12 @@ if [ "$BUILD_ZLIB" = "1" ]; then
     echo "=== Building zlib bundle ==="
     ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_zlib.sh
     rsync -a build/zlib/bundle/ userfs/
+fi
+
+if [ "$BUILD_LIBJPEG" = "1" ]; then
+    echo "=== Building libjpeg bundle ==="
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_libjpeg.sh
+    rsync -a build/libjpeg/bundle/ userfs/
 fi
 
 if [ "$BUILD_NCURSES" = "1" ]; then
