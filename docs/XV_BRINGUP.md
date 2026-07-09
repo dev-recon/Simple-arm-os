@@ -16,7 +16,8 @@ full Xorg port by default.
    - First dependency: `zlib` as `/opt/zlib/lib/libz.a`.
    - Second dependency: `libjpeg` as `/opt/libjpeg/lib/libjpeg.a`.
    - Third dependency: `libpng` as `/opt/libpng/lib/libpng.a`.
-   - Likely next dependency: `libtiff`.
+   - Fourth dependency: `libtiff` as `/opt/libtiff/lib/libtiff.a`.
+   - Next step: start an `xv` build probe against those installed libraries.
    - Avoid committing to a full Xorg server until `xv` has a proven build path.
 
 ## Current Smoke Test
@@ -40,8 +41,8 @@ The whole current dependency set can be built and staged with:
 BUILD_XV_DEPS=1 ./build.sh
 ```
 
-This enables `zlib`, `libjpeg`, and `libpng`, while skipping the native TCC
-bundle unless `BUILD_TCC=1` is passed explicitly.
+This enables `zlib`, `libjpeg`, `libpng`, and `libtiff`, while skipping the
+native TCC bundle unless `BUILD_TCC=1` is passed explicitly.
 
 Build and stage only zlib with:
 
@@ -100,3 +101,27 @@ Expected output ends with:
 ```text
 PNGTEST_OK
 ```
+
+## libtiff Smoke Test
+
+Build and stage libtiff with:
+
+```sh
+BUILD_LIBTIFF=1 BUILD_TCC=0 ./build.sh
+```
+
+Then run:
+
+```sh
+tifftest
+```
+
+Expected output ends with:
+
+```text
+TIFFTEST_OK
+```
+
+The current `tifftest` covers uncompressed grayscale scanlines.  The port builds
+Deflate/ZIP support through zlib, but compressed TIFF runtime coverage should be
+added separately before treating that path as proven.

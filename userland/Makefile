@@ -54,7 +54,7 @@ EXTERNALS := $(patsubst opt/%/src/,%,$(EXTERNAL_DIRS))
 # These tools have their own configure/build flow and are staged by dedicated
 # top-level build switches.  The generic "one directory -> one binary" rule is
 # intentionally too small for them.
-EXTERNALS := $(filter-out bmake bsdawk bsddiff bsdelftools bsdinstall bsdm4 bsdmtree bsdpax bsdpatch bsdsed bsdxargs tcc zlib libjpeg libpng,$(EXTERNALS))
+EXTERNALS := $(filter-out bmake bsdawk bsddiff bsdelftools bsdinstall bsdm4 bsdmtree bsdpax bsdpatch bsdsed bsdxargs tcc zlib libjpeg libpng libtiff,$(EXTERNALS))
 
 ifneq ($(ENABLE_TCC),1)
 PROGRAMS := $(filter-out tcc,$(PROGRAMS))

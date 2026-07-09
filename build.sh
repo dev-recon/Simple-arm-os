@@ -15,11 +15,13 @@ if [ "$BUILD_XV_DEPS" = "1" ]; then
     BUILD_ZLIB="${BUILD_ZLIB:-1}"
     BUILD_LIBJPEG="${BUILD_LIBJPEG:-1}"
     BUILD_LIBPNG="${BUILD_LIBPNG:-1}"
+    BUILD_LIBTIFF="${BUILD_LIBTIFF:-1}"
 else
     BUILD_TCC="${BUILD_TCC:-1}"
     BUILD_ZLIB="${BUILD_ZLIB:-0}"
     BUILD_LIBJPEG="${BUILD_LIBJPEG:-0}"
     BUILD_LIBPNG="${BUILD_LIBPNG:-0}"
+    BUILD_LIBTIFF="${BUILD_LIBTIFF:-0}"
 fi
 BUILD_NCURSES="${BUILD_NCURSES:-0}"
 BUILD_NANO="${BUILD_NANO:-0}"
@@ -139,6 +141,22 @@ if [ "$BUILD_LIBPNG" = "1" ]; then
     echo "=== Building libpng bundle ==="
     ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_libpng.sh
     rsync -a build/libpng/bundle/ userfs/
+fi
+
+if [ "$BUILD_LIBTIFF" = "1" ]; then
+    if [ ! -f build/zlib/bundle/opt/zlib/lib/libz.a ]; then
+        echo "=== Building zlib bundle for libtiff ==="
+        ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_zlib.sh
+    fi
+    if [ ! -f build/libjpeg/bundle/opt/libjpeg/lib/libjpeg.a ]; then
+        echo "=== Building libjpeg bundle for libtiff ==="
+        ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_libjpeg.sh
+    fi
+    rsync -a build/zlib/bundle/ userfs/
+    rsync -a build/libjpeg/bundle/ userfs/
+    echo "=== Building libtiff bundle ==="
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_libtiff.sh
+    rsync -a build/libtiff/bundle/ userfs/
 fi
 
 if [ "$BUILD_NCURSES" = "1" ]; then
