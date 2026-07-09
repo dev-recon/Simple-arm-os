@@ -60,6 +60,10 @@ ifneq ($(ENABLE_TCC),1)
 PROGRAMS := $(filter-out tcc,$(PROGRAMS))
 endif
 
+# fbview links against zlib/libjpeg/libpng/libtiff and is built by the
+# dedicated top-level BUILD_FBVIEW flow.
+PROGRAMS := $(filter-out fbview,$(PROGRAMS))
+
 PROGRAM_TARGETS := $(PROGRAMS:%=$(OUT_USR_BIN)/%)
 EXTERNAL_TARGETS := $(foreach name,$(EXTERNALS),$(OUT_OPT)/$(name)/bin/$(name))
 

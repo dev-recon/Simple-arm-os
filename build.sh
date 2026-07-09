@@ -16,12 +16,14 @@ if [ "$BUILD_XV_DEPS" = "1" ]; then
     BUILD_LIBJPEG="${BUILD_LIBJPEG:-1}"
     BUILD_LIBPNG="${BUILD_LIBPNG:-1}"
     BUILD_LIBTIFF="${BUILD_LIBTIFF:-1}"
+    BUILD_FBVIEW="${BUILD_FBVIEW:-1}"
 else
     BUILD_TCC="${BUILD_TCC:-1}"
     BUILD_ZLIB="${BUILD_ZLIB:-0}"
     BUILD_LIBJPEG="${BUILD_LIBJPEG:-0}"
     BUILD_LIBPNG="${BUILD_LIBPNG:-0}"
     BUILD_LIBTIFF="${BUILD_LIBTIFF:-0}"
+    BUILD_FBVIEW="${BUILD_FBVIEW:-0}"
 fi
 BUILD_NCURSES="${BUILD_NCURSES:-0}"
 BUILD_NANO="${BUILD_NANO:-0}"
@@ -157,6 +159,32 @@ if [ "$BUILD_LIBTIFF" = "1" ]; then
     echo "=== Building libtiff bundle ==="
     ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_libtiff.sh
     rsync -a build/libtiff/bundle/ userfs/
+fi
+
+if [ "$BUILD_FBVIEW" = "1" ]; then
+    if [ ! -f build/zlib/bundle/opt/zlib/lib/libz.a ]; then
+        echo "=== Building zlib bundle for fbview ==="
+        ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_zlib.sh
+    fi
+    if [ ! -f build/libjpeg/bundle/opt/libjpeg/lib/libjpeg.a ]; then
+        echo "=== Building libjpeg bundle for fbview ==="
+        ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_libjpeg.sh
+    fi
+    if [ ! -f build/libpng/bundle/opt/libpng/lib/libpng.a ]; then
+        echo "=== Building libpng bundle for fbview ==="
+        ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_libpng.sh
+    fi
+    if [ ! -f build/libtiff/bundle/opt/libtiff/lib/libtiff.a ]; then
+        echo "=== Building libtiff bundle for fbview ==="
+        ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_libtiff.sh
+    fi
+    rsync -a build/zlib/bundle/ userfs/
+    rsync -a build/libjpeg/bundle/ userfs/
+    rsync -a build/libpng/bundle/ userfs/
+    rsync -a build/libtiff/bundle/ userfs/
+    echo "=== Building fbview ==="
+    ARCH="$ARCH" NEWLIB_SYSROOT="$NEWLIB_SYSROOT" ./tools/build_fbview.sh
+    rsync -a build/fbview/bundle/ userfs/
 fi
 
 if [ "$BUILD_NCURSES" = "1" ]; then

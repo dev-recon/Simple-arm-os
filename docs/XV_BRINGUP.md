@@ -57,7 +57,9 @@ BUILD_XV_DEPS=1 ./build.sh
 ```
 
 This enables `zlib`, `libjpeg`, `libpng`, and `libtiff`, while skipping the
-native TCC bundle unless `BUILD_TCC=1` is passed explicitly.
+native TCC bundle unless `BUILD_TCC=1` is passed explicitly.  It also builds
+`fbview`, a small ArmOS-owned framebuffer image viewer used to validate the
+decode-to-display path without depending on xv redistribution rights.
 
 Build and stage only zlib with:
 
@@ -140,6 +142,32 @@ TIFFTEST_OK
 The current `tifftest` covers uncompressed grayscale scanlines.  The port builds
 Deflate/ZIP support through zlib, but compressed TIFF runtime coverage should be
 added separately before treating that path as proven.
+
+## fbview Smoke Test
+
+Build and stage `fbview` plus its image dependencies with:
+
+```sh
+BUILD_FBVIEW=1 BUILD_TCC=0 ./build.sh
+```
+
+Then run:
+
+```sh
+fbview image.jpg
+echo status=$?
+```
+
+Expected output includes:
+
+```text
+FBVIEW_OK
+status=0
+```
+
+`fbview` is ArmOS-owned test code.  It supports JPEG, PNG, and TIFF input,
+scales large images down to fit `/dev/fb0`, and paints ARGB8888 pixels through
+the public framebuffer ABI.
 
 ## External xv Loader Probe
 
