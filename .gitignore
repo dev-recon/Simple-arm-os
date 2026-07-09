@@ -63,3 +63,7 @@ output/
 
 # Third-party archives
 *.tar.gz
+
+# Local-only xv experiments.  xv sources, source-derived shims, and patches
+# must not be committed unless redistribution rights are clarified separately.
+third_party/xv/

@@ -3,6 +3,21 @@
 The goal is to make `xv` build and run on ArmOS without turning the work into a
 full Xorg port by default.
 
+## Source And Redistribution Boundary
+
+`xv` is an external test target for ArmOS graphics bring-up, not vendored
+ArmOS source.
+
+- Do not commit `xv` source files, source-derived compatibility headers, or
+  patches to this repository.
+- Use a local source checkout, such as `../xv-3.10a`, only as an input for
+  local experiments.
+- A locally built ArmOS `xv` binary may be staged into a generated disk image
+  for testing, but it must remain a local/generated artifact unless
+  redistribution rights are clarified separately.
+- ArmOS documentation may explain that `xv` was used as a compatibility target
+  and that users can download/build `xv` in their own environment.
+
 ## Strategy
 
 1. Expose a minimal framebuffer ABI first.
@@ -125,3 +140,41 @@ TIFFTEST_OK
 The current `tifftest` covers uncompressed grayscale scanlines.  The port builds
 Deflate/ZIP support through zlib, but compressed TIFF runtime coverage should be
 added separately before treating that path as proven.
+
+## External xv Loader Probe
+
+A local-only probe built outside the repository from `../xv-3.10a` has been
+used to validate the original xv BMP, JPEG, and TIFF loader paths against the
+ArmOS userland libraries.  The probe binary may be copied into `userfs/usr/bin`
+for a generated-disk smoke test, but the probe sources, xv sources, source
+patches, and source-derived compatibility headers must stay outside this
+repository.
+
+Runtime test:
+
+```sh
+xvprobe
+echo status=$?
+```
+
+Expected output includes:
+
+```text
+XVBMP_OK type=PIC24 size=2x2
+XVJPEG_OK type=PIC24 size=2x2
+XVTIFF_OK type=PIC8 size=2x2
+XVPROBE_OK
+status=0
+```
+
+Current local findings:
+
+- The framebuffer path and dependency chain are strong enough to run the xv
+  BMP/JPEG/TIFF loader code in ArmOS.
+- Any local xv compatibility shim must let `jpeglib.h` define `boolean`,
+  `TRUE`, and `FALSE` before defining xv-style boolean macros; otherwise the
+  application and libjpeg disagree on `struct jpeg_compress_struct` and
+  `struct jpeg_decompress_struct` sizes.
+- The xv TIFF loader needs local scratch adaptation for modern libtiff symbol
+  names before it can be used with libtiff 4.x.  Keep that adaptation outside
+  the repo until redistribution rights are settled.
