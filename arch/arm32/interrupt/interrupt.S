@@ -387,12 +387,12 @@ memory_barrier_full:
 
 .global memory_barrier_read
 memory_barrier_read:
-    dsb ld                      /* Load barrier */
+    dsb                         /* ARMv7-compatible full barrier */
     bx lr
 
 .global memory_barrier_write
 memory_barrier_write:
-    dsb st                      /* Store barrier */
+    dsb                         /* ARMv7-compatible full barrier */
     bx lr
 
 .end

@@ -51,6 +51,24 @@ static bool mmu_is_enabled(void)
     return arch_mmu_enabled();
 }
 
+static bool buddy_lock_if_needed(unsigned long *flags)
+{
+    if (mmu_is_enabled()) {
+        spin_lock_irqsave(&buddy_lock, flags);
+        return true;
+    }
+
+    if (flags)
+        *flags = 0;
+    return false;
+}
+
+static void buddy_unlock_if_needed(bool locked, unsigned long flags)
+{
+    if (locked)
+        spin_unlock_irqrestore(&buddy_lock, flags);
+}
+
 static struct page_info* page_info_array(void)
 {
     paddr_t phys = (paddr_t)page_infos;
@@ -129,6 +147,14 @@ static paddr_t choose_buddy_base(void)
     paddr_t base = ALIGN_UP((paddr_t)FREE_MEMORY_START, PAGE_SIZE);
 
     /*
+     * The physical-page bitmap is carved out before the buddy allocator is
+     * initialized. Keep the buddy arena above it; otherwise the page-info array
+     * allocated by early_alloc() can overwrite the bitmap on low-RAM platforms.
+     */
+    if (phys_alloc.start_addr > base)
+        base = ALIGN_UP(phys_alloc.start_addr, PAGE_SIZE);
+
+    /*
      * reserve_dtb_pages() may advance buddy_base past a boot DTB. Preserve it
      * when it is inside platform RAM.
      */
@@ -181,6 +207,7 @@ void* buddy_alloc(size_t num_block) {
     paddr_t ram_end = physical_ram_end();
     uint32_t max_pages = (ram_end - buddy_base) / PAGE_SIZE;
     unsigned long flags;
+    bool locked;
     struct page_info *infos;
 
     //kprintf("\n***********************************************************************\n");
@@ -191,10 +218,10 @@ void* buddy_alloc(size_t num_block) {
         return NULL;
     }
 
-    spin_lock_irqsave(&buddy_lock, &flags);
+    locked = buddy_lock_if_needed(&flags);
     infos = page_info_array();
     if (!infos) {
-        spin_unlock_irqrestore(&buddy_lock, flags);
+        buddy_unlock_if_needed(locked, flags);
         return NULL;
     }
 
@@ -230,7 +257,7 @@ void* buddy_alloc(size_t num_block) {
 
             account_buddy_alloc(num_block);
 
-            spin_unlock_irqrestore(&buddy_lock, flags);
+            buddy_unlock_if_needed(locked, flags);
 
             void *zero_addr = (void *)addr;
             if (mmu_is_enabled()) {
@@ -250,7 +277,7 @@ void* buddy_alloc(size_t num_block) {
         }
     }
 
-    spin_unlock_irqrestore(&buddy_lock, flags);
+    buddy_unlock_if_needed(locked, flags);
     return NULL; // Aucun bloc disponible
 }
 
@@ -303,10 +330,11 @@ static void buddy_free_locked(void* ptr) {
 
 void buddy_free(void* ptr) {
     unsigned long flags;
+    bool locked;
 
-    spin_lock_irqsave(&buddy_lock, &flags);
+    locked = buddy_lock_if_needed(&flags);
     buddy_free_locked(ptr);
-    spin_unlock_irqrestore(&buddy_lock, flags);
+    buddy_unlock_if_needed(locked, flags);
 }
 
 static struct page_info* buddy_page_info(void* ptr)
@@ -341,21 +369,23 @@ bool page_is_buddy_page(void* page_addr)
 uint16_t page_ref_count(void* page_addr)
 {
     unsigned long flags;
+    bool locked;
     uint16_t refs;
 
-    spin_lock_irqsave(&buddy_lock, &flags);
+    locked = buddy_lock_if_needed(&flags);
     struct page_info* info = buddy_page_info(page_addr);
     refs = info ? info->refcount : 0;
-    spin_unlock_irqrestore(&buddy_lock, flags);
+    buddy_unlock_if_needed(locked, flags);
     return refs;
 }
 
 int page_ref_inc(void* page_addr)
 {
     unsigned long flags;
+    bool locked;
     int ret = 0;
 
-    spin_lock_irqsave(&buddy_lock, &flags);
+    locked = buddy_lock_if_needed(&flags);
     struct page_info* info = buddy_page_info(page_addr);
     if (!info || info->refcount == 0xFFFFu) {
         ret = -1;
@@ -363,23 +393,24 @@ int page_ref_inc(void* page_addr)
         info->refcount++;
     }
 
-    spin_unlock_irqrestore(&buddy_lock, flags);
+    buddy_unlock_if_needed(locked, flags);
     return ret;
 }
 
 uint16_t page_ref_dec(void* page_addr)
 {
     unsigned long flags;
+    bool locked;
     uint16_t refs = 0;
 
-    spin_lock_irqsave(&buddy_lock, &flags);
+    locked = buddy_lock_if_needed(&flags);
     struct page_info* info = buddy_page_info(page_addr);
     if (info && info->refcount > 0) {
         info->refcount--;
         refs = info->refcount;
     }
 
-    spin_unlock_irqrestore(&buddy_lock, flags);
+    buddy_unlock_if_needed(locked, flags);
     return refs;
 }
 
@@ -403,7 +434,7 @@ bool init_memory(void)
     KINFO("[MEM] RAM: 0x%08X - 0x%08X (%u MB)\n", 
             mem_start, mem_start + mem_size, mem_size / (1024*1024));
 
-    paddr_t bitmap_start = mem_start;
+    paddr_t bitmap_start = ALIGN_UP((paddr_t)FREE_MEMORY_START, PAGE_SIZE);
     paddr_t ram_end = mem_start + mem_size;
     
     /* Bitmap: 1 bit per page */
@@ -411,6 +442,11 @@ bool init_memory(void)
     bitmap_size_words = (phys_alloc.total_pages + 31) / 32;
     bitmap_size_bytes = bitmap_size_words * 4;
     phys_alloc.bitmap_pages = (bitmap_size_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+    if (bitmap_start < mem_start || bitmap_start >= ram_end) {
+        KERROR("[MEM] Bitmap start outside platform RAM!\n");
+        return false;
+    }
+
     phys_alloc.start_addr = bitmap_start + (phys_alloc.bitmap_pages * PAGE_SIZE);
     if (phys_alloc.start_addr > ram_end) {
         KERROR("[MEM] Bitmap consumes all platform RAM!\n");
@@ -509,9 +545,8 @@ static void reserve_kernel_pages(void)
             bss_start, bss_end, (uint32_t)(bss_end - bss_start));
     
     /* Verifications de securite */
-    if (kernel_start < phys_alloc.start_addr) {
-        KERROR("[MEM] Kernel starts before RAM!\n");
-        KINFO("[MEM]   Kernel: 0x%08X, RAM: 0x%08X\n", kernel_start, phys_alloc.start_addr);
+    if (kernel_end <= phys_alloc.start_addr) {
+        KINFO("[MEM] Kernel image is below managed RAM start; already excluded\n");
         return;
     }
     
@@ -686,8 +721,15 @@ static void reserve_heap_pages(void)
     KINFO("[MEM]   Heap end:   0x%08X\n", heap_end);
     KINFO("[MEM]   Heap size:  %u MB\n", heap_size / (1024*1024));
 
-    if (heap_end <= managed_start || heap_start >= ram_end) {
-        KWARN("[MEM] Heap outside managed RAM, skipping reservation\n");
+    if (heap_end <= managed_start) {
+        KINFO("[MEM] Heap below managed RAM start; already excluded\n");
+        KINFO("[MEM]   Heap: 0x%08X-0x%08X, managed RAM: 0x%08X-0x%08X\n",
+              heap_start, heap_end, managed_start, ram_end);
+        return;
+    }
+
+    if (heap_start >= ram_end) {
+        KWARN("[MEM] Heap outside platform RAM, skipping reservation\n");
         KINFO("[MEM]   Heap: 0x%08X-0x%08X, managed RAM: 0x%08X-0x%08X\n",
               heap_start, heap_end, managed_start, ram_end);
         return;
@@ -781,16 +823,17 @@ void* allocate_page(void)
 void free_page(void* page_addr)
 {
     unsigned long flags;
+    bool locked;
     struct page_info* info;
 
     if (!page_addr) {
         return;
     }
 
-    spin_lock_irqsave(&buddy_lock, &flags);
+    locked = buddy_lock_if_needed(&flags);
     info = buddy_page_info(page_addr);
     if (!info) {
-        spin_unlock_irqrestore(&buddy_lock, flags);
+        buddy_unlock_if_needed(locked, flags);
         return;
     }
 
@@ -800,7 +843,7 @@ void free_page(void* page_addr)
     if (info->refcount == 0) {
         buddy_free_locked(page_addr);
     }
-    spin_unlock_irqrestore(&buddy_lock, flags);
+    buddy_unlock_if_needed(locked, flags);
 }
 
 /*

@@ -30,6 +30,7 @@
 #include <kernel/interrupt.h>
 #include <kernel/virtio_block.h>
 #include <kernel/virtio_net.h>
+#include <kernel/uart.h>
 #include <kernel/ext2.h>
 #include <kernel/syscalls.h>
 #include <kernel/smp.h>
@@ -1190,6 +1191,7 @@ static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
     int last_signal = 0;
     pid_t last_signal_pgid = 0;
     int last_signal_delivered = 0;
+    uart_stats_t uart_stats;
     struct termios tio;
     struct tty_struct *tty = tty_id == TTY_GRAPHICS_ID ? &tty1 : &tty0;
     uint16_t rows = 0;
@@ -1210,6 +1212,9 @@ static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
                                &tty_eof_wakeups);
     tty_get_termios_for_id(tty_id, &tio);
     tty_get_winsize_for_id(tty_id, &rows, &cols, &xpixel, &ypixel);
+    memset(&uart_stats, 0, sizeof(uart_stats));
+    if (tty_id == TTY_CONSOLE_ID)
+        uart_get_stats(&uart_stats);
 
     spin_lock_irqsave(&tty->lock, &flags);
     input_chars = tty->input_chars;
@@ -1239,6 +1244,24 @@ static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
                 tty_char_wakeups, tty_line_wakeups, tty_eof_wakeups);
     proc_append(buf, cap, len, "output enq %u drain %u full %u drain_calls %u\n",
                 tty_tx_enqueued, tty_tx_drained, tty_tx_full_waits, tty_tx_drain_calls);
+    if (tty_id == TTY_CONSOLE_ID) {
+        proc_append(buf, cap, len,
+                    "uart irq_rx %u irq_tx %u irq_err %u rx_chars %u\n",
+                    uart_stats.rx_irq,
+                    uart_stats.tx_irq,
+                    uart_stats.err_irq,
+                    uart_stats.rx_chars);
+        proc_append(buf, cap, len,
+                    "uart errors fe %u pe %u be %u oe %u fr 0x%08X rsr 0x%08X imsc 0x%08X mis 0x%08X\n",
+                    uart_stats.frame_errors,
+                    uart_stats.parity_errors,
+                    uart_stats.break_errors,
+                    uart_stats.overrun_errors,
+                    uart_stats.fr,
+                    uart_stats.rsr,
+                    uart_stats.imsc,
+                    uart_stats.mis);
+    }
     proc_append(buf, cap, len, "flags iflag %u oflag %u lflag %u vmin %u vtime %u\n",
                 tty_iflag, tty_oflag, tty_lflag, tty_vmin, tty_vtime);
     proc_append(buf, cap, len, "mode %s %s %s\n",

@@ -104,18 +104,14 @@ static uint32_t boot_bogomips_x100(uint32_t timer_freq)
 
 void early_init(void)
 {
-    /* Phase 1: Hardware de base uniquement */
-    uart_init();
-    tty_init();
-    uart_attach_tty_backend();
-    
-    /* Phase 2: Detection memoire pour MMU */
+    /* Phase 1: Detection memoire pour MMU */
     kernel_memory_size = detect_memory();
+    KBOOT_OKF("Memory: detected %uMB", kernel_memory_size / (1024 * 1024));
     
     if (kernel_memory_size > 0) {
-        /* Phase 3: Setup MMU - AVANT tout allocateur */
+        /* Phase 2: Setup MMU - AVANT tout allocateur */
         if (setup_mmu()) {
-            uart_use_kernel_mmio_alias();
+            KBOOT_OK("MMU: setup");
         } else {
             panic("MMU setup FAILED - cannot continue");
         }
@@ -164,8 +160,16 @@ void kernel_main(void)
     bool block_ready;
     bool rootfs_ready = false;
 
+    /*
+     * Real Raspberry Pi firmware does not guarantee a configured PL011 UART.
+     * Bring up the physical UART and tty0 before the first KBOOT line.
+     */
+    uart_init();
+    tty_init();
+    uart_attach_tty_backend();
+
     /* Phase 0: etats du processeur */
-    enable_async_abort_irq_fiq();
+    enable_async_abort();
 
     sctlr_set_smp();
     smp_init_boot_cpu();
@@ -181,10 +185,15 @@ void kernel_main(void)
     KBOOT_OKF("Calibrating delay loop... %u.%02u BogoMIPS",
                 bogo_x100 / 100, bogo_x100 % 100);
     
-    init_memory();  // <- Allocateur physique EN PREMIER
+    if (!init_memory()) {  // <- Allocateur physique EN PREMIER
+        KBOOT_FAIL("Memory: physical allocator");
+        panic("init_memory failed");
+    }
+    KBOOT_OK("Memory: physical allocator");
 
     /* Phase 1: Initialisation critique (MMU, memoire de base) */
     early_init();  // MMU + detection memoire
+    KBOOT_OK("Memory: early init");
 
     total_mb = kernel_memory_size / (1024 * 1024);
     available_mb = (get_free_page_count() * PAGE_SIZE) / (1024 * 1024);
@@ -196,6 +205,7 @@ void kernel_main(void)
 
     /* Phase 3: Controleurs materiels de base */
     irq_init_controller();
+    uart_enable_rx_interrupts();
     KBOOT_OKF("%s, %u IRQs", irq_controller_name(), irq_controller_line_count());
 
     //init_timer_software();

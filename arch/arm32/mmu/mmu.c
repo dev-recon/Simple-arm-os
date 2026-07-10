@@ -26,6 +26,7 @@
 #include <kernel/task.h>
 #include <kernel/tlb.h>
 #include <kernel/arch_memory.h>
+#include <kernel/uart.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
 
@@ -427,6 +428,7 @@ bool setup_mmu(void)
     set_sctlr(sctlr);
     data_sync_barrier();
     instruction_sync_barrier();
+    uart_use_kernel_mmio_alias();
 
     KDEBUG("MMU ACTIVATED .....\n");
 
@@ -441,8 +443,12 @@ bool setup_mmu(void)
     uint32_t vbar_addr = (uint32_t)&vectors;
     set_vbar(vbar_addr);
 
-    // Activer les exceptions
-    enable_async_abort_irq_fiq();
+    /*
+     * Keep IRQ/FIQ masked here. The platform interrupt controller and timer
+     * are initialized later by kernel_main(), then arch_enable_interrupts()
+     * opens normal IRQ delivery at the explicit boot phase boundary.
+     */
+    enable_async_abort();
 
     // Desactive l'alignement
     configure_alignment_policy();

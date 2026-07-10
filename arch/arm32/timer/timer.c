@@ -106,15 +106,9 @@ bool get_critical_section(void)
 void init_timer_software(void)
 {
     extern int kprintf(const char *format, ...);
+    uint32_t timer_freq = get_timer_frequency();
+
     KINFO("[TIMER] Initializing SOFTWARE timer (no IRQ)...\n");
-    
-    /* Lire la frequence du timer ARM Generic Timer */
-    uint32_t timer_freq = get_cntfrq();
-    
-    if (timer_freq == 0) {
-        timer_freq = arch_platform_timer_fallback_hz();
-    }
-    
     KINFO("[TIMER] Timer frequency: %u Hz\n", timer_freq);
     
     /* PAS d'activation du timer hardware */
@@ -236,19 +230,24 @@ void timer_init_local_cpu(void)
 void init_timer(void)
 {
     extern int kprintf(const char *format, ...);
+    uint32_t timer_freq;
+    uint32_t cntfrq;
     uint32_t timer_irq;
 
     KINFO("[TIMER] Starting ARM Generic Timer initialization...\n");
-    
-    /* 1. Lire la frequence du timer */
-    uint32_t timer_freq = get_cntfrq();
-    
-    if (timer_freq == 0) {
-        timer_freq = arch_platform_timer_fallback_hz();
+
+    /* 1. Read the effective platform timer frequency. */
+    timer_freq = get_timer_frequency();
+    cntfrq = get_cntfrq();
+
+    if (arch_platform_timer_force_hz()) {
+        KWARN("[TIMER] CNTFRQ=%u Hz, using platform timer override %u Hz\n",
+              cntfrq, timer_freq);
+    } else if (cntfrq == 0) {
         KWARN("[TIMER] Timer frequency is 0, using platform fallback %u Hz\n",
               timer_freq);
     }
-    
+
     KINFO("[TIMER] Timer frequency: %u Hz\n", timer_freq);
     
     /* 2. Calculer l'interval pour TIMER_FREQ Hz */
@@ -355,8 +354,12 @@ void timer_disable_scheduling(void)
 
 uint32_t get_timer_frequency(void)
 {
+    uint32_t forced = arch_platform_timer_force_hz();
     uint32_t freq = 0;
-    
+
+    if (forced)
+        return forced;
+
     /* Lire la frequence du timer generique ARM */
     freq = get_cntfrq();
     

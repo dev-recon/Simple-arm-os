@@ -117,6 +117,11 @@ INLINE void disable_fiq(void)
     __asm__ volatile("cpsid f" ::: "memory");
 }
 
+INLINE void enable_async_abort(void)
+{
+    __asm__ volatile("cpsie a" ::: "memory");
+}
+
 INLINE void enable_async_abort_irq_fiq(void)
 {
     __asm__ volatile("cpsie aif" ::: "memory");
@@ -250,12 +255,12 @@ INLINE void data_sync_barrier(void)
 
 INLINE void data_sync_barrier_read(void) 
 {
-    __asm__ volatile("dsb ld" ::: "memory");
+    __asm__ volatile("dsb" ::: "memory");
 }
 
 INLINE void data_sync_barrier_write(void) 
 {
-    __asm__ volatile("dsb st" ::: "memory");
+    __asm__ volatile("dsb" ::: "memory");
 }
 
 INLINE void data_sync_barrier_inner_shareable(void)
@@ -287,12 +292,12 @@ INLINE void data_memory_barrier(void)
 
 INLINE void data_memory_barrier_read(void) 
 {
-    __asm__ volatile("dmb ld" ::: "memory");
+    __asm__ volatile("dmb" ::: "memory");
 }
 
 INLINE void data_memory_barrier_write(void) 
 {
-    __asm__ volatile("dmb st" ::: "memory");
+    __asm__ volatile("dmb" ::: "memory");
 }
 
 INLINE void data_memory_barrier_inner_shareable(void)
@@ -393,24 +398,93 @@ INLINE uint32_t get_main_id(void)
     return arm_read_midr();
 }
 
-/* Cache operations pour Cortex-A15 */
+/* Cache operations pour ARMv7-A */
 INLINE void flush_icache(void)
 {
     __asm__ volatile("mcr p15, 0, %0, c7, c5, 0" : : "r"(0));
     instruction_sync_barrier();
 }
 
+/* Branch predictor operations */
+INLINE void flush_branch_predictor(void)
+{
+    __asm__ volatile("mcr p15, 0, %0, c7, c5, 6" : : "r"(0));
+    instruction_sync_barrier();
+}
+
+INLINE uint32_t arm_read_clidr(void)
+{
+    uint32_t clidr;
+    __asm__ volatile("mrc p15, 1, %0, c0, c0, 1" : "=r"(clidr));
+    return clidr;
+}
+
+INLINE void arm_write_csselr(uint32_t csselr)
+{
+    __asm__ volatile("mcr p15, 2, %0, c0, c0, 0" : : "r"(csselr) : "memory");
+    instruction_sync_barrier();
+}
+
+INLINE uint32_t arm_read_ccsidr(void)
+{
+    uint32_t ccsidr;
+    __asm__ volatile("mrc p15, 1, %0, c0, c0, 0" : "=r"(ccsidr));
+    return ccsidr;
+}
+
+INLINE void arm_dcache_clean_invalidate_setway(uint32_t setway)
+{
+    __asm__ volatile("mcr p15, 0, %0, c7, c14, 2" : : "r"(setway) : "memory");
+}
+
+INLINE uint32_t arm_clz(uint32_t value)
+{
+    uint32_t count;
+    __asm__ volatile("clz %0, %1" : "=r"(count) : "r"(value));
+    return count;
+}
+
 INLINE void flush_dcache(void)
 {
-    __asm__ volatile("mcr p15, 0, %0, c7, c6, 0" : : "r"(0));
+    uint32_t clidr = arm_read_clidr();
+    uint32_t loc = (clidr >> 24) & 0x7u;
+
+    for (uint32_t level = 0; level < loc; ++level) {
+        uint32_t ctype = (clidr >> (level * 3u)) & 0x7u;
+
+        if (ctype < 2u)
+            continue;
+
+        arm_write_csselr(level << 1);
+        uint32_t ccsidr = arm_read_ccsidr();
+        uint32_t line_shift = (ccsidr & 0x7u) + 4u;
+        uint32_t ways = ((ccsidr >> 3) & 0x3ffu) + 1u;
+        uint32_t sets = ((ccsidr >> 13) & 0x7fffu) + 1u;
+        uint32_t way_shift = arm_clz(ways - 1u);
+
+        for (uint32_t way = ways; way > 0; --way) {
+            uint32_t way_index = way - 1u;
+
+            for (uint32_t set = sets; set > 0; --set) {
+                uint32_t set_index = set - 1u;
+                uint32_t setway = (level << 1) |
+                                  (set_index << line_shift) |
+                                  (way_index << way_shift);
+
+                arm_dcache_clean_invalidate_setway(setway);
+            }
+        }
+    }
+
     data_sync_barrier();
+    instruction_sync_barrier();
 }
 
 INLINE void flush_cache_all(void)
 {
-    __asm__ volatile("mcr p15, 0, %0, c7, c7, 0" : : "r"(0));
-    data_sync_barrier();
-    instruction_sync_barrier();
+    flush_dcache();
+    flush_icache();
+    flush_branch_predictor();
 }
 
 INLINE void clean_dcache_range(vaddr_t start, vaddr_t end)
@@ -454,13 +528,6 @@ INLINE void tlb_flush_all_debug(void)
 INLINE void dc_clean_mva(void *va)
 {
     __asm__ volatile("mcr p15,0,%0,c7,c10,1" :: "r"(va) : "memory");
-}
-
-/* Branch predictor operations */
-INLINE void flush_branch_predictor(void)
-{
-    __asm__ volatile("mcr p15, 0, %0, c7, c5, 6" : : "r"(0));
-    instruction_sync_barrier();
 }
 
 /* MMU control */

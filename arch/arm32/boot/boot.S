@@ -52,8 +52,15 @@ _start:
      * an IRQ while parked can corrupt early boot state or steal UART input.
      */
     cpsid aif                   /* Disable async aborts, IRQ and FIQ */
+
+    .ifdef ARMOS_PLATFORM_RASPI2
+    bl raspi2_leave_hyp_mode
+    .endif
     
-    /* Sauvegarder le DTB address immediatement */
+    /* Sauvegarder le DTB address immediatement. Le firmware Raspberry passe
+     * le DTB en r2; garder une copie en registre jusqu'apres le clear BSS.
+     */
+    mov r8, r2
     ldr r3, =dtb_address
     str r2, [r3]
     
@@ -62,7 +69,7 @@ _start:
     and r0, r0, #3              /* Extraire CPU ID (bits 1:0) */
     cmp r0, #0                  /* CPU 0 ? */
     bne halt_secondary_cpu      /* Arreter les autres CPUs */
-    
+
     /* === PHASE 2: CONFIGURATION SeCURITe === */
     
     /* Configuration systeme de base */
@@ -105,7 +112,7 @@ _start:
     add r0, r0, #32             /* Marge de securite */
     cmp sp, r0  
     bhi stack_panic             /* SP trop haut = erreur fatale */
-    
+
     /* === PHASE 4: VECTEURS D'INTERRUPTION === */
     
     /* Configurer la table des vecteurs */
@@ -113,7 +120,7 @@ _start:
     mcr p15, 0, r0, c12, c0, 0  /* ecrire VBAR (Vector Base Address Register) */
     dsb                         /* Data Synchronization Barrier */
     isb                         /* Instruction Synchronization Barrier */
-    
+
     /* === PHASE 5: INITIALISATION MeMOIRE === */
     
     /* Effacer la section BSS (variables non-initialisees) */
@@ -128,14 +135,19 @@ clear_bss_loop:
     
     /* Restaurer l'adresse DTB apres clear BSS */
     ldr r3, =dtb_address
-    ldr r0, [r3]
+    mov r0, r8
     str r0, [r3]                /* S'assurer que DTB est preserve */
-    
+
     /* === PHASE 6: OPTIMISATIONS PERFORMANCE === */
     
-    /* Activer les caches et optimisations */
+    /*
+     * QEMU virt tolerated this old early cache path, but real Raspberry Pi
+     * firmware bring-up can fault here before any C diagnostic exists. Leave
+     * caches off on Raspberry until the MMU code owns memory attributes.
+     */
+    .ifndef ARMOS_PLATFORM_RASPI2
     bl enable_caches_and_optimizations
-    
+    .endif
     /* === PHASE 7: TRANSFERT AU KERNEL === */
     /* S'assurer qu'on est en mode SVC avec la bonne pile */
     cps #0x13                    /* Force mode SVC */
@@ -145,12 +157,32 @@ clear_bss_loop:
     /* Memory barriers finaux avant le kernel */
     dsb
     isb
-    
     /* Appeler le kernel principal en C */
     bl kernel_main
     
     /* Ne devrait jamais atteindre ce point */
     b kernel_exit_panic
+
+.ifdef ARMOS_PLATFORM_RASPI2
+/*
+ * Raspberry Pi firmware may enter kernel7.img in HYP mode. ArmOS expects to
+ * own the classic privileged mode stacks, so drop to SVC before using CPS to
+ * initialize ABT/IRQ/UND/SVC stacks.
+ */
+raspi2_leave_hyp_mode:
+    mrs r0, cpsr
+    and r1, r0, #0x1F
+    cmp r1, #0x1A               /* HYP mode */
+    bxne lr
+
+    bic r0, r0, #0x1F
+    orr r0, r0, #0x13           /* SVC mode */
+    bic r0, r0, #(1 << 5)       /* ARM state, not Thumb */
+    orr r0, r0, #(7 << 6)       /* keep A/I/F masked */
+    msr SPSR_hyp, r0
+    msr ELR_hyp, lr             /* Resume after the BL, but in SVC mode. */
+    eret
+.endif
 
 /*
  * Configuration avancee du CPU ARMv7-A Cortex-A15
@@ -430,8 +462,9 @@ reset_vector:
     b _start
 
 undefined_vector:
-    /* Instruction non-definie */
-    /* TODO: Implementer un handler proper avec diagnostic */
+    /* Preserve the fault context before C can clobber the UND banked LR. */
+    sub r0, lr, #4              /* r0 = faulting PC */
+    mrs r1, spsr                /* r1 = saved CPSR */
     b undefined_instruction_handler
 
 swi_vector:

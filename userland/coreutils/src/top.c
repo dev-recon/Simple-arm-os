@@ -11,7 +11,6 @@
  */
 
 #include <dirent.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -174,28 +173,6 @@ static void top_enable_interactive(void)
     raw.c_cc[VTIME] = 0;
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == 0)
         top_termios_saved = 1;
-}
-
-static void top_set_raw_timeout(unsigned delay_sec)
-{
-    struct termios raw;
-    unsigned deciseconds;
-
-    if (!top_termios_saved)
-        return;
-    if (tcgetattr(STDIN_FILENO, &raw) < 0)
-        return;
-
-    deciseconds = delay_sec * 10u;
-    if (deciseconds == 0)
-        deciseconds = 1;
-    if (deciseconds > 255u)
-        deciseconds = 255u;
-
-    raw.c_lflag &= ~(ECHO | ICANON);
-    raw.c_cc[VMIN] = 0;
-    raw.c_cc[VTIME] = (cc_t)deciseconds;
-    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 }
 
 static void top_set_raw_poll(void)
@@ -770,34 +747,13 @@ static void render_top(unsigned delay_sec, int iteration)
 
 static void top_delay(unsigned *delay_sec)
 {
-    char c;
-    ssize_t n;
-
     if (*delay_sec == 0)
         return;
 
-    top_set_raw_timeout(*delay_sec);
+    sleep(*delay_sec);
 
-    for (;;) {
-        errno = 0;
-        n = read(STDIN_FILENO, &c, 1);
-        if (n == 1) {
-            handle_key(c, delay_sec);
-            top_set_raw_poll();
-            poll_input(delay_sec);
-            break;
-        }
-        if (n == 0)
-            break;
-        if (errno == EINTR) {
-            if (!top_running)
-                break;
-            continue;
-        }
-        break;
-    }
-
-    top_set_raw_poll();
+    if (top_termios_saved)
+        top_set_raw_poll();
 }
 
 static int parse_args(int argc, char **argv, unsigned *delay_sec, int *count)

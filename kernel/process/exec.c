@@ -273,10 +273,6 @@ int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm)
             close_temp_inode_file(&temp_file);
             return -1;
         }
-
-        arch_sync_loaded_user_page(page_vaddr, PAGE_SIZE,
-                                    (vma_flags & VMA_EXEC) != 0);
-
     }
     
     //KINFO("Segment loaded successfully\n");

@@ -29,17 +29,8 @@ bool arch_validate_elf_header(const elf32_ehdr_t* header)
 
 void arch_sync_loaded_user_page(vaddr_t mapped_vaddr, size_t size, bool executable)
 {
-    uintptr_t start;
-    uintptr_t end;
-
-    start = mapped_vaddr & ~63u;
-    end = (mapped_vaddr + size + 63u) & ~63u;
-
-    invalidate_dcache_range((vaddr_t)start, (vaddr_t)end);
-    dcache_clean_by_va((void *)mapped_vaddr, size);
+    clean_dcache_by_mva((void *)mapped_vaddr, size);
 
     if (executable)
         sync_icache_for_exec();
-
-    clean_dcache_by_mva((void *)mapped_vaddr, size);
 }

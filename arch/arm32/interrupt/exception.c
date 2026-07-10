@@ -35,23 +35,19 @@
 
 static DEFINE_SPINLOCK(exception_log_lock);
 
-// Implémentez ces handlers
-void undefined_instruction_handler(void) {
-    /* Capturer AVANT tout appel : bl ecrase lr.
-     * lr_und = adresse instruction fautive + 4.
-     * lr_svc/sp_svc (banques, virt ext A15) = etat SVC au moment du saut. */
-    uint32_t lr, spsr, lr_svc, sp_svc;
-    lr = arm_current_lr();
-    spsr = get_spsr();
-    lr_svc = arm_read_banked_lr_svc();
-    sp_svc = arm_read_banked_sp_svc();
-
-    kprintf("=== UNDEFINED INSTRUCTION ===\n");
-    kprintf("UND LR: 0x%08X (PC fautif=0x%08X), SPSR: 0x%08X\n", lr, lr - 4, spsr);
-    task_t* task = task_current_local();
-    kprintf("LR_svc: 0x%08X SP_svc: 0x%08X current_task=%p (%s)\n",
-            lr_svc, sp_svc, (void*)task,
-            task ? task->name : "?");
+void undefined_instruction_handler(uint32_t fault_pc, uint32_t spsr) {
+    /*
+     * Keep this handler usable on real ARMv7 cores before MMU/locks/tasks are
+     * stable. In particular, do not read LR_svc/SP_svc with banked-register
+     * MRS encodings: those are virtualization-extension instructions and can
+     * themselves trap as undefined on Pi-class cores.
+     */
+    uart_puts("=== UNDEFINED INSTRUCTION ===\n");
+    uart_puts("PC="); uart_put_hex(fault_pc);
+    uart_puts(" SPSR="); uart_put_hex(spsr);
+    uart_puts(" MODE="); uart_put_hex(spsr & 0x1F);
+    uart_puts(" T="); uart_put_dec((spsr >> 5) & 1);
+    uart_puts("\n");
     while(1);
 }
 
@@ -949,9 +945,25 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
     uint32_t status = ((dfsr >> 10) & 1) << 4 | (dfsr & 0xF);
     uint32_t mode = spsr_abt & 0x1F;
     bool is_write = (dfsr & (1u << 11)) != 0;
-    uint32_t fault_pc;
-    task_t* task = task_current_local();
+    uint32_t fault_pc = lr_abt - (spsr_thumb(spsr_abt) ? 4u : 8u);
+    task_t* task;
     unsigned long log_flags;
+
+    if ((get_sctlr() & 1u) == 0) {
+        uart_puts("\n=== EARLY DATA ABORT ===\n");
+        uart_puts("DFAR="); uart_put_hex(dfar);
+        uart_puts(" DFSR="); uart_put_hex(dfsr);
+        uart_puts(" STATUS="); uart_put_hex(status);
+        uart_puts(" WRITE="); uart_put_dec(is_write ? 1u : 0u);
+        uart_puts("\nSPSR_abt="); uart_put_hex(spsr_abt);
+        uart_puts(" MODE="); uart_put_hex(mode);
+        uart_puts(" LR_abt="); uart_put_hex(lr_abt);
+        uart_puts(" PC="); uart_put_hex(fault_pc);
+        uart_puts(spsr_thumb(spsr_abt) ? " Thumb\n" : " ARM\n");
+        return -1;
+    }
+
+    task = task_current_local();
 
     if ((status == 0x05 || status == 0x07) && mode == 0x10) {
         if (handle_user_stack_fault(dfar) == 0) {
@@ -983,7 +995,6 @@ int data_abort_handler(uint32_t spsr_abt, uint32_t dfar, uint32_t dfsr, uint32_t
     /* User-mode faults that are not handled above become SIGSEGV. Keep the
      * console readable and put the detailed crash context into /tmp/<pid>.dump.
      */
-    fault_pc = lr_abt - (spsr_thumb(spsr_abt) ? 4u : 8u);
     if (exception_from_user(spsr_abt)) {
         vaddr_t svc_sp = 0;
         char dump_path[32];

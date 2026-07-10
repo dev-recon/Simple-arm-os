@@ -40,6 +40,10 @@
 #define ARMOS_PLATFORM_HAS_PSCI 0u
 #endif
 
+#ifndef ARMOS_PLATFORM_TIMER_FORCE_HZ
+#define ARMOS_PLATFORM_TIMER_FORCE_HZ 0u
+#endif
+
 #ifndef ARMOS_PLATFORM_UART0_PHYS_SECTION_BASE
 #define ARMOS_PLATFORM_UART0_PHYS_SECTION_BASE ARMOS_PLATFORM_UART0_PHYS_BASE
 #endif
@@ -203,6 +207,11 @@ static inline uint32_t arch_platform_ram_probe_max_mb(void)
 static inline uint32_t arch_platform_timer_fallback_hz(void)
 {
     return ARMOS_PLATFORM_TIMER_FALLBACK_HZ;
+}
+
+static inline uint32_t arch_platform_timer_force_hz(void)
+{
+    return ARMOS_PLATFORM_TIMER_FORCE_HZ;
 }
 
 static inline paddr_t arch_platform_device_start(void)

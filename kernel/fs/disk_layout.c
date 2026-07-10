@@ -22,6 +22,8 @@
 #define MBR_TYPE_EXT2        0x83
 #define MBR_TYPE_FAT32_CHS   0x0B
 #define MBR_TYPE_FAT32_LBA   0x0C
+#define MBR_TYPE_HIDDEN_FAT32_CHS 0x1B
+#define MBR_TYPE_HIDDEN_FAT32_LBA 0x1C
 #define DISK_PART_NAME_LEN   16
 
 static char runtime_partition_names[DISK_PART_COUNT][DISK_PART_NAME_LEN];
@@ -77,8 +79,25 @@ const disk_partition_t* disk_partition_get(disk_partition_id_t id)
     return &kernel_disk_partitions[id];
 }
 
-static void update_partition(disk_partition_id_t id, uint32_t start_lba, uint32_t sectors)
+static void set_partition_name(disk_partition_id_t id, uint32_t partition_number)
 {
+    const char* block_name = blk_get_name();
+
+    if (!block_name || block_name[0] == '\0' || strcmp(block_name, "none") == 0)
+        block_name = "disk0";
+
+    snprintf(runtime_partition_names[id],
+             sizeof(runtime_partition_names[id]),
+             "%sp%u", block_name, partition_number);
+    kernel_disk_partitions[id].name = runtime_partition_names[id];
+}
+
+static void update_partition(disk_partition_id_t id,
+                             uint32_t partition_number,
+                             uint32_t start_lba,
+                             uint32_t sectors)
+{
+    set_partition_name(id, partition_number);
     kernel_disk_partitions[id].lba_start = start_lba;
     kernel_disk_partitions[id].sector_count = sectors;
 }
@@ -113,13 +132,17 @@ bool disk_layout_init_from_mbr(void)
         }
 
         if (!found_ext2 && type == MBR_TYPE_EXT2) {
-            update_partition(DISK_PART_EXT2_ROOT, start_lba, sectors);
+            update_partition(DISK_PART_EXT2_ROOT, (uint32_t)i + 1, start_lba, sectors);
             found_ext2 = true;
             continue;
         }
 
-        if (!found_fat32 && (type == MBR_TYPE_FAT32_CHS || type == MBR_TYPE_FAT32_LBA)) {
-            update_partition(DISK_PART_FAT32_MNT, start_lba, sectors);
+        if (!found_fat32 &&
+            (type == MBR_TYPE_FAT32_CHS ||
+             type == MBR_TYPE_FAT32_LBA ||
+             type == MBR_TYPE_HIDDEN_FAT32_CHS ||
+             type == MBR_TYPE_HIDDEN_FAT32_LBA)) {
+            update_partition(DISK_PART_FAT32_MNT, (uint32_t)i + 1, start_lba, sectors);
             found_fat32 = true;
             continue;
         }

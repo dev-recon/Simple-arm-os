@@ -39,7 +39,7 @@ include $(PLATFORM_MK)
 MATH_FLAGS = -fno-builtin-div -fno-builtin-mod
 
 # Flags de compilation
-ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated
+ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated $(PLATFORM_ASFLAGS)
 
 CFLAGS = -std=gnu99 $(ARCH_CFLAGS) $(PLATFORM_CFLAGS) $(MATH_FLAGS) \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
@@ -121,6 +121,7 @@ PLATFORM_KERNEL_MAP = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).map
 PLATFORM_KERNEL_DIS = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).dis
 PLATFORM_DISK_IMG   = $(IMAGE_DIR)/disk-$(IMAGE_SUFFIX).img
 FAT32_SIZE_MB = 64
+FAT32_LABEL ?= ARMBOOT
 EXT2_SIZE_MB = 512
 DISK_RESERVED_MB = 1
 DISK_SIZE_MB = $(shell echo $$(($(DISK_RESERVED_MB) + $(EXT2_SIZE_MB) + $(FAT32_SIZE_MB))))
@@ -128,10 +129,17 @@ PLATFORM_DISK_SIZE_MB ?= $(DISK_SIZE_MB)
 DISK_MB_SECTORS = 2048
 DISK_EXT2_START_MB = $(DISK_RESERVED_MB)
 DISK_FAT32_START_MB = $(shell echo $$(($(DISK_EXT2_START_MB) + $(EXT2_SIZE_MB))))
+DISK_FAT32_FIRST_FAT32_START_MB = $(DISK_RESERVED_MB)
+DISK_FAT32_FIRST_EXT2_START_MB = $(shell echo $$(($(DISK_FAT32_FIRST_FAT32_START_MB) + $(FAT32_SIZE_MB))))
 DISK_EXT2_START_SECTOR = $(shell echo $$(($(DISK_EXT2_START_MB) * $(DISK_MB_SECTORS))))
 DISK_FAT32_START_SECTOR = $(shell echo $$(($(DISK_FAT32_START_MB) * $(DISK_MB_SECTORS))))
+DISK_FAT32_FIRST_FAT32_START_SECTOR = $(shell echo $$(($(DISK_FAT32_FIRST_FAT32_START_MB) * $(DISK_MB_SECTORS))))
+DISK_FAT32_FIRST_EXT2_START_SECTOR = $(shell echo $$(($(DISK_FAT32_FIRST_EXT2_START_MB) * $(DISK_MB_SECTORS))))
 DISK_EXT2_SECTORS = $(shell echo $$(($(EXT2_SIZE_MB) * $(DISK_MB_SECTORS))))
 DISK_FAT32_SECTORS = $(shell echo $$(($(FAT32_SIZE_MB) * $(DISK_MB_SECTORS))))
+PLATFORM_DISK_LAYOUT ?= ext2-first
+PLATFORM_DISK_HIDDEN_BOOT ?= 0
+HIDDEN_FAT32_FLAG = $(if $(filter 1 yes true,$(PLATFORM_DISK_HIDDEN_BOOT)),--hidden-fat32,)
 USERFS_DIR   = userfs
 USERLAND_DIR = userland
 EXT2_STAGING = /tmp/ext2_staging
@@ -141,8 +149,6 @@ USERFS_FILES := $(shell find $(USERFS_DIR) -type f 2>/dev/null)
 USERFS_DIRS  := $(shell find $(USERFS_DIR) -type d 2>/dev/null)
 USERFS_LINKS := $(shell find $(USERFS_DIR) -type l 2>/dev/null)
 USERFS_BIN_FILES := $(shell find $(USERFS_DIR)/bin -type f 2>/dev/null)
-FAT32_MNT_PATHS := README.TXT hello.txt test.txt home/user/profile.txt tmp/README
-FAT32_MNT_FILES := $(foreach file,$(FAT32_MNT_PATHS),$(wildcard $(USERFS_DIR)/$(file)))
 
 # Cibles
 TARGET = kernel
@@ -207,23 +213,16 @@ $(ASM_OFFSETS_H): $(ASM_OFFSETS_SRC) include/kernel/task.h $(BUILD_CONFIG_STAMP)
 %.o: %.S $(ASM_OFFSETS_H) $(BUILD_CONFIG_STAMP)
 	$(AS) $(ASFLAGS) $< -o $@
 
-# Partition FAT32 montee sous /mnt. Elle reste volontairement minimale :
-# ext2 est le root complet, FAT32 sert surtout d'espace de compatibilite/echange.
-$(FAT32_IMG): $(USERFS_DIR) $(FAT32_MNT_FILES)
+# Partition FAT32 de boot. Elle reste volontairement vide au build generique :
+# les firmwares Raspberry Pi, le kernel et config.txt sont stages ensuite par
+# tools/build_pi2_sd.sh. Le root systeme complet vit dans ext2.
+$(FAT32_IMG): Makefile
 	@echo "=== Creating FAT32 image ($(FAT32_SIZE_MB) MB) ==="
 	dd if=/dev/zero of=$(FAT32_IMG) bs=1048576 count=$(FAT32_SIZE_MB) 2>/dev/null
-	mkfs.fat -F 32 -n "OSKERNEL" $(FAT32_IMG)
-	@for dir in home home/user tmp; do \
-		mmd -i $(FAT32_IMG) "::$$dir" || true; \
-	done
-	@for file in $(FAT32_MNT_PATHS); do \
-		if [ -f "$(USERFS_DIR)/$$file" ]; then \
-			mcopy -o -i $(FAT32_IMG) "$(USERFS_DIR)/$$file" "::$$file"; \
-		fi; \
-	done
+	mkfs.fat -F 32 -n "$(FAT32_LABEL)" $(FAT32_IMG)
 	@echo "FAT32 image created"
 
-# Partition ext2 (64 Mo) — peuplée avec tout userfs via mke2fs + debugfs
+# Partition ext2 — peuplee avec tout userfs via mke2fs + debugfs.
 E2FSPROGS_PREFIX ?= $(shell \
 	if command -v brew >/dev/null 2>&1; then \
 		brew --prefix e2fsprogs 2>/dev/null; \
@@ -317,12 +316,34 @@ $(DISK_IMG): $(FAT32_IMG) $(EXT2_IMG) $(MBR_TOOL)
 	dd if=/dev/zero of=$(DISK_IMG) bs=1048576 count=$(DISK_SIZE_MB) 2>/dev/null
 	$(PYTHON) $(MBR_TOOL) $(DISK_IMG) \
 		$(DISK_EXT2_START_SECTOR) $(DISK_EXT2_SECTORS) \
-		$(DISK_FAT32_START_SECTOR) $(DISK_FAT32_SECTORS)
+		$(DISK_FAT32_START_SECTOR) $(DISK_FAT32_SECTORS) \
+		$(HIDDEN_FAT32_FLAG)
 	dd if=$(EXT2_IMG) of=$(DISK_IMG) bs=1048576 seek=$(DISK_EXT2_START_MB) conv=notrunc 2>/dev/null
 	dd if=$(FAT32_IMG) of=$(DISK_IMG) bs=1048576 seek=$(DISK_FAT32_START_MB) conv=notrunc 2>/dev/null
 	@echo "Disk image $(DISK_IMG) created ($(DISK_SIZE_MB) MB)"
 
-$(PLATFORM_DISK_IMG): $(DISK_IMG) Makefile
+ifeq ($(PLATFORM_DISK_LAYOUT),fat32-first)
+$(PLATFORM_DISK_IMG): $(FAT32_IMG) $(EXT2_IMG) $(MBR_TOOL) Makefile $(PLATFORM_MK)
+	@mkdir -p $(IMAGE_DIR)
+	@echo "=== Assembling $(PLATFORM_DISK_IMG) (MBR + FAT32 boot + ext2 root) ==="
+	dd if=/dev/zero of=$(PLATFORM_DISK_IMG) bs=1048576 count=$(DISK_SIZE_MB) 2>/dev/null
+	$(PYTHON) $(MBR_TOOL) $(PLATFORM_DISK_IMG) \
+		$(DISK_FAT32_FIRST_EXT2_START_SECTOR) $(DISK_EXT2_SECTORS) \
+		$(DISK_FAT32_FIRST_FAT32_START_SECTOR) $(DISK_FAT32_SECTORS) \
+		--fat32-first $(HIDDEN_FAT32_FLAG)
+	dd if=$(FAT32_IMG) of=$(PLATFORM_DISK_IMG) bs=1048576 seek=$(DISK_FAT32_FIRST_FAT32_START_MB) conv=notrunc 2>/dev/null
+	dd if=$(EXT2_IMG) of=$(PLATFORM_DISK_IMG) bs=1048576 seek=$(DISK_FAT32_FIRST_EXT2_START_MB) conv=notrunc 2>/dev/null
+	@if [ "$(PLATFORM_DISK_SIZE_MB)" -lt "$(DISK_SIZE_MB)" ]; then \
+		echo "Error: PLATFORM_DISK_SIZE_MB ($(PLATFORM_DISK_SIZE_MB)) is smaller than disk layout ($(DISK_SIZE_MB))"; \
+		exit 1; \
+	fi
+	@if [ "$(PLATFORM_DISK_SIZE_MB)" != "$(DISK_SIZE_MB)" ]; then \
+		dd if=/dev/zero of=$(PLATFORM_DISK_IMG) bs=1048576 seek=$$(($(PLATFORM_DISK_SIZE_MB) - 1)) count=1 conv=notrunc 2>/dev/null; \
+		echo "Platform disk image padded to $(PLATFORM_DISK_SIZE_MB) MB"; \
+	fi
+	@echo "Platform disk image: $(PLATFORM_DISK_IMG)"
+else
+$(PLATFORM_DISK_IMG): $(DISK_IMG) Makefile $(PLATFORM_MK)
 	@mkdir -p $(IMAGE_DIR)
 	cp $(DISK_IMG) $(PLATFORM_DISK_IMG)
 	@if [ "$(PLATFORM_DISK_SIZE_MB)" -lt "$(DISK_SIZE_MB)" ]; then \
@@ -334,6 +355,7 @@ $(PLATFORM_DISK_IMG): $(DISK_IMG) Makefile
 		echo "Platform disk image padded to $(PLATFORM_DISK_SIZE_MB) MB"; \
 	fi
 	@echo "Platform disk image: $(PLATFORM_DISK_IMG)"
+endif
 
 platform-disk: $(PLATFORM_DISK_IMG)
 
@@ -427,7 +449,7 @@ check-disk: $(DISK_IMG)
 		echo "Could not list ext2 /bin: debugfs not found"; \
 	fi
 	@echo ""
-	@echo "=== FAT32 contents (mounted as /mnt) ==="
+	@echo "=== FAT32 boot contents ==="
 	@mdir -i $(FAT32_IMG) :: 2>/dev/null || echo "Could not list FAT32 /mnt directory"
 	@echo ""
 	@echo "=== Disk image info ==="
@@ -441,18 +463,18 @@ check-disk: $(DISK_IMG)
 
 # Extraire le contenu du disque (pour debug)
 extract-disk: $(DISK_IMG)
-	@echo "Extracting ext2 / and FAT32 /mnt to disk_contents/..."
+	@echo "Extracting ext2 / and FAT32 boot to disk_contents/..."
 	rm -rf disk_contents
-	mkdir -p disk_contents/ext2-root disk_contents/fat32-mnt
+	mkdir -p disk_contents/ext2-root disk_contents/fat32-boot
 	@if [ -x "$(DEBUGFS)" ]; then \
 		$(DEBUGFS) -R 'rdump / disk_contents/ext2-root' $(EXT2_IMG) >/dev/null 2>/dev/null || \
 			echo "Could not extract ext2 root"; \
 	else \
 		echo "Could not extract ext2 root: debugfs not found"; \
 	fi
-	@mcopy -s -i $(FAT32_IMG) :: disk_contents/fat32-mnt/ 2>/dev/null || \
-		echo "Could not extract FAT32 /mnt contents"
-	@echo "Extracted to disk_contents/ext2-root and disk_contents/fat32-mnt"
+	@mcopy -s -i $(FAT32_IMG) :: disk_contents/fat32-boot/ 2>/dev/null || \
+		echo "Could not extract FAT32 boot contents"
+	@echo "Extracted to disk_contents/ext2-root and disk_contents/fat32-boot"
 
 # Creer un disque de boot avec le kernel (optionnel)
 boot-disk: $(KERNEL_BIN) $(USERFS_DIR)

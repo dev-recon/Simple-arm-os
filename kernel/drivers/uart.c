@@ -23,8 +23,10 @@
 #include <kernel/vfs.h>
 #include <kernel/userspace.h>
 #include <kernel/tty.h>
+#include <kernel/uart.h>
 #include <kernel/kprintf.h>
 #include <kernel/arch_barrier.h>
+#include <kernel/arch_cpu.h>
 
 /*
  * Avant l'activation de la MMU, l'UART doit etre accedee par son adresse
@@ -38,6 +40,120 @@ static inline void uart_ensure_mmio_base(void)
     if (uart_mmio_base == 0)
         uart_mmio_base = (uintptr_t)arch_platform_uart0_phys_base();
 }
+
+#if defined(ARMOS_PLATFORM_RASPI2)
+#define RASPI2_GPIO_BASE          0x3F200000u
+#define RASPI2_GPFSEL1            0x04u
+#define RASPI2_GPPUD              0x94u
+#define RASPI2_GPPUDCLK0          0x98u
+#define RASPI2_GPIO14             14u
+#define RASPI2_GPIO15             15u
+#define RASPI2_GPIO_ALT0          4u
+#define RASPI2_MBOX_BASE          0x3F00B880u
+#define RASPI2_MBOX_READ          0x00u
+#define RASPI2_MBOX_STATUS        0x18u
+#define RASPI2_MBOX_WRITE         0x20u
+#define RASPI2_MBOX_FULL          0x80000000u
+#define RASPI2_MBOX_EMPTY         0x40000000u
+#define RASPI2_MBOX_CH_PROP       8u
+#define RASPI2_MBOX_REQUEST       0u
+#define RASPI2_MBOX_RESPONSE_OK   0x80000000u
+#define RASPI2_MBOX_TAG_SETCLKRATE 0x00038002u
+#define RASPI2_MBOX_CLOCK_UART    2u
+
+static volatile uint32_t raspi2_mbox[9] __attribute__((aligned(16)));
+static bool raspi2_uart_clock_prepared;
+
+static void raspi2_delay(unsigned count)
+{
+    while (count-- > 0)
+        __asm__ volatile("nop");
+}
+
+static bool raspi2_mbox_call(uint8_t channel)
+{
+    volatile uint32_t* mbox = (volatile uint32_t*)(uintptr_t)RASPI2_MBOX_BASE;
+    uint32_t request = ((uint32_t)(uintptr_t)raspi2_mbox & ~0xFu) |
+                       (channel & 0xFu);
+    uint32_t timeout;
+
+    timeout = 1000000u;
+    while ((mbox[RASPI2_MBOX_STATUS / 4u] & RASPI2_MBOX_FULL) && --timeout)
+        ;
+    if (timeout == 0)
+        return false;
+
+    mbox[RASPI2_MBOX_WRITE / 4u] = request;
+
+    timeout = 1000000u;
+    while (timeout-- > 0) {
+        uint32_t response;
+
+        while ((mbox[RASPI2_MBOX_STATUS / 4u] & RASPI2_MBOX_EMPTY) && --timeout)
+            ;
+        if (timeout == 0)
+            return false;
+
+        response = mbox[RASPI2_MBOX_READ / 4u];
+        if (response == request)
+            return raspi2_mbox[1] == RASPI2_MBOX_RESPONSE_OK;
+    }
+
+    return false;
+}
+
+static void uart_platform_prepare_clock(void)
+{
+    /*
+     * Match the well-known Pi3 UART0 bring-up sequence: ask VideoCore to run
+     * PL011 from a stable 4 MHz clock, then program divisors for 115200 baud.
+     * This avoids relying on firmware defaults or config.txt init_uart_clock.
+     */
+    if (raspi2_uart_clock_prepared)
+        return;
+
+    raspi2_mbox[0] = sizeof(raspi2_mbox);
+    raspi2_mbox[1] = RASPI2_MBOX_REQUEST;
+    raspi2_mbox[2] = RASPI2_MBOX_TAG_SETCLKRATE;
+    raspi2_mbox[3] = 12;
+    raspi2_mbox[4] = 8;
+    raspi2_mbox[5] = RASPI2_MBOX_CLOCK_UART;
+    raspi2_mbox[6] = arch_platform_uart0_clock_hz();
+    raspi2_mbox[7] = 0;
+    raspi2_mbox[8] = 0;
+    (void)raspi2_mbox_call(RASPI2_MBOX_CH_PROP);
+    raspi2_uart_clock_prepared = true;
+}
+
+static void uart_platform_configure_pins(void)
+{
+    volatile uint32_t* gpio = (volatile uint32_t*)(uintptr_t)RASPI2_GPIO_BASE;
+    uint32_t gpfsel1;
+
+    /*
+     * Real Raspberry Pi 2 boards need GPIO14/GPIO15 muxed to ALT0 for PL011
+     * TXD0/RXD0. QEMU accepts UART MMIO without this, which can hide the issue.
+     */
+    gpfsel1 = gpio[RASPI2_GPFSEL1 / 4u];
+    gpfsel1 &= ~((7u << 12) | (7u << 15));
+    gpfsel1 |= (RASPI2_GPIO_ALT0 << 12) | (RASPI2_GPIO_ALT0 << 15);
+    gpio[RASPI2_GPFSEL1 / 4u] = gpfsel1;
+
+    gpio[RASPI2_GPPUD / 4u] = 0;
+    raspi2_delay(150);
+    gpio[RASPI2_GPPUDCLK0 / 4u] = (1u << RASPI2_GPIO14) | (1u << RASPI2_GPIO15);
+    raspi2_delay(150);
+    gpio[RASPI2_GPPUDCLK0 / 4u] = 0;
+}
+#else
+static void uart_platform_prepare_clock(void)
+{
+}
+
+static void uart_platform_configure_pins(void)
+{
+}
+#endif
 
 /* Registres PL011 UART */
 #define UART_REG(offset) (*(volatile uint32_t*)(uart_mmio_base + (offset)))
@@ -54,6 +170,14 @@ static inline void uart_ensure_mmio_base(void)
 #define UART_RIS        UART_REG(0x3C)  /* Raw Interrupt Status */
 #define UART_MIS        UART_REG(0x40)  /* Masked Interrupt Status */
 #define UART_ICR        UART_REG(0x44)  /* Interrupt Clear */
+
+/* Bits UART_DR / UART_RSR d'erreur reception */
+#define UART_DR_DATA    0x000000FFu
+#define UART_DR_FE      (1 << 8)  /* Framing error */
+#define UART_DR_PE      (1 << 9)  /* Parity error */
+#define UART_DR_BE      (1 << 10) /* Break error */
+#define UART_DR_OE      (1 << 11) /* Overrun error */
+#define UART_DR_ERR     (UART_DR_FE | UART_DR_PE | UART_DR_BE | UART_DR_OE)
 
 /* Bits UART interrupt PL011 */
 #define UART_INT_RX     (1 << 4)  /* Receive FIFO interrupt */
@@ -77,6 +201,10 @@ static inline void uart_ensure_mmio_base(void)
 #define UART_CR_LBE     (1 << 7)  /* Loopback enable */
 #define UART_CR_UARTEN  (1 << 0)  /* UART enable */
 
+/* PL011 interrupt FIFO levels. RX at 1/8 favors interactive reliability. */
+#define UART_IFLS_TX_1_2  (2u << 0)
+#define UART_IFLS_RX_1_8  (0u << 3)
+
 /* Bits de controle UART_LCRH (Line Control Register) */
 #define UART_LCRH_SPS   (1 << 7)  /* Stick parity select */
 #define UART_LCRH_WLEN_8 (3 << 5) /* Word length 8 bits */
@@ -91,6 +219,32 @@ static inline void uart_ensure_mmio_base(void)
 
 /* Variable globale */
 DEFINE_SPINLOCK(uart_lock);
+
+static volatile uint32_t uart_rx_irq_count;
+static volatile uint32_t uart_tx_irq_count;
+static volatile uint32_t uart_err_irq_count;
+static volatile uint32_t uart_rx_char_count;
+static volatile uint32_t uart_frame_error_count;
+static volatile uint32_t uart_parity_error_count;
+static volatile uint32_t uart_break_error_count;
+static volatile uint32_t uart_overrun_error_count;
+
+static void uart_record_rx_status(uint32_t dr)
+{
+    if ((dr & UART_DR_ERR) == 0)
+        return;
+
+    if (dr & UART_DR_FE)
+        uart_frame_error_count++;
+    if (dr & UART_DR_PE)
+        uart_parity_error_count++;
+    if (dr & UART_DR_BE)
+        uart_break_error_count++;
+    if (dr & UART_DR_OE)
+        uart_overrun_error_count++;
+
+    UART_RSR = 0;
+}
 
 static void uart_configure_baud(void)
 {
@@ -133,38 +287,59 @@ void uart_use_kernel_mmio_alias(void)
  */
 void uart_init(void)
 {
+    unsigned rx_timeout;
+
     uart_ensure_mmio_base();
 
     /* Desactiver l'UART */
     UART_CR = 0;
+    UART_IMSC = 0;
+    UART_ICR = 0x7FF;
+    UART_RSR = 0;
+
+    uart_platform_prepare_clock();
+    uart_platform_configure_pins();
     
-    /* Vider les FIFOs */
-    while (!(UART_FR & UART_FR_RXFE)) {
+    /* Vider les FIFOs, sans jamais bloquer le boot sur un etat materiel. */
+    rx_timeout = 1024;
+    while (!(UART_FR & UART_FR_RXFE) && rx_timeout-- > 0) {
         (void)UART_DR;
     }
     
     uart_configure_baud();
     
+    UART_IFLS = UART_IFLS_TX_1_2 | UART_IFLS_RX_1_8;
+
     /* Configurer le format de ligne */
     UART_LCRH = UART_LCRH_WLEN_8 | UART_LCRH_FEN;
     
     /* Effacer toutes les interruptions */
     UART_ICR = 0x7FF;
-    UART_IMSC = UART_INT_RX | UART_INT_RT;
+    UART_IMSC = 0;
     
     /* Activer UART, TX et RX */
-    UART_CR = UART_CR_UARTEN | UART_CR_TXE | UART_CR_RXE;
+    UART_CR = UART_CR_UARTEN | UART_CR_TXE | UART_CR_RXE | UART_CR_RTS;
 
+}
+
+void uart_enable_rx_interrupts(void)
+{
+    unsigned long flags;
+
+    uart_ensure_mmio_base();
+    spin_lock_irqsave(&uart_lock, &flags);
+    UART_ICR = UART_INT_RX | UART_INT_RT | UART_INT_ERR;
+    UART_RSR = 0;
+    UART_IMSC |= UART_INT_RX | UART_INT_RT | UART_INT_ERR;
+    spin_unlock_irqrestore(&uart_lock, flags);
 }
 
 /*
  * Envoyer un caractere
  */
-void uart_putc(char c)
+static void uart_putc_unlocked(char c)
 {
-    unsigned long flags;
     uart_ensure_mmio_base();
-    spin_lock_irqsave(&uart_lock, &flags);
 
     int timeout = 100000;
     
@@ -177,6 +352,25 @@ void uart_putc(char c)
     if (timeout > 0) {
         UART_DR = c;
     }
+}
+
+void uart_putc(char c)
+{
+    unsigned long flags;
+
+    /*
+     * Before the MMU establishes normal memory attributes, ARM exclusive
+     * monitors used by spinlocks are not a reliable contract on real Pi
+     * hardware. Early boot is single-core with IRQ/FIQ masked, so polling is
+     * the correct recovery-console path here.
+     */
+    if (!arch_mmu_enabled()) {
+        uart_putc_unlocked(c);
+        return;
+    }
+
+    spin_lock_irqsave(&uart_lock, &flags);
+    uart_putc_unlocked(c);
     spin_unlock_irqrestore(&uart_lock, flags);
 }
 
@@ -215,6 +409,26 @@ void uart_set_tx_irq_enabled(bool enabled)
     spin_unlock_irqrestore(&uart_lock, flags);
 }
 
+void uart_get_stats(uart_stats_t *stats)
+{
+    if (!stats)
+        return;
+
+    uart_ensure_mmio_base();
+    stats->rx_irq = uart_rx_irq_count;
+    stats->tx_irq = uart_tx_irq_count;
+    stats->err_irq = uart_err_irq_count;
+    stats->rx_chars = uart_rx_char_count;
+    stats->frame_errors = uart_frame_error_count;
+    stats->parity_errors = uart_parity_error_count;
+    stats->break_errors = uart_break_error_count;
+    stats->overrun_errors = uart_overrun_error_count;
+    stats->fr = UART_FR;
+    stats->rsr = UART_RSR;
+    stats->imsc = UART_IMSC;
+    stats->mis = UART_MIS;
+}
+
 /*
  * Envoyer une chaine de caracteres
  */
@@ -236,15 +450,20 @@ void uart_puts(const char* str)
  */
 int uart_getc(void)
 {
+    uint32_t dr;
+
     uart_ensure_mmio_base();
 
     /* Verifier si des donnees sont disponibles */
     if (UART_FR & UART_FR_RXFE) {
         return -1;  /* Pas de donnees */
     }
-    
+
     /* Lire le caractere */
-    return UART_DR & 0xFF;
+    dr = UART_DR;
+    uart_record_rx_status(dr);
+    uart_rx_char_count++;
+    return (int)(dr & UART_DR_DATA);
 }
 
 /*
@@ -252,19 +471,13 @@ int uart_getc(void)
  */
 void uart_put_hex(uint32_t value)
 {
+    int shift;
 
-    const char hex_chars[] = "0123456789ABCDEF";
-    char buffer[9];
-    int i;
-    
-    buffer[8] = '\0';
-    
-    for (i = 7; i >= 0; i--) {
-        buffer[i] = hex_chars[value & 0xF];
-        value >>= 4;
+    for (shift = 28; shift >= 0; shift -= 4) {
+        uint32_t nibble = (value >> shift) & 0xFu;
+        uart_putc((char)(nibble < 10 ? ('0' + nibble)
+                                      : ('A' + nibble - 10)));
     }
-    
-    uart_puts(buffer);
 }
 
 /*
@@ -422,7 +635,9 @@ void uart_dump_registers(void)
 }
 
 void putchar_kernel(char c) {
-    uart_putc(c) ;
+    if (c == '\n')
+        uart_putc('\r');
+    uart_putc(c);
 }
 
 void uart_flush(void)
@@ -554,11 +769,20 @@ file_t* create_uart_console_file(const char* name, int flags) {
 
 /* Dans uart.c */
 void uart_irq_handler(void) {
+    uart_ensure_mmio_base();
+
     uint32_t mis = UART_MIS;  /* Masked Interrupt Status */
     uint32_t handled = mis & (UART_INT_RX | UART_INT_RT | UART_INT_TX | UART_INT_ERR);
-    
+
+    if (mis & (UART_INT_RX | UART_INT_RT))
+        uart_rx_irq_count++;
+    if (mis & UART_INT_TX)
+        uart_tx_irq_count++;
+    if (mis & UART_INT_ERR)
+        uart_err_irq_count++;
+
     /* RX ou timeout de reception ? */
-    if (mis & (UART_INT_RX | UART_INT_RT)) {
+    if (mis & (UART_INT_RX | UART_INT_RT | UART_INT_ERR)) {
         /* Lire tous les caractères disponibles */
         while (uart_has_data()) {
             int c = uart_getc();
@@ -567,6 +791,8 @@ void uart_irq_handler(void) {
             /* Envoyer au TTY */
             tty_input_char((char)c);
         }
+        if (mis & UART_INT_ERR)
+            UART_RSR = 0;
     }
 
     if (mis & UART_INT_TX) {

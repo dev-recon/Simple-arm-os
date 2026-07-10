@@ -31,6 +31,7 @@
 #define SMP_PROC_BUF        4096
 
 static volatile sig_atomic_t running = 1;
+static volatile sig_atomic_t interrupted_signal = 0;
 
 typedef struct smp_sample {
     unsigned possible;
@@ -40,7 +41,7 @@ typedef struct smp_sample {
 
 static void on_signal(int sig)
 {
-    (void)sig;
+    interrupted_signal = sig;
     running = 0;
 }
 
@@ -347,8 +348,11 @@ int main(int argc, char **argv)
         int pid = waitpid(-1, &status, 0);
 
         if (pid < 0) {
-            if (errno == EINTR)
+            if (errno == EINTR) {
+                if (interrupted_signal)
+                    break;
                 continue;
+            }
             printf("schedtest: waitpid failed errno=%d\n", errno);
             failures++;
             break;
@@ -358,6 +362,11 @@ int main(int argc, char **argv)
         launched--;
         if (status != 0)
             failures++;
+    }
+
+    if (interrupted_signal) {
+        printf("schedtest: interrupted by signal %d\n", (int)interrupted_signal);
+        return 128 + (int)interrupted_signal;
     }
 
     if (smp_mode) {

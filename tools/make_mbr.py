@@ -21,12 +21,14 @@ MBR_SIGNATURE_OFFSET = 510
 
 PART_TYPE_EXT2 = 0x83
 PART_TYPE_FAT32_LBA = 0x0C
+PART_TYPE_HIDDEN_FAT32_LBA = 0x1C
 
 
 def usage() -> None:
     print(
         "usage: make_mbr.py <disk.img> "
-        "<ext2_start_lba> <ext2_sectors> <fat32_start_lba> <fat32_sectors>",
+        "<ext2_start_lba> <ext2_sectors> <fat32_start_lba> <fat32_sectors> "
+        "[--fat32-first] [--hidden-fat32]",
         file=sys.stderr,
     )
 
@@ -47,7 +49,7 @@ def partition_entry(part_type: int, start_lba: int, sectors: int) -> bytes:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 6:
+    if len(argv) < 6:
         usage()
         return 2
 
@@ -56,14 +58,30 @@ def main(argv: list[str]) -> int:
     ext2_sectors = int(argv[3], 0)
     fat32_start = int(argv[4], 0)
     fat32_sectors = int(argv[5], 0)
+    options = set(argv[6:])
+    fat32_first = "--fat32-first" in options
+    hidden_fat32 = "--hidden-fat32" in options
+
+    if len(options) != len(argv[6:]) or options - {"--fat32-first", "--hidden-fat32"}:
+        usage()
+        return 2
+
+    fat32_type = PART_TYPE_HIDDEN_FAT32_LBA if hidden_fat32 else PART_TYPE_FAT32_LBA
 
     mbr = bytearray(MBR_SIZE)
-    mbr[PARTITION_TABLE_OFFSET : PARTITION_TABLE_OFFSET + 16] = partition_entry(
-        PART_TYPE_EXT2, ext2_start, ext2_sectors
+    entries = (
+        (
+            partition_entry(fat32_type, fat32_start, fat32_sectors),
+            partition_entry(PART_TYPE_EXT2, ext2_start, ext2_sectors),
+        )
+        if fat32_first
+        else (
+            partition_entry(PART_TYPE_EXT2, ext2_start, ext2_sectors),
+            partition_entry(fat32_type, fat32_start, fat32_sectors),
+        )
     )
-    mbr[PARTITION_TABLE_OFFSET + 16 : PARTITION_TABLE_OFFSET + 32] = partition_entry(
-        PART_TYPE_FAT32_LBA, fat32_start, fat32_sectors
-    )
+    mbr[PARTITION_TABLE_OFFSET : PARTITION_TABLE_OFFSET + 16] = entries[0]
+    mbr[PARTITION_TABLE_OFFSET + 16 : PARTITION_TABLE_OFFSET + 32] = entries[1]
     mbr[MBR_SIGNATURE_OFFSET] = 0x55
     mbr[MBR_SIGNATURE_OFFSET + 1] = 0xAA
 
@@ -71,10 +89,16 @@ def main(argv: list[str]) -> int:
         disk.seek(0)
         disk.write(mbr)
 
-    print(
-        f"MBR: p1 ext2 start={ext2_start} sectors={ext2_sectors}; "
-        f"p2 fat32 start={fat32_start} sectors={fat32_sectors}"
-    )
+    if fat32_first:
+        print(
+            f"MBR: p1 fat32 type=0x{fat32_type:02X} start={fat32_start} sectors={fat32_sectors}; "
+            f"p2 ext2 start={ext2_start} sectors={ext2_sectors}"
+        )
+    else:
+        print(
+            f"MBR: p1 ext2 start={ext2_start} sectors={ext2_sectors}; "
+            f"p2 fat32 type=0x{fat32_type:02X} start={fat32_start} sectors={fat32_sectors}"
+        )
     return 0
 
 

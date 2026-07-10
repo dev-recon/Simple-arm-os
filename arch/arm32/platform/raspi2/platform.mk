@@ -5,6 +5,7 @@
 
 PLATFORM_CPU_CFLAGS = -mcpu=cortex-a7
 PLATFORM_CFLAGS = $(PLATFORM_CPU_CFLAGS) -DARMOS_PLATFORM_RASPI2
+PLATFORM_ASFLAGS = -march=armv7ve --defsym ARMOS_PLATFORM_RASPI2=1
 PLATFORM_LDFLAGS = \
 	--defsym=KERNEL_LINK_ADDR=0x02010000 \
 	--defsym=RAM_BASE_ADDR=0x00000000 \
@@ -14,6 +15,10 @@ PLATFORM_LDFLAGS = \
 # not a power of two.  The MBR partition layout remains 577 MiB; the platform
 # image is padded to a 1 GiB card.
 PLATFORM_DISK_SIZE_MB ?= 1024
+PLATFORM_DISK_LAYOUT ?= fat32-first
+# Keep the Raspberry Pi boot partition as standard FAT32 LBA by default.
+# Some firmware revisions may ignore hidden FAT32 partition types (0x1B/0x1C).
+PLATFORM_DISK_HIDDEN_BOOT ?= 0
 
 PLATFORM_OBJS = \
 	$(PLATFORM_DIR)/devices.o \
