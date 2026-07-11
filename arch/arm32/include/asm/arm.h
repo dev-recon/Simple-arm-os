@@ -46,6 +46,16 @@
 #define ARM_HAS_LARGE_PHYS_ADDR     ARCH_HAS_LARGE_PHYS_ADDR
 #define ARM_HAS_VIRTUALIZATION      ARCH_HAS_VIRTUALIZATION
 
+#define ARM_CPU_PART_CORTEX_A7      0xC07u
+#define ARM_CPU_PART_CORTEX_A15     0xC0Fu
+#define ARM_CPU_PART_CORTEX_A53     0xD03u
+
+/* ACTLR bits for Cortex-A7/A15-style SMP coherency. */
+#define ACTLR_SMP   (1 << 6)    /* SMP mode */
+#define ACTLR_L1PEN (1 << 2)    /* L1 prefetch enable */
+#define ACTLR_L2PEN (1 << 1)    /* L2 prefetch enable */
+#define ACTLR_FW    (1 << 0)    /* Cache and TLB maintenance broadcast */
+
 #ifdef __GNUC__
 #define INLINE static __inline__
 #else
@@ -358,6 +368,11 @@ INLINE uint32_t arm_read_midr(void)
     uint32_t midr;
     __asm__ volatile("mrc p15, 0, %0, c0, c0, 0" : "=r"(midr));
     return midr;
+}
+
+INLINE uint32_t arm_midr_part(uint32_t midr)
+{
+    return (midr >> 4) & 0xfffu;
 }
 
 INLINE uint32_t arm_read_ctr(void)
@@ -808,6 +823,13 @@ INLINE void set_actlr(uint32_t actlr)
     instruction_sync_barrier();
 }
 
+INLINE void arm_enable_smp_coherency(void)
+{
+    set_actlr(get_actlr() | ACTLR_SMP | ACTLR_FW);
+    data_sync_barrier();
+    instruction_sync_barrier();
+}
+
 /* Cache size identification pour Cortex-A15 */
 INLINE uint32_t get_ccsidr(void)
 {
@@ -1132,12 +1154,6 @@ INLINE uint32_t read_lr_usr(void)
 #define CPACR_CP11_MASK (3 << 22)
 #define CPACR_CP10_FULL (3 << 20)
 #define CPACR_CP11_FULL (3 << 22)
-
-/* ACTLR bits pour Cortex-A15 */
-#define ACTLR_SMP   (1 << 6)    /* SMP mode */
-#define ACTLR_L1PEN (1 << 2)    /* L1 prefetch enable */
-#define ACTLR_L2PEN (1 << 1)    /* L2 prefetch enable */
-#define ACTLR_FW    (1 << 0)    /* Cache and TLB maintenance broadcast */
 
 /* Timer control bits */
 #define CNTP_CTL_ENABLE  (1 << 0)

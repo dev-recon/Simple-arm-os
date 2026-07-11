@@ -117,6 +117,16 @@ __load_new_context:
     /* Address-space context. */
     ldr     r2, [r12, #CTX_TTBR0]
     ldr     r3, [r12, #CTX_ASID]
+    /*
+     * ctx->ttbr0 stores the aligned table base. Page-table walks must use the
+     * same SMP attributes as the C MMU path: shareable, outer WBWA and inner
+     * WBWA. Without these bits, another CPU can observe stale L1 entries after
+     * a task migrates and fault while the software page-table walk is valid.
+     */
+    orr     r2, r2, #(1 << 1)              // S: shareable walks
+    orr     r2, r2, #(1 << 3)              // RGN: outer WBWA
+    orr     r2, r2, #(1 << 6)              // IRGN: inner WBWA
+    dsb
     mcr     p15, 0, r2, c2,  c0, 0         // TTBR0
     mcr     p15, 0, r3, c13, c0, 1         // ASID
     /*

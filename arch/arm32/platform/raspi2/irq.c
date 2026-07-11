@@ -23,18 +23,25 @@
 #include <kernel/kprintf.h>
 #include <kernel/smp.h>
 #include <kernel/timer.h>
+#include <kernel/tlb.h>
 #include <kernel/types.h>
 #include <kernel/uart.h>
 
 #define LOCAL_CONTROL                  0x00u
 #define LOCAL_GPU_IRQ_ROUTING          0x0Cu
 #define LOCAL_CORE_TIMER_IRQ_CONTROL0  0x40u
+#define LOCAL_CORE_MAILBOX_IRQ_CONTROL0 0x50u
 #define LOCAL_CORE_IRQ_SOURCE0         0x60u
+#define LOCAL_MAILBOX0_SET0            0x80u
+#define LOCAL_MAILBOX0_CLEAR0          0xC0u
+#define LOCAL_MAILBOX_STRIDE           0x10u
 
 #define LOCAL_TIMER_IRQ_CNTPS          (1u << 0)
 #define LOCAL_TIMER_IRQ_CNTPNS         (1u << 1)
 #define LOCAL_TIMER_IRQ_PHYS_BITS      (LOCAL_TIMER_IRQ_CNTPS | LOCAL_TIMER_IRQ_CNTPNS)
+#define LOCAL_IRQ_MAILBOX0             (1u << 4)
 #define LOCAL_IRQ_GPU                  (1u << 8)
+#define LOCAL_MAILBOX0_IRQ_ENABLE      (1u << 0)
 
 #define LEGACY_IRQ_PENDING1            0x204u
 #define LEGACY_IRQ_PENDING2            0x208u
@@ -120,9 +127,24 @@ static inline uint32_t core_timer_irq_control_offset(uint32_t cpu)
     return LOCAL_CORE_TIMER_IRQ_CONTROL0 + cpu * sizeof(uint32_t);
 }
 
+static inline uint32_t core_mailbox_irq_control_offset(uint32_t cpu)
+{
+    return LOCAL_CORE_MAILBOX_IRQ_CONTROL0 + cpu * sizeof(uint32_t);
+}
+
 static inline uint32_t core_irq_source_offset(uint32_t cpu)
 {
     return LOCAL_CORE_IRQ_SOURCE0 + cpu * sizeof(uint32_t);
+}
+
+static inline uint32_t mailbox0_set_offset(uint32_t cpu)
+{
+    return LOCAL_MAILBOX0_SET0 + cpu * LOCAL_MAILBOX_STRIDE;
+}
+
+static inline uint32_t mailbox0_clear_offset(uint32_t cpu)
+{
+    return LOCAL_MAILBOX0_CLEAR0 + cpu * LOCAL_MAILBOX_STRIDE;
 }
 
 static void raspi2_enable_local_timer_for_cpu(uint32_t cpu)
@@ -138,10 +160,24 @@ static void raspi2_enable_local_timer_for_cpu(uint32_t cpu)
     local_write(core_timer_irq_control_offset(cpu), LOCAL_TIMER_IRQ_PHYS_BITS);
 }
 
+static void raspi2_enable_local_mailbox_for_cpu(uint32_t cpu)
+{
+    uint32_t offset;
+
+    if (cpu >= 4)
+        return;
+
+    offset = core_mailbox_irq_control_offset(cpu);
+    local_write(offset, local_read(offset) | LOCAL_MAILBOX0_IRQ_ENABLE);
+}
+
 void arch_irq_controller_init(void)
 {
-    for (uint32_t cpu = 0; cpu < 4; cpu++)
+    for (uint32_t cpu = 0; cpu < 4; cpu++) {
         local_write(core_timer_irq_control_offset(cpu), 0);
+        local_write(core_mailbox_irq_control_offset(cpu), 0);
+        local_write(mailbox0_clear_offset(cpu), 0xffffffffu);
+    }
 
     /*
      * Route BCM2835 peripheral interrupts to core 0 as normal IRQs. QEMU's
@@ -152,6 +188,7 @@ void arch_irq_controller_init(void)
     legacy_write(LEGACY_DISABLE_IRQS1, 0xffffffffu);
     legacy_write(LEGACY_DISABLE_IRQS2, 0xffffffffu);
     legacy_irq_enable(IRQ_UART);
+    raspi2_enable_local_mailbox_for_cpu(smp_processor_id());
 
     KBOOT_OKF("IRQ: BCM2836 local controller @ 0x%08X",
               (uint32_t)arch_platform_kernel_mmio_irqctrl_base());
@@ -160,6 +197,7 @@ void arch_irq_controller_init(void)
 void arch_irq_init_local_cpu_interface(void)
 {
     raspi2_enable_local_timer_for_cpu(smp_processor_id());
+    raspi2_enable_local_mailbox_for_cpu(smp_processor_id());
 }
 
 const char* arch_irq_controller_name(void)
@@ -231,15 +269,59 @@ static bool raspi2_handle_legacy_irq(void)
     return false;
 }
 
+static bool raspi2_handle_mailbox0_irq(uint32_t cpu)
+{
+    uint32_t pending;
+
+    if (cpu >= 4)
+        return false;
+
+    pending = local_read(mailbox0_clear_offset(cpu));
+    if (!pending)
+        return false;
+
+    local_write(mailbox0_clear_offset(cpu), pending);
+    raspi2_irq_last = IRQ_SGI_TLB_SHOOTDOWN;
+    if (IRQ_SGI_TLB_SHOOTDOWN < RASPI2_IRQ_COUNTERS)
+        raspi2_irq_counts[IRQ_SGI_TLB_SHOOTDOWN]++;
+    smp_note_ipi(cpu);
+
+    if (pending & (1u << IRQ_SGI_TLB_SHOOTDOWN))
+        tlb_handle_remote_ipi(cpu);
+
+    return true;
+}
+
 void arch_irq_send_ipi(uint32_t target_cpu_mask, uint32_t irq)
 {
-    (void)target_cpu_mask;
-    (void)irq;
+    uint32_t bit;
+
+    if (irq >= 32)
+        return;
+
+    bit = 1u << irq;
+    data_memory_barrier();
+
+    for (uint32_t cpu = 0; cpu < 4; cpu++) {
+        if (target_cpu_mask & (1u << cpu))
+            local_write(mailbox0_set_offset(cpu), bit);
+    }
+
+    data_sync_barrier();
+    send_event();
 }
 
 void arch_irq_send_ipi_others(uint32_t irq)
 {
-    (void)irq;
+    uint32_t current = smp_processor_id();
+    uint32_t mask = 0;
+
+    for (uint32_t cpu = 0; cpu < smp_possible_cpu_count() && cpu < 4; cpu++) {
+        if (cpu != current)
+            mask |= 1u << cpu;
+    }
+
+    arch_irq_send_ipi(mask, irq);
 }
 
 void irq_c_handler(void)
@@ -256,6 +338,9 @@ void irq_c_handler(void)
         timer_irq_handler();
         return;
     }
+
+    if ((source & LOCAL_IRQ_MAILBOX0) && raspi2_handle_mailbox0_irq(cpu))
+        return;
 
     if ((source & LOCAL_IRQ_GPU) && raspi2_handle_legacy_irq())
         return;

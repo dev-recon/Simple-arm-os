@@ -37,6 +37,8 @@
 #include <kernel/tlb.h>
 #include <kernel/arch_cpu.h>
 #include <kernel/arch_platform.h>
+#include <asm/arm.h>
+#include <asm/mmu.h>
 
 extern uint32_t task_count;
 extern task_t* task_list_head;
@@ -637,6 +639,8 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
     uint32_t boot = smp_boot_cpu_id();
     uint32_t possible = smp_possible_cpu_count();
     uint32_t seen = smp_seen_cpu_mask();
+    uint32_t midr = arm_read_midr();
+    uint32_t part = arm_midr_part(midr);
 
     proc_append(buf, cap, len, "current_cpu: %u\n", current);
     proc_append(buf, cap, len, "boot_cpu:    %u\n", boot);
@@ -649,6 +653,10 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "tlb_defer:   %u\n", tlb_shootdown_deferred_count());
     proc_append(buf, cap, len, "tlb_gen:     %u\n", tlb_shootdown_generation());
     proc_append(buf, cap, len, "sched_guard: %u\n", smp_scheduler_reject_count());
+    proc_append(buf, cap, len,
+                "sysreg_cpu%u: midr=0x%08x part=0x%03x sctlr=0x%08x actlr=0x%08x ttbr0=0x%08x ttbr1=0x%08x ttbcr=0x%08x dacr=0x%08x\n",
+                current, midr, part, get_sctlr(), get_actlr(), get_ttbr0(),
+                get_ttbr1(), get_ttbcr(), get_dacr());
     proc_append(buf, cap, len, "\n");
     proc_append(buf, cap, len, "cpu state   seen sched rq      irq  ipi    timer    hb tlb idle  cur_tid cur_pid pri current      psci idle-work idle-sched idle-fb\n");
 
@@ -680,6 +688,17 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
                     scheduler_idle_work_seen_count(cpu),
                     scheduler_idle_schedule_count(cpu),
                     scheduler_idle_fallback_count(cpu));
+    }
+
+    proc_append(buf, cap, len, "\n");
+    proc_append(buf, cap, len, "release diagnostics\n");
+    proc_append(buf, cap, len, "cpu entry      mbox3_rd  spin_lo\n");
+    for (uint32_t cpu = 0; cpu < possible; cpu++) {
+        proc_append(buf, cap, len, "%3u 0x%08x 0x%08x 0x%08x\n",
+                    cpu,
+                    smp_cpu_release_entry(cpu),
+                    smp_cpu_release_mailbox3_value(cpu),
+                    smp_cpu_release_spin_table_value(cpu));
     }
 }
 
@@ -730,7 +749,7 @@ static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
     const char* irq_name = irq_controller_name();
 
     proc_append(buf, cap, len, "           CPU0\n");
-    if (IRQ_SGI_TLB_SHOOTDOWN != 0u) {
+    if (arch_platform_has_smp_ipi()) {
         proc_append(buf, cap, len, "%3u: %10u %s  ipi-tlb\n",
                     IRQ_SGI_TLB_SHOOTDOWN,
                     irq_get_count(IRQ_SGI_TLB_SHOOTDOWN),

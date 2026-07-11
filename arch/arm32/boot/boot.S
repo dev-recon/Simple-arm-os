@@ -30,11 +30,13 @@
 .extern prefetch_abort_handler
 .extern swi_handler
 .extern smp_cpu_infos
+.extern smp_secondary_release_entry
 .extern smp_secondary_main
 .extern __smp_irq_stack_bottom
 .extern __smp_abt_stack_bottom
 .extern __smp_und_stack_bottom
 .extern kernel_pgdir
+.extern ttbr0_pgdir
 
 
 /*
@@ -53,10 +55,6 @@ _start:
      */
     cpsid aif                   /* Disable async aborts, IRQ and FIQ */
 
-    .ifdef ARMOS_PLATFORM_RASPI2
-    bl raspi2_leave_hyp_mode
-    .endif
-    
     /* Sauvegarder le DTB address immediatement. Le firmware Raspberry passe
      * le DTB en r2; garder une copie en registre jusqu'apres le clear BSS.
      */
@@ -68,9 +66,24 @@ _start:
     mrc p15, 0, r0, c0, c0, 5   /* Lire MPIDR (Multiprocessor Affinity Register) */
     and r0, r0, #3              /* Extraire CPU ID (bits 1:0) */
     cmp r0, #0                  /* CPU 0 ? */
+    .ifdef ARMOS_PLATFORM_RASPBERRYPI
+    bne raspi2_secondary_wait_release
+    .else
     bne halt_secondary_cpu      /* Arreter les autres CPUs */
+    .endif
 
     /* === PHASE 2: CONFIGURATION SeCURITe === */
+    .ifdef ARMOS_PLATFORM_RASPBERRYPI
+    /*
+     * Raspberry Pi firmware may enter the boot CPU in HYP while released
+     * secondaries pass through smp_secondary_entry, which already drops to SVC.
+     * Keep all CPUs in the same privilege regime before touching ACTLR/cache
+     * state; asymmetric coherency setup makes LDREX/STREX locks unreliable on
+     * real SMP hardware.
+     */
+    bl raspi2_leave_hyp_mode
+    bl raspi2_enable_smp_coherency
+    .endif
     
     /* Configuration systeme de base */
     bl setup_cpu_state
@@ -145,7 +158,7 @@ clear_bss_loop:
      * firmware bring-up can fault here before any C diagnostic exists. Leave
      * caches off on Raspberry until the MMU code owns memory attributes.
      */
-    .ifndef ARMOS_PLATFORM_RASPI2
+    .ifndef ARMOS_PLATFORM_RASPBERRYPI
     bl enable_caches_and_optimizations
     .endif
     /* === PHASE 7: TRANSFERT AU KERNEL === */
@@ -163,7 +176,7 @@ clear_bss_loop:
     /* Ne devrait jamais atteindre ce point */
     b kernel_exit_panic
 
-.ifdef ARMOS_PLATFORM_RASPI2
+.ifdef ARMOS_PLATFORM_RASPBERRYPI
 /*
  * Raspberry Pi firmware may enter kernel7.img in HYP mode. ArmOS expects to
  * own the classic privileged mode stacks, so drop to SVC before using CPS to
@@ -182,6 +195,15 @@ raspi2_leave_hyp_mode:
     msr SPSR_hyp, r0
     msr ELR_hyp, lr             /* Resume after the BL, but in SVC mode. */
     eret
+
+raspi2_enable_smp_coherency:
+    mrc p15, 0, r0, c1, c0, 1   /* ACTLR */
+    orr r0, r0, #(1 << 6)       /* SMP: coherent exclusive/cache ops */
+    orr r0, r0, #(1 << 0)       /* FW: broadcast cache/TLB maintenance */
+    mcr p15, 0, r0, c1, c0, 1
+    dsb
+    isb
+    bx lr
 .endif
 
 /*
@@ -211,11 +233,15 @@ setup_cpu_state:
     
     /* Configuration additionnelle pour Cortex-A15 */
     
-    /* ACTLR (Auxiliary Control Register) pour Cortex-A15 */
+    /* ACTLR coherency setup */
+    .ifdef ARMOS_PLATFORM_RASPBERRYPI
+    bl raspi2_enable_smp_coherency
+    .else
     mrc p15, 0, r0, c1, c0, 1
     orr r0, r0, #(1 << 6)       /* SMP: Coherency enable pour multi-core */
     orr r0, r0, #(1 << 0)       /* L1 data prefetch enable */
     mcr p15, 0, r0, c1, c0, 1
+    .endif
     
     /* Restaurer et retourner */
     mov lr, r4
@@ -268,9 +294,34 @@ enable_caches_and_optimizations:
  */
 smp_secondary_entry:
     cpsid aif                   /* Secondary CPUs must not take IRQs yet */
+    .ifdef ARMOS_PLATFORM_RASPBERRYPI
+    bl raspi2_leave_hyp_mode
+    bl raspi2_enable_smp_coherency
+    .endif
     bl setup_cpu_state
     bl setup_secondary_mmu_state
     b halt_secondary_cpu
+
+.ifdef ARMOS_PLATFORM_RASPBERRYPI
+/*
+ * Some firmware/QEMU paths may enter all cores at _start before CPU0 has
+ * cleared BSS and built the kernel page table. Keep those secondaries in a
+ * tiny MMU-off holding pen. CPU0 releases them after early_init() by storing
+ * smp_secondary_entry in smp_secondary_release_entry[cpu] and issuing SEV.
+ */
+raspi2_secondary_wait_release:
+    ldr r1, =smp_secondary_release_entry
+    add r1, r1, r0, lsl #2
+    ldr r2, =smp_secondary_entry
+1:
+    ldr r3, [r1]
+    cmp r3, r2
+    beq 2f
+    wfe
+    b 1b
+2:
+    bx r3
+.endif
 
 /*
  * Minimal MMU setup for secondary CPUs.
@@ -284,11 +335,23 @@ smp_secondary_entry:
 setup_secondary_mmu_state:
     mov r4, lr
 
-    mov r0, #0
-    mcr p15, 0, r0, c2, c0, 0   /* TTBR0 unused while parked */
+    /*
+     * Raspberry Pi kernels are linked below the 0x40000000 TTBR split.  A
+     * secondary that enables the MMU with TTBR0 cleared faults before it can
+     * reach the C holding pen. Reuse CPU0's boot TTBR0 identity map.
+     */
+    ldr r1, =ttbr0_pgdir
+    ldr r1, [r1]                /* r1 = boot/kernel TTBR0 table */
+    orr r1, r1, #(1 << 1)       /* TTBR S: page-table walks are shareable */
+    orr r1, r1, #(1 << 3)       /* TTBR RGN: outer WBWA */
+    orr r1, r1, #(1 << 6)       /* TTBR IRGN: inner WBWA */
+    mcr p15, 0, r1, c2, c0, 0   /* TTBR0 */
 
     ldr r1, =kernel_pgdir
     ldr r1, [r1]                /* r1 = kernel_page_dir physical/identity VA */
+    orr r1, r1, #(1 << 1)       /* TTBR S: page-table walks are shareable */
+    orr r1, r1, #(1 << 3)       /* TTBR RGN: outer WBWA */
+    orr r1, r1, #(1 << 6)       /* TTBR IRGN: inner WBWA */
     mcr p15, 0, r1, c2, c0, 1   /* TTBR1 */
 
     mov r0, #2                  /* N=2: split at 0x40000000 */
@@ -311,7 +374,10 @@ setup_secondary_mmu_state:
      * depending on the CPU that runs it.
      */
     bic r0, r0, #(1 << 1)       /* Disable strict alignment checks */
-    orr r0, r0, #1              /* Enable MMU, keep caches as setup_cpu_state left them */
+    orr r0, r0, #1              /* Enable MMU */
+    orr r0, r0, #(1 << 2)       /* Enable D-cache for coherent SMP state */
+    orr r0, r0, #(1 << 11)      /* Enable branch prediction */
+    orr r0, r0, #(1 << 12)      /* Enable I-cache */
     mcr p15, 0, r0, c1, c0, 0
     dsb
     isb

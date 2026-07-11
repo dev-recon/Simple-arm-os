@@ -27,6 +27,52 @@ static inline int spin_atomic_try_acquire(volatile uint32_t* locked)
     return arch_spin_try_acquire(locked);
 }
 
+static void spin_lock_record(spinlock_t* lock, const void* caller)
+{
+    arch_spin_memory_barrier();
+    lock->owner = smp_processor_id();
+    lock->owner_pc = caller;
+    lock->count++;
+}
+
+static void spin_unlock_record(spinlock_t* lock, const void* caller)
+{
+    uint32_t cpu;
+    uint32_t owner;
+    uint32_t locked;
+    const void* owner_pc;
+
+    if (!lock) return;
+
+    cpu = smp_processor_id();
+    owner = lock->owner;
+    owner_pc = lock->owner_pc;
+    locked = lock->locked;
+
+    if (!locked) {
+        KERROR("spin_unlock: Lock '%s' not held! cpu=%u owner=%u caller=%p owner_pc=%p lock=%p\n",
+               lock->name, cpu, owner, caller, owner_pc, lock);
+        return;
+    }
+
+    if (owner != cpu) {
+        KERROR("spin_unlock: CPU%u releasing lock '%s' owned by CPU%u caller=%p owner_pc=%p lock=%p\n",
+               cpu, lock->name, owner, caller, owner_pc, lock);
+        /*
+         * Releasing here corrupts the lock for the real owner and turns one
+         * mismatch into allocator/TLB/task-list damage across all CPUs.
+         */
+        return;
+    }
+
+    lock->owner_pc = 0;
+    lock->owner = SPINLOCK_NO_OWNER;
+    arch_spin_memory_barrier();
+    lock->locked = 0;
+    arch_spin_post_unlock_barrier();
+    arch_spin_wake();
+}
+
 void init_spinlock(spinlock_t* lock)
 {
     if (!lock) return;
@@ -35,6 +81,7 @@ void init_spinlock(spinlock_t* lock)
     lock->owner = SPINLOCK_NO_OWNER;
     lock->count = 0;
     lock->name = "unnamed";
+    lock->owner_pc = 0;
 }
 
 void init_spinlock_named(spinlock_t* lock, const char* name)
@@ -45,6 +92,7 @@ void init_spinlock_named(spinlock_t* lock, const char* name)
     lock->owner = SPINLOCK_NO_OWNER;
     lock->count = 0;
     lock->name = name ? name : "unnamed";
+    lock->owner_pc = 0;
 }
 
 void spin_lock(spinlock_t* lock)
@@ -62,30 +110,12 @@ void spin_lock(spinlock_t* lock)
         arch_spin_wait();
     }
 
-    arch_spin_memory_barrier();
-    lock->owner = smp_processor_id();
-    lock->count++;
+    spin_lock_record(lock, __builtin_return_address(0));
 }
 
 void spin_unlock(spinlock_t* lock)
 {
-    if (!lock) return;
-    
-    if (!lock->locked) {
-        KERROR("spin_unlock: Lock '%s' not held!\n", lock->name);
-        return;
-    }
-
-    if (lock->owner != smp_processor_id()) {
-        KERROR("spin_unlock: CPU%u releasing lock '%s' owned by CPU%u\n",
-               smp_processor_id(), lock->name, lock->owner);
-    }
-
-    lock->owner = SPINLOCK_NO_OWNER;
-    arch_spin_memory_barrier();
-    lock->locked = 0;
-    arch_spin_post_unlock_barrier();
-    arch_spin_wake();
+    spin_unlock_record(lock, __builtin_return_address(0));
 }
 
 int spin_trylock(spinlock_t* lock)
@@ -93,9 +123,7 @@ int spin_trylock(spinlock_t* lock)
     if (!lock) return 0;
     
     if (spin_atomic_try_acquire(&lock->locked)) {
-        arch_spin_memory_barrier();
-        lock->owner = smp_processor_id();
-        lock->count++;
+        spin_lock_record(lock, __builtin_return_address(0));
         return 1;
     }
 
@@ -107,14 +135,19 @@ void spin_lock_irqsave(spinlock_t* lock, unsigned long* flags)
     if (!lock || !flags) return;
 
     *flags = arch_spin_irq_save();
-    spin_lock(lock);
+    for (;;) {
+        if (spin_atomic_try_acquire(&lock->locked))
+            break;
+        arch_spin_wait();
+    }
+    spin_lock_record(lock, __builtin_return_address(0));
 }
 
 void spin_unlock_irqrestore(spinlock_t* lock, unsigned long flags)
 {
     if (!lock) return;
     
-    spin_unlock(lock);
+    spin_unlock_record(lock, __builtin_return_address(0));
 
     arch_spin_irq_restore(flags);
 }
@@ -140,6 +173,7 @@ void spin_dump_info(spinlock_t* lock)
         KINFO("  Owner:    none\n");
     else
         KINFO("  Owner:    CPU%u\n", lock->owner);
+    KINFO("  Owner PC: %p\n", lock->owner_pc);
     KINFO("  Count:    %u\n", lock->count);
     KINFO("  Address:  %p\n", lock);
     KINFO("====================\n");

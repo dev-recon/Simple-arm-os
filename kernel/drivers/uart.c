@@ -41,7 +41,7 @@ static inline void uart_ensure_mmio_base(void)
         uart_mmio_base = (uintptr_t)arch_platform_uart0_phys_base();
 }
 
-#if defined(ARMOS_PLATFORM_RASPI2)
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
 #define RASPI2_GPIO_BASE          0x3F200000u
 #define RASPI2_GPFSEL1            0x04u
 #define RASPI2_GPPUD              0x94u

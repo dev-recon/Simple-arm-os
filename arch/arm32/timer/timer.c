@@ -246,6 +246,9 @@ void init_timer(void)
     } else if (cntfrq == 0) {
         KWARN("[TIMER] Timer frequency is 0, using platform fallback %u Hz\n",
               timer_freq);
+    } else if (timer_freq != cntfrq) {
+        KWARN("[TIMER] CNTFRQ=%u Hz, using platform timer quirk %u Hz\n",
+              cntfrq, timer_freq);
     }
 
     KINFO("[TIMER] Timer frequency: %u Hz\n", timer_freq);
@@ -354,20 +357,7 @@ void timer_disable_scheduling(void)
 
 uint32_t get_timer_frequency(void)
 {
-    uint32_t forced = arch_platform_timer_force_hz();
-    uint32_t freq = 0;
-
-    if (forced)
-        return forced;
-
-    /* Lire la frequence du timer generique ARM */
-    freq = get_cntfrq();
-    
-    if (freq == 0) {
-        freq = arch_platform_timer_fallback_hz();
-    }
-    
-    return freq;
+    return arch_platform_timer_effective_hz(get_cntfrq());
 }
 
 /* Fonction pour obtenir le compte du timer */

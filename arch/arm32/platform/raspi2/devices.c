@@ -14,6 +14,7 @@
  */
 
 #include <kernel/block_device.h>
+#include <kernel/arch_platform.h>
 #include <kernel/disk_layout.h>
 #include <kernel/kprintf.h>
 #include <kernel/mmc/bcm2835_emmc.h>
@@ -24,9 +25,9 @@ platform_devices_state_t platform_devices_init(void)
     platform_devices_state_t state = {0};
 
     KBOOT_OK("TTY: console tty0 on raspberry-pi PL011 uart0");
-    KBOOT_WARN("GPU: unavailable on raspi2 milestone 1");
-    KBOOT_WARN("Input: unavailable on raspi2 milestone 1");
-    KBOOT_WARN("Net: unavailable on raspi2 milestone 1");
+    KBOOT_WARNF("GPU: unavailable on %s milestone 1", arch_platform_name());
+    KBOOT_WARNF("Input: unavailable on %s milestone 1", arch_platform_name());
+    KBOOT_WARNF("Net: unavailable on %s milestone 1", arch_platform_name());
 
     return state;
 }

@@ -20,9 +20,10 @@
 
 #include <kernel/arch_power.h>
 #include <kernel/arch_cpu.h>
+#include <kernel/arch_platform.h>
 #include <kernel/uart.h>
 #include <asm/arm.h>
-#include <asm/platform/raspi2.h>
+#include <asm/platform.h>
 
 #define RASPI2_MBOX_BASE             0x3F00B880u
 #define RASPI2_MBOX_READ             0x00u
@@ -41,7 +42,7 @@
 #define RASPI2_POWER_STATE_NO_DEVICE 0x00000002u
 
 #define RASPI2_MBOX_KERNEL_BASE \
-    (RASPI2_KERNEL_MMIO_IRQ_BASE + (RASPI2_MBOX_BASE - RASPI2_IRQCTRL_SECTION_BASE))
+    (RASPI2_KERNEL_MMIO_IRQCTRL2_BASE + (RASPI2_MBOX_BASE - RASPI2_IRQCTRL_SECTION_BASE))
 
 static volatile uint32_t raspi2_power_mbox[16] __attribute__((aligned(64)));
 
@@ -121,17 +122,18 @@ void arch_system_off(void)
 
     (void)arm_disable_irq_fiq_save();
 
-    uart_puts("raspi2: firmware powerdown start\n");
+    uart_puts(arch_platform_name());
+    uart_puts(": firmware powerdown start\n");
     sd_ok = raspi2_set_power_state(RASPI2_POWER_SD_CARD,
                                    RASPI2_POWER_STATE_OFF_WAIT);
     usb_ok = raspi2_set_power_state(RASPI2_POWER_USB_HCD,
                                     RASPI2_POWER_STATE_OFF_WAIT);
 
     if (!sd_ok)
-        uart_puts("raspi2: SD powerdown request failed\n");
+        uart_puts("raspberrypi: SD powerdown request failed\n");
     if (!usb_ok)
-        uart_puts("raspi2: USB powerdown request failed\n");
-    uart_puts("raspi2: halted; safe to remove power\n");
+        uart_puts("raspberrypi: USB powerdown request failed\n");
+    uart_puts("raspberrypi: halted; safe to remove power\n");
 
     for (;;) {
         wait_for_interrupt();

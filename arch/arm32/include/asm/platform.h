@@ -13,9 +13,8 @@
  * - Keep ARM32 CPU support separate from machine-specific MMIO addresses.
  *
  * Notes:
- * - The next concrete platform target is Raspberry Pi 2.  Keep this dispatch
- *   intentionally simple: each real board gets its own header, and the shared
- *   ARM32 code includes only <asm/platform.h>.
+ * - Keep this dispatch intentionally simple: each real board gets its own
+ *   header, and the shared ARM32 code includes only <asm/platform.h>.
  */
 
 #ifndef _ASM_PLATFORM_H
@@ -23,10 +22,12 @@
 
 #if defined(ARMOS_PLATFORM_QEMU_VIRT)
 #include <asm/platform/qemu_virt.h>
+#elif defined(ARMOS_PLATFORM_PI3)
+#include <asm/platform/pi3.h>
 #elif defined(ARMOS_PLATFORM_RASPI2)
 #include <asm/platform/raspi2.h>
 #else
-#error "No ARM32 platform selected. Define ARMOS_PLATFORM_QEMU_VIRT, ARMOS_PLATFORM_RASPI2, or add a new platform header."
+#error "No ARM32 platform selected. Define ARMOS_PLATFORM_QEMU_VIRT, ARMOS_PLATFORM_RASPI2, ARMOS_PLATFORM_PI3, or add a new platform header."
 #endif
 
 #endif /* _ASM_PLATFORM_H */

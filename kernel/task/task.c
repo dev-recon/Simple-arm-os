@@ -75,6 +75,8 @@ static volatile int need_resched_cpu[ARMOS_MAX_CPUS];
 static volatile uint32_t idle_work_seen_count[ARMOS_MAX_CPUS];
 static volatile uint32_t idle_schedule_count[ARMOS_MAX_CPUS];
 static volatile uint32_t idle_fallback_count[ARMOS_MAX_CPUS];
+static volatile uint32_t secondary_scheduler_done_mask;
+static volatile uint32_t secondary_scheduler_warned_mask;
 
 //static spinlock_t task_lock = {0};
 
@@ -2273,6 +2275,47 @@ static bool scheduler_has_ready_work(void)
     return has_work;
 }
 
+static void scheduler_enable_secondary_cpus_once(void)
+{
+    uint32_t target_mask = 0;
+
+    if (!smp_is_boot_cpu())
+        return;
+
+    for (uint32_t cpu = 1; cpu < smp_possible_cpu_count() && cpu < ARMOS_MAX_CPUS; cpu++)
+        target_mask |= 1u << cpu;
+
+    if ((secondary_scheduler_done_mask & target_mask) == target_mask)
+        return;
+
+    for (uint32_t cpu = 1; cpu < smp_possible_cpu_count() && cpu < ARMOS_MAX_CPUS; cpu++) {
+        uint32_t bit = 1u << cpu;
+
+        if (secondary_scheduler_done_mask & bit)
+            continue;
+
+        if (smp_scheduler_cpu_enabled(cpu)) {
+            secondary_scheduler_done_mask |= bit;
+            continue;
+        }
+
+        if (!smp_cpu_seen(cpu) || smp_cpu_state(cpu) != SMP_CPU_PARKED)
+            continue;
+
+        if (smp_enable_scheduler_cpu(cpu) == 0) {
+            secondary_scheduler_done_mask |= bit;
+            KBOOT_OKF("SMP: scheduler enabled on CPU%u", cpu);
+        } else if ((secondary_scheduler_warned_mask & bit) == 0) {
+            secondary_scheduler_warned_mask |= bit;
+            KBOOT_WARNF("SMP: CPU%u scheduler unavailable (%s, start=%d, seen=%u)",
+                        cpu,
+                        smp_cpu_state_name(cpu),
+                        smp_cpu_start_result(cpu),
+                        smp_cpu_seen(cpu) ? 1u : 0u);
+        }
+    }
+}
+
 static bool scheduler_entry_allowed(const char* caller, task_t* requested)
 {
     task_t* current = task_current_local();
@@ -2897,6 +2940,8 @@ void idle_task_func(void* arg)
     KINFO("Idle task started\n");
     
     while (1) {
+        scheduler_enable_secondary_cpus_once();
+
         /*
          * Before timer preemption existed, idle yielded in a tight loop. With
          * periodic IRQs that causes idle->idle context-switch storms. We still
