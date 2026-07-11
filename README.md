@@ -1,7 +1,8 @@
 # ArmOS
 
-ArmOS is a small ARMv7-A Unix-like kernel for the QEMU `virt` machine,
-currently targeting Cortex-A15.
+ArmOS is a small 32-bit ARM Unix-like kernel for QEMU and Raspberry Pi
+experiments. The v0.6 reference platform remains QEMU `virt` / Cortex-A15;
+Raspberry Pi 3 is available as a dedicated AArch32 hardware target.
 
 It started as a learning experiment: can a Linux-like ARM kernel be built from
 scratch, with modern tooling and AI-assisted development? It is now a usable
@@ -53,6 +54,7 @@ but it is now a credible end-user programming environment.
 ArmOS currently provides:
 
 - ARMv7-A kernel running on QEMU `virt` / Cortex-A15
+- Raspberry Pi 3 AArch32 hardware target running on Cortex-A53
 - MMU enabled with split TTBR0/TTBR1 address spaces
 - ASID support and ASID rollover handling
 - typed physical/virtual address groundwork (`paddr_t`, `vaddr_t`, `pfn_t`)
@@ -94,7 +96,7 @@ ArmOS currently provides:
 
 ## Platform
 
-Current supported platform:
+Reference platform:
 
 - QEMU `virt`
 - QEMU 10.0.2 is the supported v0.6 reference emulator
@@ -107,6 +109,17 @@ Current supported platform:
 - VirtIO block device
 - UART console
 - Optional VirtIO-GPU display and VirtIO input keyboard
+
+Hardware development platform:
+
+- Raspberry Pi 3 Model B/B+ in AArch32 mode (`TARGET_PLATFORM=pi3`)
+- four Cortex-A53 CPUs participating in the scheduler
+- PL011 UART rescue console on `tty0`
+- SD/eMMC block device with hidden FAT32 firmware partition and ext2 root
+- BCM2836 local interrupt controller and ARM generic timer
+
+See [Raspberry Pi 3 AArch32](docs/RASPBERRY_PI3.md) for the build, SD-card,
+UART, validation, and current limitation contracts.
 
 ### CPU Support Contract
 
@@ -128,8 +141,9 @@ diagnostics. `SMP_CPUS>1` is now useful and increasingly robust for developers,
 but the public release contract remains `SMP_CPUS=1` until the full mixed stress
 matrix is boring across repeated runs.
 
-Future targets may include Raspberry Pi boards or an AArch64 port, but the
-current development platform is QEMU `virt`.
+The v0.6 release contract remains QEMU `virt` with one CPU. Raspberry Pi 3 SMP
+is a separately validated hardware-development profile, not yet a promise that
+all QEMU multi-CPU or future Raspberry Pi variants are release-stable.
 
 ## Filesystems
 
