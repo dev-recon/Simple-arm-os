@@ -19,6 +19,15 @@ The v0.6 baseline is:
 - ncurses and nano are optional generated bundles;
 - multi-arch work has phase-0 foundations but no second architecture yet.
 
+Post-v0.6 hardware milestone:
+
+- Raspberry Pi 3 boots as a dedicated AArch32 platform;
+- four Cortex-A53 CPUs participate in scheduling and pass sustained `kload`;
+- SD/eMMC, ext2 root, UART console, procfs diagnostics, and shutdown are usable;
+- framebuffer/input/network remain future Raspberry Pi milestones;
+- ASID-aware context-switch optimization remains blocked on a hardware-correct
+  residency and invalidation design.
+
 ## 1. Unix Permissions
 
 Status: started.

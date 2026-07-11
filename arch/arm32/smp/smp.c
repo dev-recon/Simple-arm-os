@@ -10,14 +10,14 @@
  *
  * Responsibilities:
  * - Discover possible CPUs from the DTB.
- * - Start secondary CPUs through PSCI and park them safely.
+ * - Start secondary CPUs through PSCI or the active board release mechanism.
  * - Track boot, seen, online and scheduler-enabled CPU masks.
  * - Provide common CPU-id helpers for locks and diagnostics.
  *
  * Notes:
  * - Secondary CPUs are brought into C, given private exception stacks, then
- *   parked outside the scheduler.  This validates boot/interrupt plumbing while
- *   preserving the historical single-scheduler-CPU runtime model.
+ *   parked outside the scheduler. Once TLB shootdown and per-CPU timers are
+ *   ready, smp_enable_scheduler_cpu() admits them into normal scheduling.
  */
 
 #include <kernel/smp.h>
@@ -29,9 +29,19 @@
 #include <kernel/task.h>
 #include <kernel/timer.h>
 #include <kernel/arch_platform.h>
+#include <kernel/arch_cpu.h>
 #include <asm/arm.h>
 
 #define PSCI_0_2_FN_CPU_ON 0x84000003u
+
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
+#define RASPI2_LOCAL_MAILBOX3_SET0      0x08Cu
+#define RASPI2_LOCAL_MAILBOX3_CLEAR0    0x0CCu
+#define RASPI2_LOCAL_MAILBOX_STRIDE     0x010u
+#define RASPI2_SECONDARY_BOOT_TIMEOUT_MS 1000u
+#define RASPI3_SPIN_TABLE_BASE          0x0D8u
+#define RASPI3_SPIN_TABLE_STRIDE        0x008u
+#endif
 
 _Static_assert(sizeof(smp_cpu_info_t) == 24,
                "smp_cpu_info_t size must match boot.S");
@@ -41,6 +51,9 @@ _Static_assert(offsetof(smp_cpu_info_t, park_heartbeat) == 16,
                "smp_cpu_info_t.park_heartbeat offset must match boot.S");
 
 volatile uint32_t smp_seen_mask = 1u << ARMOS_BOOT_CPU;
+volatile uint32_t smp_secondary_release_entry[ARMOS_MAX_CPUS];
+static volatile uint32_t smp_release_mailbox3_value[ARMOS_MAX_CPUS];
+static volatile uint32_t smp_release_spin_table_value[ARMOS_MAX_CPUS];
 volatile smp_cpu_info_t smp_cpu_infos[ARMOS_MAX_CPUS] = {
     [ARMOS_BOOT_CPU] = {
         .cpu_id = ARMOS_BOOT_CPU,
@@ -60,16 +73,160 @@ static volatile uint32_t scheduler_shutdown_park_request_mask;
 
 extern void smp_secondary_entry(void);
 
+static void smp_seen_mask_or(uint32_t bit)
+{
+    uint32_t old_value;
+    uint32_t new_value;
+    uint32_t status;
+
+    do {
+        __asm__ volatile(
+            "ldrex  %0, [%3]\n"
+            "orr    %1, %0, %4\n"
+            "strex  %2, %1, [%3]\n"
+            : "=&r"(old_value), "=&r"(new_value), "=&r"(status)
+            : "r"(&smp_seen_mask), "r"(bit)
+            : "cc", "memory");
+    } while (status != 0);
+
+    data_memory_barrier();
+}
+
+static void smp_mark_secondary_parked(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return;
+
+    smp_seen_mask_or(1u << cpu_id);
+    if (!smp_scheduler_cpu_enabled(cpu_id))
+        smp_cpu_infos[cpu_id].state = SMP_CPU_PARKED;
+}
+
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
+static inline volatile uint32_t* raspi2_smp_local_base(void)
+{
+    if (!arch_mmu_enabled())
+        return (volatile uint32_t*)(uintptr_t)arch_platform_irqctrl_phys_start();
+    return (volatile uint32_t*)(uintptr_t)arch_platform_kernel_mmio_irqctrl_base();
+}
+
+static inline void raspi2_smp_local_write(uint32_t offset, uint32_t value)
+{
+    *(volatile uint32_t*)((volatile uint8_t*)raspi2_smp_local_base() + offset) = value;
+    data_sync_barrier();
+}
+
+static inline uint32_t raspi2_smp_local_read(uint32_t offset)
+{
+    uint32_t value;
+
+    value = *(volatile uint32_t*)((volatile uint8_t*)raspi2_smp_local_base() + offset);
+    data_sync_barrier();
+    return value;
+}
+
+static void raspi2_smp_write_spin_table(uint32_t cpu, uint32_t entry_point)
+{
+    volatile uint32_t* release;
+    uintptr_t release_addr;
+
+    if (cpu >= 4)
+        return;
+
+    release_addr = RASPI3_SPIN_TABLE_BASE + RASPI3_SPIN_TABLE_STRIDE * cpu;
+    release = (volatile uint32_t*)release_addr;
+    release[0] = entry_point;
+    release[1] = 0;
+    smp_release_spin_table_value[cpu] = entry_point;
+    clean_dcache_by_mva((const void*)release_addr, sizeof(uint32_t) * 2u);
+    data_sync_barrier();
+}
+
+static int32_t smp_raspi2_cpu_on(uint32_t cpu, uint32_t entry_point)
+{
+    uint64_t start;
+    uint64_t timeout_ticks;
+
+    if (cpu >= ARMOS_MAX_CPUS || cpu >= 4)
+        return -EINVAL;
+
+    smp_cpu_infos[cpu].state = SMP_CPU_BOOTING;
+    smp_secondary_release_entry[cpu] = entry_point;
+    smp_release_mailbox3_value[cpu] = 0xffffffffu;
+    smp_release_spin_table_value[cpu] = 0;
+    clean_dcache_by_mva((const void*)&smp_secondary_release_entry[cpu],
+                        sizeof(smp_secondary_release_entry[cpu]));
+    raspi2_smp_write_spin_table(cpu, entry_point);
+    data_sync_barrier();
+
+    /*
+     * BCM2836/BCM2837 firmware waits on mailbox 3 for secondary start
+     * addresses. Cores that were entered eagerly by an emulator instead watch
+     * smp_secondary_release_entry[] in boot.S; SEV wakes both paths.
+     */
+    raspi2_smp_local_write(RASPI2_LOCAL_MAILBOX3_CLEAR0 +
+                           RASPI2_LOCAL_MAILBOX_STRIDE * cpu,
+                           0xffffffffu);
+    raspi2_smp_local_write(RASPI2_LOCAL_MAILBOX3_SET0 +
+                           RASPI2_LOCAL_MAILBOX_STRIDE * cpu,
+                           entry_point);
+    send_event();
+    instruction_sync_barrier();
+
+    start = get_timer_count();
+    timeout_ticks = (uint64_t)(get_timer_frequency() / 1000u) *
+                    RASPI2_SECONDARY_BOOT_TIMEOUT_MS;
+    if (timeout_ticks == 0)
+        timeout_ticks = 1;
+
+    while ((get_timer_count() - start) < timeout_ticks) {
+        smp_release_mailbox3_value[cpu] =
+            raspi2_smp_local_read(RASPI2_LOCAL_MAILBOX3_CLEAR0 +
+                                  RASPI2_LOCAL_MAILBOX_STRIDE * cpu);
+        if (smp_cpu_seen(cpu) && smp_cpu_state(cpu) == SMP_CPU_PARKED)
+            return 0;
+        cpu_relax();
+    }
+
+    return -ETIMEDOUT;
+}
+#endif
+
+static bool smp_platform_can_start_secondary_cpus(void)
+{
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
+    return true;
+#else
+    return false;
+#endif
+}
+
+static int32_t smp_platform_cpu_on(uint32_t target_cpu,
+                                   uint32_t entry_point,
+                                   uint32_t context_id)
+{
+    (void)context_id;
+
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
+    return smp_raspi2_cpu_on(target_cpu, entry_point);
+#else
+    (void)target_cpu;
+    (void)entry_point;
+    return -ENOSYS;
+#endif
+}
+
 static uint32_t smp_detect_possible_cpus_from_dtb(void)
 {
     void* dtb_ptr = (void*)dtb_address;
     uint32_t count = 0;
+    uint32_t fallback = arch_platform_default_cpu_count();
 
     if (!dtb_ptr)
-        return 1;
+        return fallback ? fallback : 1;
 
     if (!fdt_check_header(dtb_ptr))
-        return 1;
+        return fallback ? fallback : 1;
 
     struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
     uint8_t* struct_block = (uint8_t*)dtb_ptr + fdt32_to_cpu(fdt->off_dt_struct);
@@ -99,9 +256,9 @@ static uint32_t smp_detect_possible_cpus_from_dtb(void)
             case FDT_NOP:
                 break;
             case FDT_END:
-                return count ? count : 1;
+                return count ? count : (fallback ? fallback : 1);
             default:
-                return count ? count : 1;
+                return count ? count : (fallback ? fallback : 1);
         }
     }
 }
@@ -129,6 +286,7 @@ void smp_init_boot_cpu(void)
         smp_cpu_infos[cpu].ipi_count = 0;
         smp_cpu_infos[cpu].park_heartbeat = 0;
         smp_cpu_infos[cpu].start_result = (cpu == boot_cpu_id) ? 0 : 1;
+        smp_secondary_release_entry[cpu] = 0;
     }
 }
 
@@ -137,6 +295,23 @@ void smp_start_secondary_cpus(void)
     uint32_t entry = (uint32_t)smp_secondary_entry;
 
     if (!arch_platform_has_psci()) {
+        if (smp_platform_can_start_secondary_cpus()) {
+            for (uint32_t cpu = 0; cpu < possible_cpu_count; cpu++) {
+                if (cpu == boot_cpu_id)
+                    continue;
+
+                smp_cpu_infos[cpu].start_result =
+                    smp_platform_cpu_on(cpu, entry, cpu);
+                if (smp_cpu_infos[cpu].start_result != 0)
+                    smp_cpu_infos[cpu].state = SMP_CPU_OFFLINE;
+            }
+
+            data_sync_barrier();
+            send_event();
+            instruction_sync_barrier();
+            return;
+        }
+
         for (uint32_t cpu = 0; cpu < possible_cpu_count; cpu++) {
             if (cpu == boot_cpu_id)
                 continue;
@@ -171,16 +346,17 @@ void smp_secondary_main(uint32_t cpu_id)
     if (cpu_id >= ARMOS_MAX_CPUS)
         cpu_id = smp_processor_id();
 
-    if (cpu_id < ARMOS_MAX_CPUS)
-        smp_cpu_infos[cpu_id].state = SMP_CPU_PARKED;
+    smp_mark_secondary_parked(cpu_id);
 
     irq_init_local_cpu_interface();
     timer_init_local_cpu();
     enable_interrupts();
 
     while (1) {
-        if (cpu_id < ARMOS_MAX_CPUS)
+        if (cpu_id < ARMOS_MAX_CPUS) {
+            smp_mark_secondary_parked(cpu_id);
             smp_cpu_infos[cpu_id].park_heartbeat++;
+        }
 
         if (cpu_id < ARMOS_MAX_CPUS && smp_scheduler_cpu_enabled(cpu_id))
             task_start_secondary_scheduler(cpu_id);
@@ -226,6 +402,27 @@ int32_t smp_cpu_start_result(uint32_t cpu_id)
     if (cpu_id >= ARMOS_MAX_CPUS)
         return -1;
     return smp_cpu_infos[cpu_id].start_result;
+}
+
+uint32_t smp_cpu_release_entry(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return 0;
+    return smp_secondary_release_entry[cpu_id];
+}
+
+uint32_t smp_cpu_release_mailbox3_value(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return 0;
+    return smp_release_mailbox3_value[cpu_id];
+}
+
+uint32_t smp_cpu_release_spin_table_value(uint32_t cpu_id)
+{
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return 0;
+    return smp_release_spin_table_value[cpu_id];
 }
 
 smp_cpu_state_t smp_cpu_state(uint32_t cpu_id)

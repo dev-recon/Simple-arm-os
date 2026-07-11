@@ -165,32 +165,30 @@ Kernel code that should remain architecture-neutral:
 
 ## Phase C - Second ARM32 Platform
 
-Before AArch64, use a second ARM32 machine to force real platform boundaries.
-Candidates:
+Status: implemented.
 
-- QEMU `raspi2b`;
-- real Raspberry Pi 2-class board;
-- another ARMv7 board with FDT, GIC/timer equivalents, and a usable UART.
+The second ARM32 family now has two explicit profiles:
 
-This phase validates platform interfaces without also changing pointer width,
-exception level, or page-table format.
+- `TARGET_PLATFORM=raspi2` for QEMU `raspi2b` / Cortex-A7;
+- `TARGET_PLATFORM=pi3` for Raspberry Pi 3 hardware / Cortex-A53 in AArch32.
 
-Current staging:
+They share the BCM283x UART, local interrupt controller, timer, SD/eMMC, and
+power backend under `arch/arm32/platform/raspi2/`, while target-specific build
+flags and quirks remain separate. This phase validated the platform interfaces
+without changing pointer width, exception level, or page-table format.
 
-- `arch/arm32/platform/raspi2/` exists as a non-buildable staging directory.
-  It intentionally has no `platform.mk`, so `TARGET_PLATFORM=raspi2` fails
-  until the actual board contract is implemented.
-- The first raspi2 milestone is UART-only boot with `tty0` preserved as the
-  recovery console. Graphics and input are later milestones.
-- The staging README lists the minimal files required before making `raspi2`
-  buildable: platform header, `platform.mk`, platform `devices.c`, and optional
-  QEMU launch defaults.
-- Do not make `raspi2` buildable by reusing the qemu-virt GIC fragment. The
-  next real step is a Raspberry Pi interrupt-controller backend that implements
-  the `arch_irq_*` contract used by generic drivers.
-- Do not add fake VirtIO, PL050, or legacy IDE constants to `raspi2`. Its first
-  milestone is allowed to be UART-only; optional helpers now have safe defaults
-  for platforms that do not expose those MMIO devices.
+Landed milestones:
+
+- PL011 `tty0` recovery console;
+- Raspberry Pi interrupt-controller backend implementing the generic IRQ/IPI
+  contract;
+- SD/eMMC block device, MBR partitions, hidden FAT32 boot, and ext2 root;
+- four-CPU scheduler participation and shutdown parking;
+- PI3-specific CPU identity, timer, firmware handoff, and AArch32 build profile;
+- no fake VirtIO, PL050, or legacy IDE capabilities on Raspberry Pi targets.
+
+The hardware build and validation contract is documented in
+[`docs/RASPBERRY_PI3.md`](RASPBERRY_PI3.md).
 
 ## Phase D - AArch64
 

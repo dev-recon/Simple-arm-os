@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build_pi2_sd.sh - build Raspberry Pi 2 images and stage them to an SD card.
+# build_pi2_sd.sh - build Raspberry Pi images and stage them to an SD card.
 
 set -euo pipefail
 
@@ -18,7 +18,12 @@ PUSH_MODE="${PUSH_MODE:-boot}"
 SD_VOLUME="${SD_VOLUME:-/Volumes/PI2}"
 KERNEL_NAME="${KERNEL_NAME:-kernel7.img}"
 KERNEL_ADDRESS="${KERNEL_ADDRESS:-0x02010000}"
-DEVICE_TREE="${DEVICE_TREE:-bcm2709-rpi-2-b.dtb}"
+if [ -z "${DEVICE_TREE+x}" ]; then
+    case "$TARGET_PLATFORM" in
+        pi3) DEVICE_TREE="bcm2710-rpi-3-b-plus.dtb" ;;
+        *) DEVICE_TREE="bcm2709-rpi-2-b.dtb" ;;
+    esac
+fi
 DTOVERLAY="${DTOVERLAY:-}"
 INIT_UART_BAUD="${INIT_UART_BAUD:-115200}"
 INIT_UART_CLOCK="${INIT_UART_CLOCK:-}"
@@ -44,7 +49,7 @@ Defaults:
   kernel name: kernel7.img
 
 Environment overrides:
-  ARCH, BUILD_NEWLIB, BUILD_TCC, BUILD_BSD, BUILD_NCURSES, BUILD_NANO,
+  ARCH, TARGET_PLATFORM, BUILD_NEWLIB, BUILD_TCC, BUILD_BSD, BUILD_NCURSES, BUILD_NANO,
   BUILD_XV_DEPS, BUILD_FBVIEW, SD_VOLUME, PI2_FIRMWARE_DIR, KERNEL_NAME,
   KERNEL_ADDRESS, DEVICE_TREE, DTOVERLAY, INIT_UART_BAUD, INIT_UART_CLOCK,
   PUSH_MODE, RAW_DEVICE, INSTALL_FIRMWARE, WRITE_CONFIG
@@ -311,15 +316,33 @@ esac
 
 cd "$ROOT_DIR"
 
-if [ "$TARGET_ARCH" != "arm32" ] || [ "$TARGET_PLATFORM" != "raspi2" ]; then
-    die "this script is for TARGET_ARCH=arm32 TARGET_PLATFORM=raspi2"
+if [ "$TARGET_ARCH" != "arm32" ]; then
+    die "this script is for TARGET_ARCH=arm32"
 fi
 
-KERNEL_IMAGE="$ROOT_DIR/build/images/kernel-raspi2.bin"
-DISK_IMAGE="$ROOT_DIR/build/images/disk-raspi2.img"
+case "$TARGET_PLATFORM" in
+    raspi2)
+        PI_LABEL="Raspberry Pi 2"
+        PI_OK_PREFIX="PI2"
+        ;;
+    pi3)
+        PI_LABEL="Raspberry Pi 3"
+        PI_OK_PREFIX="PI3"
+        ;;
+    *)
+        die "this script supports TARGET_PLATFORM=raspi2 or TARGET_PLATFORM=pi3"
+        ;;
+esac
+
+KERNEL_IMAGE="$ROOT_DIR/build/images/kernel-$TARGET_PLATFORM.bin"
+DISK_IMAGE="$ROOT_DIR/build/images/disk-$TARGET_PLATFORM.img"
+
+if [ "$TARGET_PLATFORM" = "pi3" ] && [ "$DEVICE_TREE" = "bcm2709-rpi-2-b.dtb" ]; then
+    die "pi3 requires a Pi 3 device tree; use bcm2710-rpi-3-b-plus.dtb"
+fi
 
 if [ "$SKIP_BUILD" != "1" ]; then
-    echo "=== Building ArmOS for Raspberry Pi 2 ==="
+    echo "=== Building ArmOS for $PI_LABEL ==="
     echo "BUILD_NEWLIB=$BUILD_NEWLIB BUILD_TCC=$BUILD_TCC"
     ARCH="$ARCH" \
     TARGET_ARCH="$TARGET_ARCH" \
@@ -330,7 +353,11 @@ if [ "$SKIP_BUILD" != "1" ]; then
 fi
 
 [ -f "$KERNEL_IMAGE" ] || die "kernel image not found: $KERNEL_IMAGE"
-[ -f "$DISK_IMAGE" ] || die "disk image not found: $DISK_IMAGE"
+case "$PUSH_MODE" in
+    image|raw)
+        [ -f "$DISK_IMAGE" ] || die "disk image not found: $DISK_IMAGE"
+        ;;
+esac
 
 case "$PUSH_MODE" in
     none)
@@ -347,12 +374,11 @@ case "$PUSH_MODE" in
 
         if [ "$INSTALL_FIRMWARE" = "1" ]; then
             [ -d "$PI2_FIRMWARE_DIR" ] || die "firmware directory not found: $PI2_FIRMWARE_DIR"
-            for file in bootcode.bin start.elf fixup.dat bcm2709-rpi-2-b.dtb; do
+            for file in bootcode.bin start.elf fixup.dat "$DEVICE_TREE"; do
                 [ -f "$PI2_FIRMWARE_DIR/$file" ] || die "firmware file not found: $PI2_FIRMWARE_DIR/$file"
             done
-            [ -f "$PI2_FIRMWARE_DIR/$DEVICE_TREE" ] || die "device tree not found: $PI2_FIRMWARE_DIR/$DEVICE_TREE"
 
-            echo "=== Copying Raspberry Pi 2 firmware to SD boot volume ==="
+            echo "=== Copying $PI_LABEL firmware to SD boot volume ==="
             echo "source: $PI2_FIRMWARE_DIR"
             echo "target: $SD_VOLUME"
             rsync -a \
@@ -365,7 +391,7 @@ case "$PUSH_MODE" in
                 "$PI2_FIRMWARE_DIR/" "$SD_VOLUME/"
         fi
 
-        echo "=== Copying Raspberry Pi 2 kernel to SD boot volume ==="
+        echo "=== Copying $PI_LABEL kernel to SD boot volume ==="
         echo "source: $KERNEL_IMAGE"
         echo "target: $SD_VOLUME/$KERNEL_NAME"
         cp "$KERNEL_IMAGE" "$SD_VOLUME/$KERNEL_NAME"
@@ -382,7 +408,7 @@ case "$PUSH_MODE" in
             dot_clean "$SD_VOLUME" >/dev/null 2>&1 || true
         fi
         sync
-        echo "PI2_SD_BOOT_OK"
+        echo "${PI_OK_PREFIX}_SD_BOOT_OK"
         ;;
     raw)
         [ -n "$RAW_DEVICE" ] || die "raw mode requires --raw-device /dev/rdiskN"
@@ -404,9 +430,13 @@ case "$PUSH_MODE" in
         raw_write_image
         sync
         diskutil eject "$RAW_DEVICE" >/dev/null || true
-        echo "PI2_SD_RAW_OK"
+        echo "${PI_OK_PREFIX}_SD_RAW_OK"
         ;;
 esac
 
 echo "Kernel image: $KERNEL_IMAGE"
-echo "Disk image:   $DISK_IMAGE"
+if [ -f "$DISK_IMAGE" ]; then
+    echo "Disk image:   $DISK_IMAGE"
+else
+    echo "Disk image:   $DISK_IMAGE (not built)"
+fi

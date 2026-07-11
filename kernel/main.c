@@ -171,7 +171,7 @@ void kernel_main(void)
     /* Phase 0: etats du processeur */
     enable_async_abort();
 
-    sctlr_set_smp();
+    arm_enable_smp_coherency();
     smp_init_boot_cpu();
 
     timer_freq = boot_timer_frequency();
@@ -214,15 +214,14 @@ void kernel_main(void)
                 timer_freq, 1000000 / TIMER_FREQ);
 
     smp_start_secondary_cpus();
-    KBOOT_OKF("SMP: %u CPU(s) configured, %u online",
-              smp_possible_cpu_count(), smp_online_cpu_count());
+    KBOOT_OKF("SMP: %u CPU(s) configured, %u online, seen=0x%X",
+              smp_possible_cpu_count(), smp_online_cpu_count(),
+              smp_seen_cpu_mask());
 
     /* Phase 4: Peripheriques d'entree/sortie */
     platform_devices = platform_devices_init();
 
     /* Phase 6: Activation des interruptions */
-    timer_enable_scheduling();
- 
     arch_enable_interrupts();
 
     /* Phase 7: Systemes de fichiers (OPTIONNEL) */
@@ -254,6 +253,7 @@ void kernel_main(void)
         init_kernel_task_system();
         KBOOT_WARN("Init: skipped, no root filesystem");
     }
+    timer_enable_scheduling();
 
     if (rootfs_ready) {
         if (coredumpd_start() == 0)
@@ -274,12 +274,6 @@ void kernel_main(void)
     if (smp_possible_cpu_count() > 1) {
         KBOOT_OK("SMP: TLB/IPI preflight");
         tlb_shootdown_all();
-        for (uint32_t cpu = 1; cpu < smp_possible_cpu_count(); cpu++) {
-            if (smp_enable_scheduler_cpu(cpu) == 0)
-                KBOOT_OKF("SMP: scheduler enabled on CPU%u", cpu);
-            else
-                KBOOT_WARNF("SMP: CPU%u scheduler remains parked", cpu);
-        }
     }
 
     /* Main scheduler loop */

@@ -70,13 +70,7 @@ void arch_disable_branch_predictor(void)
 
 uint32_t arch_timer_frequency(void)
 {
-    uint32_t forced = arch_platform_timer_force_hz();
-    uint32_t timer_freq = get_cntfrq();
-
-    if (forced)
-        return forced;
-
-    return timer_freq ? timer_freq : arch_platform_timer_fallback_hz();
+    return arch_platform_timer_effective_hz(get_cntfrq());
 }
 
 uint64_t arch_timer_counter(void)

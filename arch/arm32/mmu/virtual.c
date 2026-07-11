@@ -77,7 +77,8 @@ static void install_low_kernel_aliases(vm_space_t *vm)
                          0x00000002u |  /* Section descriptor. */
                          0x00000400u |  /* AP[1:0] = 01: privileged RW. */
                          0x00000004u |  /* B: bufferable. */
-                         0x00000008u;   /* C: cacheable. */
+                         0x00000008u |  /* C: cacheable. */
+                         0x00010000u;   /* S: coherent across SMP CPUs. */
     }
 }
 

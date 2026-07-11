@@ -25,6 +25,7 @@
 #include <kernel/string.h>
 #include <kernel/task.h>
 #include <kernel/tlb.h>
+#include <kernel/spinlock.h>
 #include <kernel/arch_memory.h>
 #include <kernel/uart.h>
 #include <asm/mmu.h>
@@ -35,6 +36,30 @@
 #define MMU_PDE_SECTION    0x00000002
 #define MMU_PDE_CACHE      0x00000008
 #define MMU_PDE_BUFFER     0x00000004
+
+#define ARM_L1_SECTION        0x00000002u
+#define ARM_L1_AP_RW_ALL      0x00000C00u
+#define ARM_L1_XN             0x00000010u
+#define ARM_L1_C              0x00000008u
+#define ARM_L1_B              0x00000004u
+#define ARM_L1_S              0x00010000u
+#define ARM_L1_NORMAL_WBWA_S  (ARM_L1_SECTION | ARM_L1_AP_RW_ALL | ARM_L1_C | ARM_L1_B | ARM_L1_S)
+#define ARM_L1_DEVICE_S       (ARM_L1_SECTION | ARM_L1_AP_RW_ALL | ARM_L1_B | ARM_L1_S)
+
+#define ARM_TTBR_INNER_WBWA   (1u << 6)
+
+static inline uint32_t ttbr_attr_wbwa_share(paddr_t base)
+{
+    return (base & 0xFFFFC000u) |
+           TTBR_SHAREABLE |
+           TTBR_RGN_OUTER_WBWA |
+           ARM_TTBR_INNER_WBWA;
+}
+
+static inline uint32_t ttbcr_split_value(uint32_t n)
+{
+    return n & 0x7u;
+}
 
 /* Configuration TTBR split pour Cortex-A15 */
 #define TTBCR_N_SPLIT_2GB   1  /* N=1: split à 2GB (0-2GB=TTBR0, 2-4GB=TTBR1) */
@@ -54,6 +79,7 @@ static uint32_t current_asid = ASID_KERNEL;
 static uint32_t asid_generation = 1;
 bool asid_map[MAX_ASID + 1] = {true}; /* ASID 0 réservé */
 static uint32_t asid_slot_generation[MAX_ASID + 1];
+static spinlock_t asid_lock = SPINLOCK_INIT("asid_pool");
 
 extern void vectors(void);
 
@@ -132,7 +158,8 @@ static void flush_all_tlb_local(void)
 
 static uint32_t user_page_flags(uint32_t vma_flags, bool writable)
 {
-    uint32_t page_flags = 0x02 | 0x0C;  /* small page + B/C */
+    uint32_t page_flags = 0x02 | 0x0C | (1u << 10) | (1u << 11);
+    /* Small page, cacheable/shareable and non-global so the ASID is honored. */
 
     page_flags |= writable ? PTE_AP_RW_RW : PTE_AP_RW_RO;
     if (!(vma_flags & VMA_EXEC)) {
@@ -310,33 +337,14 @@ bool setup_mmu(void)
 
     setup_kernel_space();
 
-    // 3. Configurer TTBR0 (userspace)
-    uint32_t ttbr0_value = (uint32_t)ttbr0_pgdir |
-                          TTBR_RGN_OUTER_WBWA |  // Outer write-back write-allocate
-                          TTBR_SHAREABLE |       // Shareable
-                          TTBR_CACHEABLE;        // Cacheable
-    
-    // 4. Configurer TTBR1 (kernel)  
-    uint32_t ttbr1_value = (uint32_t)kernel_page_dir |
-                          TTBR_RGN_OUTER_WBWA |  // Outer write-back write-allocate
-                          TTBR_SHAREABLE |       // Shareable
-                          TTBR_CACHEABLE;        // Cacheable
-    
-    // 5. Configurer TTBCR avec IRGN
-    uint32_t ttbcr_value = 2 |                    // N=2 (split à 0x40000000)
-                          TTBCR_IRGN0_WBWA |     // Inner cacheable TTBR0
-                          TTBCR_IRGN1_WBWA;      // Inner cacheable TTBR1
-
-    ttbr0_value = (uint32_t)ttbr0_pgdir;
-    ttbr1_value = (uint32_t)kernel_page_dir;
+    uint32_t ttbr0_value = ttbr_attr_wbwa_share((paddr_t)ttbr0_pgdir);
+    uint32_t ttbr1_value = ttbr_attr_wbwa_share((paddr_t)kernel_page_dir);
+    uint32_t ttbcr_value = ttbcr_split_value(get_optimal_ttbcr_n());
     
     // Écriture des TTBR
     set_ttbr0(ttbr0_value);
     set_ttbr1(ttbr1_value);
 
-    // TTBCR : N = 2 (split à 0x40000000), EAE = 0 (format court)
-    uint32_t ttbcr = 0x2; //0x2;
-    ttbcr_value = ttbcr;
     set_ttbcr(ttbcr_value);
 
     data_sync_barrier();
@@ -546,8 +554,7 @@ static void setup_kernel_space(void)
     // 1. Mapper TOUTE la zone basse (0-1GB) en identity mapping dans TTBR0
      for (vaddr_t addr = 0; addr < split_boundary; addr += 0x100000) {
         uint32_t index = get_L1_index(addr);  // Index 0-1023
-        //kernel_page_dir[index] = addr | 0xC0E;
-        ttbr0_pgdir[index] = addr | 0xC0E;
+        ttbr0_pgdir[index] = addr | ARM_L1_NORMAL_WBWA_S;
         mapped_low++;
     }
 
@@ -560,27 +567,8 @@ static void setup_kernel_space(void)
 
         uint32_t index = get_L1_index((vaddr_t)addr);
         
-        // Devices: non-cacheable, non-bufferable
-        ttbr0_pgdir[index] = addr | 
-                0x00000002 |  // Section descriptor
-                0x00000C00 |  // AP[2:1] = 11 (full access)
-                0x00000004 |  // TEX[0], C, B = 001 (device memory)
-                0x00000000 |  // Domain 0
-                0x00000000 |  // nG = 0 (global)
-                0x00000000;   // S = 0 (non-shared, OK pour device)
-
-        kernel_page_dir[index] = addr | 
-                0x00000002 |  // Section descriptor
-                0x00000C00 |  // AP[2:1] = 11 (full access)
-                0x00000004 |  // TEX[0], C, B = 001 (device memory)
-                0x00000000 |  // Domain 0
-                0x00000000 |  // nG = 0 (global)
-                0x00000000;   // S = 0 (non-shared, OK pour device)
-
-                            //0x00000002 |  // Section entry
-                            //0x00000C00 |  // AP[2:1] = 11
-                            //0x00000010 |  // User accessible  
-                            //0x00000004;   // Device memory (non-cacheable)
+        ttbr0_pgdir[index] = addr | ARM_L1_DEVICE_S;
+        kernel_page_dir[index] = addr | ARM_L1_DEVICE_S;
         mapped_devices++;
         
     }
@@ -598,11 +586,7 @@ static void setup_kernel_space(void)
         vaddr_t addr = (vaddr_t)addr64;
         uint32_t ttbr1_index = get_L1_index(addr);
 
-        kernel_page_dir[ttbr1_index] = addr |
-                        0x00000002 |      /* Section bit */
-                        0x00000C00 |      /* AP[11:10] = 11 (Kernel RW) */
-                        0x00000004 |      /* C - Cacheable */
-                        0x00000008;       /* B - Bufferable */
+        kernel_page_dir[ttbr1_index] = addr | ARM_L1_NORMAL_WBWA_S;
 
         mapped_identity++;
         mapped_sections++;
@@ -629,11 +613,8 @@ static void setup_kernel_space(void)
         }
 
         kernel_page_dir[ttbr1_index] = paddr |
-                        0x00000002 |      /* Section bit */
-                        0x00000C00 |      /* AP[11:10] = 11 (Kernel RW) */
-                        0x00000010 |      /* XN: direct-map RAM is data */
-                        0x00000004 |      /* C - Cacheable */
-                        0x00000008;       /* B - Bufferable */
+                        ARM_L1_NORMAL_WBWA_S |
+                        ARM_L1_XN;
 
         mapped_direct++;
         mapped_sections++;
@@ -691,10 +672,11 @@ static void setup_kernel_space(void)
 static void setup_ttbr_split(void)
 {
     /* Configuration TTBCR pour split à 2GB */
-    uint32_t ttbcr =  get_optimal_ttbcr_n();  /* N=1: 2GB split */
+    uint32_t ttbcr_n = get_optimal_ttbcr_n();
+    uint32_t ttbcr = ttbcr_split_value(ttbcr_n);
     vaddr_t boundary = get_split_boundary();
 
-    KINFO("MMU: Auto-detected split N=%u, boundary=0x%08X\n", ttbcr, boundary);
+    KINFO("MMU: Auto-detected split N=%u, boundary=0x%08X\n", ttbcr_n, boundary);
     KINFO("MMU: Kernel at 0x%08X -> TTBR%u space\n", 
         (vaddr_t)(uintptr_t)&__start,
         ((vaddr_t)(uintptr_t)&__start >= boundary) ? 1 : 0);
@@ -706,11 +688,10 @@ static void setup_ttbr_split(void)
      * platforms execute kernel code below the TTBR boundary, so clearing TTBR0
      * here would immediately unmap the currently executing code.
      */
-    set_ttbr0((uint32_t)ttbr0_pgdir);
+    set_ttbr0(ttbr_attr_wbwa_share((paddr_t)ttbr0_pgdir));
     
     /* Set TTBR1 (noyau - 2GB-4GB) */  
-    uint32_t ttbr1 = ((uint32_t)kernel_page_dir) | (0b00 << 0) | (1 << 1); // IRGN=0b00 (WBWA), S=0, RGN=0
-    set_ttbr1(ttbr1);
+    set_ttbr1(ttbr_attr_wbwa_share((paddr_t)kernel_page_dir));
     
     /* Set TTBCR */
     ttbcr &= ~(1 << 31);   // EAE = 0 : format court
@@ -834,13 +815,6 @@ uint32_t get_current_asid(void)
 
 /* Fonctions publiques modifiées pour ASID */
 
-#define TTBR_S     (1u<<1)
-#define TTBR_RGN_WBWA (0b01u<<3)     // RGN[4:3]=01
-#define TTBR_IRGN_WBWA (1u<<6)       // IRGN[6]=1, IRGN[0]=0 → 01
-static inline uint32_t ttbr_attr_wbwa_share(paddr_t base){
-    return (base & 0xFFFFC000u) | TTBR_S | TTBR_RGN_WBWA | TTBR_IRGN_WBWA;
-}
-
 void switch_address_space(pgdir_t pgdir)
 {
     if (!pgdir) {
@@ -877,20 +851,18 @@ void switch_address_space_with_asid(pgdir_t pgdir, uint32_t asid)
         return;
     }
 
-    /* Switch ASID */
+    /* Keep the proven switch ordering while non-global mappings are validated. */
     set_current_asid(asid);
-    data_sync_barrier();                 // dsb
-    instruction_sync_barrier();          // isb
-
-    tlb_shootdown_asid(get_current_asid());
-    //set_ttbr0((uint32_t)pgdir);
     data_sync_barrier();
     instruction_sync_barrier();
 
-    /* Switch TTBR0 */
+    tlb_shootdown_asid(get_current_asid());
+    data_sync_barrier();
+    instruction_sync_barrier();
+
     switch_address_space(pgdir);
-    data_sync_barrier();                 // dsb
-    instruction_sync_barrier();          // is
+    data_sync_barrier();
+    instruction_sync_barrier();
     
     //KDEBUG("Address space switched: pgdir=0x%08X, ASID=%u\n", (uint32_t)pgdir, asid);
 }
@@ -898,12 +870,22 @@ void switch_address_space_with_asid(pgdir_t pgdir, uint32_t asid)
 /* Fonctions publiques pour la gestion ASID */
 uint32_t vm_allocate_asid(void)
 {
-    return allocate_asid();
+    unsigned long flags;
+    uint32_t asid;
+
+    spin_lock_irqsave(&asid_lock, &flags);
+    asid = allocate_asid();
+    spin_unlock_irqrestore(&asid_lock, flags);
+    return asid;
 }
 
 void vm_free_asid(uint32_t asid)
 {
+    unsigned long flags;
+
+    spin_lock_irqsave(&asid_lock, &flags);
     free_asid(asid);
+    spin_unlock_irqrestore(&asid_lock, flags);
 }
 
 uint32_t vm_get_current_asid(void)

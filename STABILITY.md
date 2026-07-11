@@ -141,6 +141,57 @@ TLB shootdown invariants:
 - If a target CPU stops acknowledging after repeated SGI re-emissions, panic
   instead of spinning forever.
 
+## Raspberry Pi 3 Hardware SMP Baseline
+
+Raspberry Pi 3 is a distinct AArch32 hardware-development profile. It does not
+change the v0.6 public QEMU contract above.
+
+Configuration:
+
+- `TARGET_PLATFORM=pi3`
+- Cortex-A53 in AArch32 mode, four scheduler CPUs
+- PL011 UART at 115200 baud
+- hidden FAT32 firmware/boot partition followed by a 512 MB ext2 root
+- ARM generic timer quirked to the validated 1 MHz scheduler timebase
+
+Validated hardware load:
+
+```sh
+kload -s 120 -m 2048 -c 4 -u 25 -p 8 -f 1 &
+top -s 1
+lps
+cat /proc/smp
+mmaptest
+```
+
+Observed stable run:
+
+- all four CPUs were online and participated in scheduling;
+- 979 short-lived tasks completed with no live zombies, fork failure,
+  scheduler refusal, or spinlock ownership error;
+- physical-page and kernel-stack allocation counters returned to their idle
+  live values;
+- `mmaptest` passed after the stress run;
+- `sleep 1`, `top -s 1`, UART input, and clean shutdown retained correct timing
+  and behavior.
+
+Hardware-specific MMU contract:
+
+- user mappings are non-global and carry an 8-bit hardware ASID;
+- ASID allocation/free is serialized for SMP;
+- TTBR page-table walks are shareable and WBWA;
+- address-space switches deliberately retain a full local `TLBIALL`;
+- do not replace that flush with `TLBIASID` or `TLBIASIDIS` based only on QEMU
+  results: both variants passed emulation and later fetched stale user mappings
+  on Cortex-A53 hardware;
+- optimize page-table and COW invalidation volume independently before changing
+  the context-switch invalidation protocol.
+
+`top` must be included in every future PI3 stress pass. Its refresh loop uses
+fixed buffers and was soaked concurrently with `kload` on the raspi2 QEMU
+profile after a prior newlib `_malloc_r` crash. Repeat the concurrent monitor
+test on hardware whenever procfs or user memory allocation changes.
+
 ## Notes From Scheduler Debt Fairness
 
 ArmOS currently reports this scheduler policy through `/proc/sched`:

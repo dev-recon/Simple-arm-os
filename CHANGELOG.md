@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Added a dedicated `TARGET_PLATFORM=pi3` hardware profile for Raspberry Pi 3
+  boards booting `kernel7.img` in AArch32 mode.
+- Brought all four Cortex-A53 CPUs online on Raspberry Pi 3, with coherent
+  page-table walks, per-CPU scheduler participation, local timer interrupts,
+  task migration, TLB/IPI diagnostics, and clean secondary-CPU parking during
+  shutdown.
+- Added `tools/build_pi3_sd.sh` and a FAT32-first SD layout whose firmware
+  partition is marked hidden while ext2 remains the ArmOS root filesystem.
+- Kept the proven full local TLB invalidation on address-space switches after
+  ASID-only variants passed QEMU but produced stale user instruction mappings
+  on Raspberry Pi 3 hardware.
+- Removed temporary mappings from read-only user page-table inspection and made
+  `top` use fixed bounded buffers so long monitoring sessions do not churn or
+  corrupt the newlib heap under process stress.
 - Added an optional BSD-style userland tool bundle behind `BUILD_BSD=1`,
   including `bmake`, BSD `sed`/`awk`, `install`, `mtree`, `xargs`, `diff`,
   `patch`, `pax`/`tar`, `m4`, and small ELF/archive tools: `ar`, `ranlib`,

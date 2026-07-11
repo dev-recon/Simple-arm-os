@@ -36,13 +36,16 @@ typedef struct spinlock {
     uint32_t owner;              /* owning CPU id, or SPINLOCK_NO_OWNER */
     uint32_t count;              /* total successful acquisitions, debug only */
     const char* name;            /* debug name */
-} __attribute__((aligned(4))) spinlock_t;
+    const void* owner_pc;        /* acquisition site, debug only */
+    uint32_t reserved[11];       /* keep each lock in its own cache line */
+} __attribute__((aligned(64))) spinlock_t;
 
 #define SPINLOCK_INIT(lock_name) { \
     .locked = 0, \
     .owner = SPINLOCK_NO_OWNER, \
     .count = 0, \
-    .name = lock_name \
+    .name = lock_name, \
+    .owner_pc = 0 \
 }
 
 #define DEFINE_SPINLOCK(name) \

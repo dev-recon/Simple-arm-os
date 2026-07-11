@@ -295,6 +295,12 @@ profile remains `SMP_CPUS=1`. Multi-CPU boots are intentionally available for
 kernel development and race hunting, but they are not yet the supported release
 configuration.
 
+Raspberry Pi 3 uses a separate `pi3` AArch32 platform profile. On that hardware,
+all four Cortex-A53 CPUs have completed sustained scheduler/fork/COW stress and
+clean shutdown. This hardware milestone does not automatically promote the
+generic QEMU `SMP_CPUS>1` profile or other boards to the public release
+contract.
+
 Stable profile:
 
 ```sh
@@ -327,6 +333,15 @@ Current SMP contract:
   `/proc/smp_ipi` can trigger a full shootdown rendezvous for diagnostics;
 - the scheduler has SMP-aware task ownership and runqueue protection, but this
   path is still under hardening.
+
+On Raspberry Pi 3, short-descriptor page-table walks must be shareable and
+WBWA, and user PTEs must be non-global for ASID tagging. The current context
+switch still performs a full local `TLBIALL`. Local and inner-shareable
+ASID-only invalidations both exposed stale user instruction mappings on real
+Cortex-A53 hardware even though the same tests passed QEMU. Any future ASID
+optimization therefore needs an explicit per-CPU residency/generation protocol
+and hardware validation; changing only the CP15 invalidation opcode is not a
+valid optimization.
 
 The intended bring-up sequence is deliberately conservative:
 

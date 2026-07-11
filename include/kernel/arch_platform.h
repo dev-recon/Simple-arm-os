@@ -40,8 +40,24 @@
 #define ARMOS_PLATFORM_HAS_PSCI 0u
 #endif
 
+#ifndef ARMOS_PLATFORM_HAS_SMP_IPI
+#define ARMOS_PLATFORM_HAS_SMP_IPI 0u
+#endif
+
 #ifndef ARMOS_PLATFORM_TIMER_FORCE_HZ
 #define ARMOS_PLATFORM_TIMER_FORCE_HZ 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_TIMER_CNTFRQ_QUIRK_HZ
+#define ARMOS_PLATFORM_TIMER_CNTFRQ_QUIRK_HZ 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_TIMER_CNTFRQ_QUIRK_EFFECTIVE_HZ
+#define ARMOS_PLATFORM_TIMER_CNTFRQ_QUIRK_EFFECTIVE_HZ 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_DEFAULT_CPU_COUNT
+#define ARMOS_PLATFORM_DEFAULT_CPU_COUNT 1u
 #endif
 
 #ifndef ARMOS_PLATFORM_UART0_PHYS_SECTION_BASE
@@ -214,6 +230,24 @@ static inline uint32_t arch_platform_timer_force_hz(void)
     return ARMOS_PLATFORM_TIMER_FORCE_HZ;
 }
 
+static inline uint32_t arch_platform_timer_effective_hz(uint32_t cntfrq)
+{
+    if (ARMOS_PLATFORM_TIMER_FORCE_HZ)
+        return ARMOS_PLATFORM_TIMER_FORCE_HZ;
+
+    if (ARMOS_PLATFORM_TIMER_CNTFRQ_QUIRK_HZ &&
+        ARMOS_PLATFORM_TIMER_CNTFRQ_QUIRK_EFFECTIVE_HZ &&
+        cntfrq == ARMOS_PLATFORM_TIMER_CNTFRQ_QUIRK_HZ)
+        return ARMOS_PLATFORM_TIMER_CNTFRQ_QUIRK_EFFECTIVE_HZ;
+
+    return cntfrq ? cntfrq : ARMOS_PLATFORM_TIMER_FALLBACK_HZ;
+}
+
+static inline uint32_t arch_platform_default_cpu_count(void)
+{
+    return ARMOS_PLATFORM_DEFAULT_CPU_COUNT;
+}
+
 static inline paddr_t arch_platform_device_start(void)
 {
     return (paddr_t)ARMOS_PLATFORM_DEVICE_START;
@@ -283,6 +317,11 @@ static inline bool arch_platform_has_emmc(void)
 static inline bool arch_platform_has_psci(void)
 {
     return ARMOS_PLATFORM_HAS_PSCI != 0u;
+}
+
+static inline bool arch_platform_has_smp_ipi(void)
+{
+    return ARMOS_PLATFORM_HAS_SMP_IPI != 0u;
 }
 
 static inline bool arch_platform_has_pl050_keyboard(void)
