@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #define TOP_PROC_BUF 4096
+#define TOP_FRAME_BUF 32768
 #define TOP_MAX_TASKS 128
 #define TOP_HZ 1000
 #define TOP_MAX_CPUS 8
@@ -76,39 +77,22 @@ static struct termios top_saved_termios;
 static int top_termios_saved = 0;
 static unsigned top_cpu_load_x10[TOP_MAX_CPUS];
 static unsigned top_cpu_count = 1;
+static char top_proc_dirbuf[TOP_PROC_BUF];
+static char top_frame_data[TOP_FRAME_BUF];
 
 static void top_buf_free(top_buf_t *buf)
 {
-    free(buf->data);
-    buf->data = NULL;
     buf->len = 0;
-    buf->cap = 0;
 }
 
 static int top_buf_append(top_buf_t *buf, const char *s, int len)
 {
-    char *next;
-    int next_cap;
-
     if (!s || len <= 0)
         return 0;
 
-    if (buf->len + len <= buf->cap) {
-        memcpy(buf->data + buf->len, s, (size_t)len);
-        buf->len += len;
-        return 0;
-    }
-
-    next_cap = buf->cap ? buf->cap : 4096;
-    while (next_cap < buf->len + len)
-        next_cap *= 2;
-
-    next = realloc(buf->data, (size_t)next_cap);
-    if (!next)
+    if (len > buf->cap - buf->len)
         return -1;
 
-    buf->data = next;
-    buf->cap = next_cap;
     memcpy(buf->data + buf->len, s, (size_t)len);
     buf->len += len;
     return 0;
@@ -473,26 +457,19 @@ static void enrich_from_status(top_task_t *task)
 
 static int load_tasks(top_task_t *tasks, int max_tasks)
 {
-    char *dirbuf;
     char statbuf[512];
     int fd;
     int n;
     int count = 0;
 
-    dirbuf = malloc(TOP_PROC_BUF);
-    if (!dirbuf)
-        return 0;
-
     fd = open("/proc", O_RDONLY | O_DIRECTORY, 0);
-    if (fd < 0) {
-        free(dirbuf);
+    if (fd < 0)
         return 0;
-    }
 
-    while ((n = getdents(fd, dirbuf, TOP_PROC_BUF)) > 0 && count < max_tasks) {
-        char *ptr = dirbuf;
+    while ((n = getdents(fd, top_proc_dirbuf, TOP_PROC_BUF)) > 0 && count < max_tasks) {
+        char *ptr = top_proc_dirbuf;
 
-        while (ptr < dirbuf + n && count < max_tasks) {
+        while (ptr < top_proc_dirbuf + n && count < max_tasks) {
             struct linux_dirent *e = (struct linux_dirent *)ptr;
             char path[64];
 
@@ -517,7 +494,6 @@ static int load_tasks(top_task_t *tasks, int max_tasks)
     }
 
     close(fd);
-    free(dirbuf);
     return count;
 }
 
@@ -655,7 +631,11 @@ static void append_cpu(top_buf_t *buf, int cpu)
 
 static void render_top(unsigned delay_sec, int iteration)
 {
-    top_buf_t frame = {0};
+    top_buf_t frame = {
+        .data = top_frame_data,
+        .len = 0,
+        .cap = sizeof(top_frame_data),
+    };
     top_mem_t mem;
     unsigned used_kb;
     unsigned pct_x10;

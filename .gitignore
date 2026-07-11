@@ -60,6 +60,7 @@ output/
 **/.DS_Store
 .idea/
 .vscode/
+CONTEXT_REPRISE*.md
 
 # Third-party archives
 *.tar.gz

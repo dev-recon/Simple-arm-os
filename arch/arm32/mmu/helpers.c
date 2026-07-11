@@ -1288,22 +1288,17 @@ paddr_t get_phys_addr_from_pgdir(pgdir_t pgdir, vaddr_t vaddr)
     // Adresse physique de la L2 table
     paddr_t l2_phys = l1_entry & 0xFFFFFC00;
 
-    vaddr_t l2_virt = map_temp_page(l2_phys);
-
-    if (!l2_virt)
-        return 0;
-
-    //KDEBUG("get_phys_addr_from_pgdir: Temporary page successfuly mapped to 0x%08X...\n", l2_virt);
-    //print_cpu_mode();
-    //debug_mmu_state();
-
-    l2_table_t l2_table = (l2_table_t)l2_virt;
+    /*
+     * User L2 tables are allocator pages in managed RAM and are permanently
+     * reachable through the kernel direct map.  A temporary global mapping
+     * here used to trigger one map and one unmap TLB shootdown for every PTE
+     * lookup, which made fork/COW workloads invalidate the TLB millions of
+     * times for read-only page-table inspection.
+     */
+    l2_table_t l2_table = (l2_table_t)phys_to_virt(l2_phys);
     l2_entry_t l2_entry = l2_table[l2_index];
 
     //KDEBUG("get_phys_addr_from_pgdir: L2 entry calculated...\n");
-
-
-    unmap_temp_page((void*)l2_virt);
 
     uint32_t l2_type = l2_entry & 0x3;
     // Vérifier que c’est une small page
