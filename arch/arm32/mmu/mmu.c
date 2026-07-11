@@ -25,6 +25,7 @@
 #include <kernel/string.h>
 #include <kernel/task.h>
 #include <kernel/tlb.h>
+#include <kernel/spinlock.h>
 #include <kernel/arch_memory.h>
 #include <kernel/uart.h>
 #include <asm/mmu.h>
@@ -78,6 +79,7 @@ static uint32_t current_asid = ASID_KERNEL;
 static uint32_t asid_generation = 1;
 bool asid_map[MAX_ASID + 1] = {true}; /* ASID 0 réservé */
 static uint32_t asid_slot_generation[MAX_ASID + 1];
+static spinlock_t asid_lock = SPINLOCK_INIT("asid_pool");
 
 extern void vectors(void);
 
@@ -156,7 +158,8 @@ static void flush_all_tlb_local(void)
 
 static uint32_t user_page_flags(uint32_t vma_flags, bool writable)
 {
-    uint32_t page_flags = 0x02 | 0x0C | (1u << 10);  /* small page + B/C + S */
+    uint32_t page_flags = 0x02 | 0x0C | (1u << 10) | (1u << 11);
+    /* Small page, cacheable/shareable and non-global so the ASID is honored. */
 
     page_flags |= writable ? PTE_AP_RW_RW : PTE_AP_RW_RO;
     if (!(vma_flags & VMA_EXEC)) {
@@ -848,20 +851,18 @@ void switch_address_space_with_asid(pgdir_t pgdir, uint32_t asid)
         return;
     }
 
-    /* Switch ASID */
+    /* Keep the proven switch ordering while non-global mappings are validated. */
     set_current_asid(asid);
-    data_sync_barrier();                 // dsb
-    instruction_sync_barrier();          // isb
-
-    tlb_shootdown_asid(get_current_asid());
-    //set_ttbr0((uint32_t)pgdir);
     data_sync_barrier();
     instruction_sync_barrier();
 
-    /* Switch TTBR0 */
+    tlb_shootdown_asid(get_current_asid());
+    data_sync_barrier();
+    instruction_sync_barrier();
+
     switch_address_space(pgdir);
-    data_sync_barrier();                 // dsb
-    instruction_sync_barrier();          // is
+    data_sync_barrier();
+    instruction_sync_barrier();
     
     //KDEBUG("Address space switched: pgdir=0x%08X, ASID=%u\n", (uint32_t)pgdir, asid);
 }
@@ -869,12 +870,22 @@ void switch_address_space_with_asid(pgdir_t pgdir, uint32_t asid)
 /* Fonctions publiques pour la gestion ASID */
 uint32_t vm_allocate_asid(void)
 {
-    return allocate_asid();
+    unsigned long flags;
+    uint32_t asid;
+
+    spin_lock_irqsave(&asid_lock, &flags);
+    asid = allocate_asid();
+    spin_unlock_irqrestore(&asid_lock, flags);
+    return asid;
 }
 
 void vm_free_asid(uint32_t asid)
 {
+    unsigned long flags;
+
+    spin_lock_irqsave(&asid_lock, &flags);
     free_asid(asid);
+    spin_unlock_irqrestore(&asid_lock, flags);
 }
 
 uint32_t vm_get_current_asid(void)

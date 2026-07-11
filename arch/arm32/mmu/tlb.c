@@ -92,8 +92,8 @@ static uint32_t tlb_remote_target_mask(tlb_request_kind_t kind, uint32_t asid)
             /*
              * User-ASID invalidations only need a remote rendezvous when that
              * CPU is currently executing the same address-space. Context switch
-             * still performs a local full TLB flush, so stale user entries left
-             * by an earlier run cannot survive task migration.
+             * still performs a local full TLB flush while the ASID path is
+             * validated, so stale entries cannot survive task migration.
              */
             if (task && ((task->context.asid & ASID_MASK) == (asid & ASID_MASK)))
                 mask |= 1u << cpu;
