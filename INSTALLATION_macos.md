@@ -3,17 +3,23 @@
 This guide sets up ArmOS on macOS. The project is primarily developed on Apple
 Silicon, but Intel Homebrew paths are noted where they differ.
 
-ArmOS targets an ARMv7-A Cortex-A15 kernel running on QEMU `virt`.
-The supported v0.6 reference emulator is QEMU 10.0.2. QEMU 11.0.1 has been
-smoke-tested, but its macOS/Cocoa graphical window scaling differs from 10.0.2.
+ArmOS currently targets ARM32. `qemu-virt` is the reference platform for kernel
+features and day-to-day development. Raspberry Pi 3 running AArch32 is the
+reference hardware platform; see [docs/RASPBERRY_PI3.md](docs/RASPBERRY_PI3.md)
+for SD-card and UART setup.
+
+The reproducible v0.6 emulator baseline is QEMU 10.0.2. Newer releases can be
+used for compatibility testing, but should not silently replace the baseline.
 
 ## Disk Layout
 
-The default generated disk layout is:
+The build creates intermediate `ext2.img` and `fat32.img` files, then publishes
+platform-specific artifacts under `build/images/`:
 
-- `ext2.img`: 512 MB primary root filesystem, mounted as `/`
-- `fat32.img`: secondary compatibility filesystem, mounted as `/mnt`
-- `disk.img`: MBR at sector 0, ext2 as partition 1, FAT32 as partition 2
+- `kernel-qemu-virt.bin` and `disk-qemu-virt.img`: QEMU development images;
+  ext2 root is partition 1 and FAT32 compatibility storage is partition 2
+- `kernel-pi3.bin` and `disk-pi3.img`: PI3 hardware images; hidden FAT32 boot
+  is partition 1 and ext2 root is partition 2
 
 Generated images are build artifacts and should not be committed.
 
@@ -38,6 +44,8 @@ On Intel Macs, Homebrew usually lives under `/usr/local` instead of
 
 ```sh
 brew install make
+brew install git
+brew install python
 brew install arm-none-eabi-gcc
 brew install qemu
 brew install mtools
@@ -45,11 +53,14 @@ brew install dosfstools
 brew install e2fsprogs
 brew install curl
 brew install xz
+brew install glib pixman ninja pkg-config
 ```
 
 Tool purpose:
 
 - `make`: GNU make used by the root, libc, kernel, and userland Makefiles
+- `git`: source checkout and QEMU fallback subproject retrieval
+- `python`: host Python used by ArmOS image tools and QEMU's build system
 - `arm-none-eabi-gcc`: ARM bare-metal compiler, assembler, linker, and binutils
 - `qemu`: `qemu-system-arm`
 - `mtools`: FAT image manipulation (`mcopy`, `mmd`, `mdir`)
@@ -57,6 +68,34 @@ Tool purpose:
 - `e2fsprogs`: ext2 tools (`mke2fs`, `debugfs`, `e2fsck`)
 - `curl`: optional newlib source download when the local archive is absent
 - `xz`: archive support for some upstream source packages
+- `glib`, `pixman`, `ninja`, `pkg-config`: host dependencies for the exact
+  repo-local QEMU 10.0.2 build
+
+`brew install qemu` installs Homebrew's current QEMU release, not necessarily
+10.0.2. Keep it as a convenient fallback, or use the pinned build below.
+
+### Install Exactly QEMU 10.0.2
+
+The reliable method is to build the official source release in an isolated,
+repo-local prefix:
+
+```sh
+./tools/build_qemu_10_0_2.sh
+```
+
+The script downloads the [official QEMU 10.0.2 source archive](https://download.qemu.org/qemu-10.0.2.tar.xz),
+checks its pinned SHA-256, builds only `arm-softmmu`, and installs it under:
+
+```text
+build/qemu-10.0.2/install/bin/qemu-system-arm
+```
+
+ArmOS boot scripts automatically prefer that binary. Homebrew's `brew pin`
+only prevents upgrades after a version has been installed; it cannot install
+10.0.2 when the formula history no longer exposes it. `brew extract` can create
+a historical formula in a personal tap, but that formula is user-maintained and
+less reproducible than the source build. See the
+[Homebrew versioning documentation](https://docs.brew.sh/Versions).
 
 ## 3. Configure PATH
 
@@ -95,13 +134,16 @@ debugfs -V
 e2fsck -V
 ```
 
-For ArmOS v0.6, `qemu-system-arm --version` should ideally report QEMU 10.0.2.
-The scripts also accept an explicit QEMU binary:
+For a strict baseline run, make a version mismatch fatal:
 
 ```sh
-QEMU=/opt/qemu-11.0.1/bin/qemu-system-arm ./boot.sh
-QEMU=/opt/qemu-11.0.1/bin/qemu-system-arm ./boot-graphics.sh
+QEMU_REQUIRED_VERSION=10.0.2 ./boot.sh
+QEMU_REQUIRED_VERSION=10.0.2 ./boot-graphics.sh
 ```
+
+The scripts also accept an explicit QEMU binary through `QEMU=/path/to/qemu-system-arm`
+or as their first argument. Explicit selection takes precedence over the
+repo-local pinned build.
 
 If `mke2fs`, `debugfs`, or `e2fsck` are not found, your shell is missing the
 `e2fsprogs` sbin path.
@@ -111,15 +153,15 @@ If `mke2fs`, `debugfs`, or `e2fsck` are not found, your shell is missing the
 ```sh
 git clone https://github.com/dev-recon/Simple-arm-os.git arm-os
 cd arm-os
-chmod +x run.sh boot.sh tools/build_newlib.sh
+chmod +x run.sh boot.sh tools/build_newlib.sh tools/build_qemu_10_0_2.sh
 ./run.sh
 ```
 
 `run.sh` performs a full local rebuild:
 
 1. rebuilds libc/userland pieces
-2. rebuilds `kernel.bin`
-3. recreates `fat32.img`, `ext2.img`, and `disk.img`
+2. rebuilds `build/images/kernel-qemu-virt.bin`
+3. recreates `build/images/disk-qemu-virt.img`
 4. boots QEMU
 
 At the `mash$>` prompt, a quick smoke test is:
@@ -143,14 +185,14 @@ Ctrl+A, then X
 Build kernel only:
 
 ```sh
-make kernel.bin
+TARGET_PLATFORM=qemu-virt make platform-kernel
 ```
 
 Rebuild disk images only:
 
 ```sh
-rm -f disk.img ext2.img fat32.img
-make disk.img
+rm -f disk.img ext2.img fat32.img build/images/disk-qemu-virt.img
+TARGET_PLATFORM=qemu-virt make platform-disk
 ```
 
 Inspect generated filesystems:
@@ -162,7 +204,7 @@ make check-disk
 Verify ext2 without modifying it:
 
 ```sh
-e2fsck -fn ext2.img
+$(brew --prefix e2fsprogs)/sbin/e2fsck -fn ext2.img
 ```
 
 Boot without rebuilding:
@@ -325,8 +367,8 @@ Ctrl+A, then X
 `make clean` removes kernel objects and binaries. To force fresh disk images:
 
 ```sh
-rm -f disk.img ext2.img fat32.img
-make disk.img
+rm -f disk.img ext2.img fat32.img build/images/disk-qemu-virt.img
+TARGET_PLATFORM=qemu-virt make platform-disk
 ```
 
 `./run.sh` already removes and recreates these images before booting.

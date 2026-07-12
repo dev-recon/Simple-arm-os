@@ -38,21 +38,8 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
 NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$DEFAULT_NEWLIB_SYSROOT}"
 
-select_qemu() {
-    if [ -n "${1:-}" ]; then
-        printf '%s\n' "$1"
-    elif [ -n "${QEMU:-}" ]; then
-        printf '%s\n' "$QEMU"
-    elif [ -x /opt/homebrew/bin/qemu-system-arm ]; then
-        printf '%s\n' /opt/homebrew/bin/qemu-system-arm
-    elif [ -x /usr/local/bin/qemu-system-arm ]; then
-        printf '%s\n' /usr/local/bin/qemu-system-arm
-    else
-        printf '%s\n' qemu-system-arm
-    fi
-}
-
-QEMU="$(select_qemu "${1:-}")"
+. "$ROOT_DIR/tools/qemu_helpers.sh"
+QEMU="$(select_arm_qemu "${1:-}" "$ROOT_DIR")"
 
 echo "=== RUN KERNEL SCRIPT ==="
 echo "Target: ${TARGET_ARCH}/${TARGET_PLATFORM}"
@@ -77,6 +64,7 @@ if ! command -v "$QEMU" >/dev/null 2>&1; then
     echo "Error: QEMU binary '$QEMU' not found"
     exit 1
 fi
+require_qemu_version "$QEMU"
 
 if [ "$BUILD_NEWLIB" = "1" ]; then
     if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_SYSROOT/lib/libc.a" ]; then

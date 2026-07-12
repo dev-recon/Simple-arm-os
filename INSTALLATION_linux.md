@@ -3,17 +3,23 @@
 This guide sets up ArmOS on Linux. Debian and Ubuntu are the primary reference
 distributions for now.
 
-ArmOS targets an ARMv7-A Cortex-A15 kernel running on QEMU `virt`.
-The supported v0.6 reference emulator is QEMU 10.0.2. Other QEMU versions may
-work, but 10.0.2 is the version to use when reproducing release behavior.
+ArmOS currently targets ARM32. `qemu-virt` is the reference platform for kernel
+features and day-to-day development. Raspberry Pi 3 running AArch32 is the
+reference hardware platform; see [docs/RASPBERRY_PI3.md](docs/RASPBERRY_PI3.md)
+for SD-card and UART setup.
+
+The reproducible v0.6 emulator baseline is QEMU 10.0.2. Newer releases can be
+used for compatibility testing, but should not silently replace the baseline.
 
 ## Disk Layout
 
-The default generated disk layout is:
+The build creates intermediate `ext2.img` and `fat32.img` files, then publishes
+platform-specific artifacts under `build/images/`:
 
-- `ext2.img`: 512 MB primary root filesystem, mounted as `/`
-- `fat32.img`: secondary compatibility filesystem, mounted as `/mnt`
-- `disk.img`: MBR at sector 0, ext2 as partition 1, FAT32 as partition 2
+- `kernel-qemu-virt.bin` and `disk-qemu-virt.img`: QEMU development images;
+  ext2 root is partition 1 and FAT32 compatibility storage is partition 2
+- `kernel-pi3.bin` and `disk-pi3.img`: PI3 hardware images; hidden FAT32 boot
+  is partition 1 and ext2 root is partition 2
 
 Generated images are build artifacts and should not be committed.
 
@@ -35,7 +41,12 @@ sudo apt install -y \
   qemu-utils \
   mtools \
   dosfstools \
-  e2fsprogs
+  e2fsprogs \
+  ninja-build \
+  pkg-config \
+  python3-venv \
+  libglib2.0-dev \
+  libpixman-1-dev
 ```
 
 Tool purpose:
@@ -47,6 +58,37 @@ Tool purpose:
 - `dosfstools`: FAT image creation (`mkfs.fat`)
 - `e2fsprogs`: ext2 tools (`mke2fs`, `debugfs`, `e2fsck`)
 - `curl`, `xz-utils`: optional source package download/extraction helpers
+- `ninja-build`, `pkg-config`, `python3-venv`, `libglib2.0-dev`,
+  `libpixman-1-dev`: host dependencies for the exact QEMU 10.0.2 build
+
+### Install Exactly QEMU 10.0.2
+
+The distro package installs the version carried by the configured Debian or
+Ubuntu release. The reliable cross-distribution method is an isolated source
+build:
+
+```sh
+./tools/build_qemu_10_0_2.sh
+```
+
+The script downloads the [official QEMU 10.0.2 source archive](https://download.qemu.org/qemu-10.0.2.tar.xz),
+checks its pinned SHA-256, builds only `arm-softmmu`, and installs it under:
+
+```text
+build/qemu-10.0.2/install/bin/qemu-system-arm
+```
+
+ArmOS boot scripts automatically prefer that binary. APT can install an exact
+package only if that package version is present in the configured repositories:
+
+```sh
+apt-cache madison qemu-system-arm
+sudo apt install qemu-system-arm='EXACT_APT_VERSION'
+sudo apt-mark hold qemu-system-arm
+```
+
+The APT version includes distro epoch/revision fields and usually does not map
+to a portable `10.0.2` command, so the source build is the documented baseline.
 
 ## 2. Verify The Toolchain
 
@@ -64,20 +106,27 @@ debugfs -V
 e2fsck -V
 ```
 
+For a strict baseline run, make a version mismatch fatal:
+
+```sh
+QEMU_REQUIRED_VERSION=10.0.2 ./boot.sh
+QEMU_REQUIRED_VERSION=10.0.2 ./boot-graphics.sh
+```
+
 ## 3. Clone And Build
 
 ```sh
 git clone https://github.com/dev-recon/Simple-arm-os.git arm-os
 cd arm-os
-chmod +x run.sh boot.sh tools/build_newlib.sh
+chmod +x run.sh boot.sh tools/build_newlib.sh tools/build_qemu_10_0_2.sh
 ./run.sh
 ```
 
 `run.sh` performs a full local rebuild:
 
 1. rebuilds libc/userland pieces
-2. rebuilds `kernel.bin`
-3. recreates `fat32.img`, `ext2.img`, and `disk.img`
+2. rebuilds `build/images/kernel-qemu-virt.bin`
+3. recreates `build/images/disk-qemu-virt.img`
 4. boots QEMU
 
 At the `mash$>` prompt, a quick smoke test is:
@@ -101,14 +150,14 @@ Ctrl+A, then X
 Build kernel only:
 
 ```sh
-make kernel.bin
+TARGET_PLATFORM=qemu-virt make platform-kernel
 ```
 
 Rebuild disk images only:
 
 ```sh
-rm -f disk.img ext2.img fat32.img
-make disk.img
+rm -f disk.img ext2.img fat32.img build/images/disk-qemu-virt.img
+TARGET_PLATFORM=qemu-virt make platform-disk
 ```
 
 Inspect generated filesystems:
@@ -249,7 +298,7 @@ Ctrl+A, then X
 ### Permission problems on scripts
 
 ```sh
-chmod +x run.sh boot.sh tools/build_newlib.sh
+chmod +x run.sh boot.sh tools/build_newlib.sh tools/build_qemu_10_0_2.sh
 ```
 
 ### Fresh disk images
@@ -257,8 +306,8 @@ chmod +x run.sh boot.sh tools/build_newlib.sh
 To force fresh disk images:
 
 ```sh
-rm -f disk.img ext2.img fat32.img
-make disk.img
+rm -f disk.img ext2.img fat32.img build/images/disk-qemu-virt.img
+TARGET_PLATFORM=qemu-virt make platform-disk
 ```
 
 `./run.sh` already removes and recreates these images before booting.

@@ -13,19 +13,7 @@ export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
-select_qemu() {
-    if [ -n "${1:-}" ]; then
-        printf '%s\n' "$1"
-    elif [ -n "${QEMU:-}" ]; then
-        printf '%s\n' "$QEMU"
-    elif [ -x /opt/homebrew/bin/qemu-system-arm ]; then
-        printf '%s\n' /opt/homebrew/bin/qemu-system-arm
-    elif [ -x /usr/local/bin/qemu-system-arm ]; then
-        printf '%s\n' /usr/local/bin/qemu-system-arm
-    else
-        printf '%s\n' qemu-system-arm
-    fi
-}
+. "$ROOT_DIR/tools/qemu_helpers.sh"
 
 select_display() {
     if [ -n "${QEMU_DISPLAY:-}" ]; then
@@ -52,7 +40,7 @@ select_display() {
     esac
 }
 
-QEMU="$(select_qemu "${1:-}")"
+QEMU="$(select_arm_qemu "${1:-}" "$ROOT_DIR")"
 . "$ROOT_DIR/tools/qemu_platform_env.sh"
 QEMU_DISPLAY="$(select_display)"
 SMP_CPUS="${SMP_CPUS:-${QEMU_SMP}}"
@@ -80,6 +68,7 @@ if ! command -v "$QEMU" >/dev/null 2>&1; then
     echo "Error: QEMU binary '$QEMU' not found"
     exit 1
 fi
+require_qemu_version "$QEMU"
 
 if [ -z "${GPU_DEVICE}" ]; then
     echo "Error: platform '${TARGET_ARCH}/${TARGET_PLATFORM}' does not define a QEMU GPU device"
