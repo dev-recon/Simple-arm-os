@@ -4,9 +4,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ARCH="${ARCH:-arm-none-eabi-}"
 TARGET_ARCH="${TARGET_ARCH:-arm32}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
+if [ "$TARGET_ARCH" = "arm64" ]; then
+    ARCH="${ARCH:-aarch64-elf-}"
+else
+    ARCH="${ARCH:-arm-none-eabi-}"
+fi
 BUILD_XV_DEPS="${BUILD_XV_DEPS:-0}"
 BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 BUILD_BSD="${BUILD_BSD:-0}"
@@ -43,6 +47,23 @@ cd "$ROOT_DIR"
 
 echo "=== BUILD ARMOS ==="
 echo "Target: ${TARGET_ARCH}/${TARGET_PLATFORM}"
+
+if [ "$TARGET_ARCH" = "arm64" ]; then
+    for tool in make "${ARCH}gcc" "${ARCH}ld" "${ARCH}objcopy" "${ARCH}objdump"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "Error: required ARM64 bootstrap tool '$tool' not found" >&2
+            exit 1
+        fi
+    done
+
+    echo "=== Building ARM64 serial bootstrap ==="
+    make platform-kernel \
+        ARCH="$ARCH" CROSS_COMPILE="$ARCH" \
+        TARGET_ARCH="$TARGET_ARCH" TARGET_PLATFORM="$TARGET_PLATFORM"
+    echo "=== ARM64 BOOTSTRAP BUILD DONE ==="
+    echo "Kernel image: build/images/kernel-arm64-qemu-virt.bin"
+    exit 0
+fi
 
 for dir in userfs userland kernel newlib-port; do
     if [ ! -d "$dir" ]; then

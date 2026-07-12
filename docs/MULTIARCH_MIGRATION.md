@@ -192,14 +192,32 @@ The hardware build and validation contract is documented in
 
 ## Phase D - AArch64
 
-AArch64 should start only after ARM32/QEMU `virt` and the second ARM32 target
-share the same platform seams.
+Status: started on `TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt`.
 
-Expected new AArch64 pieces:
+The first executable milestone now provides an isolated EL1 serial bootstrap:
 
-- EL1 boot path;
-- AArch64 exception vectors;
-- long-descriptor MMU;
+- AArch64 image linked at `0x40080000`;
+- EL2-to-EL1h transition when required;
+- boot stack and BSS initialization;
+- PL011 output and DTB handoff diagnostics;
+- a complete EL1 vector table, architecture-local exception frame, synchronous
+  fault diagnostics, and a recoverable BRK/ERET smoke test;
+- a 4 KiB/39-bit long-descriptor identity map with distinct Device and normal
+  memory attributes, plus AT/PAR translation checks;
+- GICv2 CPU/distributor initialization and a three-interrupt physical timer PPI
+  smoke test through the EL1h IRQ vector;
+- architecture-neutral early physical-page allocation with reservation,
+  contiguous allocation, free, reuse, and memory-integrity smoke tests;
+- dependency-free FDT discovery of RAM, firmware reservations,
+  `/reserved-memory`, and the DTB blob itself;
+- separate ARM64 artifacts so ARM32 platform images are not overwritten.
+
+See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
+
+Remaining AArch64 pieces:
+
+- synchronization and full physical-allocator integration;
+- managed long-descriptor MMU and the final kernel/user VA split;
 - AArch64 syscall ABI;
 - AArch64 context switch;
 - AArch64 signal frame;

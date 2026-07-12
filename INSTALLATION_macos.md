@@ -84,10 +84,12 @@ repo-local prefix:
 ```
 
 The script downloads the [official QEMU 10.0.2 source archive](https://download.qemu.org/qemu-10.0.2.tar.xz),
-checks its pinned SHA-256, builds only `arm-softmmu`, and installs it under:
+checks its pinned SHA-256, builds `arm-softmmu` and `aarch64-softmmu`, and
+installs the binaries under:
 
 ```text
 build/qemu-10.0.2/install/bin/qemu-system-arm
+build/qemu-10.0.2/install/bin/qemu-system-aarch64
 ```
 
 ArmOS boot scripts automatically prefer that binary. Homebrew's `brew pin`

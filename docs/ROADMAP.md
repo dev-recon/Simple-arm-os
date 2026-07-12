@@ -17,7 +17,10 @@ The v0.6 baseline is:
 - newlib is the supported libc;
 - TinyCC is the native end-user compiler path;
 - ncurses and nano are optional generated bundles;
-- multi-arch work has phase-0 foundations but no second architecture yet.
+- multi-arch work includes an ARM64/QEMU-virt EL1 serial bootstrap, exception
+  vectors, a minimal long-descriptor identity MMU, GICv2/generic-timer IRQ
+  delivery, a shared early page allocator, and FDT-driven RAM/reservation
+  discovery; the full Unix kernel and userland remain ARM32.
 
 Post-v0.6 hardware milestone:
 

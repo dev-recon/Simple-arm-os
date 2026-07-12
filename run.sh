@@ -32,19 +32,45 @@ else
 fi
 TARGET_ARCH="${TARGET_ARCH:-arm32}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
-ARCH="${ARCH:-arm-none-eabi-}"
+if [ "$TARGET_ARCH" = "arm64" ]; then
+    ARCH="${ARCH:-aarch64-elf-}"
+else
+    ARCH="${ARCH:-arm-none-eabi-}"
+fi
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
 NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$DEFAULT_NEWLIB_SYSROOT}"
 
 . "$ROOT_DIR/tools/qemu_helpers.sh"
-QEMU="$(select_arm_qemu "${1:-}" "$ROOT_DIR")"
+QEMU="$(select_arm_qemu "${1:-}" "$ROOT_DIR" "$TARGET_ARCH")"
 
 echo "=== RUN KERNEL SCRIPT ==="
 echo "Target: ${TARGET_ARCH}/${TARGET_PLATFORM}"
 
 cd "$ROOT_DIR"
+
+if [ "$TARGET_ARCH" = "arm64" ]; then
+    for tool in make "${ARCH}gcc" "${ARCH}ld" "${ARCH}objcopy" "${ARCH}objdump"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "Error: required ARM64 bootstrap tool '$tool' not found" >&2
+            exit 1
+        fi
+    done
+    if ! command -v "$QEMU" >/dev/null 2>&1; then
+        echo "Error: QEMU binary '$QEMU' not found" >&2
+        exit 1
+    fi
+    require_qemu_version "$QEMU"
+
+    echo "=== Building ARM64 serial bootstrap ==="
+    make platform-kernel \
+        ARCH="$ARCH" CROSS_COMPILE="$ARCH" \
+        TARGET_ARCH="$TARGET_ARCH" TARGET_PLATFORM="$TARGET_PLATFORM"
+    echo "=== Booting ARM64 serial bootstrap ==="
+    QEMU="$QEMU" TARGET_ARCH="$TARGET_ARCH" TARGET_PLATFORM="$TARGET_PLATFORM" ./boot.sh
+    exit 0
+fi
 
 for dir in "$USERFS_DIR" "$USERLAND_DIR"; do
     if [ ! -d "$dir" ]; then

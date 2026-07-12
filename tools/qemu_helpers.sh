@@ -6,7 +6,14 @@ QEMU_PINNED_VERSION="${QEMU_PINNED_VERSION:-10.0.2}"
 select_arm_qemu() {
     local explicit="${1:-}"
     local root_dir="${2:?repository root is required}"
-    local pinned_qemu="$root_dir/build/qemu-$QEMU_PINNED_VERSION/install/bin/qemu-system-arm"
+    local target_arch="${3:-arm32}"
+    local qemu_name="qemu-system-arm"
+    local pinned_qemu
+
+    if [ "$target_arch" = "arm64" ]; then
+        qemu_name="qemu-system-aarch64"
+    fi
+    pinned_qemu="$root_dir/build/qemu-$QEMU_PINNED_VERSION/install/bin/$qemu_name"
 
     if [ -n "$explicit" ]; then
         printf '%s\n' "$explicit"
@@ -14,12 +21,12 @@ select_arm_qemu() {
         printf '%s\n' "$QEMU"
     elif [ -x "$pinned_qemu" ]; then
         printf '%s\n' "$pinned_qemu"
-    elif [ -x /opt/homebrew/bin/qemu-system-arm ]; then
-        printf '%s\n' /opt/homebrew/bin/qemu-system-arm
-    elif [ -x /usr/local/bin/qemu-system-arm ]; then
-        printf '%s\n' /usr/local/bin/qemu-system-arm
+    elif [ -x "/opt/homebrew/bin/$qemu_name" ]; then
+        printf '%s\n' "/opt/homebrew/bin/$qemu_name"
+    elif [ -x "/usr/local/bin/$qemu_name" ]; then
+        printf '%s\n' "/usr/local/bin/$qemu_name"
     else
-        printf '%s\n' qemu-system-arm
+        printf '%s\n' "$qemu_name"
     fi
 }
 

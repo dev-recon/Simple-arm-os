@@ -1,8 +1,10 @@
 # ArmOS
 
-ArmOS is a small 32-bit ARM Unix-like kernel for QEMU and Raspberry Pi
-experiments. The v0.6 reference platform remains QEMU `virt` / Cortex-A15;
-Raspberry Pi 3 is available as a dedicated AArch32 hardware target.
+ArmOS is a small ARM Unix-like kernel for QEMU and Raspberry Pi experiments.
+The complete v0.6 kernel and userland remain 32-bit, with QEMU `virt` /
+Cortex-A15 as the feature-development reference and Raspberry Pi 3 as the
+AArch32 hardware reference. An isolated AArch64/QEMU-virt EL1 serial bootstrap
+now starts the ARM64 port.
 
 It started as a learning experiment: can a Linux-like ARM kernel be built from
 scratch, with modern tooling and AI-assisted development? It is now a usable
@@ -55,6 +57,11 @@ ArmOS currently provides:
 
 - ARMv7-A kernel running on QEMU `virt` / Cortex-A15
 - Raspberry Pi 3 AArch32 hardware target running on Cortex-A53
+- initial AArch64 QEMU `virt` bootstrap reaching EL1 with PL011 diagnostics,
+  a complete exception-vector table, a recoverable BRK/ERET smoke test, and a
+  4 KiB long-descriptor identity MMU with Device/normal memory attributes,
+  plus GICv2 physical-timer IRQ delivery through the EL1h vector and a shared
+  early physical-page allocator driven by FDT RAM and reservation discovery
 - MMU enabled with split TTBR0/TTBR1 address spaces
 - ASID support and ASID rollover handling
 - typed physical/virtual address groundwork (`paddr_t`, `vaddr_t`, `pfn_t`)
@@ -120,6 +127,9 @@ Hardware development platform:
 
 See [Raspberry Pi 3 AArch32](docs/RASPBERRY_PI3.md) for the build, SD-card,
 UART, validation, and current limitation contracts.
+
+See [ARM64 Port](docs/ARM64_PORT.md) for the AArch64 bootstrap contract,
+toolchain, validation marker, and staged migration plan.
 
 ### CPU Support Contract
 
@@ -304,7 +314,7 @@ Planned cleanup work includes:
 - lowering warning noise
 - shrinking kernel size
 - isolating architecture-specific ARM32 code more cleanly
-- restarting the multi-arch branch from the V0.6 baseline
+- advancing the ARM64 port from its EL1 serial bootstrap
 
 ## Roadmap
 
@@ -320,7 +330,8 @@ Near-term work:
 Medium-term ideas:
 
 - improve POSIX compatibility for larger userland packages
-- evaluate AArch64 and Raspberry Pi ports
+- extend ARM64 early allocation into the synchronized physical allocator and
+  dynamically managed page tables
 
 See [`ROADMAP.md`](ROADMAP.md) for more detail.
 

@@ -59,10 +59,10 @@ fi
 mkdir -p "$BUILD_DIR" "$PREFIX"
 cd "$BUILD_DIR"
 
-echo "=== Configuring QEMU $QEMU_VERSION (arm-softmmu) ==="
+echo "=== Configuring QEMU $QEMU_VERSION (ARM32 + ARM64 system emulation) ==="
 "$SOURCE_DIR/configure" \
     --prefix="$PREFIX" \
-    --target-list=arm-softmmu \
+    --target-list=arm-softmmu,aarch64-softmmu \
     --disable-docs \
     --disable-werror
 
@@ -70,15 +70,17 @@ echo "=== Building QEMU $QEMU_VERSION ==="
 make -j"$JOBS"
 make install
 
-QEMU_BINARY="$PREFIX/bin/qemu-system-arm"
-version_line="$("$QEMU_BINARY" --version | head -n 1)"
-detected_version="$(printf '%s\n' "$version_line" | sed -n 's/^QEMU emulator version \([^ ]*\).*/\1/p')"
-if [ "$detected_version" != "$QEMU_VERSION" ]; then
-    echo "error: unexpected installed QEMU version: $version_line" >&2
-    exit 1
-fi
+for qemu_name in qemu-system-arm qemu-system-aarch64; do
+    QEMU_BINARY="$PREFIX/bin/$qemu_name"
+    version_line="$("$QEMU_BINARY" --version | head -n 1)"
+    detected_version="$(printf '%s\n' "$version_line" | sed -n 's/^QEMU emulator version \([^ ]*\).*/\1/p')"
+    if [ "$detected_version" != "$QEMU_VERSION" ]; then
+        echo "error: unexpected installed QEMU version: $version_line" >&2
+        exit 1
+    fi
+    echo "Installed: $QEMU_BINARY"
+done
 
 echo
-echo "Installed: $QEMU_BINARY"
 echo "$version_line"
 echo "ArmOS boot scripts will prefer this repo-local binary automatically."

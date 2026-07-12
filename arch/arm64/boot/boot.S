@@ -1,0 +1,88 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * AArch64 milestone 1 entry for QEMU virt.
+ */
+
+.section .text.boot
+.align 7
+.global _start
+.type _start, %function
+
+.extern arm64_early_main
+.extern arm64_vectors
+.extern __bss_start
+.extern __bss_end
+.extern __stack_top
+
+_start:
+    msr daifset, #0xf
+
+    /* Preserve the QEMU DTB pointer while establishing the execution level. */
+    mov x20, x0
+
+    mrs x1, mpidr_el1
+    and x1, x1, #0xff
+    cbnz x1, .Lsecondary_park
+
+    mrs x1, CurrentEL
+    lsr x1, x1, #2
+    cmp x1, #2
+    b.eq .Ldrop_from_el2
+    cmp x1, #1
+    b.eq .Lenter_el1
+    b .Lbad_el
+
+.Ldrop_from_el2:
+    /* Run EL1 as AArch64 and return with interrupts masked on the EL1h stack. */
+    mov x2, #(1 << 31)
+    msr hcr_el2, x2
+    mrs x2, cnthctl_el2
+    orr x2, x2, #3
+    msr cnthctl_el2, x2
+    msr cntvoff_el2, xzr
+    mov x2, #0x3c5
+    msr spsr_el2, x2
+    adr x2, .Lenter_el1
+    msr elr_el2, x2
+    ldr x2, =__stack_top
+    msr sp_el1, x2
+    eret
+
+.Lenter_el1:
+    msr spsel, #1
+    isb
+    ldr x1, =__stack_top
+    mov sp, x1
+
+    ldr x1, =__bss_start
+    ldr x2, =__bss_end
+.Lclear_bss:
+    cmp x1, x2
+    b.hs .Lbss_done
+    str xzr, [x1], #8
+    b .Lclear_bss
+
+.Lbss_done:
+    ldr x1, =arm64_vectors
+    msr vbar_el1, x1
+    isb
+
+    mov x0, x20
+    bl arm64_early_main
+
+.Lhalt:
+    wfe
+    b .Lhalt
+
+.Lsecondary_park:
+    wfe
+    b .Lsecondary_park
+
+.Lbad_el:
+    wfe
+    b .Lbad_el
+
+.size _start, . - _start

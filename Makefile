@@ -1,6 +1,14 @@
 # ArmOS kernel Makefile
 
-CROSS_COMPILE = arm-none-eabi-
+TARGET_ARCH ?= arm32
+TARGET_PLATFORM ?= qemu-virt
+
+ifeq ($(TARGET_ARCH),arm64)
+CROSS_COMPILE ?= aarch64-elf-
+else
+CROSS_COMPILE ?= arm-none-eabi-
+endif
+
 CC = $(CROSS_COMPILE)gcc
 AS = $(CROSS_COMPILE)as
 LD = $(CROSS_COMPILE)ld
@@ -9,8 +17,6 @@ OBJDUMP = $(CROSS_COMPILE)objdump
 QEMU ?= qemu-system-arm
 SMP_CPUS ?= 1
 BUILD_DIR = build
-TARGET_ARCH ?= arm32
-TARGET_PLATFORM ?= qemu-virt
 IMAGE_DIR ?= $(BUILD_DIR)/images
 ARCH_DIR = arch/$(TARGET_ARCH)
 ARCH_INCLUDE = $(ARCH_DIR)/include
@@ -26,6 +32,9 @@ PLATFORM_MK = $(PLATFORM_DIR)/platform.mk
 ifeq ($(TARGET_ARCH),arm32)
 ARCH_CFLAGS = -marm -mfpu=neon-vfpv4 -mfloat-abi=soft \
               -mno-unaligned-access -DARMV7A_KERNEL -DARMOS_ARCH_BITS=32
+else ifeq ($(TARGET_ARCH),arm64)
+ARCH_CFLAGS = -march=armv8-a -mgeneral-regs-only \
+              -DARMV8A_KERNEL -DARMOS_ARCH_BITS=64
 else
 $(error Unsupported TARGET_ARCH '$(TARGET_ARCH)')
 endif
@@ -37,6 +46,8 @@ include $(PLATFORM_MK)
 
 # CORRECTION 2: Flags specifiques pour corriger les operations mathematiques
 MATH_FLAGS = -fno-builtin-div -fno-builtin-mod
+STACK_PROTECTOR_FLAG ?= -fstack-protector
+LINKER_SCRIPT ?= linker.ld
 
 # Flags de compilation
 ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated $(PLATFORM_ASFLAGS)
@@ -44,14 +55,14 @@ ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated $(PLATFORM_ASF
 CFLAGS = -std=gnu99 $(ARCH_CFLAGS) $(PLATFORM_CFLAGS) $(MATH_FLAGS) \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
          -Wall -Wextra -Werror -g -O0 -fno-omit-frame-pointer -Wformat -Wformat-security \
-         -fno-builtin -fstack-protector -Wno-unused-function \
+         -fno-builtin $(STACK_PROTECTOR_FLAG) -Wno-unused-function \
          -MMD -MP \
          -fno-pic -fno-pie \
          -I$(ARCH_INCLUDE) \
          -Iinclude
 # Flags du linker. Platform --defsym values must precede -T so linker.ld sees
 # them while evaluating parametric addresses.
-LDFLAGS = $(PLATFORM_LDFLAGS) -T linker.ld -nostdlib -Map=kernel.map
+LDFLAGS = $(PLATFORM_LDFLAGS) -T $(LINKER_SCRIPT) -nostdlib -Map=kernel.map
 
 TASK_OBJS = kernel/task/task.o \
             $(ARCH_DIR)/task/task_switch.o \
@@ -105,6 +116,22 @@ KERNEL_OBJS = \
 	kernel/syscalls/shm.o \
 	kernel/syscalls/process_syscalls.o \
 	$(ARCH_DIR)/user/userspace.o
+
+ifeq ($(TARGET_ARCH),arm64)
+# ARM64 milestone 1 is an intentionally small serial bootstrap. Generic kernel
+# subsystems move across only after EL1 entry and the host tooling are stable.
+TASK_OBJS =
+LIB_OBJ =
+KERNEL_OBJS = \
+	$(ARCH_DIR)/boot/boot.o \
+	$(ARCH_DIR)/interrupt/vectors.o \
+	$(ARCH_DIR)/interrupt/exception.o \
+	$(ARCH_DIR)/interrupt/irq.o \
+	$(ARCH_DIR)/mmu/mmu.o \
+	kernel/lib/fdt_memory.o \
+	kernel/memory/early_page_allocator.o \
+	$(PLATFORM_DIR)/early_console.o
+endif
 
 # Tous les objets
 ALL_OBJS = $(KERNEL_OBJS) $(LIB_OBJ) $(TASK_OBJS)
@@ -160,7 +187,7 @@ KERNEL_BIN = $(TARGET).bin
 all: platform-kernel platform-disk
 
 # Linkage
-$(KERNEL_ELF): $(ALL_OBJS) linker.ld
+$(KERNEL_ELF): $(ALL_OBJS) $(LINKER_SCRIPT)
 	$(LD) $(LDFLAGS) $(ALL_OBJS) -o $@
 
 # Conversion en binaire
@@ -210,8 +237,13 @@ $(ASM_OFFSETS_H): $(ASM_OFFSETS_SRC) include/kernel/task.h $(BUILD_CONFIG_STAMP)
 %.o: %.c $(BUILD_CONFIG_STAMP)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+ifeq ($(TARGET_ARCH),arm64)
+%.o: %.S $(BUILD_CONFIG_STAMP)
+	$(AS) $(ASFLAGS) $< -o $@
+else
 %.o: %.S $(ASM_OFFSETS_H) $(BUILD_CONFIG_STAMP)
 	$(AS) $(ASFLAGS) $< -o $@
+endif
 
 # Partition FAT32 de boot. Elle reste volontairement vide au build generique :
 # les firmwares Raspberry Pi, le kernel et config.txt sont stages ensuite par
