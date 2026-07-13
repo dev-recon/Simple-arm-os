@@ -71,11 +71,16 @@ arm64_user_task_probe_entry:
 .type arm64_el0_payload_start, %function
 .equ ARMOS_NR_EXIT,  1
 .equ ARMOS_NR_FORK,  2
+.equ ARMOS_NR_READ,  3
 .equ ARMOS_NR_WRITE, 4
+.equ ARMOS_NR_OPEN,  5
+.equ ARMOS_NR_CLOSE, 6
 .equ ARMOS_NR_WAITPID, 7
 .equ ARMOS_NR_GETPID, 20
 .equ ARMOS_NR_KILL, 37
+.equ ARMOS_NR_PIPE, 42
 .equ ARMOS_NR_BRK, 45
+.equ ARMOS_NR_DUP2, 63
 .equ ARMOS_NR_SIGACTION, 67
 .equ ARMOS_NR_SCHED_YIELD, 158
 .equ ARMOS_NR_MMAP, 195
@@ -241,6 +246,63 @@ arm64_el0_generic_payload:
     mov x8, #ARMOS_NR_MUNMAP
     svc #0
     str x0, [x18, #0x148]
+
+    add x0, x18, #0x380
+    mov x1, xzr
+    mov x2, xzr
+    mov x8, #ARMOS_NR_OPEN
+    svc #0
+    mov x21, x0
+
+    mov x0, x21
+    add x1, x18, #0x3c0
+    mov x2, #12
+    mov x8, #ARMOS_NR_READ
+    svc #0
+    str x0, [x18, #0x170]
+
+    mov x0, x21
+    mov x8, #ARMOS_NR_CLOSE
+    svc #0
+    str x0, [x18, #0x178]
+
+    add x0, x18, #0x400
+    mov x8, #ARMOS_NR_PIPE
+    svc #0
+    str x0, [x18, #0x180]
+
+    ldr w21, [x18, #0x400]
+    ldr w22, [x18, #0x404]
+    mov w0, w22
+    add x1, x18, #0x420
+    mov x2, #6
+    mov x8, #ARMOS_NR_WRITE
+    svc #0
+    str x0, [x18, #0x188]
+
+    mov w0, w21
+    add x1, x18, #0x440
+    mov x2, #6
+    mov x8, #ARMOS_NR_READ
+    svc #0
+    str x0, [x18, #0x190]
+
+    mov w0, w21
+    mov x8, #ARMOS_NR_CLOSE
+    svc #0
+    mov w0, w22
+    mov x8, #ARMOS_NR_CLOSE
+    svc #0
+
+    mov x0, #1
+    mov x1, #9
+    mov x8, #ARMOS_NR_DUP2
+    svc #0
+    str x0, [x18, #0x198]
+
+    mov x0, #9
+    mov x8, #ARMOS_NR_CLOSE
+    svc #0
 
     adr x4, 2f
     str x4, [x18, #0x118]

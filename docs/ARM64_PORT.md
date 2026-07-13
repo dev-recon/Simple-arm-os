@@ -910,7 +910,43 @@ ARM64_KINIT_RUNNING
 ARM64_BOOTSTRAP_RETIRED
 ARM64_IDLE_KINIT_SWITCH_OK
 ARM64_RUNTIME_SCHEDULER_OK
+
+## Generic I/O and AArch64 newlib userland
+
+The ARM64 bootstrap now routes its EL0 descriptor syscalls through the generic
+`io_model` layer. The bounded early namespace provides immutable VFS nodes,
+shared open-file descriptions, per-process descriptors, byte-stream pipes and
+TTY callbacks. The serial integration payload validates `open`, `read`,
+`write`, `close`, `pipe` and `dup2` and reports:
+
+```text
+ARM64_VFS_FD_PIPE_TTY_OK
 ```
+
+This is the architecture-neutral I/O contract needed by early ELF64 programs.
+Persistent ext2/virtio mounts and blocking TTY input remain part of the later
+full-kernel integration; the bootstrap model deliberately does not duplicate
+those drivers.
+
+Newlib 4.4 can now be built for both ArmOS ABIs in independent object trees.
+The AArch64 sysroot is installed under
+`build/newlib-sysroot/aarch64-elf`, while its ArmOS CRT and syscall glue live
+under `newlib-port/build/arm64`. Build the sysroot and the first three userland
+milestones with one command:
+
+```sh
+./tools/build_arm64_userland.sh --rebuild-newlib
+```
+
+Subsequent builds reuse the sysroot:
+
+```sh
+./tools/build_arm64_userland.sh
+```
+
+The default targets are `hello`, `init` and `mash`. They are emitted as static
+AArch64 ELF64 executables under `build/userland-arm64/out`; the script never
+overwrites the ARM32 programs staged in `userfs`.
 
 Generated artifacts are isolated from ARM32 under:
 
@@ -923,11 +959,10 @@ build/images/kernel-arm64-qemu-virt.dis
 
 ## Next Milestones
 
-1. Bring VFS image acquisition, file descriptors, pipes, console TTY, and
-   runnable fork/exec task ownership to ARM64, then execute `/sbin/init` from
-   an ELF64 file.
-2. Build the AArch64 ArmOS newlib sysroot and validate progressively larger C
-   programs before moving `init` and `mash`.
+1. Connect the persistent virtio/ext2 VFS to the generic ARM64 I/O contract,
+   then make `execve` load the generated ELF64 `/sbin/init` by path.
+2. Run the generated `hello`, `init` and `mash` binaries under QEMU virt,
+   completing any missing file, TTY and process syscalls they expose.
 3. Replace the bounded ARM64 VMA/table inventories and early allocator with
    dynamic range nodes and synchronized physical-page backends.
 4. Add SMP synchronization, per-CPU scheduler ownership, ASID rollover, and

@@ -75,6 +75,7 @@ int process_model_fork(process_model_t *parent, process_model_t *child,
                            child_task) != 0)
         return -2;
     child->blocked_signals = parent->blocked_signals;
+    child->io_context = parent->io_context;
     for (signal = 0; signal < PROCESS_MODEL_SIGNAL_COUNT; signal++)
         child->signal_handlers[signal] = parent->signal_handlers[signal];
     return 0;

@@ -1,7 +1,20 @@
 /*
  * ArmOS
  * Copyright (c) 2026 Mohamed Ennassiri
- * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/memory/early_page_allocator.c
+ * Layer: Kernel / early physical memory
+ *
+ * Responsibilities:
+ * - Allocate and release contiguous physical pages during early boot.
+ * - Reserve firmware, kernel and bootstrap ranges in a compact bitmap.
+ *
+ * Notes:
+ * - This allocator is intentionally single-CPU and precedes the synchronized
+ *   physical memory manager.
  */
 
 #include <kernel/early_page_allocator.h>

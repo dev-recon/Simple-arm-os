@@ -140,6 +140,7 @@ KERNEL_OBJS = \
 	kernel/syscalls/dispatch.o \
 	kernel/process/model.o \
 	kernel/process/elf64.o \
+	kernel/fs/io_model.o \
 	kernel/task/runqueue.o \
 	$(ARCH_DIR)/user/el0.o \
 	kernel/lib/fdt_memory.o \

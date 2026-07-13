@@ -1,7 +1,19 @@
 /*
  * ArmOS
  * Copyright (c) 2026 Mohamed Ennassiri
- * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: arch/arm64/include/asm/cache.h
+ * Layer: ARM64 / cache interface
+ *
+ * Responsibilities:
+ * - Publish cache-line sizes required by aligned kernel data structures.
+ * - Provide the architecture cache-line contract to generic code.
+ *
+ * Notes:
+ * - The current QEMU virt and Cortex-A53/A72 targets use 64-byte cache lines.
  */
 
 #ifndef ASM_ARM64_CACHE_H

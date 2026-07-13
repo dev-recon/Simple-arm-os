@@ -115,7 +115,7 @@ int usleep(useconds_t useconds);
 pid_t wait4(pid_t pid, int *status, int options, struct rusage *rusage);
 int lstat(const char *pathname, struct stat *statbuf);
 int symlink(const char *target, const char *linkpath);
-int readlink(const char *pathname, char *buf, size_t bufsiz);
+ssize_t readlink(const char *pathname, char *buf, size_t bufsiz);
 int getpgrp(void);
 int setpgid(pid_t pid, pid_t pgid);
 void sync(void);

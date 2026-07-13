@@ -49,6 +49,7 @@ typedef struct process_model {
     vaddr_t signal_handlers[PROCESS_MODEL_SIGNAL_COUNT];
     vm_space_t *vm_space;
     void *task;
+    void *io_context;
     struct process_model *parent;
     struct process_model *first_child;
     struct process_model *next_sibling;

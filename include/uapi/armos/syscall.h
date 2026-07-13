@@ -24,11 +24,15 @@
 #define ARMOS_NR_FORK       2
 #define ARMOS_NR_READ       3
 #define ARMOS_NR_WRITE      4
+#define ARMOS_NR_OPEN       5
+#define ARMOS_NR_CLOSE      6
 #define ARMOS_NR_WAITPID    7
 #define ARMOS_NR_EXECVE     11
 #define ARMOS_NR_GETPID     20
 #define ARMOS_NR_KILL       37
 #define ARMOS_NR_BRK        45
+#define ARMOS_NR_PIPE       42
+#define ARMOS_NR_DUP2       63
 #define ARMOS_NR_SIGACTION  67
 #define ARMOS_NR_GETPPID    119
 #define ARMOS_NR_SCHED_YIELD 158

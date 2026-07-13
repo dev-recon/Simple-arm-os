@@ -3,11 +3,16 @@
 # Newlib is the supported userspace ABI. Legacy home-grown libc sources are
 # kept under userland/legacy for reference only.
 
+TARGET_ARCH ?= arm32
+ifeq ($(TARGET_ARCH),arm64)
+ARCH ?= aarch64-elf-
+else
 ARCH ?= arm-none-eabi-
+endif
 CC := $(ARCH)gcc
 STRIP := $(ARCH)strip
 
-BUILD_DIR := ../build/userland
+BUILD_DIR := ../build/userland-$(TARGET_ARCH)
 OUT_DIR := $(BUILD_DIR)/out
 OUT_BIN := $(OUT_DIR)/bin
 OUT_SBIN := $(OUT_DIR)/sbin
@@ -20,7 +25,15 @@ USERFS_SBIN := $(USERFS_ROOT)/sbin
 USERFS_USR_BIN := $(USERFS_ROOT)/usr/bin
 USERFS_OPT := $(USERFS_ROOT)/opt
 
+ifeq ($(TARGET_ARCH),arm64)
+ARCH_FLAGS := -mcpu=cortex-a53
+USER_TEXT_ADDRESS := 0x400000
+PORT_BUILD_DIR := build/arm64
+else
 ARCH_FLAGS := -mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft
+USER_TEXT_ADDRESS := 0x8000
+PORT_BUILD_DIR := build
+endif
 NEWLIB_SYSROOT ?= $(shell $(CC) -print-sysroot 2>/dev/null)
 NEWLIB_LIBC ?= $(NEWLIB_SYSROOT)/lib/libc.a
 LIBGCC := $(shell $(CC) $(ARCH_FLAGS) -print-libgcc-file-name 2>/dev/null)
@@ -30,12 +43,12 @@ CFLAGS := $(ARCH_FLAGS) -std=gnu99 -Os -ffreestanding -fno-builtin \
           -fno-stack-protector -DARM_OS_NEWLIB \
           -Iinclude -I$(NEWLIB_SYSROOT)/include
 LDFLAGS := $(ARCH_FLAGS) -nostdlib -nostartfiles -static \
-           -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections \
+           -Wl,-Ttext=$(USER_TEXT_ADDRESS) -Wl,-e,_start -Wl,--gc-sections \
            -Wl,--allow-multiple-definition
 
-PORT_OBJECTS := $(NEWLIB_PORT)/build/crt0_newlib.o \
-                $(NEWLIB_PORT)/build/syscall_raw.o \
-                $(NEWLIB_PORT)/build/syscalls.o
+PORT_OBJECTS := $(NEWLIB_PORT)/$(PORT_BUILD_DIR)/crt0_newlib.o \
+                $(NEWLIB_PORT)/$(PORT_BUILD_DIR)/syscall_raw.o \
+                $(NEWLIB_PORT)/$(PORT_BUILD_DIR)/syscalls.o
 
 COREUTIL_SRCS := $(wildcard coreutils/src/*.c)
 COREUTILS := $(sort $(patsubst coreutils/src/%.c,%,$(COREUTIL_SRCS)))
@@ -90,7 +103,7 @@ check-newlib:
 	fi
 
 newlib-port:
-	$(MAKE) -C $(NEWLIB_PORT) ARCH="$(ARCH)" NEWLIB_SYSROOT="$(NEWLIB_SYSROOT)" NEWLIB_LIBC="$(NEWLIB_LIBC)"
+	$(MAKE) -C $(NEWLIB_PORT) TARGET_ARCH="$(TARGET_ARCH)" ARCH="$(ARCH)" NEWLIB_SYSROOT="$(NEWLIB_SYSROOT)" NEWLIB_LIBC="$(NEWLIB_LIBC)"
 
 list:
 	@printf '%s\n' $(TARGETS)

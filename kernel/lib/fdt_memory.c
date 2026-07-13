@@ -1,9 +1,20 @@
 /*
  * ArmOS
  * Copyright (c) 2026 Mohamed Ennassiri
- * SPDX-License-Identifier: Apache-2.0
  *
- * Dependency-free FDT memory topology reader for early boot.
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: kernel/lib/fdt_memory.c
+ * Layer: Kernel / firmware data parsing
+ *
+ * Responsibilities:
+ * - Decode RAM banks and reserved ranges from a flattened device tree.
+ * - Validate FDT structure bounds before exposing early memory topology.
+ *
+ * Notes:
+ * - The parser is dependency-free so it remains usable before the heap and
+ *   full device-tree subsystem are initialized.
  */
 
 #include <kernel/fdt.h>

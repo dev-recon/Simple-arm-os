@@ -1,9 +1,20 @@
 /*
  * ArmOS
  * Copyright (c) 2026 Mohamed Ennassiri
- * SPDX-License-Identifier: Apache-2.0
  *
- * AArch64 milestone 1 entry for QEMU virt.
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: arch/arm64/boot/boot.S
+ * Layer: ARM64 / early boot
+ *
+ * Responsibilities:
+ * - Normalize QEMU virt entry from EL2 or EL1 into the EL1h kernel context.
+ * - Establish the boot stack, clear BSS and install the first vector table.
+ * - Transfer execution between the low bootstrap and high TTBR1 alias.
+ *
+ * Notes:
+ * - Secondary CPUs remain parked until the ARM64 SMP startup path is added.
  */
 
 .section .text.boot

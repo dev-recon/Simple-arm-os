@@ -1334,7 +1334,8 @@ int tcsetattr(int fd, int optional_actions, const void *termios_p)
 
 int tcflush(int fd, int queue_selector)
 {
-    return ret_errno(sys_ioctl(fd, TCFLSH, (void *)queue_selector));
+    return ret_errno(sys_ioctl(fd, TCFLSH,
+                               (void *)(intptr_t)queue_selector));
 }
 
 int tcdrain(int fd)

@@ -32,6 +32,7 @@
 #include <kernel/early_page_allocator.h>
 #include <kernel/elf64.h>
 #include <kernel/fdt.h>
+#include <kernel/io_model.h>
 #include <kernel/process_model.h>
 #include <kernel/syscall_dispatch.h>
 #include <kernel/task.h>
@@ -72,12 +73,25 @@
 #define USER_FORK_RESULT_OFFSET      0x158u
 #define USER_KILL_RESULT_OFFSET      0x160u
 #define USER_WAIT_RESULT_OFFSET      0x168u
+#define USER_OPEN_READ_RESULT_OFFSET 0x170u
+#define USER_CLOSE_RESULT_OFFSET     0x178u
+#define USER_PIPE_RESULT_OFFSET      0x180u
+#define USER_PIPE_WRITE_RESULT_OFFSET 0x188u
+#define USER_PIPE_READ_RESULT_OFFSET 0x190u
+#define USER_DUP2_RESULT_OFFSET      0x198u
 #define USER_VM_MAGIC_OFFSET     0x200u
 #define USER_PREEMPT_FLAG_OFFSET 0x300u
+#define USER_OPEN_PATH_OFFSET    0x380u
+#define USER_OPEN_BUFFER_OFFSET  0x3C0u
+#define USER_PIPE_FDS_OFFSET     0x400u
+#define USER_PIPE_SOURCE_OFFSET  0x420u
+#define USER_PIPE_BUFFER_OFFSET  0x440u
 #define USER_TEST_MAGIC          0x5553455254544252ULL
 #define USER_WRITE_LENGTH        23u
 #define USER_EXIT_STATUS         42u
 #define USER_PREEMPT_EXIT_STATUS 43u
+#define USER_OPEN_CONTENT_LENGTH 12u
+#define USER_PIPE_CONTENT_LENGTH 6u
 #define USER_PROCESS_PID          1u
 #define USER_BRK_TEST_ADDRESS     (USER_HEAP_START + PAGE_SIZE)
 #define USER_FAULT_MAGIC          0x4641554C54564D36ULL
@@ -99,6 +113,9 @@
 #define ARMOS_MAP_ANON            0x20u
 
 static const char arm64_user_message[] = "ARM64 syscall write OK\n";
+static const char arm64_bootstrap_path[] = "/etc/arm64-release";
+static const char arm64_bootstrap_file[] = "ArmOS arm64\n";
+static const char arm64_pipe_message[] = "pipe64";
 _Static_assert(sizeof(arm64_user_message) - 1 == USER_WRITE_LENGTH,
                "EL0 write payload length must match its assembly constant");
 
@@ -120,6 +137,8 @@ typedef struct {
     syscall_dispatcher_t dispatcher;
     process_model_t process;
     process_model_t child;
+    io_model_vfs_t vfs;
+    io_model_context_t io;
     arm64_user_vm_t *vm;
     early_page_allocator_t *allocator;
 } arm64_syscall_runtime_t;
@@ -235,23 +254,126 @@ static int arm64_dispatcher_init(task_dispatcher_t *dispatcher,
                                        NULL);
 }
 
+static ssize_t arm64_bootstrap_tty_read(void *owner, void *buffer,
+                                        size_t length)
+{
+    (void)owner;
+    (void)buffer;
+    (void)length;
+    return -EAGAIN;
+}
+
+static ssize_t arm64_bootstrap_tty_write(void *owner, const void *buffer,
+                                         size_t length)
+{
+    const uint8_t *bytes = buffer;
+    size_t index;
+
+    (void)owner;
+    for (index = 0; index < length; index++)
+        arm64_early_putc((char)bytes[index]);
+    return (ssize_t)length;
+}
+
+static int arm64_copy_user_path(arm64_syscall_runtime_t *runtime,
+                                vaddr_t address, char *path,
+                                size_t capacity)
+{
+    size_t index;
+
+    if (!runtime || !path || capacity < 2)
+        return -EINVAL;
+    for (index = 0; index < capacity; index++) {
+        if (arm64_user_vm_validate_range(runtime->vm, address + index, 1,
+                                         VMA_READ) != 0)
+            return -EFAULT;
+        path[index] = *(const char *)(uintptr_t)(address + index);
+        if (path[index] == '\0')
+            return 0;
+    }
+    path[capacity - 1] = '\0';
+    return -E2BIG;
+}
+
 static syscall_result_t arm64_syscall_write(
     void *owner, const syscall_request_t *request)
 {
     arm64_syscall_runtime_t *runtime = owner;
     vaddr_t address = (vaddr_t)request->arguments[1];
     size_t length = (size_t)request->arguments[2];
-    size_t index;
 
-    if (!runtime || !runtime->vm ||
-        (request->arguments[0] != 1 && request->arguments[0] != 2))
-        return -(syscall_result_t)EBADF;
+    if (!runtime || !runtime->vm)
+        return -(syscall_result_t)EINVAL;
     if (length > 256 || arm64_user_vm_validate_range(
             runtime->vm, address, length, VMA_READ) != 0)
         return -(syscall_result_t)EFAULT;
-    for (index = 0; index < length; index++)
-        arm64_early_putc(*(const char *)(uintptr_t)(address + index));
-    return (syscall_result_t)length;
+    return io_model_write(&runtime->io, (int)request->arguments[0],
+                          (const void *)(uintptr_t)address, length);
+}
+
+static syscall_result_t arm64_syscall_read(
+    void *owner, const syscall_request_t *request)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+    vaddr_t address = (vaddr_t)request->arguments[1];
+    size_t length = (size_t)request->arguments[2];
+
+    if (!runtime || !runtime->vm)
+        return -(syscall_result_t)EINVAL;
+    if (length > 256 || arm64_user_vm_validate_range(
+            runtime->vm, address, length, VMA_WRITE) != 0)
+        return -(syscall_result_t)EFAULT;
+    return io_model_read(&runtime->io, (int)request->arguments[0],
+                         (void *)(uintptr_t)address, length);
+}
+
+static syscall_result_t arm64_syscall_open(
+    void *owner, const syscall_request_t *request)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+    char path[MAX_PATH];
+    int result;
+
+    result = arm64_copy_user_path(runtime,
+                                  (vaddr_t)request->arguments[0],
+                                  path, sizeof(path));
+    if (result != 0)
+        return result;
+    return io_model_open(&runtime->io, path,
+                         (unsigned int)request->arguments[1]);
+}
+
+static syscall_result_t arm64_syscall_close(
+    void *owner, const syscall_request_t *request)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+
+    return runtime ? io_model_close(&runtime->io,
+                                    (int)request->arguments[0]) :
+                     -(syscall_result_t)EINVAL;
+}
+
+static syscall_result_t arm64_syscall_pipe(
+    void *owner, const syscall_request_t *request)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+    vaddr_t address = (vaddr_t)request->arguments[0];
+
+    if (!runtime || arm64_user_vm_validate_range(
+            runtime->vm, address, 2u * sizeof(int), VMA_WRITE) != 0)
+        return -(syscall_result_t)EFAULT;
+    return io_model_pipe(&runtime->io, (int *)(uintptr_t)address);
+}
+
+static syscall_result_t arm64_syscall_dup2(
+    void *owner, const syscall_request_t *request)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+
+    return runtime ? io_model_dup2(&runtime->io,
+                                   (int)request->arguments[0],
+                                   (int)request->arguments[1]) :
+                     -(syscall_result_t)EINVAL;
 }
 
 static syscall_result_t arm64_syscall_yield(
@@ -431,12 +553,21 @@ static int arm64_syscall_runtime_init(arm64_high_context_t *context)
 
     runtime->vm = &context->user_vm;
     runtime->allocator = high_early_allocator();
+    io_model_vfs_init(&runtime->vfs);
+    if (io_model_vfs_add_readonly(
+            &runtime->vfs, arm64_bootstrap_path,
+            arm64_bootstrap_file, USER_OPEN_CONTENT_LENGTH) != 0 ||
+        io_model_context_init(&runtime->io, &runtime->vfs,
+                              arm64_bootstrap_tty_read,
+                              arm64_bootstrap_tty_write, NULL) != 0)
+        return -1;
     syscall_dispatcher_init(&runtime->dispatcher);
     if (process_model_init(&runtime->process, USER_PROCESS_PID, NULL,
                            &runtime->vm->space,
                            &context->scheduled_user_task) != 0)
         return -1;
     runtime->process.state = PROCESS_MODEL_RUNNING;
+    runtime->process.io_context = &runtime->io;
 
 #define REGISTER_BOOTSTRAP_SYSCALL(number, handler) \
     if (syscall_dispatcher_register(&runtime->dispatcher, (number), \
@@ -444,13 +575,18 @@ static int arm64_syscall_runtime_init(arm64_high_context_t *context)
         return -2
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_EXIT, arm64_syscall_exit);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_FORK, arm64_syscall_fork);
+    REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_READ, arm64_syscall_read);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_WRITE, arm64_syscall_write);
+    REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_OPEN, arm64_syscall_open);
+    REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_CLOSE, arm64_syscall_close);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_WAITPID, arm64_syscall_waitpid);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_EXECVE,
                                arm64_syscall_execve_unavailable);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_GETPID, arm64_syscall_getpid);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_KILL, arm64_syscall_kill);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_BRK, arm64_syscall_brk);
+    REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_PIPE, arm64_syscall_pipe);
+    REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_DUP2, arm64_syscall_dup2);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_SIGACTION,
                                arm64_syscall_sigaction);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_GETPPID, arm64_syscall_getppid);
@@ -2137,6 +2273,14 @@ static int test_dynamic_page_table(void)
     for (offset = 0; offset < USER_WRITE_LENGTH; offset++)
         *(volatile uint8_t *)(uintptr_t)(user_data_page + offset) =
             (uint8_t)arm64_user_message[offset];
+    for (offset = 0; offset < sizeof(arm64_bootstrap_path); offset++)
+        *(volatile uint8_t *)(uintptr_t)
+            (user_data_page + USER_OPEN_PATH_OFFSET + offset) =
+                (uint8_t)arm64_bootstrap_path[offset];
+    for (offset = 0; offset < USER_PIPE_CONTENT_LENGTH; offset++)
+        *(volatile uint8_t *)(uintptr_t)
+            (user_data_page + USER_PIPE_SOURCE_OFFSET + offset) =
+                (uint8_t)arm64_pipe_message[offset];
     *(volatile uint64_t *)(uintptr_t)(user_data_page + USER_VM_MAGIC_OFFSET) =
         USER_TEST_MAGIC;
     high_context.boot_l1 = l1_page;
@@ -2437,6 +2581,7 @@ halt:
 static unsigned int arm64_el0_validation_error(uint64_t result)
 {
     volatile uint64_t *data = (volatile uint64_t *)(uintptr_t)USER_DATA_VA;
+    unsigned int byte;
 
     if (current_el() != 1 || result != USER_EXIT_STATUS)
         return 1;
@@ -2486,27 +2631,49 @@ static unsigned int arm64_el0_validation_error(uint64_t result)
         data[USER_KILL_RESULT_OFFSET / sizeof(*data)] != 0 ||
         data[USER_WAIT_RESULT_OFFSET / sizeof(*data)] != 0)
         return 16;
+    if (data[USER_OPEN_READ_RESULT_OFFSET / sizeof(*data)] !=
+            USER_OPEN_CONTENT_LENGTH ||
+        data[USER_CLOSE_RESULT_OFFSET / sizeof(*data)] != 0 ||
+        data[USER_PIPE_RESULT_OFFSET / sizeof(*data)] != 0 ||
+        data[USER_PIPE_WRITE_RESULT_OFFSET / sizeof(*data)] !=
+            USER_PIPE_CONTENT_LENGTH ||
+        data[USER_PIPE_READ_RESULT_OFFSET / sizeof(*data)] !=
+            USER_PIPE_CONTENT_LENGTH ||
+        data[USER_DUP2_RESULT_OFFSET / sizeof(*data)] != 9)
+        return 17;
+    for (byte = 0; byte < USER_OPEN_CONTENT_LENGTH; byte++) {
+        if (*(volatile uint8_t *)(uintptr_t)
+                (USER_DATA_VA + USER_OPEN_BUFFER_OFFSET + byte) !=
+            (uint8_t)arm64_bootstrap_file[byte])
+            return 18;
+    }
+    for (byte = 0; byte < USER_PIPE_CONTENT_LENGTH; byte++) {
+        if (*(volatile uint8_t *)(uintptr_t)
+                (USER_DATA_VA + USER_PIPE_BUFFER_OFFSET + byte) !=
+            (uint8_t)arm64_pipe_message[byte])
+            return 19;
+    }
     if (high_context.user_task.user.pstate !=
         ARM64_USER_PSTATE_EL0T_MASKED)
-        return 17;
+        return 20;
     if (arm64_exception_el0_exit_status() != USER_EXIT_STATUS ||
-        arm64_exception_el0_syscall_count() != 13)
-        return 18;
-    if (high_context.syscall_runtime.dispatcher.calls != 12 ||
+        arm64_exception_el0_syscall_count() != 23)
+        return 21;
+    if (high_context.syscall_runtime.dispatcher.calls != 22 ||
         high_context.syscall_runtime.dispatcher.rejected != 1)
-        return 19;
+        return 22;
     if (high_context.syscall_runtime.process.state != PROCESS_MODEL_ZOMBIE ||
         high_context.syscall_runtime.process.exit_status != USER_EXIT_STATUS)
-        return 20;
+        return 23;
     if (high_context.syscall_runtime.process.first_child != NULL ||
         high_context.syscall_runtime.child.parent != NULL ||
         high_context.syscall_runtime.child.ppid != 0 ||
         high_context.syscall_runtime.child.state != PROCESS_MODEL_READY ||
         high_context.syscall_runtime.child.signal_handlers[10] != 0x1234 ||
         high_context.syscall_runtime.child.pending_signals != (1u << 10))
-        return 21;
+        return 24;
     if (high_context.user_vm.space.brk != USER_BRK_TEST_ADDRESS)
-        return 22;
+        return 25;
     return 0;
 }
 
@@ -2518,6 +2685,29 @@ static void arm64_el0_return(uint64_t result)
         arm64_early_puts("ARM64_EL0_SYSCALL_ABI_FAILED\n");
         arm64_early_puts("validation code: ");
         arm64_early_puthex64(validation_error);
+        if (validation_error == 17) {
+            volatile uint64_t *data =
+                (volatile uint64_t *)(uintptr_t)USER_DATA_VA;
+
+            arm64_early_puts(" io results: ");
+            arm64_early_puthex64(
+                data[USER_OPEN_READ_RESULT_OFFSET / sizeof(*data)]);
+            arm64_early_putc(' ');
+            arm64_early_puthex64(
+                data[USER_CLOSE_RESULT_OFFSET / sizeof(*data)]);
+            arm64_early_putc(' ');
+            arm64_early_puthex64(
+                data[USER_PIPE_RESULT_OFFSET / sizeof(*data)]);
+            arm64_early_putc(' ');
+            arm64_early_puthex64(
+                data[USER_PIPE_WRITE_RESULT_OFFSET / sizeof(*data)]);
+            arm64_early_putc(' ');
+            arm64_early_puthex64(
+                data[USER_PIPE_READ_RESULT_OFFSET / sizeof(*data)]);
+            arm64_early_putc(' ');
+            arm64_early_puthex64(
+                data[USER_DUP2_RESULT_OFFSET / sizeof(*data)]);
+        }
         arm64_early_puts("\n");
         goto halt;
     }
@@ -2531,6 +2721,7 @@ static void arm64_el0_return(uint64_t result)
     arm64_early_puts("ARM64_GENERIC_SYSCALL_ABI_OK\n");
     arm64_early_puts("ARM64_PROCESS_SYSCALLS_OK\n");
     arm64_early_puts("ARM64_BRK_MMAP_PAGE_FAULT_OK\n");
+    arm64_early_puts("ARM64_VFS_FD_PIPE_TTY_OK\n");
 
     arm64_early_puts("Testing timer IRQ after EL0 return\n");
     if (arm64_timer_irq_smoke_test() != 0) {

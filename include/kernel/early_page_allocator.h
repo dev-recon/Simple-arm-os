@@ -1,10 +1,20 @@
 /*
  * ArmOS
  * Copyright (c) 2026 Mohamed Ennassiri
- * SPDX-License-Identifier: Apache-2.0
  *
- * Single-CPU page allocator for architecture bring-up before the full physical
- * memory manager and its synchronization primitives are available.
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: include/kernel/early_page_allocator.h
+ * Layer: Kernel / early physical memory interface
+ *
+ * Responsibilities:
+ * - Define the bitmap-backed early physical page allocator state.
+ * - Expose contiguous allocation, release and range reservation operations.
+ *
+ * Notes:
+ * - The interface is single-CPU and is retired once the full synchronized
+ *   physical memory manager becomes available.
  */
 
 #ifndef _KERNEL_EARLY_PAGE_ALLOCATOR_H
