@@ -68,7 +68,10 @@ ArmOS currently provides:
   MMIO; all low kernel mappings are then removed and isolated user-only TTBR0
   tables are exercised with distinct ASIDs; a copied EL0t payload now runs on
   separate RX code and RW/NX data/stack pages, returns through the lower-EL SVC
-  vector, and leaves the physical timer operational
+  vector, and leaves the physical timer operational; its TTBR0 tables, mapped
+  pages, and ASID now have an explicit bootstrap user-VM owner with a balanced
+  lifecycle test; `svc #0` now follows an AArch64 register ABI and validates
+  successful `write`, `-EFAULT`, `-ENOSYS`, and `exit(42)` paths
 - MMU enabled with split TTBR0/TTBR1 address spaces
 - ASID support and ASID rollover handling
 - typed physical/virtual address groundwork (`paddr_t`, `vaddr_t`, `pfn_t`)
@@ -339,7 +342,8 @@ Medium-term ideas:
 - improve POSIX compatibility for larger userland packages
 - connect the validated ARM64 TTBR0/ASID and EL0-entry primitives to tasks,
   extend early allocation into the synchronized physical allocator, and
-  define the real syscall and ELF64 process ABIs
+  connect the validated syscall registers to the generic dispatcher and ELF64
+  process loader
 
 See [`ROADMAP.md`](ROADMAP.md) for more detail.
 

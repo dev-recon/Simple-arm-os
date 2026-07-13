@@ -192,6 +192,38 @@ These two SVC numbers are bring-up probes only. They are not the public ArmOS
 syscall ABI, and this payload is not yet owned by a scheduler task or
 `vm_space`.
 
+### Milestone 12: Owned Bootstrap User Address Spaces
+
+User tables, mapped pages, and ASIDs are now grouped in an
+`arm64_user_vm_t` instead of being assembled as unrelated values in the QEMU
+platform bootstrap. The object creates its own three-level TTBR0 hierarchy,
+allocates user pages through the early allocator, records mappings, enforces a
+single L3 window and W^X, activates its own ASID, and can return every owned
+page and the ASID on destruction.
+
+An explicit lifecycle smoke test creates an address space, maps a page, rejects
+an RWX mapping without leaking its temporary page, destroys the space, checks
+the allocator balance, and verifies ASID reuse. The live EL0 and empty
+isolation spaces are then created through the same API. This establishes the
+ownership boundary that the future generic `vm_space` backend can adopt; the
+allocator and ASID pool remain intentionally single-CPU bootstrap components.
+
+### Milestone 13: AArch64 Syscall Register ABI
+
+EL0 now uses `svc #0` with the AArch64 calling convention: the syscall number
+is in `x8`, up to six arguments are in `x0` through `x5`, and the signed result
+is returned in `x0`. The numeric namespace is shared with the existing ArmOS
+ABI through `include/uapi/armos/syscall.h`; `exit` remains 1 and `write`
+remains 4.
+
+The bootstrap dispatcher implements bounded console `write` and controlled
+`exit`. Before dereferencing an EL0 buffer, it asks the active
+`arm64_user_vm_t` to validate every covered page and the required read
+permission. The payload verifies a successful write, an unmapped-buffer
+`-EFAULT`, an unknown-call `-ENOSYS`, and `exit(42)`. These are now real
+register and error-return semantics, but `write` is still an early-console
+backend rather than the generic VFS syscall implementation.
+
 ## Toolchain
 
 On macOS, install the AArch64 bare-metal compiler and QEMU:
@@ -256,6 +288,7 @@ TTBR0 allocated: old=... new=... L2=... L3=...
 ARM64_L3_PAGE_TLBI_OK
 TTBR1 kernel alias: table=... text=0xFFFFFF8040080000 TCR=...
 ARM64_TTBR1_PERMISSIONS_OK
+ARM64_USER_VM_LIFECYCLE_OK
 ARM64_DYNAMIC_PGTABLE_OK
 High kernel: PC=0xFFFFFF80... SP=0xFFFFFF80... VBAR=0xFFFFFF80...
 ARM64_TTBR1_EXECUTION_OK
@@ -266,8 +299,9 @@ ARM64_USER_TTBR0_ASID_OK
 Testing high VBAR synchronous vector
 ARM64_VECTOR_OK
 Entering EL0 at 0x0000000000400000 stack=0x0000000000403000
-EL0 result: 0x0000000000001235 SVC count: 0x0000000000000002
-ARM64_EL0_SVC_RETURN_OK
+ARM64 syscall write OK
+EL0 exit status: 0x000000000000002A syscall count: 0x0000000000000004
+ARM64_EL0_SYSCALL_ABI_OK
 Testing timer IRQ after EL0 return
 ARM64_TIMER_IRQ_OK
 ARM64_HIGH_KERNEL_OK
@@ -284,7 +318,9 @@ build/images/kernel-arm64-qemu-virt.dis
 
 ## Next Milestones
 
-1. Integrate TTBR0/ASID ownership with `task` and `vm_space`, and graduate the
-   early allocator into the synchronized full physical-memory path.
-2. Define the real syscall ABI, then add ELF64 loading, AArch64 context switch,
-   signal frames, and the userland target.
+1. Attach the owned ARM64 address space to `task` and the generic `vm_space`
+   contract, then replace its early allocator and ASID pool with synchronized
+   runtime backends.
+2. Connect the validated register ABI to the generic syscall dispatcher once
+   tasks exist, then add ELF64 loading, AArch64 context switch, signal frames,
+   and the userland target.

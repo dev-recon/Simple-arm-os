@@ -23,16 +23,17 @@
 #include <kernel/vfs.h>
 #include <kernel/signal.h>  /* Pour sig_handler_t et sigaction_t */
 #include <kernel/dirent.h>
+#include <uapi/armos/syscall.h>
 
 /* Forward declarations */
 struct process;
 
 /* Syscall numbers (Linux ARM32 compatible) */
 #define __NR_restart_syscall      0
-#define __NR_exit                 1
+#define __NR_exit                 ARMOS_NR_EXIT
 #define __NR_fork                 2
 #define __NR_read                 3
-#define __NR_write                4
+#define __NR_write                ARMOS_NR_WRITE
 #define __NR_open                 5
 #define __NR_close                6
 #define __NR_waitpid              7
@@ -132,7 +133,7 @@ struct process;
 #define __NR_accept             285
 #define __NR_sysinfo            116     /* reused for getprocs — remplacer par /proc plus tard */
 
-#define MAX_SYSCALLS            512
+#define MAX_SYSCALLS            ARMOS_SYSCALL_MAX
 
 /* Informations sur un processus */
 struct proc_info {

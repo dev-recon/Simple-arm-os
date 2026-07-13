@@ -7,9 +7,13 @@
 #ifndef ARMOS_ARM64_EXCEPTION_H
 #define ARMOS_ARM64_EXCEPTION_H
 
+#include <asm/user_vm.h>
+
 typedef unsigned long long arm64_exception_u64;
 
-void arm64_exception_set_el0_exit(arm64_exception_u64 address);
-unsigned int arm64_exception_el0_svc_count(void);
+void arm64_exception_set_el0_context(const arm64_user_vm_t *vm,
+                                     arm64_exception_u64 exit_address);
+unsigned int arm64_exception_el0_syscall_count(void);
+arm64_exception_u64 arm64_exception_el0_exit_status(void);
 
 #endif

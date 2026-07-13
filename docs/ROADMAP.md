@@ -25,7 +25,10 @@ The v0.6 baseline is:
   complete low kernel/MMIO map; isolated user-only TTBR0 tables and ASID
   switching are validated; a first EL0t smoke payload runs with separate
   RX and RW/NX mappings, returns through SVC, and preserves timer IRQ delivery,
-  while the full Unix kernel and userland remain ARM32.
+  and a bootstrap user-VM object now owns its tables, pages, mappings, and ASID,
+  while a bounded `svc #0` dispatcher validates the AArch64 register ABI,
+  user-buffer faults, unknown calls, and `exit`; the full Unix kernel and
+  userland remain ARM32.
 
 Post-v0.6 hardware milestone:
 
