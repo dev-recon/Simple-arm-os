@@ -123,8 +123,9 @@ KERNEL_OBJS = \
 	$(ARCH_DIR)/user/userspace.o
 
 ifeq ($(TARGET_ARCH),arm64)
-# ARM64 milestone 1 is an intentionally small serial bootstrap. Generic kernel
-# subsystems move across only after EL1 entry and the host tooling are stable.
+# ARM64 keeps a focused object graph while generic kernel contracts migrate
+# incrementally from the stable ARM32 kernel.
+ARM64_BOOTSTRAP_ELF = $(BUILD_DIR)/userland-arm64/out/usr/bin/hello64
 TASK_OBJS =
 LIB_OBJ =
 KERNEL_OBJS = \
@@ -140,11 +141,13 @@ KERNEL_OBJS = \
 	kernel/syscalls/dispatch.o \
 	kernel/process/model.o \
 	kernel/process/elf64.o \
+	kernel/fs/ext2_reader.o \
 	kernel/fs/io_model.o \
 	kernel/task/runqueue.o \
 	$(ARCH_DIR)/user/el0.o \
 	kernel/lib/fdt_memory.o \
 	kernel/memory/early_page_allocator.o \
+	$(PLATFORM_OBJS) \
 	$(PLATFORM_DIR)/early_console.o
 endif
 
@@ -219,6 +222,15 @@ $(PLATFORM_KERNEL_BIN): $(KERNEL_BIN)
 	@echo "Platform kernel image: $(PLATFORM_KERNEL_BIN)"
 
 platform-kernel: $(PLATFORM_KERNEL_BIN)
+
+ifeq ($(TARGET_ARCH),arm64)
+$(ARM64_BOOTSTRAP_ELF): userland/programs/hello64/main.c \
+		newlib-port/arm64/crt0_newlib.S \
+		newlib-port/arm64/syscall_raw.S newlib-port/syscalls.c \
+		newlib-port/Makefile userland/Makefile
+	./tools/build_arm64_userland.sh hello64
+
+endif
 
 $(BUILD_CONFIG_STAMP): FORCE
 	@mkdir -p $(BUILD_DIR)
@@ -364,7 +376,16 @@ $(DISK_IMG): $(FAT32_IMG) $(EXT2_IMG) $(MBR_TOOL)
 	dd if=$(FAT32_IMG) of=$(DISK_IMG) bs=1048576 seek=$(DISK_FAT32_START_MB) conv=notrunc 2>/dev/null
 	@echo "Disk image $(DISK_IMG) created ($(DISK_SIZE_MB) MB)"
 
-ifeq ($(PLATFORM_DISK_LAYOUT),fat32-first)
+ifeq ($(TARGET_ARCH),arm64)
+$(PLATFORM_DISK_IMG): $(ARM64_BOOTSTRAP_ELF) \
+		tools/build_arm64_disk.sh tools/build_arm64_userland.sh \
+		tools/make_mbr.py userland/programs/hello/main.c \
+		userland/system/init/main.c \
+		$(wildcard userland/system/mash/src/*.c) \
+		$(wildcard userland/system/mash/include/*.h)
+	./tools/build_arm64_userland.sh hello init mash
+	./tools/build_arm64_disk.sh --skip-userland --output $@
+else ifeq ($(PLATFORM_DISK_LAYOUT),fat32-first)
 $(PLATFORM_DISK_IMG): $(FAT32_IMG) $(EXT2_IMG) $(MBR_TOOL) Makefile $(PLATFORM_MK)
 	@mkdir -p $(IMAGE_DIR)
 	@echo "=== Assembling $(PLATFORM_DISK_IMG) (MBR + FAT32 boot + ext2 root) ==="

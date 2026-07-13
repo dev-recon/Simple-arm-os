@@ -14,7 +14,8 @@
  * - Load segments through VM callbacks independent of VFS acquisition.
  *
  * Notes:
- * - Point 5 will provide file-backed image bytes through VFS.
+ * - Image acquisition is provided by VFS; this layer only validates and maps
+ *   an already resident executable image.
  */
 
 #ifndef _KERNEL_ELF64_H

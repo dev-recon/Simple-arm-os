@@ -10,6 +10,7 @@
  *
  * Responsibilities:
  * - Resolve immutable files in a bounded bootstrap VFS namespace.
+ * - Forward persistent regular-file reads to an offset-based provider.
  * - Allocate process descriptors backed by shared open-file descriptions.
  * - Implement byte-stream pipes and architecture-neutral TTY forwarding.
  *
@@ -111,6 +112,36 @@ int io_model_vfs_add_readonly(io_model_vfs_t *vfs, const char *path,
     return 0;
 }
 
+int io_model_vfs_lookup_readonly(const io_model_vfs_t *vfs, const char *path,
+                                 const void **data, size_t *size)
+{
+    unsigned int index;
+
+    if (!vfs || !path || !data || !size)
+        return -EINVAL;
+    for (index = 0; index < vfs->node_count; index++) {
+        if (!strings_equal(vfs->nodes[index].path, path))
+            continue;
+        *data = vfs->nodes[index].data;
+        *size = vfs->nodes[index].size;
+        return 0;
+    }
+    return -ENOENT;
+}
+
+int io_model_vfs_set_readonly_provider(io_model_vfs_t *vfs,
+                                       io_model_readonly_lookup_t lookup,
+                                       io_model_readonly_read_t read,
+                                       void *owner)
+{
+    if (!vfs || !lookup || !read)
+        return -EINVAL;
+    vfs->readonly_lookup = lookup;
+    vfs->readonly_read = read;
+    vfs->readonly_owner = owner;
+    return 0;
+}
+
 int io_model_context_init(io_model_context_t *context, io_model_vfs_t *vfs,
                           io_model_tty_read_t tty_read,
                           io_model_tty_write_t tty_write, void *tty_owner)
@@ -141,6 +172,8 @@ int io_model_open(io_model_context_t *context, const char *path,
 {
     const io_model_node_t *node = NULL;
     io_model_file_t *file;
+    size_t provider_size = 0;
+    size_t path_length = 0;
     int fd;
     unsigned int index;
 
@@ -154,8 +187,18 @@ int io_model_open(io_model_context_t *context, const char *path,
             break;
         }
     }
-    if (!node)
-        return -ENOENT;
+    if (!node) {
+        if (!context->vfs->readonly_lookup ||
+            context->vfs->readonly_lookup(
+                context->vfs->readonly_owner, path,
+                &provider_size) != 0)
+            return -ENOENT;
+        while (path[path_length] != '\0' &&
+               path_length < IO_MODEL_PATH_CAPACITY)
+            path_length++;
+        if (path_length == IO_MODEL_PATH_CAPACITY)
+            return -EINVAL;
+    }
     fd = allocate_fd(context, 3);
     if (fd < 0)
         return -EMFILE;
@@ -165,6 +208,11 @@ int io_model_open(io_model_context_t *context, const char *path,
     file->kind = IO_MODEL_FILE_REGULAR;
     file->flags = flags;
     file->node = node;
+    if (!node) {
+        for (index = 0; index <= path_length; index++)
+            file->provider_path[index] = path[index];
+        file->provider_size = provider_size;
+    }
     context->fds[fd] = file;
     return fd;
 }
@@ -199,11 +247,27 @@ ssize_t io_model_read(io_model_context_t *context, int fd, void *buffer,
         return context->tty_read ?
             context->tty_read(context->tty_owner, buffer, length) : -EAGAIN;
     if (file->kind == IO_MODEL_FILE_REGULAR) {
-        if (file->offset >= file->node->size)
+        size_t file_size = file->node ? file->node->size :
+            file->provider_size;
+
+        if (file->offset >= file_size)
             return 0;
-        count = file->node->size - file->offset;
+        count = file_size - file->offset;
         if (count > length)
             count = length;
+        if (!file->node) {
+            ssize_t provider_result;
+
+            if (!context->vfs->readonly_read)
+                return -EIO;
+            provider_result = context->vfs->readonly_read(
+                context->vfs->readonly_owner, file->provider_path,
+                file->offset, buffer, count);
+            if (provider_result < 0)
+                return provider_result;
+            file->offset += (size_t)provider_result;
+            return provider_result;
+        }
         for (index = 0; index < count; index++)
             output[index] = file->node->data[file->offset + index];
         file->offset += count;

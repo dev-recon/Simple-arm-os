@@ -10,6 +10,7 @@
  *
  * Responsibilities:
  * - Define a bounded VFS namespace suitable for early userspace bring-up.
+ * - Attach an optional offset-based provider for persistent read-only files.
  * - Own process file descriptors and shared open-file descriptions.
  * - Provide regular-file, pipe and TTY operations without architecture types.
  *
@@ -29,6 +30,7 @@
 #define IO_MODEL_MAX_FDS 16u
 #define IO_MODEL_MAX_PIPES 4u
 #define IO_MODEL_PIPE_CAPACITY 128u
+#define IO_MODEL_PATH_CAPACITY 128u
 
 #define IO_MODEL_O_RDONLY 0u
 #define IO_MODEL_O_WRONLY 1u
@@ -38,6 +40,11 @@ typedef ssize_t (*io_model_tty_read_t)(void *owner, void *buffer,
                                        size_t length);
 typedef ssize_t (*io_model_tty_write_t)(void *owner, const void *buffer,
                                         size_t length);
+typedef int (*io_model_readonly_lookup_t)(void *owner, const char *path,
+                                          size_t *size);
+typedef ssize_t (*io_model_readonly_read_t)(void *owner, const char *path,
+                                            size_t offset, void *buffer,
+                                            size_t length);
 
 typedef struct io_model_node {
     const char *path;
@@ -48,6 +55,9 @@ typedef struct io_model_node {
 typedef struct io_model_vfs {
     io_model_node_t nodes[IO_MODEL_MAX_NODES];
     unsigned int node_count;
+    io_model_readonly_lookup_t readonly_lookup;
+    io_model_readonly_read_t readonly_read;
+    void *readonly_owner;
 } io_model_vfs_t;
 
 typedef struct io_model_pipe {
@@ -75,6 +85,8 @@ typedef struct io_model_file {
     unsigned int flags;
     size_t offset;
     const io_model_node_t *node;
+    size_t provider_size;
+    char provider_path[IO_MODEL_PATH_CAPACITY];
     io_model_pipe_t *pipe;
 } io_model_file_t;
 
@@ -91,6 +103,12 @@ typedef struct io_model_context {
 void io_model_vfs_init(io_model_vfs_t *vfs);
 int io_model_vfs_add_readonly(io_model_vfs_t *vfs, const char *path,
                               const void *data, size_t size);
+int io_model_vfs_lookup_readonly(const io_model_vfs_t *vfs, const char *path,
+                                 const void **data, size_t *size);
+int io_model_vfs_set_readonly_provider(io_model_vfs_t *vfs,
+                                       io_model_readonly_lookup_t lookup,
+                                       io_model_readonly_read_t read,
+                                       void *owner);
 int io_model_context_init(io_model_context_t *context, io_model_vfs_t *vfs,
                           io_model_tty_read_t tty_read,
                           io_model_tty_write_t tty_write, void *tty_owner);

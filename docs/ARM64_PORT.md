@@ -916,22 +916,24 @@ ARM64_RUNTIME_SCHEDULER_OK
 The ARM64 bootstrap now routes its EL0 descriptor syscalls through the generic
 `io_model` layer. The bounded early namespace provides immutable VFS nodes,
 shared open-file descriptions, per-process descriptors, byte-stream pipes and
-TTY callbacks. The serial integration payload validates `open`, `read`,
-`write`, `close`, `pipe` and `dup2` and reports:
+TTY callbacks. It also accepts an offset-based read-only provider; QEMU virt
+binds that provider to the ext2 reader over VirtIO. The serial integration
+payload validates `open`, `read`, `write`, `close`, `pipe` and `dup2`, including
+a real disk read from `/etc/motd`, and reports:
 
 ```text
 ARM64_VFS_FD_PIPE_TTY_OK
+ARM64_EXT2_VFS_READ_OK path=/etc/motd
 ```
 
 This is the architecture-neutral I/O contract needed by early ELF64 programs.
-Persistent ext2/virtio mounts and blocking TTY input remain part of the later
-full-kernel integration; the bootstrap model deliberately does not duplicate
-those drivers.
+Writable ext2, directory operations and blocking TTY input remain part of the
+later full-kernel integration.
 
 Newlib 4.4 can now be built for both ArmOS ABIs in independent object trees.
 The AArch64 sysroot is installed under
 `build/newlib-sysroot/aarch64-elf`, while its ArmOS CRT and syscall glue live
-under `newlib-port/build/arm64`. Build the sysroot and the first three userland
+under `newlib-port/build/arm64`. Build the sysroot and the first four userland
 milestones with one command:
 
 ```sh
@@ -944,9 +946,78 @@ Subsequent builds reuse the sysroot:
 ./tools/build_arm64_userland.sh
 ```
 
-The default targets are `hello`, `init` and `mash`. They are emitted as static
-AArch64 ELF64 executables under `build/userland-arm64/out`; the script never
-overwrites the ARM32 programs staged in `userfs`.
+The default targets are `hello64`, `hello`, `init` and `mash`. They are emitted
+as static AArch64 ELF64 executables under `build/userland-arm64/out`; the script
+never overwrites the ARM32 programs staged in `userfs`.
+
+`hello64` is the deliberately small first execution target. It is installed in
+the dedicated ARM64 ext2 image at `/usr/bin/hello64`; it is no longer embedded
+in the kernel or preloaded during boot. `execve` resolves it from ext2 on
+demand, acquires the complete ELF into temporary physical pages, loads its
+segments into a fresh TTBR0 address space, creates an AAPCS64
+`argc`/`argv`/`envp` stack and enters the newlib CRT in EL0. A successful run
+emits:
+
+```text
+ARM64_EXT2_EXEC_IMAGE_READY path=/usr/bin/hello64 size=...
+ARM64_ELF64_PATH_LOAD_OK entry=... stack=...
+hello64: newlib ELF64 execution OK
+ARM64_EXECVE_SOURCE_RETIRED_OK
+ARM64_EXECVE_OLD_VM_RETIRED_OK
+ARM64_EXECVE_COMMIT_OK
+ARM64_ELF64_PATH_EXEC_OK
+```
+
+This validates real generated ELF64 execution, including the VFS acquisition,
+loader, page permissions, instruction-cache synchronization, newlib CRT,
+`write` and `exit`. A dedicated EL0 caller now issues `execve`; the syscall
+prepares the new VM and the exception return atomically commits its TTBR0 and
+register image before `ERET`, preserving the process PID and open descriptors.
+The syscall copies at most four arguments and four environment strings of up
+to 63 bytes each from the caller, builds a 16-byte-aligned initial stack, and
+rejects invalid user pointers or unterminated vectors. A post-commit hook then
+destroys the previous VM only after the new TTBR0 is active, so its page tables,
+physical pages and ASID can be reclaimed without invalidating the exception
+return path. The same hook releases the temporary ext2 file image after the
+ELF loader has populated the new VM. Preparation failures destroy the candidate
+VM and release any acquired source pages; the serial probe checks this invariant
+with `ARM64_EXECVE_ROLLBACK_OK` before the successful execution.
+
+The ARM64 QEMU profile now attaches a compact 65 MiB architecture-specific disk
+instead of reusing the 577 MiB ARM32 image. Build it with:
+
+```sh
+./tools/build_arm64_disk.sh
+```
+
+Its single ext2 partition contains the AArch64 `hello64`, `hello`, `init` and
+`mash` executables. `make TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt
+platform-disk` rebuilds the same image without modifying `userfs`.
+
+A bounded
+read-only VirtIO block driver scans the QEMU MMIO transports, supports both the
+legacy version 1 PFN layout and the modern VirtIO 1.0 version 2 queue-address
+layout, and submits synchronous reads through a three-descriptor split ring.
+DMA buffers receive explicit AArch64 cache maintenance and every completion
+poll is bounded by the architectural counter.
+
+The bootstrap reads sector zero, validates the MBR signature, discovers the
+first Linux/ext2 partition, then reads and validates its ext2 superblock. A
+dependency-free ext2 reader resolves absolute paths and reads complete files or
+byte ranges through direct, singly indirect and sparse file blocks. Before
+entering userspace, `/sbin/init` is read in full and verified as ELF64. Later,
+the VFS reads `/etc/motd` by offset and `execve` acquires `/usr/bin/hello64` on
+demand. The milestones report:
+
+```text
+ARM64_VIRTIO_BLOCK_OK capacity=... ext2_lba=...
+ARM64_EXT2_PATH_READ_OK path=/sbin/init size=... elf_class=2
+ARM64_EXT2_EXEC_IMAGE_READY path=/usr/bin/hello64 size=...
+```
+
+Both QEMU's default legacy transport and an explicitly forced modern transport
+have passed this probe. The driver and early ext2 provider remain intentionally
+read-only; registration in the full mounted VFS is still pending.
 
 Generated artifacts are isolated from ARM32 under:
 
@@ -955,15 +1026,19 @@ build/images/kernel-arm64-qemu-virt.bin
 build/images/kernel-arm64-qemu-virt.elf
 build/images/kernel-arm64-qemu-virt.map
 build/images/kernel-arm64-qemu-virt.dis
+build/images/disk-arm64-qemu-virt.img
+build/images/rootfs-arm64-qemu-virt.ext2
 ```
 
 ## Next Milestones
 
-1. Connect the persistent virtio/ext2 VFS to the generic ARM64 I/O contract,
-   then make `execve` load the generated ELF64 `/sbin/init` by path.
-2. Run the generated `hello`, `init` and `mash` binaries under QEMU virt,
-   completing any missing file, TTY and process syscalls they expose.
-3. Replace the bounded ARM64 VMA/table inventories and early allocator with
+1. Make `/sbin/init` the first scheduled disk-backed process and route its
+   process, TTY and signal operations through persistent runtime objects.
+2. Run `init` and `mash` progressively, completing the writable file,
+   TTY and process syscalls each program exposes.
+3. Generalize the temporary four-entry `argv`/`envp` limits into the persistent
+   process resource model used by `init` and `mash`.
+4. Replace the bounded ARM64 VMA/table inventories and early allocator with
    dynamic range nodes and synchronized physical-page backends.
-4. Add SMP synchronization, per-CPU scheduler ownership, ASID rollover, and
+5. Add SMP synchronization, per-CPU scheduler ownership, ASID rollover, and
    remote TLB shootdowns when secondary ARM64 CPUs are introduced.

@@ -51,6 +51,10 @@ typedef unsigned long long uint64_t;
 
 static const vm_space_t *el0_vm_space;
 static arm64_user_context_t *el0_registers;
+static const vm_space_t *pending_exec_vm_space;
+static arm64_user_context_t *pending_exec_registers;
+static arm64_exec_commit_hook_t pending_exec_commit_hook;
+static void *pending_exec_commit_owner;
 static uint64_t el0_exit_address;
 static uint64_t el0_exit_status;
 static unsigned int el0_syscall_count;
@@ -68,6 +72,25 @@ void arm64_exception_set_el0_context(const vm_space_t *vm_space,
     el0_exit_address = exit_address;
     el0_exit_status = 0;
     el0_syscall_count = 0;
+    pending_exec_vm_space = NULL;
+    pending_exec_registers = NULL;
+    pending_exec_commit_hook = NULL;
+    pending_exec_commit_owner = NULL;
+}
+
+int arm64_exception_request_exec(const vm_space_t *vm_space,
+                                 arm64_user_context_t *registers,
+                                 arm64_exec_commit_hook_t commit_hook,
+                                 void *commit_owner)
+{
+    if (!vm_space || !registers || pending_exec_vm_space ||
+        pending_exec_registers)
+        return -1;
+    pending_exec_vm_space = vm_space;
+    pending_exec_registers = registers;
+    pending_exec_commit_hook = commit_hook;
+    pending_exec_commit_owner = commit_owner;
+    return 0;
 }
 
 void arm64_exception_set_task_dispatcher(task_dispatcher_t *dispatcher)
@@ -119,6 +142,18 @@ static void save_el0_registers(const arm64_user_context_t *registers)
     el0_registers->pstate = registers->pstate;
 }
 
+static void restore_el0_registers(arm64_user_context_t *destination,
+                                  const arm64_user_context_t *source)
+{
+    unsigned int index;
+
+    for (index = 0; index < 31; index++)
+        destination->x[index] = source->x[index];
+    destination->sp = source->sp;
+    destination->pc = source->pc;
+    destination->pstate = source->pstate;
+}
+
 static void arm64_bootstrap_syscall(arm64_exception_frame_t *frame)
 {
     arm64_user_context_t *registers = &frame->user;
@@ -137,6 +172,31 @@ static void arm64_bootstrap_syscall(arm64_exception_frame_t *frame)
         result = syscall_dispatcher_dispatch(active_syscall_dispatcher,
                                              &request);
         registers->x[0] = (uint64_t)result;
+        if (number == ARMOS_NR_EXECVE && result == 0 &&
+            pending_exec_vm_space && pending_exec_registers) {
+            const vm_space_t *new_vm = pending_exec_vm_space;
+            const vm_space_t *previous_vm = el0_vm_space;
+            arm64_user_context_t *new_registers = pending_exec_registers;
+            arm64_exec_commit_hook_t commit_hook =
+                pending_exec_commit_hook;
+            void *commit_owner = pending_exec_commit_owner;
+
+            pending_exec_vm_space = NULL;
+            pending_exec_registers = NULL;
+            pending_exec_commit_hook = NULL;
+            pending_exec_commit_owner = NULL;
+            if (arm64_user_vm_activate_space(new_vm) != 0) {
+                registers->x[0] = syscall_error(EFAULT);
+                save_el0_registers(registers);
+                return;
+            }
+            el0_vm_space = new_vm;
+            el0_registers = new_registers;
+            restore_el0_registers(registers, new_registers);
+            if (commit_hook)
+                commit_hook(previous_vm, commit_owner);
+            return;
+        }
         save_el0_registers(registers);
 
         if (number == ARMOS_NR_SCHED_YIELD && result == 0 &&

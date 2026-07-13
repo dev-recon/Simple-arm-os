@@ -76,6 +76,7 @@ arm64_user_task_probe_entry:
 .equ ARMOS_NR_OPEN,  5
 .equ ARMOS_NR_CLOSE, 6
 .equ ARMOS_NR_WAITPID, 7
+.equ ARMOS_NR_EXECVE, 11
 .equ ARMOS_NR_GETPID, 20
 .equ ARMOS_NR_KILL, 37
 .equ ARMOS_NR_PIPE, 42
@@ -313,6 +314,25 @@ arm64_el0_generic_payload:
 1:
     b 1b
 .size arm64_el0_generic_payload, . - arm64_el0_generic_payload
+
+.align 4
+.global arm64_el0_exec_payload
+.type arm64_el0_exec_payload, %function
+arm64_el0_exec_payload:
+    movz x18, #0x1000
+    movk x18, #0x40, lsl #16
+    add x0, x18, #0x480
+    add x1, x18, #0x4a0
+    add x2, x18, #0x4b0
+    mov x8, #ARMOS_NR_EXECVE
+    svc #0
+
+    mov x0, #127
+    mov x8, #ARMOS_NR_EXIT
+    svc #0
+1:
+    b 1b
+.size arm64_el0_exec_payload, . - arm64_el0_exec_payload
 
 arm64_el0_payload_end:
 .size arm64_el0_payload_start, . - arm64_el0_payload_start
