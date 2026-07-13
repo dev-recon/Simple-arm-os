@@ -137,6 +137,9 @@ KERNEL_OBJS = \
 	$(ARCH_DIR)/task/task.o \
 	$(ARCH_DIR)/task/task_context.o \
 	$(ARCH_DIR)/task/context_switch.o \
+	kernel/syscalls/dispatch.o \
+	kernel/process/model.o \
+	kernel/process/elf64.o \
 	kernel/task/runqueue.o \
 	$(ARCH_DIR)/user/el0.o \
 	kernel/lib/fdt_memory.o \

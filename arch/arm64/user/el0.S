@@ -70,18 +70,26 @@ arm64_user_task_probe_entry:
 .global arm64_el0_payload_end
 .type arm64_el0_payload_start, %function
 .equ ARMOS_NR_EXIT,  1
+.equ ARMOS_NR_FORK,  2
 .equ ARMOS_NR_WRITE, 4
+.equ ARMOS_NR_WAITPID, 7
+.equ ARMOS_NR_GETPID, 20
+.equ ARMOS_NR_KILL, 37
+.equ ARMOS_NR_BRK, 45
+.equ ARMOS_NR_SIGACTION, 67
 .equ ARMOS_NR_SCHED_YIELD, 158
+.equ ARMOS_NR_MMAP, 195
+.equ ARMOS_NR_MUNMAP, 196
 .equ ARMOS_NR_UNKNOWN_TEST, 511
 .equ ARM64_TEST_MESSAGE_LENGTH, 23
 
 arm64_el0_payload_start:
-    movz x3, #0x1000
-    movk x3, #0x40, lsl #16
+    movz x18, #0x1000
+    movk x18, #0x40, lsl #16
 
     mov x8, #ARMOS_NR_WRITE
     mov x0, #1
-    mov x1, x3
+    mov x1, x18
     mov x2, #ARM64_TEST_MESSAGE_LENGTH
     svc #0
     sub sp, sp, #16
@@ -89,7 +97,7 @@ arm64_el0_payload_start:
     mov x0, xzr
     ldr x0, [sp]
     add sp, sp, #16
-    str x0, [x3, #0x100]
+    str x0, [x18, #0x100]
 
     mov x8, #ARMOS_NR_SCHED_YIELD
     svc #0
@@ -100,14 +108,14 @@ arm64_el0_payload_start:
     movk x1, #0x50, lsl #16
     mov x2, #1
     svc #0
-    str x0, [x3, #0x108]
+    str x0, [x18, #0x108]
 
     mov x8, #ARMOS_NR_UNKNOWN_TEST
     svc #0
-    str x0, [x3, #0x110]
+    str x0, [x18, #0x110]
 
     adr x4, 2f
-    str x4, [x3, #0x118]
+    str x4, [x18, #0x118]
     mov x8, #ARMOS_NR_EXIT
     mov x0, #42
     svc #0
@@ -142,6 +150,107 @@ arm64_el0_preempt_payload:
 4:
     b 4b
 .size arm64_el0_preempt_payload, . - arm64_el0_preempt_payload
+
+.align 4
+.global arm64_el0_generic_payload
+.type arm64_el0_generic_payload, %function
+arm64_el0_generic_payload:
+    movz x18, #0x1000
+    movk x18, #0x40, lsl #16
+
+    mov x8, #ARMOS_NR_WRITE
+    mov x0, #1
+    mov x1, x18
+    mov x2, #ARM64_TEST_MESSAGE_LENGTH
+    svc #0
+    str x0, [x18, #0x100]
+
+    mov x8, #ARMOS_NR_SCHED_YIELD
+    svc #0
+
+    mov x8, #ARMOS_NR_WRITE
+    mov x0, #1
+    movz x1, #0
+    movk x1, #0x50, lsl #16
+    mov x2, #1
+    svc #0
+    str x0, [x18, #0x108]
+
+    mov x8, #ARMOS_NR_UNKNOWN_TEST
+    svc #0
+    str x0, [x18, #0x110]
+
+    mov x8, #ARMOS_NR_GETPID
+    svc #0
+    str x0, [x18, #0x120]
+
+    mov x0, #10
+    mov x1, #0x1234
+    mov x2, xzr
+    mov x8, #ARMOS_NR_SIGACTION
+    svc #0
+    str x0, [x18, #0x150]
+
+    mov x8, #ARMOS_NR_FORK
+    svc #0
+    str x0, [x18, #0x158]
+
+    mov x0, #2
+    mov x1, #10
+    mov x8, #ARMOS_NR_KILL
+    svc #0
+    str x0, [x18, #0x160]
+
+    mov x0, #2
+    mov x1, xzr
+    mov x2, #1
+    mov x8, #ARMOS_NR_WAITPID
+    svc #0
+    str x0, [x18, #0x168]
+
+    movz x0, #0x1000
+    movk x0, #0x0800, lsl #16
+    mov x8, #ARMOS_NR_BRK
+    svc #0
+    str x0, [x18, #0x128]
+    sub x6, x0, #8
+    movz x7, #0x4d36
+    movk x7, #0x5456, lsl #16
+    movk x7, #0x554c, lsl #32
+    movk x7, #0x4641, lsl #48
+    str x7, [x6]
+    ldr x9, [x6]
+    str x9, [x18, #0x130]
+
+    mov x0, xzr
+    mov x1, #4096
+    mov x2, #3
+    mov x3, #0x22
+    mov x4, #-1
+    mov x5, xzr
+    mov x8, #ARMOS_NR_MMAP
+    svc #0
+    str x0, [x18, #0x138]
+    mov x6, x0
+    str x7, [x6]
+    ldr x9, [x6]
+    str x9, [x18, #0x140]
+
+    mov x0, x6
+    mov x1, #4096
+    mov x8, #ARMOS_NR_MUNMAP
+    svc #0
+    str x0, [x18, #0x148]
+
+    adr x4, 2f
+    str x4, [x18, #0x118]
+    mov x8, #ARMOS_NR_EXIT
+    mov x0, #42
+    svc #0
+2:
+1:
+    b 1b
+.size arm64_el0_generic_payload, . - arm64_el0_generic_payload
 
 arm64_el0_payload_end:
 .size arm64_el0_payload_start, . - arm64_el0_payload_start

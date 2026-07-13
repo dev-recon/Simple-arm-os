@@ -36,9 +36,21 @@ typedef signed long long   int64_t;
 
 /* === TYPES SYSTeME === */
 
+#ifndef ARMOS_ARCH_BITS
+#define ARMOS_ARCH_BITS 32
+#endif
+
+#if ARMOS_ARCH_BITS == 32
 typedef uint32_t           size_t;
 typedef int32_t            ssize_t;
 typedef int32_t            off_t;
+#elif ARMOS_ARCH_BITS == 64
+typedef uint64_t           size_t;
+typedef int64_t            ssize_t;
+typedef int64_t            off_t;
+#else
+#error "Unsupported ARMOS_ARCH_BITS value"
+#endif
 typedef uint32_t           mode_t;
 typedef int32_t            pid_t;
 typedef uint32_t           uid_t;
@@ -51,10 +63,6 @@ typedef uint32_t           blkcnt_t;
 typedef uint32_t           time_t;
 
 /* === TYPES POUR ADRESSES === */
-
-#ifndef ARMOS_ARCH_BITS
-#define ARMOS_ARCH_BITS 32
-#endif
 
 /* Pour les calculs d'adresses et pointeurs */
 #if ARMOS_ARCH_BITS == 32

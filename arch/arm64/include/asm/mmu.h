@@ -53,6 +53,29 @@ int arm64_mmu_prepare_user_l3_page(arm64_mmu_u64 l3_address,
                                    arm64_mmu_u64 virtual_address,
                                    arm64_mmu_u64 physical_address,
                                    unsigned int flags);
+int arm64_mmu_install_user_l2(arm64_mmu_u64 l1_address,
+                              arm64_mmu_u64 l2_address,
+                              arm64_mmu_u64 virtual_address);
+int arm64_mmu_install_user_l3(arm64_mmu_u64 l2_address,
+                              arm64_mmu_u64 l3_address,
+                              arm64_mmu_u64 virtual_address);
+int arm64_mmu_map_user_l3_page(arm64_mmu_u64 l3_address,
+                               arm64_mmu_u64 virtual_address,
+                               arm64_mmu_u64 physical_address,
+                               unsigned int flags,
+                               unsigned int asid);
+int arm64_mmu_unmap_user_l3_page(arm64_mmu_u64 l3_address,
+                                 arm64_mmu_u64 virtual_address,
+                                 unsigned int asid,
+                                 arm64_mmu_u64 *physical_address);
+int arm64_mmu_remove_user_l3(arm64_mmu_u64 l2_address,
+                             arm64_mmu_u64 l3_address,
+                             arm64_mmu_u64 virtual_address,
+                             unsigned int asid);
+int arm64_mmu_remove_user_l2(arm64_mmu_u64 l1_address,
+                             arm64_mmu_u64 l2_address,
+                             arm64_mmu_u64 virtual_address,
+                             unsigned int asid);
 int arm64_mmu_switch_user_ttbr0(arm64_mmu_u64 table_address,
                                 unsigned int asid);
 int arm64_mmu_switch_user_ttbr0_preserve(arm64_mmu_u64 table_address,

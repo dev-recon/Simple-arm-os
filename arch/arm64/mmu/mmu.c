@@ -10,6 +10,7 @@
  *
  * Responsibilities:
  * - Build and activate ARMv8-A 4 KiB translation tables for QEMU virt.
+ * - Grow user L2/L3 hierarchies and map or unmap individual pages.
  * - Enforce kernel/user page permissions and targeted TLB maintenance.
  * - Provide conservative and resident-ASID TTBR0 activation primitives.
  *
@@ -162,6 +163,55 @@ static int user_page_flags_valid(unsigned int flags)
         return 0;
     return (flags & (ARM64_USER_PAGE_WRITE | ARM64_USER_PAGE_EXEC)) !=
            (ARM64_USER_PAGE_WRITE | ARM64_USER_PAGE_EXEC);
+}
+
+static void invalidate_user_page(uint64_t virtual_address,
+                                 unsigned int asid)
+{
+    uint64_t operand = ((uint64_t)asid << TTBR_ASID_SHIFT) |
+                       (virtual_address >> 12);
+
+    __asm__ volatile("dsb ishst" ::: "memory");
+    __asm__ volatile("tlbi vae1, %0" :: "r"(operand));
+    __asm__ volatile("dsb ish" ::: "memory");
+    arm64_isb();
+}
+
+static int user_table_is_empty(uint64_t table_address)
+{
+    uint64_t *table =
+        (uint64_t *)arm64_mmu_kernel_address(table_address);
+    unsigned int index;
+
+    for (index = 0; index < ARM64_L1_ENTRIES; index++) {
+        if ((table[index] & DESC_VALID) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+static int remove_user_table(uint64_t parent_address,
+                             uint64_t child_address,
+                             uint64_t parent_index,
+                             uint64_t virtual_address,
+                             unsigned int asid)
+{
+    uint64_t *parent =
+        (uint64_t *)arm64_mmu_kernel_address(parent_address);
+    uint64_t descriptor = parent[parent_index];
+
+    if ((descriptor & (DESC_VALID | DESC_TABLE_PAGE)) !=
+            (DESC_VALID | DESC_TABLE_PAGE) ||
+        (descriptor & ARM64_TABLE_MASK) != child_address)
+        return -1;
+    if (!user_table_is_empty(child_address))
+        return -2;
+
+    parent[parent_index] = 0;
+    clean_range_to_poc(&parent[parent_index],
+                       sizeof(parent[parent_index]));
+    invalidate_user_page(virtual_address, asid);
+    return 0;
 }
 
 static uint64_t user_page_descriptor(uint64_t physical_address,
@@ -324,9 +374,9 @@ int arm64_mmu_prepare_identity_tables(arm64_mmu_u64 l1_address,
         l2_address == l3_address)
         return -1;
 
-    l1 = (uint64_t *)l1_address;
-    l2 = (uint64_t *)l2_address;
-    l3 = (uint64_t *)l3_address;
+    l1 = (uint64_t *)arm64_mmu_kernel_address(l1_address);
+    l2 = (uint64_t *)arm64_mmu_kernel_address(l2_address);
+    l3 = (uint64_t *)arm64_mmu_kernel_address(l3_address);
     for (i = 0; i < ARM64_L1_ENTRIES; i++) {
         l1[i] = 0;
         l2[i] = normal_memory_descriptor(
@@ -384,7 +434,7 @@ int arm64_mmu_update_identity_page(arm64_mmu_u64 l3_address,
         address < ARM64_QEMU_RAM_BASE || address >= ARM64_L3_WINDOW_END)
         return -1;
 
-    l3 = (uint64_t *)l3_address;
+    l3 = (uint64_t *)arm64_mmu_kernel_address(l3_address);
     index = (address - ARM64_QEMU_RAM_BASE) >> 12;
     l3[index] = present ? normal_memory_descriptor(address, 1) : 0;
     clean_range_to_poc(&l3[index], sizeof(l3[index]));
@@ -415,7 +465,7 @@ int arm64_mmu_protect_kernel_image(arm64_mmu_u64 l3_address,
         rodata_end > ARM64_L3_WINDOW_END)
         return -1;
 
-    l3 = (uint64_t *)l3_address;
+    l3 = (uint64_t *)arm64_mmu_kernel_address(l3_address);
     for (address = text_start; address < text_end; address += 4096u) {
         index = (address - ARM64_QEMU_RAM_BASE) >> 12;
         l3[index] =
@@ -451,7 +501,7 @@ int arm64_mmu_install_ttbr1(arm64_mmu_u64 l1_address,
     if ((arm64_mmu_read_sctlr() & SCTLR_M) == 0)
         return -2;
 
-    l1 = (uint64_t *)l1_address;
+    l1 = (uint64_t *)arm64_mmu_kernel_address(l1_address);
     for (i = 0; i < ARM64_L1_ENTRIES; i++)
         l1[i] = 0;
     l1[0] = device_block_descriptor();
@@ -487,7 +537,7 @@ int arm64_mmu_retire_low_map(arm64_mmu_u64 ttbr0_l1_address)
     if ((arm64_mmu_read_ttbr1() & ARM64_TABLE_MASK) == 0)
         return -2;
 
-    l1 = (uint64_t *)ttbr0_l1_address;
+    l1 = (uint64_t *)arm64_mmu_kernel_address(ttbr0_l1_address);
     if ((l1[0] & DESC_VALID) == 0 ||
         (l1[1] & (DESC_VALID | DESC_TABLE_PAGE)) !=
         (DESC_VALID | DESC_TABLE_PAGE))
@@ -512,7 +562,7 @@ int arm64_mmu_prepare_empty_ttbr0(arm64_mmu_u64 l1_address)
     if (!table_address_valid(l1_address))
         return -1;
 
-    l1 = (uint64_t *)l1_address;
+    l1 = (uint64_t *)arm64_mmu_kernel_address(l1_address);
     for (i = 0; i < ARM64_L1_ENTRIES; i++)
         l1[i] = 0;
     clean_range_to_poc(l1, 4096u);
@@ -545,9 +595,9 @@ int arm64_mmu_prepare_user_page(arm64_mmu_u64 l1_address,
         !user_page_flags_valid(flags))
         return -1;
 
-    l1 = (uint64_t *)l1_address;
-    l2 = (uint64_t *)l2_address;
-    l3 = (uint64_t *)l3_address;
+    l1 = (uint64_t *)arm64_mmu_kernel_address(l1_address);
+    l2 = (uint64_t *)arm64_mmu_kernel_address(l2_address);
+    l3 = (uint64_t *)arm64_mmu_kernel_address(l3_address);
     for (i = 0; i < ARM64_L1_ENTRIES; i++) {
         l1[i] = 0;
         l2[i] = 0;
@@ -584,11 +634,164 @@ int arm64_mmu_prepare_user_l3_page(arm64_mmu_u64 l3_address,
         !user_page_flags_valid(flags))
         return -1;
 
-    l3 = (uint64_t *)l3_address;
+    l3 = (uint64_t *)arm64_mmu_kernel_address(l3_address);
     l3_index = (virtual_address >> 12) & 0x1ffu;
     l3[l3_index] = user_page_descriptor(physical_address, flags);
     clean_range_to_poc(&l3[l3_index], sizeof(l3[l3_index]));
     return 0;
+}
+
+int arm64_mmu_install_user_l2(arm64_mmu_u64 l1_address,
+                              arm64_mmu_u64 l2_address,
+                              arm64_mmu_u64 virtual_address)
+{
+    uint64_t *l1;
+    uint64_t *l2;
+    uint64_t l1_index;
+    unsigned int index;
+
+    if (!table_address_valid(l1_address) ||
+        !table_address_valid(l2_address) || l1_address == l2_address ||
+        virtual_address >= (1ULL << 39))
+        return -1;
+
+    l1 = (uint64_t *)arm64_mmu_kernel_address(l1_address);
+    l2 = (uint64_t *)arm64_mmu_kernel_address(l2_address);
+    l1_index = (virtual_address >> 30) & 0x1ffu;
+    if ((l1[l1_index] & DESC_VALID) != 0)
+        return -2;
+
+    for (index = 0; index < ARM64_L1_ENTRIES; index++)
+        l2[index] = 0;
+    l1[l1_index] = (l2_address & ARM64_TABLE_MASK) |
+                   DESC_VALID | DESC_TABLE_PAGE;
+    clean_range_to_poc(l2, 4096u);
+    clean_range_to_poc(&l1[l1_index], sizeof(l1[l1_index]));
+    return 0;
+}
+
+int arm64_mmu_install_user_l3(arm64_mmu_u64 l2_address,
+                              arm64_mmu_u64 l3_address,
+                              arm64_mmu_u64 virtual_address)
+{
+    uint64_t *l2;
+    uint64_t *l3;
+    uint64_t l2_index;
+    unsigned int index;
+
+    if (!table_address_valid(l2_address) ||
+        !table_address_valid(l3_address) || l2_address == l3_address ||
+        virtual_address >= (1ULL << 39))
+        return -1;
+
+    l2 = (uint64_t *)arm64_mmu_kernel_address(l2_address);
+    l3 = (uint64_t *)arm64_mmu_kernel_address(l3_address);
+    l2_index = (virtual_address >> 21) & 0x1ffu;
+    if ((l2[l2_index] & DESC_VALID) != 0)
+        return -2;
+
+    for (index = 0; index < ARM64_L1_ENTRIES; index++)
+        l3[index] = 0;
+    l2[l2_index] = (l3_address & ARM64_TABLE_MASK) |
+                   DESC_VALID | DESC_TABLE_PAGE;
+    clean_range_to_poc(l3, 4096u);
+    clean_range_to_poc(&l2[l2_index], sizeof(l2[l2_index]));
+    return 0;
+}
+
+int arm64_mmu_map_user_l3_page(arm64_mmu_u64 l3_address,
+                               arm64_mmu_u64 virtual_address,
+                               arm64_mmu_u64 physical_address,
+                               unsigned int flags,
+                               unsigned int asid)
+{
+    uint64_t *l3;
+    uint64_t l3_index;
+
+    if (!table_address_valid(l3_address) ||
+        (virtual_address & 0xfffu) != 0 ||
+        (physical_address & 0xfffu) != 0 ||
+        virtual_address >= (1ULL << 39) ||
+        !user_page_flags_valid(flags) || asid == 0 ||
+        asid > TTBR_ASID_MAX)
+        return -1;
+
+    l3 = (uint64_t *)arm64_mmu_kernel_address(l3_address);
+    l3_index = (virtual_address >> 12) & 0x1ffu;
+    if ((l3[l3_index] & DESC_VALID) != 0)
+        return -2;
+    l3[l3_index] = user_page_descriptor(physical_address, flags);
+    clean_range_to_poc(&l3[l3_index], sizeof(l3[l3_index]));
+    invalidate_user_page(virtual_address, asid);
+    return 0;
+}
+
+int arm64_mmu_unmap_user_l3_page(arm64_mmu_u64 l3_address,
+                                 arm64_mmu_u64 virtual_address,
+                                 unsigned int asid,
+                                 arm64_mmu_u64 *physical_address)
+{
+    uint64_t *l3;
+    uint64_t descriptor;
+    uint64_t l3_index;
+
+    if (!table_address_valid(l3_address) ||
+        (virtual_address & 0xfffu) != 0 ||
+        virtual_address >= (1ULL << 39) || asid == 0 ||
+        asid > TTBR_ASID_MAX || !physical_address)
+        return -1;
+
+    l3 = (uint64_t *)arm64_mmu_kernel_address(l3_address);
+    l3_index = (virtual_address >> 12) & 0x1ffu;
+    descriptor = l3[l3_index];
+    if ((descriptor & (DESC_VALID | DESC_TABLE_PAGE)) !=
+        (DESC_VALID | DESC_TABLE_PAGE))
+        return -2;
+
+    *physical_address = descriptor & ARM64_TABLE_MASK;
+    l3[l3_index] = 0;
+    clean_range_to_poc(&l3[l3_index], sizeof(l3[l3_index]));
+
+    invalidate_user_page(virtual_address, asid);
+    return 0;
+}
+
+int arm64_mmu_remove_user_l3(arm64_mmu_u64 l2_address,
+                             arm64_mmu_u64 l3_address,
+                             arm64_mmu_u64 virtual_address,
+                             unsigned int asid)
+{
+    uint64_t l2_index;
+
+    if (!table_address_valid(l2_address) ||
+        !table_address_valid(l3_address) || l2_address == l3_address ||
+        (virtual_address & 0xfffu) != 0 ||
+        virtual_address >= (1ULL << 39) || asid == 0 ||
+        asid > TTBR_ASID_MAX)
+        return -1;
+
+    l2_index = (virtual_address >> 21) & 0x1ffu;
+    return remove_user_table(l2_address, l3_address, l2_index,
+                             virtual_address, asid);
+}
+
+int arm64_mmu_remove_user_l2(arm64_mmu_u64 l1_address,
+                             arm64_mmu_u64 l2_address,
+                             arm64_mmu_u64 virtual_address,
+                             unsigned int asid)
+{
+    uint64_t l1_index;
+
+    if (!table_address_valid(l1_address) ||
+        !table_address_valid(l2_address) || l1_address == l2_address ||
+        (virtual_address & 0xfffu) != 0 ||
+        virtual_address >= (1ULL << 39) || asid == 0 ||
+        asid > TTBR_ASID_MAX)
+        return -1;
+
+    l1_index = (virtual_address >> 30) & 0x1ffu;
+    return remove_user_table(l1_address, l2_address, l1_index,
+                             virtual_address, asid);
 }
 
 static int switch_user_ttbr0(arm64_mmu_u64 table_address,

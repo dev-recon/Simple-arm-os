@@ -78,7 +78,15 @@ ArmOS currently provides:
   switch while carrying the EL0 image and TTBR0/ASID identity; the switch
   boundary activates that identity and validates mapped/empty TTBR0 isolation;
   mapping generations now preserve resident single-CPU ASIDs without a TLBI
-  on each context switch
+  on each context switch; user page tables now grow L2/L3 levels on demand
+  across multiple virtual regions after low-map retirement, and page unmap
+  performs targeted `(ASID, VA)` invalidation with exact physical-page and
+  table-lifecycle accounting; eager anonymous ranges prevalidate overlap,
+  roll back partial allocation, cross L3 boundaries, and reclaim empty L3/L2
+  tables; a native-width generic syscall dispatcher, process-state model, and
+  AArch64 ELF64 loader are now exercised at boot; lower-EL translation faults
+  back lazy `brk` and private anonymous `mmap` reservations with zeroed pages,
+  and the EL0 probe validates `munmap` and process exit through that path
 - MMU enabled with split TTBR0/TTBR1 address spaces
 - ASID support and ASID rollover handling
 - typed physical/virtual address groundwork (`paddr_t`, `vaddr_t`, `pfn_t`)
@@ -348,10 +356,11 @@ Medium-term ideas:
 
 - improve POSIX compatibility for larger userland packages
 - extend the locally IRQ-safe ARM64 dispatcher with SMP runqueue locking and
-  per-CPU ownership, replace the bounded generic ARM64 VMA storage with dynamic
-  runtime mappings, make ASID residency SMP-safe, move early allocation into
-  the synchronized physical allocator, and connect the validated syscall
-  registers to the generic dispatcher and ELF64 process loader
+  per-CPU ownership, replace the bounded generic ARM64 VMA/table inventories
+  with dynamic range nodes, make ASID residency SMP-safe, move early allocation
+  into the synchronized physical allocator, and connect VFS-backed ELF64
+  `execve`, runnable fork children, file descriptors, pipes, and TTYs before
+  building the AArch64 newlib userland
 
 See [`ROADMAP.md`](ROADMAP.md) for more detail.
 

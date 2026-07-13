@@ -10,6 +10,9 @@
  *
  * Responsibilities:
  * - Own bootstrap user tables, mapped pages and ASID allocation.
+ * - Grow bounded L2/L3 table inventories and retire mapped pages.
+ * - Provide transactional anonymous range mapping and table reclamation.
+ * - Reserve lazy brk/mmap pages and resolve their EL0 translation faults.
  * - Bind the ARM64 backend to the generic vm_space_t identity.
  * - Maintain a sorted generic VMA list for every bootstrap mapping.
  * - Track mapping generations and resident ASID translations.
@@ -24,7 +27,6 @@
 
 #define ARM64_ASID_COUNT       256u
 #define ARM64_ASID_BITMAP_SIZE (ARM64_ASID_COUNT / 8u)
-#define ARM64_L3_WINDOW_SIZE   0x200000ULL
 #define ARM64_TTBR_TABLE_MASK  0x0000FFFFFFFFF000ULL
 
 static uint8_t arm64_asid_bitmap[ARM64_ASID_BITMAP_SIZE];
@@ -38,6 +40,15 @@ typedef struct {
 } arm64_asid_residency_t;
 
 static arm64_asid_residency_t arm64_asid_residency[ARM64_ASID_COUNT];
+
+static void arm64_user_vm_publish_targeted_generation(arm64_user_vm_t *vm)
+{
+    arm64_asid_residency_t *residency =
+        &arm64_asid_residency[vm->asid];
+
+    if (residency->table == vm->l1)
+        residency->generation = vm->tlb_generation;
+}
 
 _Static_assert(ARM64_USER_PAGE_READ == VMA_READ,
                "ARM64 read permission must match generic VMA_READ");
@@ -109,6 +120,246 @@ static void arm64_user_vm_rebuild_vma_list(arm64_user_vm_t *vm)
     }
 }
 
+static arm64_user_vm_l2_table_t *arm64_user_vm_find_l2(
+    arm64_user_vm_t *vm,
+    vaddr_t virtual_address)
+{
+    uint32_t l1_index = (uint32_t)((virtual_address >> 30) & 0x1ffu);
+    unsigned int index;
+
+    for (index = 0; index < vm->l2_table_count; index++) {
+        if (vm->l2_tables[index].l1_index == l1_index)
+            return &vm->l2_tables[index];
+    }
+    return NULL;
+}
+
+static arm64_user_vm_l3_table_t *arm64_user_vm_find_l3(
+    arm64_user_vm_t *vm,
+    vaddr_t virtual_address)
+{
+    uint32_t l1_index = (uint32_t)((virtual_address >> 30) & 0x1ffu);
+    uint32_t l2_index = (uint32_t)((virtual_address >> 21) & 0x1ffu);
+    unsigned int index;
+
+    for (index = 0; index < vm->l3_table_count; index++) {
+        if (vm->l3_tables[index].l1_index == l1_index &&
+            vm->l3_tables[index].l2_index == l2_index)
+            return &vm->l3_tables[index];
+    }
+    return NULL;
+}
+
+static unsigned int arm64_user_vm_mapping_index(
+    const arm64_user_vm_t *vm,
+    vaddr_t virtual_address)
+{
+    unsigned int index;
+
+    for (index = 0; index < vm->mapping_count; index++) {
+        if (vm->mappings[index].vma.start == virtual_address)
+            return index;
+    }
+    return vm->mapping_count;
+}
+
+static int arm64_user_vm_l3_has_mapping(const arm64_user_vm_t *vm,
+                                        uint32_t l1_index,
+                                        uint32_t l2_index)
+{
+    unsigned int index;
+
+    for (index = 0; index < vm->mapping_count; index++) {
+        vaddr_t address = vm->mappings[index].vma.start;
+
+        if (vm->mappings[index].physical_address != 0 &&
+            ((address >> 30) & 0x1ffu) == l1_index &&
+            ((address >> 21) & 0x1ffu) == l2_index)
+            return 1;
+    }
+    return 0;
+}
+
+static int arm64_user_vm_l2_has_l3(const arm64_user_vm_t *vm,
+                                   uint32_t l1_index)
+{
+    unsigned int index;
+
+    for (index = 0; index < vm->l3_table_count; index++) {
+        if (vm->l3_tables[index].l1_index == l1_index)
+            return 1;
+    }
+    return 0;
+}
+
+static int arm64_user_vm_reclaim_empty_tables(
+    arm64_user_vm_t *vm,
+    early_page_allocator_t *allocator,
+    vaddr_t virtual_address)
+{
+    arm64_user_vm_l2_table_t *l2;
+    arm64_user_vm_l3_table_t *l3;
+    paddr_t table;
+    uint32_t l1_index = (uint32_t)((virtual_address >> 30) & 0x1ffu);
+    uint32_t l2_index = (uint32_t)((virtual_address >> 21) & 0x1ffu);
+    unsigned int index;
+    unsigned int last;
+
+    l3 = arm64_user_vm_find_l3(vm, virtual_address);
+    if (l3 && !arm64_user_vm_l3_has_mapping(vm, l1_index, l2_index)) {
+        l2 = arm64_user_vm_find_l2(vm, virtual_address);
+        if (!l2 || arm64_mmu_remove_user_l3(
+                l2->table, l3->table, virtual_address, vm->asid) != 0)
+            return -1;
+        table = l3->table;
+        if (early_page_free_pages(allocator, table, 1) != 0)
+            return -2;
+        for (index = 0; index < vm->l3_table_count; index++) {
+            if (vm->l3_tables[index].table == table)
+                break;
+        }
+        if (index == vm->l3_table_count)
+            return -3;
+        last = vm->l3_table_count - 1;
+        if (index != last)
+            vm->l3_tables[index] = vm->l3_tables[last];
+        clear_bytes(&vm->l3_tables[last], sizeof(vm->l3_tables[last]));
+        vm->l3_table_count--;
+    }
+
+    l2 = arm64_user_vm_find_l2(vm, virtual_address);
+    if (l2 && !arm64_user_vm_l2_has_l3(vm, l1_index)) {
+        table = l2->table;
+        if (arm64_mmu_remove_user_l2(vm->l1, table,
+                                     virtual_address, vm->asid) != 0)
+            return -4;
+        if (early_page_free_pages(allocator, table, 1) != 0)
+            return -5;
+        for (index = 0; index < vm->l2_table_count; index++) {
+            if (vm->l2_tables[index].table == table)
+                break;
+        }
+        if (index == vm->l2_table_count)
+            return -6;
+        last = vm->l2_table_count - 1;
+        if (index != last)
+            vm->l2_tables[index] = vm->l2_tables[last];
+        clear_bytes(&vm->l2_tables[last], sizeof(vm->l2_tables[last]));
+        vm->l2_table_count--;
+    }
+    return 0;
+}
+
+static int arm64_user_vm_validate_tables(const arm64_user_vm_t *vm)
+{
+    unsigned int first;
+    unsigned int second;
+    int parent_found;
+
+    if (vm->l2_table_count > ARM64_USER_VM_MAX_L2_TABLES ||
+        vm->l3_table_count > ARM64_USER_VM_MAX_L3_TABLES)
+        return -1;
+    for (first = 0; first < vm->l2_table_count; first++) {
+        if (vm->l2_tables[first].l1_index >= 512u ||
+            vm->l2_tables[first].table == 0 ||
+            (vm->l2_tables[first].table & PAGE_OFFSET_MASK) != 0 ||
+            vm->l2_tables[first].table == vm->l1)
+            return -1;
+        for (second = first + 1; second < vm->l2_table_count; second++) {
+            if (vm->l2_tables[first].l1_index ==
+                    vm->l2_tables[second].l1_index ||
+                vm->l2_tables[first].table ==
+                    vm->l2_tables[second].table)
+                return -1;
+        }
+    }
+    for (first = 0; first < vm->l3_table_count; first++) {
+        if (vm->l3_tables[first].l1_index >= 512u ||
+            vm->l3_tables[first].l2_index >= 512u ||
+            vm->l3_tables[first].table == 0 ||
+            (vm->l3_tables[first].table & PAGE_OFFSET_MASK) != 0 ||
+            vm->l3_tables[first].table == vm->l1)
+            return -1;
+        parent_found = 0;
+        for (second = 0; second < vm->l2_table_count; second++) {
+            if (vm->l2_tables[second].l1_index ==
+                vm->l3_tables[first].l1_index)
+                parent_found = 1;
+        }
+        if (!parent_found)
+            return -1;
+        for (second = first + 1; second < vm->l3_table_count; second++) {
+            if (vm->l3_tables[first].l1_index ==
+                    vm->l3_tables[second].l1_index &&
+                vm->l3_tables[first].l2_index ==
+                    vm->l3_tables[second].l2_index)
+                return -1;
+            if (vm->l3_tables[first].table ==
+                vm->l3_tables[second].table)
+                return -1;
+        }
+        for (second = 0; second < vm->l2_table_count; second++) {
+            if (vm->l3_tables[first].table ==
+                vm->l2_tables[second].table)
+                return -1;
+        }
+    }
+    return 0;
+}
+
+static int arm64_user_vm_flags_valid(unsigned int flags)
+{
+    if ((flags & VMA_READ) == 0 ||
+        (flags & ~(VMA_READ | VMA_WRITE | VMA_EXEC | VMA_LAZY)) != 0)
+        return 0;
+    return (flags & (VMA_WRITE | VMA_EXEC)) !=
+           (VMA_WRITE | VMA_EXEC);
+}
+
+static int arm64_user_vm_ensure_l3(arm64_user_vm_t *vm,
+                                   early_page_allocator_t *allocator,
+                                   vaddr_t virtual_address,
+                                   paddr_t *l3_address)
+{
+    arm64_user_vm_l2_table_t *l2 =
+        arm64_user_vm_find_l2(vm, virtual_address);
+    arm64_user_vm_l3_table_t *l3 =
+        arm64_user_vm_find_l3(vm, virtual_address);
+    paddr_t table;
+
+    if (l3) {
+        *l3_address = l3->table;
+        return 0;
+    }
+    if (!l2) {
+        if (vm->l2_table_count >= ARM64_USER_VM_MAX_L2_TABLES ||
+            early_page_alloc_pages(allocator, 1, &table) != 0)
+            return -1;
+        if (arm64_mmu_install_user_l2(vm->l1, table,
+                                      virtual_address) != 0) {
+            early_page_free_pages(allocator, table, 1);
+            return -2;
+        }
+        l2 = &vm->l2_tables[vm->l2_table_count++];
+        l2->l1_index = (uint32_t)((virtual_address >> 30) & 0x1ffu);
+        l2->table = table;
+    }
+    if (vm->l3_table_count >= ARM64_USER_VM_MAX_L3_TABLES ||
+        early_page_alloc_pages(allocator, 1, &table) != 0)
+        return -3;
+    if (arm64_mmu_install_user_l3(l2->table, table,
+                                  virtual_address) != 0) {
+        early_page_free_pages(allocator, table, 1);
+        return -4;
+    }
+    l3 = &vm->l3_tables[vm->l3_table_count++];
+    l3->l1_index = (uint32_t)((virtual_address >> 30) & 0x1ffu);
+    l3->l2_index = (uint32_t)((virtual_address >> 21) & 0x1ffu);
+    l3->table = table;
+    *l3_address = table;
+    return 0;
+}
+
 static const arm64_user_vm_mapping_t *arm64_user_vm_mapping_for_vma(
     const arm64_user_vm_t *vm,
     const vma_t *vma)
@@ -134,12 +385,16 @@ static int arm64_user_vm_validate_vmas(const arm64_user_vm_t *vm)
     while (vma) {
         mapping = arm64_user_vm_mapping_for_vma(vm, vma);
         if (count >= vm->mapping_count ||
-            !mapping || mapping->physical_address == 0 ||
-            (mapping->physical_address & PAGE_OFFSET_MASK) != 0 ||
+            !mapping ||
+            (mapping->physical_address == 0 &&
+             (vma->flags & VMA_LAZY) == 0) ||
+            (mapping->physical_address != 0 &&
+             (mapping->physical_address & PAGE_OFFSET_MASK) != 0) ||
             (vma->start & PAGE_OFFSET_MASK) != 0 ||
             vma->end != vma->start + PAGE_SIZE ||
             vma->end <= vma->start || vma->start < previous_end ||
-            (vma->flags & ~(VMA_READ | VMA_WRITE | VMA_EXEC)) != 0 ||
+            (vma->flags & ~(VMA_READ | VMA_WRITE | VMA_EXEC |
+                            VMA_LAZY)) != 0 ||
             (vma->flags & VMA_READ) == 0 ||
             (vma->flags & (VMA_WRITE | VMA_EXEC)) ==
                 (VMA_WRITE | VMA_EXEC))
@@ -165,6 +420,7 @@ static int arm64_user_vm_validate_fields(const arm64_user_vm_t *vm)
         vm->space.brk < vm->space.heap_start ||
         vm->space.brk > vm->space.heap_end ||
         vm->space.stack_start != USER_STACK_TOP ||
+        arm64_user_vm_validate_tables(vm) != 0 ||
         arm64_user_vm_validate_vmas(vm) != 0)
         return -1;
     return 0;
@@ -181,7 +437,8 @@ int arm64_user_vm_validate_identity(const arm64_user_vm_t *vm)
 int arm64_user_vm_rebind_space(arm64_user_vm_t *vm)
 {
     if (!vm || vm->magic != ARM64_USER_VM_MAGIC || vm->l1 == 0 ||
-        vm->asid == 0 || vm->mapping_count > ARM64_USER_VM_MAX_MAPPINGS)
+        vm->asid == 0 || vm->mapping_count > ARM64_USER_VM_MAX_MAPPINGS ||
+        arm64_user_vm_validate_tables(vm) != 0)
         return -1;
     arm64_user_vm_rebuild_vma_list(vm);
     vm->space.arch_private = vm;
@@ -221,19 +478,17 @@ int arm64_user_vm_init(arm64_user_vm_t *vm,
     asid = allocate_asid();
     if (asid == 0)
         return -2;
-    if (early_page_alloc_pages(allocator, 3, &table_pages) != 0) {
+    if (early_page_alloc_pages(allocator, 1, &table_pages) != 0) {
         release_asid(asid);
         return -3;
     }
     if (arm64_mmu_prepare_empty_ttbr0(table_pages) != 0) {
-        early_page_free_pages(allocator, table_pages, 3);
+        early_page_free_pages(allocator, table_pages, 1);
         release_asid(asid);
         return -4;
     }
 
     vm->l1 = table_pages;
-    vm->l2 = table_pages + PAGE_SIZE;
-    vm->l3 = table_pages + 2 * PAGE_SIZE;
     vm->asid = asid;
     vm->tlb_generation = allocate_tlb_generation();
     vm->space.pgdir = (pgdir_t)(uintptr_t)vm->l1;
@@ -256,36 +511,40 @@ int arm64_user_vm_map_new_page(arm64_user_vm_t *vm,
                                paddr_t *physical_address)
 {
     paddr_t page;
-    vaddr_t window;
+    paddr_t l3_address;
     unsigned int index;
     int result;
 
     if (arm64_user_vm_validate_identity(vm) != 0 || !allocator ||
         !physical_address ||
         (virtual_address & PAGE_OFFSET_MASK) != 0 ||
+        virtual_address >= (1ULL << 39) ||
+        !arm64_user_vm_flags_valid(flags) || (flags & VMA_LAZY) != 0 ||
         vm->mapping_count >= ARM64_USER_VM_MAX_MAPPINGS)
         return -1;
 
-    window = virtual_address & ~(ARM64_L3_WINDOW_SIZE - 1u);
-    if (vm->mapping_count != 0 && window != vm->l3_window)
+    if (arm64_user_vm_mapping_index(vm, virtual_address) !=
+        vm->mapping_count)
         return -2;
-    for (index = 0; index < vm->mapping_count; index++) {
-        if (vm->mappings[index].vma.start == virtual_address)
-            return -3;
-    }
 
-    if (early_page_alloc_pages(allocator, 1, &page) != 0)
+    if (arm64_user_vm_ensure_l3(vm, allocator, virtual_address,
+                                &l3_address) != 0) {
+        arm64_user_vm_reclaim_empty_tables(vm, allocator,
+                                           virtual_address);
+        return -3;
+    }
+    if (early_page_alloc_pages(allocator, 1, &page) != 0) {
+        arm64_user_vm_reclaim_empty_tables(vm, allocator,
+                                           virtual_address);
         return -4;
-
-    if (vm->mapping_count == 0) {
-        result = arm64_mmu_prepare_user_page(vm->l1, vm->l2, vm->l3,
-                                             virtual_address, page, flags);
-    } else {
-        result = arm64_mmu_prepare_user_l3_page(vm->l3, virtual_address,
-                                                page, flags);
     }
+
+    result = arm64_mmu_map_user_l3_page(l3_address, virtual_address,
+                                        page, flags, vm->asid);
     if (result != 0) {
         early_page_free_pages(allocator, page, 1);
+        arm64_user_vm_reclaim_empty_tables(vm, allocator,
+                                           virtual_address);
         return -5;
     }
 
@@ -297,10 +556,313 @@ int arm64_user_vm_map_new_page(arm64_user_vm_t *vm,
     vm->mappings[index].vma.next = NULL;
     vm->mappings[index].physical_address = page;
     arm64_user_vm_rebuild_vma_list(vm);
-    vm->l3_window = window;
     vm->tlb_generation = allocate_tlb_generation();
+    arm64_user_vm_publish_targeted_generation(vm);
     *physical_address = page;
     return 0;
+}
+
+int arm64_user_vm_unmap_page(arm64_user_vm_t *vm,
+                             early_page_allocator_t *allocator,
+                             vaddr_t virtual_address)
+{
+    arm64_user_vm_l3_table_t *l3;
+    paddr_t physical_address;
+    arm64_mmu_u64 descriptor_address;
+    unsigned int index;
+    unsigned int last;
+
+    if (arm64_user_vm_validate_identity(vm) != 0 || !allocator ||
+        (virtual_address & PAGE_OFFSET_MASK) != 0)
+        return -1;
+    index = arm64_user_vm_mapping_index(vm, virtual_address);
+    if (index == vm->mapping_count)
+        return -2;
+    if (vm->mappings[index].physical_address == 0) {
+        last = vm->mapping_count - 1;
+        if (index != last)
+            vm->mappings[index] = vm->mappings[last];
+        clear_bytes(&vm->mappings[last], sizeof(vm->mappings[last]));
+        vm->mapping_count--;
+        arm64_user_vm_rebuild_vma_list(vm);
+        return arm64_user_vm_validate_identity(vm);
+    }
+    l3 = arm64_user_vm_find_l3(vm, virtual_address);
+    if (!l3)
+        return -3;
+    if (arm64_mmu_unmap_user_l3_page(l3->table, virtual_address,
+                                     vm->asid,
+                                     &descriptor_address) != 0)
+        return -4;
+    physical_address = (paddr_t)descriptor_address;
+    if (physical_address != vm->mappings[index].physical_address)
+        return -5;
+    if (early_page_free_pages(allocator, physical_address, 1) != 0)
+        return -6;
+
+    last = vm->mapping_count - 1;
+    if (index != last)
+        vm->mappings[index] = vm->mappings[last];
+    clear_bytes(&vm->mappings[last], sizeof(vm->mappings[last]));
+    vm->mapping_count--;
+    arm64_user_vm_rebuild_vma_list(vm);
+    vm->tlb_generation = allocate_tlb_generation();
+    arm64_user_vm_publish_targeted_generation(vm);
+    if (arm64_user_vm_reclaim_empty_tables(vm, allocator,
+                                           virtual_address) != 0)
+        return -7;
+    return arm64_user_vm_validate_identity(vm);
+}
+
+int arm64_user_vm_map_anonymous(arm64_user_vm_t *vm,
+                                early_page_allocator_t *allocator,
+                                vaddr_t virtual_address,
+                                size_t length,
+                                unsigned int flags)
+{
+    paddr_t page;
+    vaddr_t end;
+    vaddr_t cursor;
+    unsigned int mapped = 0;
+    unsigned int page_count;
+
+    if (arm64_user_vm_validate_identity(vm) != 0 || !allocator ||
+        length == 0 || (virtual_address & PAGE_OFFSET_MASK) != 0 ||
+        (length & PAGE_OFFSET_MASK) != 0 ||
+        !arm64_user_vm_flags_valid(flags))
+        return -1;
+    end = virtual_address + (vaddr_t)length;
+    if (end <= virtual_address || end > (1ULL << 39))
+        return -1;
+    page_count = (unsigned int)(length / PAGE_SIZE);
+    if (page_count > ARM64_USER_VM_MAX_MAPPINGS - vm->mapping_count)
+        return -2;
+
+    for (cursor = virtual_address; cursor < end; cursor += PAGE_SIZE) {
+        if (arm64_user_vm_mapping_index(vm, cursor) != vm->mapping_count)
+            return -2;
+    }
+    for (cursor = virtual_address; cursor < end; cursor += PAGE_SIZE) {
+        if (arm64_user_vm_map_new_page(vm, allocator, cursor,
+                                       flags, &page) != 0)
+            break;
+        mapped++;
+    }
+    if (cursor == end)
+        return 0;
+
+    while (mapped > 0) {
+        mapped--;
+        cursor = virtual_address + (vaddr_t)mapped * PAGE_SIZE;
+        if (arm64_user_vm_unmap_page(vm, allocator, cursor) != 0)
+            return -4;
+    }
+    return -3;
+}
+
+int arm64_user_vm_unmap_range(arm64_user_vm_t *vm,
+                              early_page_allocator_t *allocator,
+                              vaddr_t virtual_address,
+                              size_t length)
+{
+    vaddr_t end;
+    vaddr_t cursor;
+
+    if (arm64_user_vm_validate_identity(vm) != 0 || !allocator ||
+        length == 0 || (virtual_address & PAGE_OFFSET_MASK) != 0 ||
+        (length & PAGE_OFFSET_MASK) != 0)
+        return -1;
+    end = virtual_address + (vaddr_t)length;
+    if (end <= virtual_address || end > (1ULL << 39))
+        return -1;
+
+    for (cursor = virtual_address; cursor < end; cursor += PAGE_SIZE) {
+        if (arm64_user_vm_mapping_index(vm, cursor) == vm->mapping_count)
+            return -2;
+    }
+    for (cursor = virtual_address; cursor < end; cursor += PAGE_SIZE) {
+        if (arm64_user_vm_unmap_page(vm, allocator, cursor) != 0)
+            return -3;
+    }
+    return 0;
+}
+
+int arm64_user_vm_reserve_anonymous(arm64_user_vm_t *vm,
+                                    vaddr_t virtual_address,
+                                    size_t length,
+                                    unsigned int flags)
+{
+    vaddr_t cursor;
+    vaddr_t end;
+    unsigned int reserved = 0;
+    unsigned int page_count;
+
+    flags |= VMA_LAZY;
+    if (arm64_user_vm_validate_identity(vm) != 0 || length == 0 ||
+        (virtual_address & PAGE_OFFSET_MASK) != 0 ||
+        (length & PAGE_OFFSET_MASK) != 0 ||
+        !arm64_user_vm_flags_valid(flags) || (flags & VMA_EXEC) != 0)
+        return -1;
+    end = virtual_address + (vaddr_t)length;
+    if (end <= virtual_address || end > (1ULL << 39))
+        return -1;
+    page_count = (unsigned int)(length / PAGE_SIZE);
+    if (page_count > ARM64_USER_VM_MAX_MAPPINGS - vm->mapping_count)
+        return -2;
+    for (cursor = virtual_address; cursor < end; cursor += PAGE_SIZE) {
+        if (arm64_user_vm_mapping_index(vm, cursor) != vm->mapping_count)
+            return -2;
+    }
+
+    for (cursor = virtual_address; cursor < end; cursor += PAGE_SIZE) {
+        unsigned int index = vm->mapping_count++;
+
+        vm->mappings[index].vma.start = cursor;
+        vm->mappings[index].vma.end = cursor + PAGE_SIZE;
+        vm->mappings[index].vma.flags = flags;
+        vm->mappings[index].vma.shm_id = 0;
+        vm->mappings[index].vma.next = NULL;
+        vm->mappings[index].physical_address = 0;
+        reserved++;
+    }
+    arm64_user_vm_rebuild_vma_list(vm);
+    if (arm64_user_vm_validate_identity(vm) == 0)
+        return 0;
+
+    while (reserved-- > 0)
+        clear_bytes(&vm->mappings[--vm->mapping_count],
+                    sizeof(vm->mappings[0]));
+    arm64_user_vm_rebuild_vma_list(vm);
+    return -3;
+}
+
+int arm64_user_vm_handle_page_fault(arm64_user_vm_t *vm,
+                                    early_page_allocator_t *allocator,
+                                    vaddr_t fault_address,
+                                    int is_write,
+                                    int is_execute,
+                                    paddr_t *physical_address)
+{
+    vaddr_t page_address = fault_address & PAGE_MASK;
+    arm64_user_vm_mapping_t *mapping;
+    paddr_t page;
+    paddr_t l3_address;
+    unsigned int index;
+    unsigned int page_flags;
+
+    if (arm64_user_vm_validate_identity(vm) != 0 || !allocator)
+        return -1;
+    index = arm64_user_vm_mapping_index(vm, page_address);
+    if (index == vm->mapping_count)
+        return -2;
+    mapping = &vm->mappings[index];
+    if (mapping->physical_address != 0 ||
+        (mapping->vma.flags & VMA_LAZY) == 0 ||
+        (is_write && (mapping->vma.flags & VMA_WRITE) == 0) ||
+        (is_execute && (mapping->vma.flags & VMA_EXEC) == 0))
+        return -3;
+    if (arm64_user_vm_ensure_l3(vm, allocator, page_address,
+                                &l3_address) != 0)
+        return -4;
+    if (early_page_alloc_pages(allocator, 1, &page) != 0) {
+        arm64_user_vm_reclaim_empty_tables(vm, allocator, page_address);
+        return -5;
+    }
+    clear_bytes((void *)(uintptr_t)arm64_mmu_kernel_address(page), PAGE_SIZE);
+    page_flags = mapping->vma.flags &
+        (VMA_READ | VMA_WRITE | VMA_EXEC);
+    if (arm64_mmu_map_user_l3_page(l3_address, page_address, page,
+                                   page_flags, vm->asid) != 0) {
+        early_page_free_pages(allocator, page, 1);
+        arm64_user_vm_reclaim_empty_tables(vm, allocator, page_address);
+        return -6;
+    }
+    mapping->physical_address = page;
+    mapping->vma.flags = page_flags;
+    vm->tlb_generation = allocate_tlb_generation();
+    arm64_user_vm_publish_targeted_generation(vm);
+    if (physical_address)
+        *physical_address = page;
+    return arm64_user_vm_validate_identity(vm);
+}
+
+int arm64_user_vm_set_brk(arm64_user_vm_t *vm,
+                          early_page_allocator_t *allocator,
+                          vaddr_t requested,
+                          vaddr_t *result)
+{
+    vaddr_t old_break;
+    vaddr_t old_end;
+    vaddr_t new_end;
+
+    if (arm64_user_vm_validate_identity(vm) != 0 || !allocator || !result)
+        return -1;
+    if (requested == 0) {
+        *result = vm->space.brk;
+        return 0;
+    }
+    if (requested < vm->space.heap_start || requested > vm->space.heap_end)
+        return -2;
+    old_break = vm->space.brk;
+    old_end = (old_break + PAGE_SIZE - 1) & PAGE_MASK;
+    new_end = (requested + PAGE_SIZE - 1) & PAGE_MASK;
+    if (new_end > old_end) {
+        if (arm64_user_vm_reserve_anonymous(
+                vm, old_end, new_end - old_end,
+                VMA_READ | VMA_WRITE) != 0)
+            return -3;
+    } else if (new_end < old_end) {
+        if (arm64_user_vm_unmap_range(vm, allocator, new_end,
+                                      old_end - new_end) != 0)
+            return -4;
+    }
+    vm->space.brk = requested;
+    *result = requested;
+    return 0;
+}
+
+int arm64_user_vm_mmap_anonymous(arm64_user_vm_t *vm,
+                                 vaddr_t hint,
+                                 size_t length,
+                                 unsigned int flags,
+                                 vaddr_t *result)
+{
+    vaddr_t cursor;
+    vaddr_t end;
+    const vma_t *vma;
+
+    if (arm64_user_vm_validate_identity(vm) != 0 || !result || length == 0 ||
+        !arm64_user_vm_flags_valid(flags) || (flags & VMA_EXEC) != 0)
+        return -1;
+    length = (length + PAGE_SIZE - 1) & PAGE_MASK;
+    if (length == 0 || length >
+        (size_t)(USER_STACK_BOTTOM - USER_SHM_END))
+        return -2;
+    cursor = hint ? (hint & PAGE_MASK) : USER_SHM_END;
+    if (cursor < USER_SHM_END || cursor >= USER_STACK_BOTTOM)
+        cursor = USER_SHM_END;
+
+    while (cursor < USER_STACK_BOTTOM) {
+        end = cursor + (vaddr_t)length;
+        if (end <= cursor || end > USER_STACK_BOTTOM)
+            return -3;
+        for (vma = vm->space.vma_list; vma; vma = vma->next) {
+            if (vma->end <= cursor)
+                continue;
+            if (vma->start >= end)
+                break;
+            cursor = vma->end;
+            break;
+        }
+        if (!vma || vma->start >= end) {
+            if (arm64_user_vm_reserve_anonymous(vm, cursor, length,
+                                                flags) != 0)
+                return -4;
+            *result = cursor;
+            return 0;
+        }
+    }
+    return -5;
 }
 
 int arm64_user_vm_activate(const arm64_user_vm_t *vm)
@@ -399,7 +961,10 @@ int arm64_user_vm_validate_range(const arm64_user_vm_t *vm,
     cursor = address;
     while (cursor < end) {
         page = cursor & PAGE_MASK;
-        if (arm64_user_vm_lookup(vm, page, NULL, &flags) != 0 ||
+        paddr_t physical_address;
+
+        if (arm64_user_vm_lookup(vm, page, &physical_address, &flags) != 0 ||
+            physical_address == 0 ||
             (flags & required_flags) != required_flags)
             return -3;
         next = page + PAGE_SIZE;
@@ -434,13 +999,24 @@ int arm64_user_vm_destroy(arm64_user_vm_t *vm,
         return -2;
 
     for (index = 0; index < vm->mapping_count; index++) {
-        if (early_page_free_pages(allocator,
+        if (vm->mappings[index].physical_address != 0 &&
+            early_page_free_pages(allocator,
                                   vm->mappings[index].physical_address,
                                   1) != 0)
             return -3;
     }
-    if (early_page_free_pages(allocator, vm->l1, 3) != 0)
-        return -4;
+    for (index = 0; index < vm->l3_table_count; index++) {
+        if (early_page_free_pages(allocator,
+                                  vm->l3_tables[index].table, 1) != 0)
+            return -4;
+    }
+    for (index = 0; index < vm->l2_table_count; index++) {
+        if (early_page_free_pages(allocator,
+                                  vm->l2_tables[index].table, 1) != 0)
+            return -5;
+    }
+    if (early_page_free_pages(allocator, vm->l1, 1) != 0)
+        return -6;
 
     release_asid(vm->asid);
     clear_bytes(vm, sizeof(*vm));

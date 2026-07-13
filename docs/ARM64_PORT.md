@@ -674,9 +674,127 @@ The main EL0 VM requires the exact code, data, stack chain before low-map
 retirement. Success reports `ARM64_GENERIC_VMA_OK`.
 
 The nodes and mapped pages are still allocated from a fixed bootstrap object
-and the early allocator. The next VM step is a runtime mapping backend with
-dynamic VMA nodes, page-table growth beyond one L3 window, unmap, and page
-ownership suitable for anonymous mappings and ELF64 segments.
+and the early allocator. Milestone 33 extends that bounded owner across a
+dynamic page-table hierarchy and adds page retirement; dynamic VMA allocation
+and the synchronized physical allocator remain later work.
+
+### Milestone 33: Runtime Page-Table Growth And Unmap
+
+An ARM64 user VM now starts with only its L1 table. L2 tables are allocated on
+demand for each occupied 1 GiB region and L3 tables are allocated on demand for
+each occupied 2 MiB window. The bounded owner inventories every table by its
+L1/L2 index, validates parentage and physical uniqueness, and releases mapped
+pages, L3 tables, L2 tables, and the L1 table in strict ownership order.
+
+Table access is valid both during identity-mapped bootstrap and after low-map
+retirement: physical table addresses are dereferenced through the live TTBR1
+kernel alias. Mapping a page installs a permission-checked PTE and invalidates
+that exact `(ASID, VA)` translation. Unmapping clears the PTE, cleans it to the
+point of coherency, performs the same targeted `TLBI VAE1`, returns the owned
+physical page, removes its generic VMA, and advances the mapping generation.
+If that ASID/table pair is already resident, the targeted operation publishes
+the new generation so a later context switch can preserve the remaining TLB
+entries instead of flushing the complete ASID.
+
+The high-half runtime probe creates a temporary VM spanning two L1 regions and
+three L3 windows. It activates the VM, checks EL0 read/write translations,
+removes the middle page, requires that translation to fault immediately while
+both neighbours remain mapped, restores the main user VM, and verifies exact
+allocator balance after destruction. Success reports
+`ARM64_DYNAMIC_USER_VM_OK`.
+
+This is still a bounded single-CPU backend. Milestone 34 adds eager anonymous
+ranges and empty-table reclamation; dynamic VMA nodes, synchronized page
+allocation, remote TLB shootdowns, anonymous demand paging, and ELF64 segment
+loading remain to be connected.
+
+### Milestone 34: Transactional Anonymous Ranges
+
+The bounded ARM64 VM backend now exposes eager anonymous range operations over
+the page primitive. A range must be non-empty, page-aligned, contained in the
+39-bit user address space, permission-valid, and small enough for the remaining
+mapping inventory. Every page is checked for overlap before allocation starts.
+If a later page allocation fails, the operation unmaps the pages already
+created in reverse order, returning their physical ownership and any hierarchy
+that became empty.
+
+Single-page unmap now reclaims structure as well as data. Once the VMA and PTE
+are gone, an empty L3 is detached only if its parent descriptor still names the
+expected physical table and all 512 child descriptors are invalid. An L2 with
+no remaining L3 children follows the same rule. Each parent descriptor is
+cleaned and invalidated for the active `(ASID, VA)` before the table page is
+returned to the allocator. A multi-page unmap prevalidates the complete range
+before applying that sequence page by page.
+
+The high-half probe maps a two-page anonymous range beginning at `0x7ff000`,
+so the second page enters a different 2 MiB L3 window. Both pages are readable
+and writable immediately in the resident ASID. A duplicate range is rejected
+without changing free-page accounting. Range unmap then faults both
+translations, preserves mappings on either side, collapses both empty L3
+tables, and returns to the exact pre-range allocation count. Final VM
+destruction still restores the original allocator count. Success reports
+`ARM64_ANON_RANGE_VM_OK`.
+
+These ranges are eagerly populated and still represented by one bounded VMA
+node per page. The next memory milestone is a dynamically allocated range VMA
+whose nonresident pages can be supplied by the EL0 data-abort path.
+
+### Milestone 35: Persistent Kernel Tasks
+
+ARM64 now leaves the bounded boot probes and enters a persistent single-CPU
+scheduler. Two generic `task_t` objects own independent high-half kernel
+stacks and use the empty TTBR0 address space: `idle0` waits in `WFI`, while
+`kinit` performs the first kernel-init lifecycle. The borrowed bootstrap task
+publishes both tasks and blocks permanently instead of remaining the implicit
+execution context.
+
+The physical timer remains periodic after bring-up. A narrow exception-layer
+tick hook applies wakeup policy before the normal deferred-preemption decision.
+`kinit` publishes a wake deadline with local IRQs masked, blocks, and is made
+ready by that hook after five ticks. The same IRQ return then preempts `idle0`
+and resumes `kinit` on its saved stack. Repeating this cycle exercises kernel
+tasks that yield through blocking kernel code, IRQ-frame suspension, timer
+preemption, and idle execution as a continuing runtime rather than a finite
+probe.
+
+The first completed wake validates that bootstrap is blocked, `kinit` is
+running, `idle0` is ready, and at least three dispatches occurred. Success
+reports `ARM64_BOOTSTRAP_RETIRED`, `ARM64_IDLE_KINIT_SWITCH_OK`, and
+`ARM64_RUNTIME_SCHEDULER_OK`. This is kernel `kinit`, not `/sbin/init`: generic
+process creation, ELF64 loading, VFS-backed `execve`, and the full syscall
+surface still separate this milestone from a 64-bit userland init.
+
+### Milestone 36: Syscalls, Processes, ELF64 And Lazy VM
+
+ARM64 now enters the architecture-neutral syscall dispatcher with the native
+AArch64 register width and all six argument registers. The dispatcher owns the
+complete ArmOS syscall-number table, reports `ENOSYS` for absent entries, and
+keeps call/rejection accounting outside the exception layer. The bootstrap
+registers process, signal, VM, and console handlers without changing the
+existing ARM32 syscall path.
+
+The generic process model now covers parent/child linkage, fork inheritance,
+exec address-space replacement, zombie publication, wait/reap selection,
+orphaning, pending signals, blocked signals, and signal dispositions. These
+state transitions are exercised independently of a concrete scheduler task.
+The ARM64 bootstrap syscall backend exposes the subset that can operate before
+VFS migration; creation of a runnable fork child and path-backed `execve`
+remain part of the VFS/process integration milestone.
+
+The generic ELF64 loader validates little-endian AArch64 `ET_EXEC` images,
+program-header bounds, segment alignment, user-address overflow, and load
+permissions. It maps, copies, and zero-fills `PT_LOAD` segments through VM
+callbacks, so image acquisition remains separate from loading. An in-memory
+ELF64 image proves executable mapping and BSS zeroing and reports
+`ARM64_PROCESS_MODEL_OK` and `ARM64_ELF64_LOADER_OK`.
+
+ARM64 `brk` and private anonymous `mmap` now reserve nonresident VMAs. Lower-EL
+translation faults allocate a zeroed page, install its L3 descriptor with the
+reserved permissions, publish a targeted ASID generation, and retry the EL0
+instruction. `munmap` releases the resident page and any empty page-table
+hierarchy. A dedicated EL0 payload reaches this path through the generic
+dispatcher and reports `ARM64_GENERIC_SYSCALL_ABI_OK`,
+`ARM64_PROCESS_SYSCALLS_OK`, and `ARM64_BRK_MMAP_PAGE_FAULT_OK`.
 
 ## Toolchain
 
@@ -760,7 +878,11 @@ ARM64_USER_TTBR0_ASID_OK
 ARM64_TASK_TTBR0_SWITCH_OK
 ARM64_GENERIC_VM_SPACE_OK
 ARM64_GENERIC_VMA_OK
-ASID residency: flush=0x0000000000000002 preserve=...
+ARM64_DYNAMIC_USER_VM_OK
+ARM64_ANON_RANGE_VM_OK
+ARM64_PROCESS_MODEL_OK
+ARM64_ELF64_LOADER_OK
+ASID residency: flush=... preserve=...
 ARM64_TASK_TLB_RESIDENCY_OK
 ARM64 syscall write OK
 ARM64_EL0_YIELD_DISPATCH_OK
@@ -771,14 +893,23 @@ ARM64_CONTINUOUS_TICK_LIFECYCLE_OK
 ARM64_IRQ_SAFE_DISPATCH_OK
 Testing high VBAR synchronous vector
 ARM64_VECTOR_OK
+ARM64_GENERIC_SYSCALL_DISPATCH_OK
 Entering EL0 at 0x0000000000400000 stack=0x0000000000403000
 ARM64 syscall write OK
-EL0 exit status: 0x000000000000002A syscall count: 0x0000000000000005
+EL0 exit status: 0x000000000000002A syscall count: 0x000000000000000D
 ARM64_EL0_SYSCALL_ABI_OK
 ARM64_EL0_CONTEXT_OK
+ARM64_GENERIC_SYSCALL_ABI_OK
+ARM64_PROCESS_SYSCALLS_OK
+ARM64_BRK_MMAP_PAGE_FAULT_OK
 Testing timer IRQ after EL0 return
 ARM64_TIMER_IRQ_OK
 ARM64_HIGH_KERNEL_OK
+ARM64_IDLE0_KINIT_READY
+ARM64_KINIT_RUNNING
+ARM64_BOOTSTRAP_RETIRED
+ARM64_IDLE_KINIT_SWITCH_OK
+ARM64_RUNTIME_SCHEDULER_OK
 ```
 
 Generated artifacts are isolated from ARM32 under:
@@ -792,12 +923,12 @@ build/images/kernel-arm64-qemu-virt.dis
 
 ## Next Milestones
 
-1. Add SMP synchronization and per-CPU current-task/preemption ownership around
-   the locally IRQ-safe dispatcher and runqueue contract.
-2. Replace the bounded ARM64 VMA storage and early allocator with dynamic
-   runtime mapping, unmap, page-table growth, and synchronized page/ASID
-   backends.
-3. Extend ASID residency with SMP synchronization, rollover and remote
-   shootdown rules when secondary ARM64 CPUs are introduced.
-4. Connect the validated register ABI to the generic syscall dispatcher once
-   tasks exist, then add ELF64 loading, signal frames, and the userland target.
+1. Bring VFS image acquisition, file descriptors, pipes, console TTY, and
+   runnable fork/exec task ownership to ARM64, then execute `/sbin/init` from
+   an ELF64 file.
+2. Build the AArch64 ArmOS newlib sysroot and validate progressively larger C
+   programs before moving `init` and `mash`.
+3. Replace the bounded ARM64 VMA/table inventories and early allocator with
+   dynamic range nodes and synchronized physical-page backends.
+4. Add SMP synchronization, per-CPU scheduler ownership, ASID rollover, and
+   remote TLB shootdowns when secondary ARM64 CPUs are introduced.

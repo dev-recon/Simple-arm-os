@@ -61,7 +61,20 @@ The v0.6 baseline is:
   address spaces now publish a generic `vm_space_t` identity used by tasks,
   TTBR0/ASID activation, and SVC buffer validation; their bounded bootstrap
   mappings now publish sorted generic VMAs used for lookup and permission
-  checks; the full Unix kernel and userland remain ARM32.
+  checks; L2/L3 user tables now grow on demand across multiple virtual regions
+  after low-map retirement, while page unmap uses targeted ASID/VA invalidation
+  and returns physical ownership with balanced hierarchy destruction; eager
+  anonymous ranges prevalidate overlap, roll back partial allocation, cross L3
+  boundaries, and reclaim empty tables; ARM64 now finishes bring-up by retiring
+  the borrowed bootstrap task into a persistent timer-driven runtime where an
+  owned-stack `kinit` task blocks on tick deadlines and an owned-stack `idle0`
+  task waits in `WFI`, with wakeup and repeated task switching validated at IRQ
+  return; a native-width generic syscall table now receives AArch64 SVC calls;
+  generic process state covers fork/exec/wait/signals; an AArch64 ELF64 loader
+  validates and populates `PT_LOAD` segments; and lazy `brk`/anonymous `mmap`
+  reservations are populated by lower-EL translation faults and released by
+  `munmap`; VFS-backed `execve`, runnable fork children, `/sbin/init`, and the
+  full Unix userland remain ARM32.
 
 Post-v0.6 hardware milestone:
 
