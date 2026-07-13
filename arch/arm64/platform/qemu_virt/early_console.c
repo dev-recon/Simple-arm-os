@@ -22,10 +22,12 @@
 #include <asm/exception.h>
 #include <asm/irq.h>
 #include <asm/mmu.h>
+#include <asm/task.h>
 #include <asm/task_context.h>
 #include <asm/user_vm.h>
 #include <kernel/early_page_allocator.h>
 #include <kernel/fdt.h>
+#include <kernel/task.h>
 #include <uapi/armos/syscall.h>
 
 #define PL011_BASE 0x09000000UL
@@ -42,7 +44,7 @@
 #define USER_CODE_VA             0x0000000000400000ULL
 #define USER_DATA_VA             0x0000000000401000ULL
 #define USER_STACK_VA            0x0000000000402000ULL
-#define USER_STACK_TOP           0x0000000000403000ULL
+#define PROBE_USER_STACK_TOP     0x0000000000403000ULL
 #define USER_WRITE_RESULT_OFFSET 0x100u
 #define USER_EFAULT_RESULT_OFFSET 0x108u
 #define USER_ENOSYS_RESULT_OFFSET 0x110u
@@ -59,18 +61,12 @@
 #define USER_X30_SENTINEL         0x3030303030303030ULL
 #define TASK_X22_SENTINEL         0x2222222222222222ULL
 #define TASK_X23_SENTINEL         0x2323232323232323ULL
-#define TASK_PROBE_STACK_SIZE     4096u
+#define TASK_PROBE_STACK_PAGES    1u
 
 static const char arm64_user_message[] = "ARM64 syscall write OK\n";
 _Static_assert(sizeof(arm64_user_message) - 1 == USER_WRITE_LENGTH,
                "EL0 write payload length must match its assembly constant");
 
-extern uint8_t __kernel_end[];
-extern uint8_t __text_start[];
-extern uint8_t __text_end[];
-extern uint8_t __rodata_start[];
-extern uint8_t __rodata_end[];
-extern uint8_t __stack_top[];
 extern uint8_t arm64_vectors[];
 extern uint8_t arm64_el0_payload_start[];
 extern uint8_t arm64_el0_payload_end[];
@@ -89,10 +85,9 @@ typedef struct {
     arm64_user_vm_t empty_vm;
     arm64_task_context_t user_task;
     arm64_task_context_t bootstrap_task;
-    arm64_task_context_t probe_task;
+    task_t probe_task;
     volatile uint64_t task_probe_phase;
-    uint8_t task_probe_stack[TASK_PROBE_STACK_SIZE]
-        __attribute__((aligned(16)));
+    volatile uint64_t task_probe_ttbr0;
 } arm64_high_context_t;
 
 static early_page_allocator_t early_allocator;
@@ -115,7 +110,7 @@ static void prepare_user_registers(arm64_user_context_t *registers)
     registers->x[20] = USER_X20_SENTINEL;
     registers->x[29] = USER_X29_SENTINEL;
     registers->x[30] = USER_X30_SENTINEL;
-    registers->sp = USER_STACK_TOP;
+    registers->sp = PROBE_USER_STACK_TOP;
     registers->pc = USER_CODE_VA;
     registers->pstate = ARM64_USER_PSTATE_EL0T_MASKED;
 }
@@ -129,48 +124,196 @@ static void clear_task_context(arm64_task_context_t *task)
         words[index] = 0;
 }
 
-static int arm64_task_context_smoke_test(arm64_high_context_t *context)
+static early_page_allocator_t *high_early_allocator(void)
+{
+    early_page_allocator_t *allocator = &early_allocator;
+
+    if ((uint64_t)(uintptr_t)allocator->bitmap < ARM64_KERNEL_VA_BASE) {
+        allocator->bitmap = (uint8_t *)(uintptr_t)
+            arm64_mmu_kernel_address(
+                (uint64_t)(uintptr_t)allocator->bitmap);
+    }
+    return allocator;
+}
+
+static int task_probe_metadata_valid(const task_t *task)
+{
+    vaddr_t stack_base;
+    vaddr_t stack_top;
+    paddr_t stack_physical;
+
+    if (!task)
+        return 0;
+    stack_base = (vaddr_t)(uintptr_t)task->stack_base;
+    stack_top = (vaddr_t)(uintptr_t)task->stack_top;
+    stack_physical = (paddr_t)(uintptr_t)task->stack_phys_base;
+
+    return task->magic == TASK_MAGIC_ALIVE &&
+           task->task_id == 1 &&
+           task->state == TASK_BLOCKED &&
+           task->priority == TASK_DEFAULT_PRIORITY &&
+           task->type == TASK_TYPE_KERNEL &&
+           task->running_cpu == TASK_CPU_NONE &&
+           task->last_cpu == TASK_CPU_NONE &&
+           task->name[0] == 'c' &&
+           task->stack_size == TASK_PROBE_STACK_PAGES * PAGE_SIZE &&
+           stack_base >= ARM64_KERNEL_VA_BASE &&
+           stack_top == stack_base + task->stack_size &&
+           task->context.kernel.sp == stack_top &&
+           (stack_physical & PAGE_OFFSET_MASK) == 0;
+}
+
+static int prepare_task_probe(arm64_high_context_t *context,
+                              const arm64_user_vm_t *user_vm)
 {
     arm64_task_context_t *bootstrap = &context->bootstrap_task;
-    arm64_task_context_t *probe = &context->probe_task;
-    uintptr_t stack_top;
+    arm64_task_context_t *probe;
 
     clear_task_context(bootstrap);
-    clear_task_context(probe);
     context->task_probe_phase = 0;
+    context->task_probe_ttbr0 = 0;
 
-    stack_top = (uintptr_t)&context->task_probe_stack[TASK_PROBE_STACK_SIZE];
-    stack_top &= ~(uintptr_t)0xfu;
+    if (arm64_task_init(
+            &context->probe_task,
+            high_early_allocator(),
+            user_vm,
+            (vaddr_t)(uintptr_t)arm64_task_context_probe_entry,
+            "context-probe",
+            1,
+            TASK_PROBE_STACK_PAGES) != 0)
+        return -1;
+    probe = &context->probe_task.context;
+    if (!task_probe_metadata_valid(&context->probe_task) ||
+        arm64_task_destroy(&context->probe_task,
+                           high_early_allocator(), probe) != -2) {
+        arm64_task_destroy(&context->probe_task,
+                           high_early_allocator(), bootstrap);
+        return -2;
+    }
     probe->kernel.x[0] = (uint64_t)(uintptr_t)probe;
     probe->kernel.x[1] = (uint64_t)(uintptr_t)bootstrap;
     probe->kernel.x[2] =
         (uint64_t)(uintptr_t)&context->task_probe_phase;
     probe->kernel.x[3] = TASK_X22_SENTINEL;
     probe->kernel.x[4] = TASK_X23_SENTINEL;
-    probe->kernel.sp = stack_top;
-    probe->kernel.pc =
-        (uint64_t)(uintptr_t)arm64_task_context_probe_entry;
-
+    probe->kernel.x[5] =
+        (uint64_t)(uintptr_t)&context->task_probe_ttbr0;
     if (probe->kernel.pc < ARM64_KERNEL_VA_BASE ||
-        probe->kernel.sp < ARM64_KERNEL_VA_BASE)
-        return -1;
+        probe->kernel.sp < ARM64_KERNEL_VA_BASE) {
+        arm64_task_destroy(&context->probe_task,
+                           high_early_allocator(), bootstrap);
+        return -3;
+    }
 
-    arm64_task_context_switch(bootstrap, probe);
-    if (context->task_probe_phase != 1 ||
+    return 0;
+}
+
+static int arm64_task_context_smoke_test(arm64_high_context_t *context)
+{
+    arm64_task_context_t *bootstrap = &context->bootstrap_task;
+    arm64_task_context_t *probe;
+    early_page_allocator_t *allocator = high_early_allocator();
+    uint64_t free_before = allocator->free_pages;
+    int result = 0;
+
+    if (prepare_task_probe(context, NULL) != 0)
+        return -1;
+    probe = &context->probe_task.context;
+
+    if (arm64_task_context_switch_address_space(bootstrap, probe) != 0)
+        result = -2;
+    if (result == 0 &&
+        (context->task_probe_phase != 1 ||
         probe->kernel.x[3] != TASK_X22_SENTINEL ||
         probe->kernel.x[4] != TASK_X23_SENTINEL ||
         bootstrap->kernel.pc < ARM64_KERNEL_VA_BASE ||
-        bootstrap->kernel.sp < ARM64_KERNEL_VA_BASE)
-        return -2;
+        bootstrap->kernel.sp < ARM64_KERNEL_VA_BASE))
+        result = -3;
 
-    context->task_probe_phase = 2;
-    arm64_task_context_switch(bootstrap, probe);
-    if (context->task_probe_phase != 3 ||
-        probe->kernel.x[3] != TASK_X22_SENTINEL ||
-        probe->kernel.x[4] != TASK_X23_SENTINEL)
-        return -3;
+    if (result == 0) {
+        context->task_probe_phase = 2;
+        if (arm64_task_context_switch_address_space(bootstrap, probe) != 0)
+            result = -4;
+        if (result == 0 &&
+            (context->task_probe_phase != 3 ||
+            probe->kernel.x[3] != TASK_X22_SENTINEL ||
+            probe->kernel.x[4] != TASK_X23_SENTINEL))
+            result = -5;
+    }
 
-    return 0;
+    if (arm64_task_destroy(&context->probe_task, allocator, bootstrap) != 0)
+        return -6;
+    if (context->probe_task.magic != TASK_MAGIC_DEAD)
+        return -7;
+    if (allocator->free_pages != free_before)
+        return -8;
+    return result;
+}
+
+static int arm64_task_address_space_smoke_test(
+    arm64_high_context_t *context,
+    uint64_t user_ttbr,
+    uint64_t empty_ttbr)
+{
+    arm64_task_context_t *bootstrap = &context->bootstrap_task;
+    arm64_task_context_t *probe;
+    uint64_t flush_before;
+    uint64_t preserve_before;
+    early_page_allocator_t *allocator = high_early_allocator();
+    uint64_t free_before = allocator->free_pages;
+    int result = 0;
+
+    if (prepare_task_probe(context, &context->empty_vm) != 0)
+        return -1;
+    probe = &context->probe_task.context;
+
+    bootstrap->user_vm = &context->user_vm;
+    bootstrap->ttbr0 = context->user_vm.l1;
+    bootstrap->asid = context->user_vm.asid;
+    probe->ttbr0 = context->user_vm.l1;
+    probe->asid = context->empty_vm.asid;
+    if (arm64_task_context_switch_address_space(bootstrap, probe) == 0 ||
+        context->task_probe_phase != 0)
+        result = -2;
+
+    probe->ttbr0 = context->empty_vm.l1;
+    flush_before = arm64_user_vm_tlb_flush_count();
+    preserve_before = arm64_user_vm_tlb_preserve_count();
+
+    if (result == 0) {
+        if (arm64_mmu_read_ttbr0() != user_ttbr ||
+            arm64_task_context_switch_address_space(bootstrap, probe) != 0)
+            result = -3;
+        if (result == 0 &&
+            (context->task_probe_phase != 1 ||
+            context->task_probe_ttbr0 != empty_ttbr ||
+            arm64_mmu_read_ttbr0() != user_ttbr))
+            result = -4;
+    }
+
+    if (result == 0) {
+        context->task_probe_phase = 2;
+        if (arm64_task_context_switch_address_space(bootstrap, probe) != 0)
+            result = -5;
+        if (result == 0 &&
+            (context->task_probe_phase != 3 ||
+            context->task_probe_ttbr0 != empty_ttbr ||
+            arm64_mmu_read_ttbr0() != user_ttbr ||
+            (arm64_mmu_translate_user_read(USER_DATA_VA) & 1u) != 0))
+            result = -6;
+        if (result == 0 &&
+            (arm64_user_vm_tlb_flush_count() != flush_before ||
+             arm64_user_vm_tlb_preserve_count() != preserve_before + 4))
+            result = -7;
+    }
+
+    if (arm64_task_destroy(&context->probe_task, allocator, bootstrap) != 0)
+        return -8;
+    if (context->probe_task.magic != TASK_MAGIC_DEAD)
+        return -9;
+    if (allocator->free_pages != free_before)
+        return -10;
+    return result;
 }
 
 static inline void mmio_write32(unsigned long address, uint32_t value)
@@ -228,7 +371,7 @@ static int test_early_page_allocator(uint64_t dtb_address)
     paddr_t one_page;
     paddr_t three_pages;
     paddr_t recycled_page;
-    paddr_t kernel_end = (paddr_t)(uintptr_t)__kernel_end;
+    paddr_t kernel_end = (paddr_t)(uintptr_t)&__kernel_end;
     paddr_t ram_end;
     uint32_t initial_free;
     uint32_t reserved_before;
@@ -369,10 +512,10 @@ static int test_dynamic_page_table(void)
     if (arm64_mmu_prepare_identity_tables(l1_page, l2_page, l3_page) != 0 ||
         arm64_mmu_protect_kernel_image(
             l3_page,
-            (arm64_mmu_u64)(uintptr_t)__text_start,
-            (arm64_mmu_u64)(uintptr_t)__text_end,
-            (arm64_mmu_u64)(uintptr_t)__rodata_start,
-            (arm64_mmu_u64)(uintptr_t)__rodata_end) != 0 ||
+            (arm64_mmu_u64)(uintptr_t)&__text_start,
+            (arm64_mmu_u64)(uintptr_t)&__text_end,
+            (arm64_mmu_u64)(uintptr_t)&__rodata_start,
+            (arm64_mmu_u64)(uintptr_t)&__rodata_end) != 0 ||
         arm64_mmu_switch_ttbr0(l1_page) != 0)
         return -1;
     new_ttbr = arm64_mmu_read_ttbr0();
@@ -412,16 +555,16 @@ static int test_dynamic_page_table(void)
         return -1;
 
     high_text = ARM64_KERNEL_VA_BASE +
-                (arm64_mmu_u64)(uintptr_t)__text_start;
+                (arm64_mmu_u64)(uintptr_t)&__text_start;
     high_rodata = ARM64_KERNEL_VA_BASE +
-                  (arm64_mmu_u64)(uintptr_t)__rodata_start;
+                  (arm64_mmu_u64)(uintptr_t)&__rodata_start;
     high_data = ARM64_KERNEL_VA_BASE +
                 (arm64_mmu_u64)(uintptr_t)&early_allocator;
 
     if ((arm64_mmu_read_ttbr1() & PAGE_MASK) != ttbr1_page ||
         (arm64_mmu_translate_read(high_text) & 1u) != 0 ||
         (arm64_mmu_translate_read(high_text) & PAR_PA_MASK) !=
-            ((arm64_mmu_u64)(uintptr_t)__text_start & PAR_PA_MASK) ||
+            ((arm64_mmu_u64)(uintptr_t)&__text_start & PAR_PA_MASK) ||
         (arm64_mmu_translate_write(high_text) & 1u) == 0 ||
         (arm64_mmu_translate_user_read(high_text) & 1u) == 0 ||
         (arm64_mmu_translate_read(high_rodata) & 1u) != 0 ||
@@ -431,9 +574,9 @@ static int test_dynamic_page_table(void)
         (arm64_mmu_translate_write(high_data) & 1u) != 0 ||
         (arm64_mmu_translate_user_read(high_data) & 1u) == 0 ||
         *(volatile uint64_t *)(uintptr_t)high_text !=
-            *(volatile uint64_t *)(uintptr_t)__text_start ||
+            *(volatile uint64_t *)(uintptr_t)&__text_start ||
         *(volatile uint64_t *)(uintptr_t)high_rodata !=
-            *(volatile uint64_t *)(uintptr_t)__rodata_start ||
+            *(volatile uint64_t *)(uintptr_t)&__rodata_start ||
         *(volatile uint64_t *)(uintptr_t)high_data !=
             *(volatile uint64_t *)(uintptr_t)&early_allocator)
         return -1;
@@ -519,7 +662,7 @@ static int test_dynamic_page_table(void)
         ARM64_KERNEL_VA_BASE +
             (arm64_mmu_u64)(uintptr_t)arm64_high_main,
         ARM64_KERNEL_VA_BASE +
-            (arm64_mmu_u64)(uintptr_t)__stack_top,
+            (arm64_mmu_u64)(uintptr_t)&__stack_top,
         ARM64_KERNEL_VA_BASE +
             (arm64_mmu_u64)(uintptr_t)arm64_vectors,
         ARM64_KERNEL_VA_BASE +
@@ -543,7 +686,7 @@ static void arm64_high_main(arm64_high_context_t *context)
     __asm__ volatile("adr %0, ." : "=r"(pc));
     __asm__ volatile("mov %0, sp" : "=r"(sp));
     __asm__ volatile("mrs %0, vbar_el1" : "=r"(vbar));
-    high_text = (arm64_mmu_u64)(uintptr_t)__text_start;
+    high_text = (arm64_mmu_u64)(uintptr_t)&__text_start;
     high_uart = arm64_mmu_kernel_address(PL011_BASE);
     if (arm64_user_vm_lookup(&context->user_vm, USER_DATA_VA,
                              &user_data_page, NULL) != 0) {
@@ -596,6 +739,8 @@ static void arm64_high_main(arm64_high_context_t *context)
         goto halt;
     }
     arm64_early_puts("ARM64_TASK_CONTEXT_SWITCH_OK\n");
+    arm64_early_puts("ARM64_TASK_STACK_LIFECYCLE_OK\n");
+    arm64_early_puts("ARM64_GENERIC_TASK_LIFECYCLE_OK\n");
 
     if (arm64_user_vm_activate(&context->user_vm) != 0) {
         arm64_early_puts("ARM64_USER_TTBR0_SWITCH_FAILED\n");
@@ -656,9 +801,22 @@ static void arm64_high_main(arm64_high_context_t *context)
     arm64_early_puthex64(user_data_page);
     arm64_early_puts("\nARM64_USER_TTBR0_ASID_OK\n");
 
+    if (arm64_task_address_space_smoke_test(context, user_ttbr,
+                                            empty_ttbr) != 0) {
+        arm64_early_puts("ARM64_TASK_TTBR0_SWITCH_FAILED\n");
+        goto halt;
+    }
+    arm64_early_puts("ARM64_TASK_TTBR0_SWITCH_OK\n");
+    arm64_early_puts("ASID residency: flush=");
+    arm64_early_puthex64(arm64_user_vm_tlb_flush_count());
+    arm64_early_puts(" preserve=");
+    arm64_early_puthex64(arm64_user_vm_tlb_preserve_count());
+    arm64_early_puts("\nARM64_TASK_TLB_RESIDENCY_OK\n");
+
     arm64_early_puts("Testing high VBAR synchronous vector\n");
     __asm__ volatile("brk #0x64");
     clear_task_context(&context->user_task);
+    context->user_task.user_vm = &context->user_vm;
     context->user_task.ttbr0 = context->user_vm.l1;
     context->user_task.asid = context->user_vm.asid;
     context->user_task.flags = ARM64_TASK_FLAG_RETURNS_TO_USER;
@@ -670,7 +828,7 @@ static void arm64_high_main(arm64_high_context_t *context)
     arm64_early_puts("Entering EL0 at ");
     arm64_early_puthex64(USER_CODE_VA);
     arm64_early_puts(" stack=");
-    arm64_early_puthex64(USER_STACK_TOP);
+    arm64_early_puthex64(PROBE_USER_STACK_TOP);
     arm64_early_puts("\n");
     arm64_enter_el0(&context->user_task.user);
 
@@ -691,6 +849,7 @@ static void arm64_el0_return(uint64_t result)
         *(volatile uint64_t *)(uintptr_t)(USER_DATA_VA +
                                          USER_ENOSYS_RESULT_OFFSET) !=
             USER_ENOSYS_RESULT ||
+        high_context.user_task.user_vm != &high_context.user_vm ||
         high_context.user_task.ttbr0 != high_context.user_vm.l1 ||
         high_context.user_task.asid != high_context.user_vm.asid ||
         high_context.user_task.flags != ARM64_TASK_FLAG_RETURNS_TO_USER ||
@@ -700,7 +859,7 @@ static void arm64_el0_return(uint64_t result)
         high_context.user_task.user.x[20] != USER_X20_SENTINEL ||
         high_context.user_task.user.x[29] != USER_X29_SENTINEL ||
         high_context.user_task.user.x[30] != USER_X30_SENTINEL ||
-        high_context.user_task.user.sp != USER_STACK_TOP ||
+        high_context.user_task.user.sp != PROBE_USER_STACK_TOP ||
         high_context.user_task.user.pc !=
             *(volatile uint64_t *)(uintptr_t)(USER_DATA_VA +
                                               USER_EXIT_PC_OFFSET) ||

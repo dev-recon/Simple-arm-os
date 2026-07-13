@@ -10,17 +10,18 @@
  *
  * Responsibilities:
  * - Group kernel callee-saved state, EL0 state and address-space identity.
- * - Define the bootstrap contract consumed by context_switch.S.
+ * - Define the bootstrap contract consumed by the task-switch boundary.
  *
  * Notes:
- * - This is not yet wired to the generic scheduler task_t lifecycle.
- * - SIMD state and per-task kernel stacks will be added with scheduler work.
+ * - task_context_t is the generic-kernel alias for this concrete layout.
+ * - SMP residency and SIMD state remain future work.
  */
 
 #ifndef ASM_ARM64_TASK_CONTEXT_H
 #define ASM_ARM64_TASK_CONTEXT_H
 
 #include <asm/user_context.h>
+#include <asm/user_vm.h>
 #include <kernel/types.h>
 
 #define ARM64_TASK_FLAG_RETURNS_TO_USER (1u << 0)
@@ -34,18 +35,24 @@ typedef struct arm64_kernel_context {
 typedef struct arm64_task_context {
     arm64_kernel_context_t kernel;
     arm64_user_context_t user;
+    const arm64_user_vm_t *user_vm;
     paddr_t ttbr0;
     uint32_t asid;
     uint32_t flags;
 } __attribute__((aligned(16))) arm64_task_context_t;
 
+typedef arm64_task_context_t task_context_t;
+
 _Static_assert(sizeof(arm64_kernel_context_t) == 112,
                "AArch64 kernel context ABI size changed");
-_Static_assert(sizeof(arm64_task_context_t) == 400,
+_Static_assert(sizeof(arm64_task_context_t) == 416,
                "AArch64 task context ABI size changed");
 
 void arm64_task_context_switch(arm64_task_context_t *previous,
                                const arm64_task_context_t *next);
+int arm64_task_context_switch_address_space(
+    arm64_task_context_t *previous,
+    const arm64_task_context_t *next);
 void arm64_task_context_probe_entry(void) __attribute__((noreturn));
 
 #endif

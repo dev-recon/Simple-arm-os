@@ -75,7 +75,10 @@ ArmOS currently provides:
   and exception capture now share an explicit register context whose generated
   assembly offsets and nonvolatile-register preservation are checked at boot;
   a bootstrap task context now performs a validated two-stack cooperative
-  switch while carrying the EL0 image and TTBR0/ASID identity
+  switch while carrying the EL0 image and TTBR0/ASID identity; the switch
+  boundary activates that identity and validates mapped/empty TTBR0 isolation;
+  mapping generations now preserve resident single-CPU ASIDs without a TLBI
+  on each context switch
 - MMU enabled with split TTBR0/TTBR1 address spaces
 - ASID support and ASID rollover handling
 - typed physical/virtual address groundwork (`paddr_t`, `vaddr_t`, `pfn_t`)
@@ -345,9 +348,9 @@ Medium-term ideas:
 
 - improve POSIX compatibility for larger userland packages
 - connect the validated ARM64 TTBR0/ASID and EL0-entry primitives to tasks,
-  give the validated context switch owned kernel stacks and scheduler
-  lifetime, move early allocation into the synchronized physical allocator,
-  and
+  publish the validated generic task through scheduler lifetime, make ASID
+  residency SMP-safe, move early allocation into the synchronized physical
+  allocator, and
   connect the validated syscall registers to the generic dispatcher and ELF64
   process loader
 

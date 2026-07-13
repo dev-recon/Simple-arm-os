@@ -234,6 +234,15 @@ The first executable milestone now provides an isolated EL1 serial bootstrap:
 - an AArch64 bootstrap task context and cooperative two-stack switch covering
   `x19-x30`, SP and resume PC, with the EL0 image and TTBR0/ASID identity
   carried by the same object;
+- a context-switch boundary that activates the incoming TTBR0/ASID and proves
+  mapped-versus-empty user-space isolation across both resumable contexts;
+- single-CPU ASID residency keyed by VM mapping generation, avoiding redundant
+  TLBI operations across four validated task-context switches;
+- an architecture-local bootstrap task object that allocates, clears, and
+  releases its owned kernel stack with exact allocator-balance validation;
+- replacement of that parallel object by generic `task_t`, including common
+  identity/state/stack metadata, lifetime guards, an ARM64 `task_context_t`
+  alias, a 39-bit user layout, and DAIF local interrupt-state primitives;
 - separate ARM64 artifacts so ARM32 platform images are not overwritten.
 
 See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
@@ -241,12 +250,11 @@ See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
 Remaining AArch64 pieces:
 
 - synchronization and full physical-allocator integration;
-- attachment of the owned ARM64 user-VM backend to generic `vm_space` and
-  `task` lifetime;
-- generic task lifetime, owned kernel stacks, and scheduler ownership of the
-  validated AArch64 context switch;
+- attachment of the owned ARM64 user-VM backend to generic `vm_space`;
+- scheduler publication and ownership of the validated generic AArch64 task,
+  context switch, owned kernel stack, and user VM;
+- SMP-safe ASID residency, rollover and remote TLB shootdown rules;
 - generic syscall-dispatch integration and the ELF64 process loader;
-- AArch64 context switch;
 - AArch64 signal frame;
 - AArch64 toolchain/userland target.
 

@@ -1,9 +1,20 @@
 /*
  * ArmOS
  * Copyright (c) 2026 Mohamed Ennassiri
- * SPDX-License-Identifier: Apache-2.0
  *
- * Single-CPU ownership wrapper around the first ARM64 user page tables.
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: arch/arm64/mmu/user_vm.c
+ * Layer: ARM64 / user address spaces
+ *
+ * Responsibilities:
+ * - Own bootstrap user tables, mapped pages and ASID allocation.
+ * - Track mapping generations and resident ASID translations.
+ * - Avoid redundant TLBI operations for unchanged address spaces.
+ *
+ * Notes:
+ * - State is intentionally single-CPU until the ARM64 scheduler is online.
  */
 
 #include <asm/mmu.h>
@@ -15,6 +26,28 @@
 #define ARM64_TTBR_TABLE_MASK  0x0000FFFFFFFFF000ULL
 
 static uint8_t arm64_asid_bitmap[ARM64_ASID_BITMAP_SIZE];
+static uint32_t next_tlb_generation = 1;
+static uint64_t tlb_flush_count;
+static uint64_t tlb_preserve_count;
+
+typedef struct {
+    paddr_t table;
+    uint32_t generation;
+} arm64_asid_residency_t;
+
+static arm64_asid_residency_t arm64_asid_residency[ARM64_ASID_COUNT];
+
+static uint32_t allocate_tlb_generation(void)
+{
+    uint32_t generation = next_tlb_generation++;
+
+    if (generation == 0) {
+        generation = next_tlb_generation++;
+        if (generation == 0)
+            generation = 1;
+    }
+    return generation;
+}
 
 static void clear_bytes(void *address, size_t length)
 {
@@ -77,6 +110,7 @@ int arm64_user_vm_init(arm64_user_vm_t *vm,
     vm->l2 = table_pages + PAGE_SIZE;
     vm->l3 = table_pages + 2 * PAGE_SIZE;
     vm->asid = asid;
+    vm->tlb_generation = allocate_tlb_generation();
     return 0;
 }
 
@@ -124,15 +158,45 @@ int arm64_user_vm_map_new_page(arm64_user_vm_t *vm,
     vm->mappings[index].physical_address = page;
     vm->mappings[index].flags = flags;
     vm->l3_window = window;
+    vm->tlb_generation = allocate_tlb_generation();
     *physical_address = page;
     return 0;
 }
 
 int arm64_user_vm_activate(const arm64_user_vm_t *vm)
 {
+    arm64_asid_residency_t *residency;
+    int result;
+
     if (!vm || vm->asid == 0 || vm->l1 == 0)
         return -1;
-    return arm64_mmu_switch_user_ttbr0(vm->l1, vm->asid);
+
+    residency = &arm64_asid_residency[vm->asid];
+    if (residency->table == vm->l1 &&
+        residency->generation == vm->tlb_generation) {
+        result = arm64_mmu_switch_user_ttbr0_preserve(vm->l1, vm->asid);
+        if (result == 0)
+            tlb_preserve_count++;
+        return result;
+    }
+
+    result = arm64_mmu_switch_user_ttbr0(vm->l1, vm->asid);
+    if (result == 0) {
+        residency->table = vm->l1;
+        residency->generation = vm->tlb_generation;
+        tlb_flush_count++;
+    }
+    return result;
+}
+
+uint64_t arm64_user_vm_tlb_flush_count(void)
+{
+    return tlb_flush_count;
+}
+
+uint64_t arm64_user_vm_tlb_preserve_count(void)
+{
+    return tlb_preserve_count;
 }
 
 int arm64_user_vm_lookup(const arm64_user_vm_t *vm,

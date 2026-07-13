@@ -13,7 +13,8 @@
  * - Provide a deterministic two-context bootstrap probe.
  *
  * Notes:
- * - Address-space activation and scheduling policy are deliberately separate.
+ * - Address-space activation is performed by task_context.c before entry.
+ * - Scheduling policy remains deliberately separate from this mechanism.
  * - Offsets come from arm64_task_context_t through asm-offsets.c.
  */
 
@@ -53,18 +54,22 @@ arm64_task_context_switch:
 /*
  * Initial probe state:
  *   x19 = probe context, x20 = bootstrap context, x21 = phase address
- *   x22/x23 = preservation sentinels
+ *   x22/x23 = preservation sentinels, x24 = observed TTBR0 address
  */
 .align 4
 .global arm64_task_context_probe_entry
 .type arm64_task_context_probe_entry, %function
 arm64_task_context_probe_entry:
+    mrs x9, ttbr0_el1
+    str x9, [x24]
     mov x9, #1
     str x9, [x21]
     mov x0, x19
     mov x1, x20
-    bl arm64_task_context_switch
+    bl arm64_task_context_switch_address_space
 
+    mrs x9, ttbr0_el1
+    str x9, [x24]
     ldr x9, =0x2222222222222222
     cmp x22, x9
     b.ne .Lprobe_failed
@@ -76,7 +81,7 @@ arm64_task_context_probe_entry:
     str x9, [x21]
     mov x0, x19
     mov x1, x20
-    bl arm64_task_context_switch
+    bl arm64_task_context_switch_address_space
     b .Lprobe_halt
 
 .Lprobe_failed:
@@ -84,7 +89,7 @@ arm64_task_context_probe_entry:
     str x9, [x21]
     mov x0, x19
     mov x1, x20
-    bl arm64_task_context_switch
+    bl arm64_task_context_switch_address_space
 
 .Lprobe_halt:
     wfe

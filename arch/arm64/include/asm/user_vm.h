@@ -1,9 +1,19 @@
 /*
  * ArmOS
  * Copyright (c) 2026 Mohamed Ennassiri
- * SPDX-License-Identifier: Apache-2.0
  *
- * Owned user address spaces for the single-CPU ARM64 bootstrap.
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: arch/arm64/include/asm/user_vm.h
+ * Layer: ARM64 / user address spaces
+ *
+ * Responsibilities:
+ * - Own bootstrap user translation tables, mappings and ASID identity.
+ * - Track mapping generations for safe resident-ASID activation.
+ *
+ * Notes:
+ * - Allocation and residency metadata remain single-CPU bootstrap services.
  */
 
 #ifndef ASM_ARM64_USER_VM_H
@@ -28,6 +38,7 @@ typedef struct {
     vaddr_t l3_window;
     unsigned int asid;
     unsigned int mapping_count;
+    uint32_t tlb_generation;
     arm64_user_vm_mapping_t mappings[ARM64_USER_VM_MAX_MAPPINGS];
 } arm64_user_vm_t;
 
@@ -49,5 +60,7 @@ int arm64_user_vm_validate_range(const arm64_user_vm_t *vm,
                                  unsigned int required_flags);
 int arm64_user_vm_destroy(arm64_user_vm_t *vm,
                           early_page_allocator_t *allocator);
+uint64_t arm64_user_vm_tlb_flush_count(void);
+uint64_t arm64_user_vm_tlb_preserve_count(void);
 
 #endif

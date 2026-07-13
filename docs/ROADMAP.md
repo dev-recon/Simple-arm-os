@@ -31,7 +31,13 @@ The v0.6 baseline is:
   exception capture now share an explicit register image with generated
   C/assembly offsets and preservation checks; a bootstrap task context also
   performs a validated two-stack cooperative switch of `x19-x30`, SP and its
-  resume PC; the full Unix kernel and userland remain ARM32.
+  resume PC, and the switch boundary now activates and verifies each context's
+  TTBR0/ASID identity; mapping generations preserve unchanged resident ASIDs
+  without per-switch TLBI on the single bootstrap CPU; the bootstrap task now
+  allocates, clears, and releases its owned high-half kernel stack with exact
+  page-accounting checks, and that probe now uses the generic `task_t` identity,
+  state, stack metadata, and lifetime guards; the full Unix kernel and userland
+  remain ARM32.
 
 Post-v0.6 hardware milestone:
 

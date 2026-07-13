@@ -1,7 +1,19 @@
 /*
  * ArmOS
  * Copyright (c) 2026 Mohamed Ennassiri
- * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: arch/arm64/include/asm/mmu.h
+ * Layer: ARM64 / memory-management interface
+ *
+ * Responsibilities:
+ * - Expose ARMv8-A translation-table construction and activation primitives.
+ * - Separate conservative ASID invalidation from resident-ASID switching.
+ *
+ * Notes:
+ * - User-VM generation policy lives above this hardware-oriented interface.
  */
 
 #ifndef ARMOS_ARM64_MMU_H
@@ -43,6 +55,8 @@ int arm64_mmu_prepare_user_l3_page(arm64_mmu_u64 l3_address,
                                    unsigned int flags);
 int arm64_mmu_switch_user_ttbr0(arm64_mmu_u64 table_address,
                                 unsigned int asid);
+int arm64_mmu_switch_user_ttbr0_preserve(arm64_mmu_u64 table_address,
+                                         unsigned int asid);
 void arm64_mmu_sync_code(arm64_mmu_u64 address,
                          arm64_mmu_u64 length);
 arm64_mmu_u64 arm64_mmu_kernel_address(arm64_mmu_u64 physical_address);

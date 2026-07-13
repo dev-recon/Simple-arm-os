@@ -1,9 +1,20 @@
 /*
  * ArmOS
  * Copyright (c) 2026 Mohamed Ennassiri
- * SPDX-License-Identifier: Apache-2.0
  *
- * Minimal ARMv8-A 4 KiB long-descriptor identity map for QEMU virt.
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: arch/arm64/mmu/mmu.c
+ * Layer: ARM64 / memory management
+ *
+ * Responsibilities:
+ * - Build and activate ARMv8-A 4 KiB translation tables for QEMU virt.
+ * - Enforce kernel/user page permissions and targeted TLB maintenance.
+ * - Provide conservative and resident-ASID TTBR0 activation primitives.
+ *
+ * Notes:
+ * - Address-space ownership and ASID generations are managed by user_vm.c.
  */
 
 #include <asm/mmu.h>
@@ -580,8 +591,9 @@ int arm64_mmu_prepare_user_l3_page(arm64_mmu_u64 l3_address,
     return 0;
 }
 
-int arm64_mmu_switch_user_ttbr0(arm64_mmu_u64 table_address,
-                                unsigned int asid)
+static int switch_user_ttbr0(arm64_mmu_u64 table_address,
+                             unsigned int asid,
+                             int invalidate)
 {
     uint64_t operand;
     uint64_t ttbr;
@@ -595,11 +607,25 @@ int arm64_mmu_switch_user_ttbr0(arm64_mmu_u64 table_address,
     operand = (uint64_t)asid << TTBR_ASID_SHIFT;
     ttbr = operand | table_address;
     __asm__ volatile("dsb ishst" ::: "memory");
-    __asm__ volatile("tlbi aside1, %0" :: "r"(operand));
-    __asm__ volatile("dsb ish" ::: "memory");
+    if (invalidate) {
+        __asm__ volatile("tlbi aside1, %0" :: "r"(operand));
+        __asm__ volatile("dsb ish" ::: "memory");
+    }
     __asm__ volatile("msr ttbr0_el1, %0" :: "r"(ttbr) : "memory");
     arm64_isb();
     return 0;
+}
+
+int arm64_mmu_switch_user_ttbr0(arm64_mmu_u64 table_address,
+                                unsigned int asid)
+{
+    return switch_user_ttbr0(table_address, asid, 1);
+}
+
+int arm64_mmu_switch_user_ttbr0_preserve(arm64_mmu_u64 table_address,
+                                         unsigned int asid)
+{
+    return switch_user_ttbr0(table_address, asid, 0);
 }
 
 void arm64_mmu_sync_code(arm64_mmu_u64 address,

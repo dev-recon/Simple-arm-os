@@ -134,6 +134,8 @@ KERNEL_OBJS = \
 	$(ARCH_DIR)/interrupt/irq.o \
 	$(ARCH_DIR)/mmu/mmu.o \
 	$(ARCH_DIR)/mmu/user_vm.o \
+	$(ARCH_DIR)/task/task.o \
+	$(ARCH_DIR)/task/task_context.o \
 	$(ARCH_DIR)/task/context_switch.o \
 	$(ARCH_DIR)/user/el0.o \
 	kernel/lib/fdt_memory.o \

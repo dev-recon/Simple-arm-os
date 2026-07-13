@@ -261,6 +261,81 @@ This validates the architectural register-switch mechanism only. It does not
 yet provide runnable queues, preemption, per-task stack allocation, or generic
 `task_t` ownership.
 
+### Milestone 16: Address-Space-Aware Context Switch
+
+The task-switch boundary now validates the incoming context's TTBR0/ASID pair
+and activates it before transferring kernel register state. Kernel-only
+bootstrap contexts use an explicit zero pair; partially initialized pairs are
+rejected. The assembly switch remains focused on registers while the C wrapper
+owns MMU policy and error handling.
+
+The two-stack probe is reused with the mapped user VM attached to the bootstrap
+context and the empty VM attached to the secondary context. The secondary
+context records `TTBR0_EL1` on both resumptions. Each observation must contain
+the empty VM table and ASID, while each return to the bootstrap context must
+restore the mapped user VM and its readable data page. Success reports
+`ARM64_TASK_TTBR0_SWITCH_OK`.
+
+The bootstrap MMU helper still invalidates the incoming ASID conservatively on
+each activation. Residency tracking and avoiding unnecessary TLBI operations
+belong to the synchronized runtime ASID backend.
+
+### Milestone 17: Single-CPU ASID Residency
+
+Each bootstrap user VM now carries a mapping generation. The ASID manager
+records which table and generation are resident for every allocated ASID. A
+first activation, ASID reuse, or mapping change takes the conservative
+`TLBI ASIDE1` path; switching back to an unchanged resident VM writes TTBR0
+without discarding that ASID's translations.
+
+Task contexts reference their owning VM as well as caching its TTBR0/ASID
+identity. The switch boundary rejects mismatched metadata and delegates the
+activation decision to the VM. The mapped/empty two-context probe snapshots
+the flush and preserve counters and requires all four of its context switches
+to preserve resident translations. The serial marker includes the counters
+and reports `ARM64_TASK_TLB_RESIDENCY_OK`.
+
+This residency table is intentionally single-CPU. Before ARM64 SMP, it must
+gain synchronization, per-CPU residency state, rollover handling, and remote
+shootdown rules.
+
+### Milestone 18: Owned Bootstrap Kernel Stack
+
+The bootstrap ARM64 task object now owns the physical pages backing its kernel
+stack. Initialization allocates and clears the stack through its TTBR1 alias,
+normalizes the initial entry point to the high kernel mapping, and seeds the
+task context with its optional user-VM identity. Destruction refuses the active
+context and returns every owned stack page to the early allocator.
+
+Both cooperative context-switch probes now use a dynamically allocated 4 KiB
+stack instead of an embedded static array. They snapshot the allocator's free
+page count before task creation and require exact balance after destruction.
+This also validates that allocator metadata retained from low bootstrap is
+usable through TTBR1 after the low mapping is retired. Success reports
+`ARM64_TASK_STACK_LIFECYCLE_OK`.
+
+At this milestone the lifetime object remained architecture-local. Milestone
+19 replaces that parallel object with the generic `task_t` layout.
+
+### Milestone 19: Generic Task Lifetime
+
+The cooperative ARM64 probe is now a real generic `task_t`. Its common fields
+hold the task identity, blocked state, kernel-task type, priority, CPU
+ownership sentinels, stack bounds, physical stack allocation, and lifetime
+magic. The ARM64 backend initializes only those fields and its concrete
+`task_context_t`; it does not publish the task to a runqueue.
+
+The architecture boundary now exposes the ARM64 context through the generic
+`task_context_t` name. It also supplies the lower 39-bit user virtual layout
+and DAIF-based local IRQ/FIQ save/restore primitives required for the generic
+task contract to compile in AArch64 builds.
+
+The runtime probe verifies all common metadata, exact stack bounds, active-task
+destruction refusal, dead-object marking, and balanced stack-page release.
+Success reports `ARM64_GENERIC_TASK_LIFECYCLE_OK`. Scheduler publication,
+runtime task allocation, and synchronization remain deliberately outside this
+bootstrap milestone.
+
 ## Toolchain
 
 On macOS, install the AArch64 bare-metal compiler and QEMU:
@@ -332,8 +407,13 @@ ARM64_TTBR1_EXECUTION_OK
 ARM64_HIGH_MMIO_OK
 ARM64_LOW_MAP_RETIRED_OK
 ARM64_TASK_CONTEXT_SWITCH_OK
+ARM64_TASK_STACK_LIFECYCLE_OK
+ARM64_GENERIC_TASK_LIFECYCLE_OK
 User TTBR0: mapped=0x0001... empty=0x0002... VA=0x0000000000401000 PA=...
 ARM64_USER_TTBR0_ASID_OK
+ARM64_TASK_TTBR0_SWITCH_OK
+ASID residency: flush=0x0000000000000002 preserve=...
+ARM64_TASK_TLB_RESIDENCY_OK
 Testing high VBAR synchronous vector
 ARM64_VECTOR_OK
 Entering EL0 at 0x0000000000400000 stack=0x0000000000403000
@@ -357,12 +437,12 @@ build/images/kernel-arm64-qemu-virt.dis
 
 ## Next Milestones
 
-1. Attach the owned ARM64 address space and task context to a minimal
-   architecture-neutral task lifetime, including owned kernel stacks.
-2. Connect TTBR0/ASID activation to the context-switch boundary and validate
-   isolation across two resumable user contexts.
-3. Attach the owned ARM64 address space to the generic `vm_space`
+1. Publish generic ARM64 tasks through a minimal scheduler lifecycle without
+   importing ARM32 register or MMU assumptions.
+2. Attach the owned ARM64 address space to the generic `vm_space`
    contract, then replace its early allocator and ASID pool with synchronized
    runtime backends.
+3. Extend ASID residency with SMP synchronization, rollover and remote
+   shootdown rules when secondary ARM64 CPUs are introduced.
 4. Connect the validated register ABI to the generic syscall dispatcher once
    tasks exist, then add ELF64 loading, signal frames, and the userland target.
