@@ -32,9 +32,14 @@ PLATFORM_MK = $(PLATFORM_DIR)/platform.mk
 ifeq ($(TARGET_ARCH),arm32)
 ARCH_CFLAGS = -marm -mfpu=neon-vfpv4 -mfloat-abi=soft \
               -mno-unaligned-access -DARMV7A_KERNEL -DARMOS_ARCH_BITS=32
+ASM_OFFSETS_DEPS = include/kernel/task.h \
+                   $(ARCH_INCLUDE)/asm/task_context.h
 else ifeq ($(TARGET_ARCH),arm64)
 ARCH_CFLAGS = -march=armv8-a -mgeneral-regs-only \
               -DARMV8A_KERNEL -DARMOS_ARCH_BITS=64
+ASM_OFFSETS_DEPS = $(ARCH_INCLUDE)/asm/user_context.h \
+                   $(ARCH_INCLUDE)/asm/exception_frame.h \
+                   $(ARCH_INCLUDE)/asm/task_context.h
 else
 $(error Unsupported TARGET_ARCH '$(TARGET_ARCH)')
 endif
@@ -129,6 +134,7 @@ KERNEL_OBJS = \
 	$(ARCH_DIR)/interrupt/irq.o \
 	$(ARCH_DIR)/mmu/mmu.o \
 	$(ARCH_DIR)/mmu/user_vm.o \
+	$(ARCH_DIR)/task/context_switch.o \
 	$(ARCH_DIR)/user/el0.o \
 	kernel/lib/fdt_memory.o \
 	kernel/memory/early_page_allocator.o \
@@ -223,7 +229,7 @@ $(BUILD_CONFIG_STAMP): FORCE
 		rm -f "$$tmp"; \
 	fi
 
-$(ASM_OFFSETS_H): $(ASM_OFFSETS_SRC) include/kernel/task.h $(BUILD_CONFIG_STAMP)
+$(ASM_OFFSETS_H): $(ASM_OFFSETS_SRC) $(ASM_OFFSETS_DEPS) $(BUILD_CONFIG_STAMP)
 	@mkdir -p $(BUILD_DIR) $(dir $@)
 	$(CC) $(CFLAGS) -S $(ASM_OFFSETS_SRC) -o $(ASM_OFFSETS_S)
 	@awk '/->/ { \
@@ -239,13 +245,8 @@ $(ASM_OFFSETS_H): $(ASM_OFFSETS_SRC) include/kernel/task.h $(BUILD_CONFIG_STAMP)
 %.o: %.c $(BUILD_CONFIG_STAMP)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-ifeq ($(TARGET_ARCH),arm64)
-%.o: %.S $(BUILD_CONFIG_STAMP)
-	$(AS) $(ASFLAGS) $< -o $@
-else
 %.o: %.S $(ASM_OFFSETS_H) $(BUILD_CONFIG_STAMP)
 	$(AS) $(ASFLAGS) $< -o $@
-endif
 
 # Partition FAT32 de boot. Elle reste volontairement vide au build generique :
 # les firmwares Raspberry Pi, le kernel et config.txt sont stages ensuite par

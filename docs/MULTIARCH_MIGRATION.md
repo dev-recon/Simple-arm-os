@@ -228,6 +228,12 @@ The first executable milestone now provides an isolated EL1 serial bootstrap:
 - an AArch64 `svc #0` register ABI using shared ArmOS syscall numbers, with
   validated user buffers and bootstrap `write`, `-EFAULT`, `-ENOSYS`, and
   `exit` coverage;
+- an explicit AArch64 EL0 register context shared by entry and exception
+  capture, with C-generated assembly offsets and preservation checks across
+  the complete bootstrap syscall sequence;
+- an AArch64 bootstrap task context and cooperative two-stack switch covering
+  `x19-x30`, SP and resume PC, with the EL0 image and TTBR0/ASID identity
+  carried by the same object;
 - separate ARM64 artifacts so ARM32 platform images are not overwritten.
 
 See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
@@ -237,7 +243,8 @@ Remaining AArch64 pieces:
 - synchronization and full physical-allocator integration;
 - attachment of the owned ARM64 user-VM backend to generic `vm_space` and
   `task` lifetime;
-- scheduler ownership of the validated EL0 entry and exception-return path;
+- generic task lifetime, owned kernel stacks, and scheduler ownership of the
+  validated AArch64 context switch;
 - generic syscall-dispatch integration and the ELF64 process loader;
 - AArch64 context switch;
 - AArch64 signal frame;

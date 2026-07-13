@@ -224,6 +224,43 @@ permission. The payload verifies a successful write, an unmapped-buffer
 register and error-return semantics, but `write` is still an early-console
 backend rather than the generic VFS syscall implementation.
 
+### Milestone 14: Explicit EL0 Register Context
+
+EL0 entry no longer accepts loose entry-point and stack arguments. It consumes
+an `arm64_user_context_t` containing `x0` through `x30`, `SP_EL0`, the return
+PC, and PSTATE. The lower-EL exception frame embeds that exact structure as
+its prefix, so syscall entry can capture a complete user register image and a
+future task switch can reuse the same contract.
+
+The C compiler now emits the context and exception-frame offsets consumed by
+`el0.S` and `vectors.S`. The frame is 16-byte aligned and any layout change is
+checked at compile time instead of relying on duplicated numeric offsets in
+assembly. The EL0 smoke test seeds nonvolatile registers, crosses all four
+syscall paths, and verifies the captured `x19`, `x20`, `x29`, `x30`, stack,
+resume PC, and PSTATE before reporting `ARM64_EL0_CONTEXT_OK`.
+
+This is a bootstrap register image, not yet a schedulable `task_context_t`.
+Kernel callee-saved state, TTBR0 ownership, and scheduler switching will be
+attached in later milestones.
+
+### Milestone 15: Bootstrap Task Context Switch
+
+The architecture now groups kernel callee-saved state, the existing EL0 image,
+and TTBR0/ASID identity in an `arm64_task_context_t`. The kernel half saves
+`x19` through `x30`, SP, and an explicit resume PC through offsets generated
+from the C structure. Address-space switching remains separate so this
+primitive can be tested before scheduler and runtime-ASID integration.
+
+A cooperative probe starts on a dedicated 4 KiB kernel stack, switches back to
+the bootstrap stack, resumes on its own stack, verifies preservation
+sentinels, and switches back a second time. The live EL0 register image and its
+TTBR0/ASID metadata are then carried by the same task-context object. Successful
+boot reports `ARM64_TASK_CONTEXT_SWITCH_OK` before entering EL0.
+
+This validates the architectural register-switch mechanism only. It does not
+yet provide runnable queues, preemption, per-task stack allocation, or generic
+`task_t` ownership.
+
 ## Toolchain
 
 On macOS, install the AArch64 bare-metal compiler and QEMU:
@@ -294,6 +331,7 @@ High kernel: PC=0xFFFFFF80... SP=0xFFFFFF80... VBAR=0xFFFFFF80...
 ARM64_TTBR1_EXECUTION_OK
 ARM64_HIGH_MMIO_OK
 ARM64_LOW_MAP_RETIRED_OK
+ARM64_TASK_CONTEXT_SWITCH_OK
 User TTBR0: mapped=0x0001... empty=0x0002... VA=0x0000000000401000 PA=...
 ARM64_USER_TTBR0_ASID_OK
 Testing high VBAR synchronous vector
@@ -302,6 +340,7 @@ Entering EL0 at 0x0000000000400000 stack=0x0000000000403000
 ARM64 syscall write OK
 EL0 exit status: 0x000000000000002A syscall count: 0x0000000000000004
 ARM64_EL0_SYSCALL_ABI_OK
+ARM64_EL0_CONTEXT_OK
 Testing timer IRQ after EL0 return
 ARM64_TIMER_IRQ_OK
 ARM64_HIGH_KERNEL_OK
@@ -318,9 +357,12 @@ build/images/kernel-arm64-qemu-virt.dis
 
 ## Next Milestones
 
-1. Attach the owned ARM64 address space to `task` and the generic `vm_space`
+1. Attach the owned ARM64 address space and task context to a minimal
+   architecture-neutral task lifetime, including owned kernel stacks.
+2. Connect TTBR0/ASID activation to the context-switch boundary and validate
+   isolation across two resumable user contexts.
+3. Attach the owned ARM64 address space to the generic `vm_space`
    contract, then replace its early allocator and ASID pool with synchronized
    runtime backends.
-2. Connect the validated register ABI to the generic syscall dispatcher once
-   tasks exist, then add ELF64 loading, AArch64 context switch, signal frames,
-   and the userland target.
+4. Connect the validated register ABI to the generic syscall dispatcher once
+   tasks exist, then add ELF64 loading, signal frames, and the userland target.

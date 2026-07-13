@@ -1,12 +1,24 @@
 /*
  * ArmOS
  * Copyright (c) 2026 Mohamed Ennassiri
- * SPDX-License-Identifier: Apache-2.0
  *
- * ARMv8-A EL1 vector table and full general-register exception frame.
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: arch/arm64/interrupt/vectors.S
+ * Layer: ARM64 / exception entry
+ *
+ * Responsibilities:
+ * - Provide the complete ARMv8-A EL1 vector table.
+ * - Save and restore the full general-register exception frame.
+ * - Transfer synchronous exceptions and IRQs to the C dispatcher.
+ *
+ * Notes:
+ * - Frame offsets are generated from C structures by asm-offsets.c.
+ * - The vector table retains the architecturally required 2 KiB alignment.
  */
 
-.equ ARM64_EXC_FRAME_SIZE, 288
+.include "asm-offsets.h"
 
 .section .vectors, "ax"
 .balign 2048
@@ -96,24 +108,29 @@ arm64_vector_save_rest:
     stp x24, x25, [sp, #192]
     stp x26, x27, [sp, #208]
     stp x28, x29, [sp, #224]
-    str x30, [sp, #240]
+    str x30, [sp, #ARM64_CTX_X30]
 
+    mrs x17, sp_el0
+    str x17, [sp, #ARM64_CTX_SP]
     mrs x17, elr_el1
-    str x17, [sp, #248]
+    str x17, [sp, #ARM64_CTX_PC]
     mrs x17, spsr_el1
-    str x17, [sp, #256]
+    str x17, [sp, #ARM64_CTX_PSTATE]
     mrs x17, esr_el1
-    str x17, [sp, #264]
+    str x17, [sp, #ARM64_EXC_ESR]
     mrs x17, far_el1
-    str x17, [sp, #272]
-    str x16, [sp, #280]
+    str x17, [sp, #ARM64_EXC_FAR]
+    str x16, [sp, #ARM64_EXC_VECTOR]
+    str xzr, [sp, #ARM64_EXC_RESERVED]
 
     mov x0, sp
     bl arm64_exception_dispatch
 
-    ldr x16, [sp, #248]
+    ldr x16, [sp, #ARM64_CTX_SP]
+    msr sp_el0, x16
+    ldr x16, [sp, #ARM64_CTX_PC]
     msr elr_el1, x16
-    ldr x16, [sp, #256]
+    ldr x16, [sp, #ARM64_CTX_PSTATE]
     msr spsr_el1, x16
 
     ldp x18, x19, [sp, #144]
@@ -122,7 +139,7 @@ arm64_vector_save_rest:
     ldp x24, x25, [sp, #192]
     ldp x26, x27, [sp, #208]
     ldp x28, x29, [sp, #224]
-    ldr x30, [sp, #240]
+    ldr x30, [sp, #ARM64_CTX_X30]
     ldp x0,  x1,  [sp, #0]
     ldp x2,  x3,  [sp, #16]
     ldp x4,  x5,  [sp, #32]

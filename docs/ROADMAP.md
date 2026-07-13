@@ -27,8 +27,11 @@ The v0.6 baseline is:
   RX and RW/NX mappings, returns through SVC, and preserves timer IRQ delivery,
   and a bootstrap user-VM object now owns its tables, pages, mappings, and ASID,
   while a bounded `svc #0` dispatcher validates the AArch64 register ABI,
-  user-buffer faults, unknown calls, and `exit`; the full Unix kernel and
-  userland remain ARM32.
+  user-buffer faults, unknown calls, and `exit`; EL0 entry and lower-EL
+  exception capture now share an explicit register image with generated
+  C/assembly offsets and preservation checks; a bootstrap task context also
+  performs a validated two-stack cooperative switch of `x19-x30`, SP and its
+  resume PC; the full Unix kernel and userland remain ARM32.
 
 Post-v0.6 hardware milestone:
 

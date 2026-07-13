@@ -1,18 +1,32 @@
 /*
  * ArmOS
  * Copyright (c) 2026 Mohamed Ennassiri
- * SPDX-License-Identifier: Apache-2.0
  *
- * AArch64 milestone 1 PL011 console for QEMU virt.
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: arch/arm64/platform/qemu_virt/early_console.c
+ * Layer: ARM64 / QEMU virt bring-up
+ *
+ * Responsibilities:
+ * - Drive the early PL011 console and sequence AArch64 boot milestones.
+ * - Validate MMU, exceptions, timer IRQs, user VMs and context switching.
+ * - Run the EL0 syscall ABI payload and report stable serial markers.
+ *
+ * Notes:
+ * - This file intentionally hosts bounded bring-up probes before generic
+ *   kernel subsystems are enabled for ARM64.
  */
 
 #include <asm/early_console.h>
 #include <asm/exception.h>
 #include <asm/irq.h>
 #include <asm/mmu.h>
+#include <asm/task_context.h>
 #include <asm/user_vm.h>
 #include <kernel/early_page_allocator.h>
 #include <kernel/fdt.h>
+#include <uapi/armos/syscall.h>
 
 #define PL011_BASE 0x09000000UL
 #define PL011_DR   0x000
@@ -32,12 +46,20 @@
 #define USER_WRITE_RESULT_OFFSET 0x100u
 #define USER_EFAULT_RESULT_OFFSET 0x108u
 #define USER_ENOSYS_RESULT_OFFSET 0x110u
+#define USER_EXIT_PC_OFFSET        0x118u
 #define USER_VM_MAGIC_OFFSET     0x200u
 #define USER_TEST_MAGIC          0x5553455254544252ULL
 #define USER_WRITE_LENGTH        23u
 #define USER_EXIT_STATUS         42u
 #define USER_EFAULT_RESULT       0xFFFFFFFFFFFFFFF2ULL
 #define USER_ENOSYS_RESULT       0xFFFFFFFFFFFFFFDAULL
+#define USER_X19_SENTINEL         0x1919191919191919ULL
+#define USER_X20_SENTINEL         0x2020202020202020ULL
+#define USER_X29_SENTINEL         0x2929292929292929ULL
+#define USER_X30_SENTINEL         0x3030303030303030ULL
+#define TASK_X22_SENTINEL         0x2222222222222222ULL
+#define TASK_X23_SENTINEL         0x2323232323232323ULL
+#define TASK_PROBE_STACK_SIZE     4096u
 
 static const char arm64_user_message[] = "ARM64 syscall write OK\n";
 _Static_assert(sizeof(arm64_user_message) - 1 == USER_WRITE_LENGTH,
@@ -58,13 +80,19 @@ extern void arm64_enter_high_alias(uint64_t entry,
                                    uint64_t vectors,
                                    uint64_t context)
     __attribute__((noreturn));
-extern void arm64_enter_el0(uint64_t entry, uint64_t stack)
+extern void arm64_enter_el0(const arm64_user_context_t *registers)
     __attribute__((noreturn));
 
 typedef struct {
     paddr_t boot_l1;
     arm64_user_vm_t user_vm;
     arm64_user_vm_t empty_vm;
+    arm64_task_context_t user_task;
+    arm64_task_context_t bootstrap_task;
+    arm64_task_context_t probe_task;
+    volatile uint64_t task_probe_phase;
+    uint8_t task_probe_stack[TASK_PROBE_STACK_SIZE]
+        __attribute__((aligned(16)));
 } arm64_high_context_t;
 
 static early_page_allocator_t early_allocator;
@@ -76,6 +104,74 @@ static void arm64_high_main(arm64_high_context_t *context)
     __attribute__((noreturn));
 static void arm64_el0_return(uint64_t result)
     __attribute__((noreturn));
+
+static void prepare_user_registers(arm64_user_context_t *registers)
+{
+    unsigned int index;
+
+    for (index = 0; index < 31; index++)
+        registers->x[index] = 0;
+    registers->x[19] = USER_X19_SENTINEL;
+    registers->x[20] = USER_X20_SENTINEL;
+    registers->x[29] = USER_X29_SENTINEL;
+    registers->x[30] = USER_X30_SENTINEL;
+    registers->sp = USER_STACK_TOP;
+    registers->pc = USER_CODE_VA;
+    registers->pstate = ARM64_USER_PSTATE_EL0T_MASKED;
+}
+
+static void clear_task_context(arm64_task_context_t *task)
+{
+    uint64_t *words = (uint64_t *)task;
+    unsigned int index;
+
+    for (index = 0; index < sizeof(*task) / sizeof(*words); index++)
+        words[index] = 0;
+}
+
+static int arm64_task_context_smoke_test(arm64_high_context_t *context)
+{
+    arm64_task_context_t *bootstrap = &context->bootstrap_task;
+    arm64_task_context_t *probe = &context->probe_task;
+    uintptr_t stack_top;
+
+    clear_task_context(bootstrap);
+    clear_task_context(probe);
+    context->task_probe_phase = 0;
+
+    stack_top = (uintptr_t)&context->task_probe_stack[TASK_PROBE_STACK_SIZE];
+    stack_top &= ~(uintptr_t)0xfu;
+    probe->kernel.x[0] = (uint64_t)(uintptr_t)probe;
+    probe->kernel.x[1] = (uint64_t)(uintptr_t)bootstrap;
+    probe->kernel.x[2] =
+        (uint64_t)(uintptr_t)&context->task_probe_phase;
+    probe->kernel.x[3] = TASK_X22_SENTINEL;
+    probe->kernel.x[4] = TASK_X23_SENTINEL;
+    probe->kernel.sp = stack_top;
+    probe->kernel.pc =
+        (uint64_t)(uintptr_t)arm64_task_context_probe_entry;
+
+    if (probe->kernel.pc < ARM64_KERNEL_VA_BASE ||
+        probe->kernel.sp < ARM64_KERNEL_VA_BASE)
+        return -1;
+
+    arm64_task_context_switch(bootstrap, probe);
+    if (context->task_probe_phase != 1 ||
+        probe->kernel.x[3] != TASK_X22_SENTINEL ||
+        probe->kernel.x[4] != TASK_X23_SENTINEL ||
+        bootstrap->kernel.pc < ARM64_KERNEL_VA_BASE ||
+        bootstrap->kernel.sp < ARM64_KERNEL_VA_BASE)
+        return -2;
+
+    context->task_probe_phase = 2;
+    arm64_task_context_switch(bootstrap, probe);
+    if (context->task_probe_phase != 3 ||
+        probe->kernel.x[3] != TASK_X22_SENTINEL ||
+        probe->kernel.x[4] != TASK_X23_SENTINEL)
+        return -3;
+
+    return 0;
+}
 
 static inline void mmio_write32(unsigned long address, uint32_t value)
 {
@@ -495,6 +591,12 @@ static void arm64_high_main(arm64_high_context_t *context)
     }
     arm64_early_puts("ARM64_LOW_MAP_RETIRED_OK\n");
 
+    if (arm64_task_context_smoke_test(context) != 0) {
+        arm64_early_puts("ARM64_TASK_CONTEXT_SWITCH_FAILED\n");
+        goto halt;
+    }
+    arm64_early_puts("ARM64_TASK_CONTEXT_SWITCH_OK\n");
+
     if (arm64_user_vm_activate(&context->user_vm) != 0) {
         arm64_early_puts("ARM64_USER_TTBR0_SWITCH_FAILED\n");
         goto halt;
@@ -556,15 +658,21 @@ static void arm64_high_main(arm64_high_context_t *context)
 
     arm64_early_puts("Testing high VBAR synchronous vector\n");
     __asm__ volatile("brk #0x64");
+    clear_task_context(&context->user_task);
+    context->user_task.ttbr0 = context->user_vm.l1;
+    context->user_task.asid = context->user_vm.asid;
+    context->user_task.flags = ARM64_TASK_FLAG_RETURNS_TO_USER;
+    prepare_user_registers(&context->user_task.user);
     arm64_exception_set_el0_context(
         &context->user_vm,
+        &context->user_task.user,
         (arm64_exception_u64)(uintptr_t)arm64_el0_return);
     arm64_early_puts("Entering EL0 at ");
     arm64_early_puthex64(USER_CODE_VA);
     arm64_early_puts(" stack=");
     arm64_early_puthex64(USER_STACK_TOP);
     arm64_early_puts("\n");
-    arm64_enter_el0(USER_CODE_VA, USER_STACK_TOP);
+    arm64_enter_el0(&context->user_task.user);
 
 halt:
     for (;;)
@@ -583,6 +691,21 @@ static void arm64_el0_return(uint64_t result)
         *(volatile uint64_t *)(uintptr_t)(USER_DATA_VA +
                                          USER_ENOSYS_RESULT_OFFSET) !=
             USER_ENOSYS_RESULT ||
+        high_context.user_task.ttbr0 != high_context.user_vm.l1 ||
+        high_context.user_task.asid != high_context.user_vm.asid ||
+        high_context.user_task.flags != ARM64_TASK_FLAG_RETURNS_TO_USER ||
+        high_context.user_task.user.x[0] != USER_EXIT_STATUS ||
+        high_context.user_task.user.x[8] != ARMOS_NR_EXIT ||
+        high_context.user_task.user.x[19] != USER_X19_SENTINEL ||
+        high_context.user_task.user.x[20] != USER_X20_SENTINEL ||
+        high_context.user_task.user.x[29] != USER_X29_SENTINEL ||
+        high_context.user_task.user.x[30] != USER_X30_SENTINEL ||
+        high_context.user_task.user.sp != USER_STACK_TOP ||
+        high_context.user_task.user.pc !=
+            *(volatile uint64_t *)(uintptr_t)(USER_DATA_VA +
+                                              USER_EXIT_PC_OFFSET) ||
+        high_context.user_task.user.pstate !=
+            ARM64_USER_PSTATE_EL0T_MASKED ||
         arm64_exception_el0_exit_status() != USER_EXIT_STATUS ||
         arm64_exception_el0_syscall_count() != 4) {
         arm64_early_puts("ARM64_EL0_SYSCALL_ABI_FAILED\n");
@@ -594,6 +717,7 @@ static void arm64_el0_return(uint64_t result)
     arm64_early_puts(" syscall count: ");
     arm64_early_puthex64(arm64_exception_el0_syscall_count());
     arm64_early_puts("\nARM64_EL0_SYSCALL_ABI_OK\n");
+    arm64_early_puts("ARM64_EL0_CONTEXT_OK\n");
 
     arm64_early_puts("Testing timer IRQ after EL0 return\n");
     if (arm64_timer_irq_smoke_test() != 0) {
