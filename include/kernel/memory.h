@@ -10,6 +10,7 @@
  *
  * Responsibilities:
  * - Declare kernel types, constants, and subsystem contracts.
+ * - Define generic VM identity with an opaque architecture-backend link.
  * - Keep cross-module ABI and structure expectations explicit.
  *
  * Notes:
@@ -49,6 +50,7 @@ typedef struct vm_space {
     pgdir_t pgdir;         /* TTBR0 physical base, pointer-shaped legacy ABI */
     pgdir_t pgdir_alloc;   /* Raw physical allocation base to free */
     vma_t* vma_list;       /* 4 bytes */
+    void* arch_private;    /* Opaque owning architecture backend, if any */
     vaddr_t heap_start;    /* 4 bytes */
     vaddr_t heap_end;      /* 4 bytes */
     vaddr_t brk;           /* 4 bytes */

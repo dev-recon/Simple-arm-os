@@ -48,8 +48,11 @@ static inline void asm_irq_fiq_restore(uint32_t saved_state)
 }
 
 uint32_t arm64_irq_dispatch(void);
+int arm64_timer_irq_arm_ticks(uint32_t ticks);
 int arm64_timer_irq_arm_once(void);
+int arm64_timer_irq_start_periodic(void);
 void arm64_timer_irq_cancel(void);
+uint32_t arm64_timer_irq_ticks(void);
 int arm64_timer_irq_fire_once(void);
 int arm64_timer_irq_smoke_test(void);
 

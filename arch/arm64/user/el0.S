@@ -131,6 +131,9 @@ arm64_el0_preempt_payload:
     mov x0, #44
     b 6f
 5:
+    mov w12, #2
+    str w12, [x3, #0x300]
+    dmb ish
     mov x0, #43
 6:
     msr nzcv, xzr

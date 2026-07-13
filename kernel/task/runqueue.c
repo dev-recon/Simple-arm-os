@@ -14,6 +14,8 @@
  *   publication.
  * - Detach selected tasks without changing architecture context state.
  * - Coordinate cooperative dispatch and deferred timer preemption.
+ * - Account timer ticks and request scheduling only at quantum expiration.
+ * - Mask local IRQs around externally visible runqueue mutations.
  *
  * Notes:
  * - The caller performs the architecture switch after taking a ready task.
@@ -151,6 +153,10 @@ int task_dispatcher_validate(const task_dispatcher_t *dispatcher)
         dispatcher->current->magic != TASK_MAGIC_ALIVE ||
         dispatcher->current->state != TASK_RUNNING ||
         dispatcher->current->running_cpu == TASK_CPU_NONE ||
+        dispatcher->quantum_ticks == 0 ||
+        dispatcher->slice_ticks >= dispatcher->quantum_ticks ||
+        ((dispatcher->irq_save == NULL) !=
+         (dispatcher->irq_restore == NULL)) ||
         task_runqueue_validate(&dispatcher->ready) != 0)
         return -1;
     return 0;
@@ -170,21 +176,69 @@ int task_dispatcher_init(task_dispatcher_t *dispatcher,
         return -2;
     dispatcher->current = current;
     dispatcher->switch_task = switch_task;
+    dispatcher->irq_save = NULL;
+    dispatcher->irq_restore = NULL;
+    dispatcher->irq_context = NULL;
     dispatcher->dispatch_count = 0;
     dispatcher->preempt_requests = 0;
     dispatcher->preempt_deferred = 0;
     dispatcher->preempt_serviced = 0;
+    dispatcher->timer_ticks = 0;
+    dispatcher->quantum_expirations = 0;
+    dispatcher->irq_critical_sections = 0;
     dispatcher->last_reason = TASK_DISPATCH_NONE;
     dispatcher->need_resched = 0;
     dispatcher->preempt_disable_depth = 0;
+    dispatcher->quantum_ticks = 1;
+    dispatcher->slice_ticks = 0;
+    return 0;
+}
+
+static uint32_t task_dispatcher_critical_enter(
+    task_dispatcher_t *dispatcher)
+{
+    uint32_t saved_state = 0;
+
+    if (dispatcher && dispatcher->irq_save) {
+        saved_state = dispatcher->irq_save(dispatcher->irq_context);
+        dispatcher->irq_critical_sections++;
+    }
+    return saved_state;
+}
+
+static void task_dispatcher_critical_leave(
+    task_dispatcher_t *dispatcher,
+    uint32_t saved_state)
+{
+    if (dispatcher && dispatcher->irq_restore)
+        dispatcher->irq_restore(dispatcher->irq_context, saved_state);
+}
+
+int task_dispatcher_set_irq_ops(task_dispatcher_t *dispatcher,
+                                task_dispatch_irq_save_t irq_save,
+                                task_dispatch_irq_restore_t irq_restore,
+                                void *irq_context)
+{
+    if (task_dispatcher_validate(dispatcher) != 0 || !irq_save ||
+        !irq_restore || dispatcher->irq_save || dispatcher->irq_restore)
+        return -1;
+    dispatcher->irq_save = irq_save;
+    dispatcher->irq_restore = irq_restore;
+    dispatcher->irq_context = irq_context;
     return 0;
 }
 
 int task_dispatcher_publish(task_dispatcher_t *dispatcher, task_t *task)
 {
+    uint32_t saved_state = task_dispatcher_critical_enter(dispatcher);
+    int result;
+
     if (task_dispatcher_validate(dispatcher) != 0)
-        return -1;
-    return task_runqueue_publish(&dispatcher->ready, task);
+        result = -1;
+    else
+        result = task_runqueue_publish(&dispatcher->ready, task);
+    task_dispatcher_critical_leave(dispatcher, saved_state);
+    return result;
 }
 
 static int task_dispatcher_reschedule(task_dispatcher_t *dispatcher,
@@ -196,6 +250,7 @@ static int task_dispatcher_reschedule(task_dispatcher_t *dispatcher,
     uint32_t previous_last_cpu;
     uint32_t next_cpu;
     uint32_t next_last_cpu;
+    uint32_t previous_slice_ticks;
     task_dispatch_reason_t last_reason;
     int requeue;
     int result;
@@ -210,6 +265,7 @@ static int task_dispatcher_reschedule(task_dispatcher_t *dispatcher,
     previous = dispatcher->current;
     previous_cpu = previous->running_cpu;
     previous_last_cpu = previous->last_cpu;
+    previous_slice_ticks = dispatcher->slice_ticks;
     last_reason = dispatcher->last_reason;
     next = task_runqueue_take(&dispatcher->ready);
     if (!next)
@@ -233,6 +289,7 @@ static int task_dispatcher_reschedule(task_dispatcher_t *dispatcher,
     dispatcher->current = next;
     dispatcher->dispatch_count++;
     dispatcher->last_reason = reason;
+    dispatcher->slice_ticks = 0;
 
     result = dispatcher->switch_task(previous, next);
     if (result != 0) {
@@ -249,6 +306,7 @@ static int task_dispatcher_reschedule(task_dispatcher_t *dispatcher,
         dispatcher->current = previous;
         dispatcher->dispatch_count--;
         dispatcher->last_reason = last_reason;
+        dispatcher->slice_ticks = previous_slice_ticks;
         return result;
     }
     return 0;
@@ -256,10 +314,32 @@ static int task_dispatcher_reschedule(task_dispatcher_t *dispatcher,
 
 int task_dispatcher_yield(task_dispatcher_t *dispatcher)
 {
-    return task_dispatcher_reschedule(dispatcher, TASK_DISPATCH_YIELD);
+    uint32_t saved_state = task_dispatcher_critical_enter(dispatcher);
+    int result = task_dispatcher_reschedule(dispatcher,
+                                            TASK_DISPATCH_YIELD);
+
+    task_dispatcher_critical_leave(dispatcher, saved_state);
+    return result;
 }
 
-int task_dispatcher_request_preempt(task_dispatcher_t *dispatcher)
+int task_dispatcher_set_quantum(task_dispatcher_t *dispatcher,
+                                uint32_t quantum_ticks)
+{
+    uint32_t saved_state = task_dispatcher_critical_enter(dispatcher);
+    int result = 0;
+
+    if (task_dispatcher_validate(dispatcher) != 0 || quantum_ticks == 0)
+        result = -1;
+    else {
+        dispatcher->quantum_ticks = quantum_ticks;
+        dispatcher->slice_ticks = 0;
+    }
+    task_dispatcher_critical_leave(dispatcher, saved_state);
+    return result;
+}
+
+static int task_dispatcher_request_preempt_locked(
+    task_dispatcher_t *dispatcher)
 {
     if (!dispatcher || !dispatcher->current || !dispatcher->switch_task)
         return -1;
@@ -268,50 +348,100 @@ int task_dispatcher_request_preempt(task_dispatcher_t *dispatcher)
     return 0;
 }
 
-int task_dispatcher_preempt_disable(task_dispatcher_t *dispatcher)
+int task_dispatcher_timer_tick(task_dispatcher_t *dispatcher)
 {
     if (task_dispatcher_validate(dispatcher) != 0 ||
-        dispatcher->preempt_disable_depth == 0xffffffffu)
+        dispatcher->quantum_ticks == 0)
         return -1;
-    dispatcher->preempt_disable_depth++;
-    return 0;
+
+    dispatcher->timer_ticks++;
+    dispatcher->slice_ticks++;
+    if (dispatcher->slice_ticks < dispatcher->quantum_ticks)
+        return 0;
+
+    dispatcher->slice_ticks = 0;
+    dispatcher->quantum_expirations++;
+    return task_dispatcher_request_preempt_locked(dispatcher);
+}
+
+int task_dispatcher_request_preempt(task_dispatcher_t *dispatcher)
+{
+    uint32_t saved_state = task_dispatcher_critical_enter(dispatcher);
+    int result = task_dispatcher_request_preempt_locked(dispatcher);
+
+    task_dispatcher_critical_leave(dispatcher, saved_state);
+    return result;
+}
+
+int task_dispatcher_preempt_disable(task_dispatcher_t *dispatcher)
+{
+    uint32_t saved_state = task_dispatcher_critical_enter(dispatcher);
+    int result = 0;
+
+    if (task_dispatcher_validate(dispatcher) != 0 ||
+        dispatcher->preempt_disable_depth == 0xffffffffu)
+        result = -1;
+    else
+        dispatcher->preempt_disable_depth++;
+    task_dispatcher_critical_leave(dispatcher, saved_state);
+    return result;
 }
 
 int task_dispatcher_preempt_enable(task_dispatcher_t *dispatcher)
 {
+    uint32_t saved_state = task_dispatcher_critical_enter(dispatcher);
+    int result;
+
     if (task_dispatcher_validate(dispatcher) != 0 ||
         dispatcher->preempt_disable_depth == 0)
-        return -1;
-    dispatcher->preempt_disable_depth--;
-    return dispatcher->need_resched != 0;
+        result = -1;
+    else {
+        dispatcher->preempt_disable_depth--;
+        result = dispatcher->need_resched != 0;
+    }
+    task_dispatcher_critical_leave(dispatcher, saved_state);
+    return result;
 }
 
 int task_dispatcher_service_preempt_at_safe_point(
     task_dispatcher_t *dispatcher)
 {
+    uint32_t saved_state = task_dispatcher_critical_enter(dispatcher);
     int result;
 
-    if (task_dispatcher_validate(dispatcher) != 0)
-        return -1;
-    if (dispatcher->need_resched == 0)
-        return 0;
+    if (task_dispatcher_validate(dispatcher) != 0) {
+        result = -1;
+        goto out;
+    }
+    if (dispatcher->need_resched == 0) {
+        result = 0;
+        goto out;
+    }
     if (dispatcher->preempt_disable_depth != 0 ||
         dispatcher->ready.count == 0) {
         dispatcher->preempt_deferred++;
-        return 0;
+        result = 0;
+        goto out;
     }
 
     dispatcher->need_resched = 0;
     result = task_dispatcher_reschedule(dispatcher, TASK_DISPATCH_PREEMPT);
     if (result != 0) {
         dispatcher->need_resched = 1;
-        return result;
+        goto out;
     }
     dispatcher->preempt_serviced++;
-    return 0;
+out:
+    task_dispatcher_critical_leave(dispatcher, saved_state);
+    return result;
 }
 
 int task_dispatcher_block(task_dispatcher_t *dispatcher)
 {
-    return task_dispatcher_reschedule(dispatcher, TASK_DISPATCH_BLOCK);
+    uint32_t saved_state = task_dispatcher_critical_enter(dispatcher);
+    int result = task_dispatcher_reschedule(dispatcher,
+                                            TASK_DISPATCH_BLOCK);
+
+    task_dispatcher_critical_leave(dispatcher, saved_state);
+    return result;
 }

@@ -173,3 +173,50 @@ arm64_task_preempt_peer_entry:
     wfe
     b .Lpreempt_peer_halt
 .size arm64_task_preempt_peer_entry, . - arm64_task_preempt_peer_entry
+
+/*
+ * Bounded periodic peer state:
+ *   x21 = phase address, x22/x23 = preservation sentinels
+ *   x25 = task_dispatcher_t pointer, x26 = user handshake flag
+ */
+.align 4
+.global arm64_task_periodic_peer_entry
+.type arm64_task_periodic_peer_entry, %function
+arm64_task_periodic_peer_entry:
+    mov x9, #1
+    str x9, [x21]
+    str x9, [x26]
+    dmb ish
+    msr daifclr, #2
+    isb
+
+.Lperiodic_peer_wait:
+    ldr x9, [x26]
+    cmp x9, #2
+    b.lo .Lperiodic_peer_wait
+    msr daifset, #2
+    isb
+
+    ldr x9, =0x2222222222222222
+    cmp x22, x9
+    b.ne .Lperiodic_peer_failed
+    ldr x9, =0x2323232323232323
+    cmp x23, x9
+    b.ne .Lperiodic_peer_failed
+
+    mov x9, #3
+    str x9, [x21]
+    mov x0, x25
+    bl task_dispatcher_block
+    b .Lperiodic_peer_halt
+
+.Lperiodic_peer_failed:
+    mov x9, #0xff
+    str x9, [x21]
+    mov x0, x25
+    bl task_dispatcher_block
+
+.Lperiodic_peer_halt:
+    wfe
+    b .Lperiodic_peer_halt
+.size arm64_task_periodic_peer_entry, . - arm64_task_periodic_peer_entry

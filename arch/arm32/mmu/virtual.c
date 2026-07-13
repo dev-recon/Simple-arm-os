@@ -156,6 +156,7 @@ vm_space_t *create_vm_space(void)
     install_low_kernel_aliases(vm);
 
     vm->vma_list = NULL;
+    vm->arch_private = NULL;
     vm->heap_start = USER_HEAP_START;
     vm->brk = USER_HEAP_START;
     vm->heap_end = USER_HEAP_END;

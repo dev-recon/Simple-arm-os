@@ -500,6 +500,184 @@ runtime scheduler tick requires periodic rearming, per-task/per-CPU preemption
 state, IRQ-safe runqueue synchronization, and a quantum policy independent of
 the timer device driver.
 
+### Milestone 27: Bounded Periodic Mixed Preemption
+
+The physical-timer bootstrap API can now arm an explicit finite number of
+ticks. Its IRQ path rearms from the acknowledged PPI until the target count is
+reached, while the exception layer continues to see one policy-neutral timer
+event per tick. The dispatcher therefore receives independent `need_resched`
+requests without learning timer register details.
+
+The periodic probe starts with a bootstrap task, an IRQ-enabled EL0 task, and a
+kernel-only peer. Tick 1 suspends EL0 and starts the peer. The peer publishes a
+shared handshake value, enables IRQ locally, and tick 2 suspends it in turn,
+returning control to the bootstrap task. At that boundary both timer-service
+calls are still suspended on their owning stacks, so two requests and zero
+completed services are required.
+
+The bootstrap then selects EL0 again. Its first IRQ service completes and
+`ERET` resumes the interrupted polling loop. EL0 advances the handshake and
+blocks through `exit`, selecting the kernel peer. The peer's second IRQ service
+then completes, its interrupted kernel loop observes the handshake, masks IRQ,
+and blocks back to the bootstrap task. The exact order is therefore
+`bootstrap, EL0, kernel, bootstrap, EL0, kernel, bootstrap` across six
+dispatches.
+
+The final invariants require two timer requests, two completed preemptions, no
+deferral, two preserved exception frames, blocked worker tasks, an empty ready
+queue, preserved EL0 registers, and exact stack-page recovery. Success reports
+`ARM64_PERIODIC_MIXED_PREEMPT_OK`.
+
+This is the transition from atomic mechanism probes to scheduler integration,
+but the sequence remains finite and single-CPU. A continuous runtime tick must
+next move timer lifetime out of the probe, define quantum accounting, and make
+runqueue/preemption state IRQ-safe before it can replace the ARM32 scheduler
+path.
+
+### Milestone 28: Dispatcher Quantum Accounting
+
+Timer frequency and scheduling policy are now separate. Every acknowledged
+timer event enters `task_dispatcher_timer_tick`, which accounts total ticks and
+the current slice. Only a configured quantum expiration increments the
+expiration counter and coalesces `need_resched`; intermediate ticks return from
+the exception without selecting another task. The default quantum remains one
+tick for the earlier probes.
+
+A successful voluntary or preemptive dispatch resets the incoming task's slice
+to zero. The transactional switch path also saves and restores the previous
+slice on architecture-switch failure, so a failed activation cannot silently
+donate or consume runtime. Dispatcher validation rejects a zero quantum or a
+slice outside its configured range.
+
+The mixed periodic probe is now parameterized. Its original two-tick run uses a
+one-tick quantum and preserves the milestone-27 behavior. A second run arms
+four physical-timer ticks with a two-tick quantum: ticks 1 and 3 return to the
+same EL0 and kernel tasks, while ticks 2 and 4 alone produce the two preemption
+requests. The final state requires four accounted ticks, two expirations, two
+completed services, zero residual slice, the same six-dispatch order, and exact
+resource recovery. Success reports `ARM64_QUANTUM_ACCOUNTING_OK`.
+
+The remaining runtime step is no longer basic timer preemption. It is ownership
+and concurrency: move the bounded timer lifetime into scheduler initialization,
+protect runqueue and preemption state against IRQ re-entry, and attach quantum
+selection to the generic task policy before enabling continuous scheduling.
+
+### Milestone 29: Scheduler-Owned Continuous Tick
+
+The timer backend now distinguishes finite bring-up sequences from a continuous
+periodic mode. Continuous mode rearms every acknowledged PPI without a target
+count and exposes only start, cancel, and observed-tick operations. It still
+does not contain a quantum, task pointer, runqueue, or scheduling callback.
+
+The parameterized mixed scheduler probe runs a third time with a two-tick
+quantum and an unbounded timer. After four physical ticks and two quantum
+expirations, FIFO rotation resumes the bootstrap task while IRQ remains masked
+by the second exception. The bootstrap task, acting as scheduler owner, cancels
+the timer before inspecting state or resuming either suspended worker.
+
+Both the timer backend and dispatcher must report exactly four ticks. The rest
+of the established contract remains unchanged: two preemption requests, two
+suspended services at the bootstrap boundary, later completion of both IRQ
+frames, six dispatches, normal EL0 exit, kernel-peer block, and balanced stack
+recovery. Success reports `ARM64_CONTINUOUS_TICK_LIFECYCLE_OK`.
+
+Continuous lifetime is therefore available without making the timer driver a
+scheduler. The next integration boundary is local concurrency: scheduler and
+runqueue mutations need architecture-provided IRQ save/mask/restore operations
+before this mode can stay enabled outside a controlled probe.
+
+### Milestone 30: IRQ-Safe Dispatcher Mutation
+
+The generic dispatcher now accepts architecture callbacks that save and mask
+local interrupts, then restore the exact previous state. The FIFO runqueue
+remains architecture-neutral and deliberately lockless; dispatcher operations
+that publish, yield, block, change preemption state, configure a quantum, or
+request or service a pending preemption provide its single-CPU serialization
+boundary. ARM64 supplies those callbacks with `DAIF` save, IRQ/FIQ mask, and
+restore.
+
+The timer tick accounting path is not masked a second time because it is called
+only after architectural IRQ entry has already masked local interrupts. Its
+safe-point service uses the protected dispatcher path. A section may span an
+architecture context switch: restoration then occurs when the suspended task
+resumes its dispatcher call, preserving the interrupt state that belonged to
+that exact execution context.
+
+All ARM64 dispatcher probes now use the same initialized hooks. The mixed
+periodic tests additionally require exactly `4 + timer_ticks` protected
+operations when the bootstrap first resumes and `7 + timer_ticks` after both
+workers block. This covers quantum setup, publication, voluntary dispatch,
+every timer safe point, and final blocking without relying on timing. Success
+reports `ARM64_IRQ_SAFE_DISPATCH_OK`.
+
+This completes local IRQ serialization, not SMP synchronization. Direct
+runqueue users must still serialize externally, and future multicore dispatch
+requires a real spinlock plus per-CPU current-task and preemption ownership.
+
+### Milestone 31: Generic VM-Space Backend Binding
+
+The owned ARM64 user-VM object now embeds a generic `vm_space_t` identity. It
+publishes the TTBR0 table through `pgdir`, records the raw table allocation,
+initializes the architecture-provided heap and stack layout, and mirrors its
+ASID. A new opaque `arch_private` field in `vm_space_t` points back to the
+owning backend; ARM32 initializes that field to `NULL`, while ARM64 requires it
+to resolve to the exact object containing the generic identity.
+
+Every ARM64 VM operation validates a backend magic plus agreement between the
+generic table/ASID fields and the concrete L1/ASID state. Task contexts now
+hold `const vm_space_t *` instead of `const arm64_user_vm_t *`. Task creation,
+TTBR0 switching, ASID-residency activation, and bootstrap SVC buffer validation
+all resolve the concrete backend from that generic reference. The duplicated
+TTBR0/ASID fields in the architecture context remain transactional switch
+metadata and are checked against `vm_space_t` before activation.
+
+Because the bootstrap objects are created through the low identity alias and
+later used through TTBR1, high-half entry explicitly rebinds `arch_private`
+after validating all persistent fields. This replaces only the virtual owner
+pointer; table physical addresses, ASID, layout, mappings, and generation must
+already agree. The low alias can then be retired without leaving a stale
+backend pointer in the generic identity.
+
+The lifecycle probe validates both directions of the generic/backend adapter.
+The task address-space probe then carries mapped and empty `vm_space_t` objects,
+rejects a deliberately mismatched TTBR0, switches both ASIDs through the
+generic identity, and preserves the existing TLB-residency counts. The final
+EL0 syscall path also validates its write buffer through the same generic
+reference. Success reports `ARM64_GENERIC_VM_SPACE_OK`.
+
+This is an identity and ownership bridge, not yet the full runtime VM. ARM64
+still uses its bounded bootstrap mapping array and early page allocator; VMA
+management, anonymous mappings, fork/COW, synchronized ASID allocation, and
+ELF64 loading remain to be connected to generic memory services.
+
+### Milestone 32: Generic VMA Ownership
+
+Each bounded ARM64 bootstrap mapping now embeds a generic `vma_t`. The
+architecture-private duplicate virtual-address and permission fields have been
+removed: the sorted list rooted at `vm_space_t.vma_list` is the source of truth
+for user ranges and `READ`, `WRITE`, and `EXEC` permissions. Compile-time
+assertions require the ARM64 page permission bits to match the generic VMA
+bits exactly.
+
+Mapping insertion rebuilds a deterministic sorted list, rejects duplicate
+pages, and records the owned physical page alongside its VMA. Identity
+validation walks the complete list and requires page alignment, one-page
+ranges, non-overlap, readable mappings, W^X, valid owned physical pages, and
+exact agreement with the bounded mapping count. Lookup and SVC range checks
+now traverse these generic VMAs to recover permissions and physical ownership.
+
+The high-half backend rebind also rebuilds every VMA link, because their
+in-object pointers were initially formed through the low identity alias. The
+lifecycle probe maps two pages in reverse virtual order and requires a sorted
+generic list, then proves that a W+X insertion fails without consuming a page.
+The main EL0 VM requires the exact code, data, stack chain before low-map
+retirement. Success reports `ARM64_GENERIC_VMA_OK`.
+
+The nodes and mapped pages are still allocated from a fixed bootstrap object
+and the early allocator. The next VM step is a runtime mapping backend with
+dynamic VMA nodes, page-table growth beyond one L3 window, unmap, and page
+ownership suitable for anonymous mappings and ELF64 segments.
+
 ## Toolchain
 
 On macOS, install the AArch64 bare-metal compiler and QEMU:
@@ -580,15 +758,22 @@ ARM64_COOPERATIVE_DISPATCHER_OK
 User TTBR0: mapped=0x0001... empty=0x0002... VA=0x0000000000401000 PA=...
 ARM64_USER_TTBR0_ASID_OK
 ARM64_TASK_TTBR0_SWITCH_OK
+ARM64_GENERIC_VM_SPACE_OK
+ARM64_GENERIC_VMA_OK
 ASID residency: flush=0x0000000000000002 preserve=...
 ARM64_TASK_TLB_RESIDENCY_OK
 ARM64 syscall write OK
 ARM64_EL0_YIELD_DISPATCH_OK
+ARM64_EL0_TIMER_PREEMPT_OK
+ARM64_PERIODIC_MIXED_PREEMPT_OK
+ARM64_QUANTUM_ACCOUNTING_OK
+ARM64_CONTINUOUS_TICK_LIFECYCLE_OK
+ARM64_IRQ_SAFE_DISPATCH_OK
 Testing high VBAR synchronous vector
 ARM64_VECTOR_OK
 Entering EL0 at 0x0000000000400000 stack=0x0000000000403000
 ARM64 syscall write OK
-EL0 exit status: 0x000000000000002A syscall count: 0x0000000000000004
+EL0 exit status: 0x000000000000002A syscall count: 0x0000000000000005
 ARM64_EL0_SYSCALL_ABI_OK
 ARM64_EL0_CONTEXT_OK
 Testing timer IRQ after EL0 return
@@ -607,11 +792,11 @@ build/images/kernel-arm64-qemu-virt.dis
 
 ## Next Milestones
 
-1. Add deferred `need_resched` handling and service timer preemption only at a
-   safe IRQ-return boundary with the interrupted task frame fully preserved.
-2. Attach the owned ARM64 address space to the generic `vm_space`
-   contract, then replace its early allocator and ASID pool with synchronized
-   runtime backends.
+1. Add SMP synchronization and per-CPU current-task/preemption ownership around
+   the locally IRQ-safe dispatcher and runqueue contract.
+2. Replace the bounded ARM64 VMA storage and early allocator with dynamic
+   runtime mapping, unmap, page-table growth, and synchronized page/ASID
+   backends.
 3. Extend ASID residency with SMP synchronization, rollover and remote
    shootdown rules when secondary ARM64 CPUs are introduced.
 4. Connect the validated register ABI to the generic syscall dispatcher once

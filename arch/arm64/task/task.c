@@ -11,6 +11,7 @@
  * Responsibilities:
  * - Allocate and clear task_t kernel stacks from the early page allocator.
  * - Initialize generic task metadata and ARM64 context state.
+ * - Attach the generic vm_space_t identity to user-capable contexts.
  * - Release stack ownership while protecting the active context.
  * - Maintain task state and CPU ownership around cooperative context switches.
  *
@@ -21,6 +22,7 @@
 
 #include <asm/mmu.h>
 #include <asm/task.h>
+#include <asm/user_vm.h>
 #include <kernel/task.h>
 
 static void clear_bytes(void *address, size_t length)
@@ -76,7 +78,7 @@ static int task_stack_valid(const struct task *task)
 
 int arm64_task_init(struct task *task,
                     early_page_allocator_t *allocator,
-                    const arm64_user_vm_t *user_vm,
+                    const vm_space_t *vm_space,
                     vaddr_t kernel_entry,
                     const char *name,
                     uint32_t task_id,
@@ -86,7 +88,9 @@ int arm64_task_init(struct task *task,
     vaddr_t stack_alias;
     size_t stack_size;
 
-    if (!task || !allocator || kernel_stack_pages == 0 ||
+    if (!task || !allocator ||
+        (vm_space && !arm64_user_vm_from_space(vm_space)) ||
+        kernel_stack_pages == 0 ||
         kernel_stack_pages > ARM64_BOOTSTRAP_TASK_MAX_STACK_PAGES)
         return -1;
     if (task->magic == TASK_MAGIC_ALIVE)
@@ -120,24 +124,25 @@ int arm64_task_init(struct task *task,
     task->context.kernel.sp =
         (stack_alias + stack_size) & ~(vaddr_t)0xfu;
     task->context.kernel.pc = kernel_entry;
-    task->context.user_vm = user_vm;
-    if (user_vm) {
-        task->context.ttbr0 = user_vm->l1;
-        task->context.asid = user_vm->asid;
+    task->context.vm_space = vm_space;
+    if (vm_space) {
+        task->context.ttbr0 = (paddr_t)(uintptr_t)vm_space->pgdir;
+        task->context.asid = vm_space->asid;
     }
     task->magic = TASK_MAGIC_ALIVE;
     return 0;
 }
 
 int arm64_task_init_current(struct task *task,
-                            const arm64_user_vm_t *user_vm,
+                            const vm_space_t *vm_space,
                             const char *name,
                             uint32_t task_id,
                             vaddr_t kernel_stack_base,
                             vaddr_t kernel_stack_top,
                             uint32_t cpu_id)
 {
-    if (!task || kernel_stack_base < ARM64_KERNEL_VA_BASE ||
+    if (!task || (vm_space && !arm64_user_vm_from_space(vm_space)) ||
+        kernel_stack_base < ARM64_KERNEL_VA_BASE ||
         kernel_stack_top <= kernel_stack_base ||
         kernel_stack_top - kernel_stack_base > 0xffffffffULL)
         return -1;
@@ -149,10 +154,10 @@ int arm64_task_init_current(struct task *task,
     task->stack_base = (void *)(uintptr_t)kernel_stack_base;
     task->stack_top = (void *)(uintptr_t)kernel_stack_top;
     task->stack_size = (uint32_t)(kernel_stack_top - kernel_stack_base);
-    task->context.user_vm = user_vm;
-    if (user_vm) {
-        task->context.ttbr0 = user_vm->l1;
-        task->context.asid = user_vm->asid;
+    task->context.vm_space = vm_space;
+    if (vm_space) {
+        task->context.ttbr0 = (paddr_t)(uintptr_t)vm_space->pgdir;
+        task->context.asid = vm_space->asid;
     }
     task->magic = TASK_MAGIC_ALIVE;
     return 0;

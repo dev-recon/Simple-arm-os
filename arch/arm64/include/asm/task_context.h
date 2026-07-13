@@ -10,6 +10,7 @@
  *
  * Responsibilities:
  * - Group kernel callee-saved state, EL0 state and address-space identity.
+ * - Reference user address spaces through the generic vm_space_t contract.
  * - Define the bootstrap contract consumed by the task-switch boundary.
  *
  * Notes:
@@ -21,7 +22,7 @@
 #define ASM_ARM64_TASK_CONTEXT_H
 
 #include <asm/user_context.h>
-#include <asm/user_vm.h>
+#include <kernel/memory.h>
 #include <kernel/types.h>
 
 #define ARM64_TASK_FLAG_RETURNS_TO_USER (1u << 0)
@@ -35,7 +36,7 @@ typedef struct arm64_kernel_context {
 typedef struct arm64_task_context {
     arm64_kernel_context_t kernel;
     arm64_user_context_t user;
-    const arm64_user_vm_t *user_vm;
+    const vm_space_t *vm_space;
     paddr_t ttbr0;
     uint32_t asid;
     uint32_t flags;
@@ -56,6 +57,7 @@ int arm64_task_context_switch_address_space(
 void arm64_task_context_probe_entry(void) __attribute__((noreturn));
 void arm64_task_dispatcher_probe_entry(void) __attribute__((noreturn));
 void arm64_task_preempt_peer_entry(void) __attribute__((noreturn));
+void arm64_task_periodic_peer_entry(void) __attribute__((noreturn));
 void arm64_user_task_probe_entry(void) __attribute__((noreturn));
 
 #endif

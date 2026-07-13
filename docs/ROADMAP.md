@@ -50,7 +50,18 @@ The v0.6 baseline is:
   only after IRQ acknowledgement at a complete exception-return frame; a real
   lower-EL timer IRQ also suspends an EL0 task on its owned kernel stack, runs a
   kernel peer, and resumes the interrupted user computation before normal
-  exit; the full Unix kernel and userland remain ARM32.
+  exit; a bounded two-tick schedule now preempts both EL0 and the kernel peer,
+  then unwinds both owned IRQ frames in deterministic FIFO order; dispatcher
+  quantum accounting also proves that four physical ticks with a two-tick
+  slice create exactly two scheduling requests; scheduler code can now own and
+  cancel a continuous timer lifetime after the same sequence; architecture
+  callbacks now mask and restore local IRQ/FIQ state around normal generic
+  dispatcher mutations, while timer accounting runs under IRQ-entry masking;
+  this includes critical sections suspended across task switches; ARM64 user
+  address spaces now publish a generic `vm_space_t` identity used by tasks,
+  TTBR0/ASID activation, and SVC buffer validation; their bounded bootstrap
+  mappings now publish sorted generic VMAs used for lookup and permission
+  checks; the full Unix kernel and userland remain ARM32.
 
 Post-v0.6 hardware milestone:
 

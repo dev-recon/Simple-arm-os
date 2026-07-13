@@ -10,6 +10,7 @@
  *
  * Responsibilities:
  * - Validate the address-space identity carried by a task context.
+ * - Resolve generic vm_space_t references through the ARM64 backend.
  * - Activate TTBR0 and its ASID before switching kernel register state.
  *
  * Notes:
@@ -19,6 +20,7 @@
 
 #include <asm/mmu.h>
 #include <asm/task_context.h>
+#include <asm/user_vm.h>
 
 int arm64_task_context_switch_address_space(
     arm64_task_context_t *previous,
@@ -29,11 +31,12 @@ int arm64_task_context_switch_address_space(
     if (!previous || !next)
         return -1;
 
-    if (next->user_vm) {
-        if (next->ttbr0 != next->user_vm->l1 ||
-            next->asid != next->user_vm->asid)
+    if (next->vm_space) {
+        if (next->ttbr0 !=
+                (paddr_t)(uintptr_t)next->vm_space->pgdir ||
+            next->asid != next->vm_space->asid)
             return -2;
-        result = arm64_user_vm_activate(next->user_vm);
+        result = arm64_user_vm_activate_space(next->vm_space);
         if (result != 0)
             return -3;
     } else if (next->ttbr0 != 0 || next->asid != 0) {

@@ -12,6 +12,7 @@
  * - Dispatch EL1 IRQs and synchronous exceptions from vectors.S.
  * - Implement the bounded bootstrap AArch64 syscall ABI.
  * - Capture the active EL0 register image across syscall entry and return.
+ * - Validate user buffers through the active generic vm_space_t identity.
  * - Route user yield and exit through the cooperative task dispatcher.
  * - Convert timer IRQ events into deferred preemption at IRQ-return points.
  *
@@ -24,6 +25,7 @@
 #include <asm/exception.h>
 #include <asm/exception_frame.h>
 #include <asm/irq.h>
+#include <asm/user_vm.h>
 #include <kernel/task_runqueue.h>
 #include <uapi/armos/syscall.h>
 
@@ -42,18 +44,18 @@ typedef unsigned long long uint64_t;
 #define SPSR_EL1H_MASKED       0x3c5u
 #define ARM64_BOOTSTRAP_WRITE_MAX 256u
 
-static const arm64_user_vm_t *el0_vm;
+static const vm_space_t *el0_vm_space;
 static arm64_user_context_t *el0_registers;
 static uint64_t el0_exit_address;
 static uint64_t el0_exit_status;
 static unsigned int el0_syscall_count;
 static task_dispatcher_t *active_dispatcher;
 
-void arm64_exception_set_el0_context(const arm64_user_vm_t *vm,
+void arm64_exception_set_el0_context(const vm_space_t *vm_space,
                                      arm64_user_context_t *registers,
                                      arm64_exception_u64 exit_address)
 {
-    el0_vm = vm;
+    el0_vm_space = vm_space;
     el0_registers = registers;
     el0_exit_address = exit_address;
     el0_exit_status = 0;
@@ -121,8 +123,9 @@ static void arm64_bootstrap_syscall(arm64_exception_frame_t *frame)
             return;
         }
         if (registers->x[2] > ARM64_BOOTSTRAP_WRITE_MAX ||
-            arm64_user_vm_validate_range(el0_vm, address, length,
-                                         ARM64_USER_PAGE_READ) != 0) {
+            arm64_user_vm_validate_space_range(
+                el0_vm_space, address, length,
+                ARM64_USER_PAGE_READ) != 0) {
             registers->x[0] = syscall_error(EFAULT);
             save_el0_registers(registers);
             return;
@@ -174,7 +177,7 @@ void arm64_exception_dispatch(arm64_exception_frame_t *frame)
 
         if ((events & ARM64_IRQ_EVENT_TIMER) != 0 &&
             active_dispatcher != NULL) {
-            if (task_dispatcher_request_preempt(active_dispatcher) != 0 ||
+            if (task_dispatcher_timer_tick(active_dispatcher) != 0 ||
                 task_dispatcher_service_preempt_at_safe_point(
                     active_dispatcher) != 0)
                 arm64_exception_halt();
@@ -186,7 +189,7 @@ void arm64_exception_dispatch(arm64_exception_frame_t *frame)
         ec == ESR_EC_SVC64 && (frame->user.pstate & 0xfu) == 0) {
         uint64_t immediate = iss & 0xffffu;
 
-        if (immediate == ARM64_SVC_SYSCALL && el0_vm != NULL) {
+        if (immediate == ARM64_SVC_SYSCALL && el0_vm_space != NULL) {
             arm64_bootstrap_syscall(frame);
             return;
         }

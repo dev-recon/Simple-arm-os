@@ -157,6 +157,31 @@ static early_page_allocator_t *high_early_allocator(void)
     return allocator;
 }
 
+static uint32_t arm64_dispatch_irq_save(void *context)
+{
+    (void)context;
+    return asm_irq_fiq_save();
+}
+
+static void arm64_dispatch_irq_restore(void *context, uint32_t saved_state)
+{
+    (void)context;
+    asm_irq_fiq_restore(saved_state);
+}
+
+static int arm64_dispatcher_init(task_dispatcher_t *dispatcher,
+                                 task_t *current,
+                                 uint32_t capacity)
+{
+    if (task_dispatcher_init(dispatcher, current, capacity,
+                             arm64_task_switch_prepared) != 0)
+        return -1;
+    return task_dispatcher_set_irq_ops(dispatcher,
+                                       arm64_dispatch_irq_save,
+                                       arm64_dispatch_irq_restore,
+                                       NULL);
+}
+
 static int task_probe_metadata_valid(const task_t *task,
                                      uint32_t task_id,
                                      char name_initial)
@@ -203,7 +228,7 @@ static int initialize_task_probe(arm64_high_context_t *context,
     if (arm64_task_init(
             task,
             high_early_allocator(),
-            user_vm,
+            user_vm ? arm64_user_vm_space(user_vm) : NULL,
             kernel_entry,
             name,
             task_id,
@@ -464,8 +489,7 @@ static int arm64_cooperative_dispatcher_smoke_test(
         return -2;
     }
 
-    if (task_dispatcher_init(&dispatcher, bootstrap, 3,
-                             arm64_task_switch_prepared) != 0 ||
+    if (arm64_dispatcher_init(&dispatcher, bootstrap, 3) != 0 ||
         task_dispatcher_publish(&dispatcher, first) != 0 ||
         task_dispatcher_publish(&dispatcher, second) != 0)
         result = -3;
@@ -535,8 +559,7 @@ static int arm64_deferred_preempt_smoke_test(
             &context->task_probe_ttbr0) != 0)
         return -1;
 
-    if (task_dispatcher_init(&dispatcher, bootstrap, 2,
-                             arm64_task_switch_prepared) != 0 ||
+    if (arm64_dispatcher_init(&dispatcher, bootstrap, 2) != 0 ||
         task_dispatcher_publish(&dispatcher, worker) != 0)
         result = -2;
     worker->context.kernel.x[6] = (uint64_t)(uintptr_t)&dispatcher;
@@ -621,7 +644,7 @@ static int arm64_user_yield_dispatcher_smoke_test(
     bootstrap->last_cpu = 0;
 
     if (arm64_task_init(
-            user, allocator, &context->user_vm,
+            user, allocator, arm64_user_vm_space(&context->user_vm),
             (vaddr_t)(uintptr_t)arm64_user_task_probe_entry,
             "user-yield", 3, TASK_PROBE_STACK_PAGES) != 0)
         return -1;
@@ -638,15 +661,15 @@ static int arm64_user_yield_dispatcher_smoke_test(
         arm64_task_destroy(user, allocator, &bootstrap->context);
         return -2;
     }
-    if (task_dispatcher_init(&dispatcher, bootstrap, 3,
-                             arm64_task_switch_prepared) != 0 ||
+    if (arm64_dispatcher_init(&dispatcher, bootstrap, 3) != 0 ||
         task_dispatcher_publish(&dispatcher, user) != 0 ||
         task_dispatcher_publish(&dispatcher, peer) != 0)
         result = -3;
 
     peer->context.kernel.x[6] = (uint64_t)(uintptr_t)&dispatcher;
-    arm64_exception_set_el0_context(&context->user_vm,
-                                    &user->context.user, 0);
+    arm64_exception_set_el0_context(
+        arm64_user_vm_space(&context->user_vm),
+        &user->context.user, 0);
     arm64_exception_set_task_dispatcher(&dispatcher);
 
     if (result == 0 && task_dispatcher_yield(&dispatcher) != 0)
@@ -724,7 +747,7 @@ static int arm64_user_timer_preempt_smoke_test(
     bootstrap->last_cpu = 0;
 
     if (arm64_task_init(
-            user, allocator, &context->user_vm,
+            user, allocator, arm64_user_vm_space(&context->user_vm),
             (vaddr_t)(uintptr_t)arm64_user_task_probe_entry,
             "user-preempt", 6, TASK_PROBE_STACK_PAGES) != 0)
         return -1;
@@ -746,8 +769,7 @@ static int arm64_user_timer_preempt_smoke_test(
         arm64_task_destroy(user, allocator, &bootstrap->context);
         return -2;
     }
-    if (task_dispatcher_init(&dispatcher, bootstrap, 3,
-                             arm64_task_switch_prepared) != 0 ||
+    if (arm64_dispatcher_init(&dispatcher, bootstrap, 3) != 0 ||
         task_dispatcher_publish(&dispatcher, user) != 0 ||
         task_dispatcher_publish(&dispatcher, peer) != 0)
         result = -3;
@@ -755,8 +777,9 @@ static int arm64_user_timer_preempt_smoke_test(
     peer->context.kernel.x[6] = (uint64_t)(uintptr_t)&dispatcher;
     peer->context.kernel.x[7] =
         USER_DATA_VA + USER_PREEMPT_FLAG_OFFSET;
-    arm64_exception_set_el0_context(&context->user_vm,
-                                    &user->context.user, 0);
+    arm64_exception_set_el0_context(
+        arm64_user_vm_space(&context->user_vm),
+        &user->context.user, 0);
     arm64_exception_set_task_dispatcher(&dispatcher);
 
     if (result == 0) {
@@ -825,6 +848,153 @@ static int arm64_user_timer_preempt_smoke_test(
     return result;
 }
 
+static int arm64_mixed_periodic_preempt_smoke_test(
+    arm64_high_context_t *context,
+    uint32_t timer_ticks,
+    uint32_t quantum_ticks,
+    int continuous_timer)
+{
+    task_t *bootstrap = &context->bootstrap_task;
+    task_t *user = &context->scheduled_user_task;
+    task_t *peer = &context->probe_task;
+    early_page_allocator_t *allocator = high_early_allocator();
+    task_dispatcher_t dispatcher;
+    uint64_t free_before = allocator->free_pages;
+    uint64_t preempt_offset =
+        (uint64_t)(uintptr_t)arm64_el0_preempt_payload -
+        (uint64_t)(uintptr_t)arm64_el0_payload_start;
+    uint32_t bootstrap_switch_before = bootstrap->switch_count;
+    int timer_armed = 0;
+    int result = 0;
+
+    if (quantum_ticks == 0 || timer_ticks != quantum_ticks * 2)
+        return -1;
+
+    clear_task_context(&bootstrap->context);
+    bootstrap->state = TASK_RUNNING;
+    bootstrap->running_cpu = 0;
+    bootstrap->last_cpu = 0;
+
+    if (arm64_task_init(
+            user, allocator, arm64_user_vm_space(&context->user_vm),
+            (vaddr_t)(uintptr_t)arm64_user_task_probe_entry,
+            "periodic-user", 8, TASK_PROBE_STACK_PAGES) != 0)
+        return -1;
+    user->type = TASK_TYPE_PROCESS;
+    user->context.flags = ARM64_TASK_FLAG_RETURNS_TO_USER;
+    prepare_user_registers(&user->context.user);
+    user->context.user.pc = USER_CODE_VA + preempt_offset;
+    user->context.user.pstate = ARM64_USER_PSTATE_EL0T;
+    user->context.kernel.x[0] = (uint64_t)(uintptr_t)user;
+
+    *(volatile uint64_t *)(uintptr_t)(USER_DATA_VA +
+                                      USER_PREEMPT_FLAG_OFFSET) = 0;
+    if (preempt_offset >= PAGE_SIZE ||
+        initialize_task_probe(
+            context, peer, NULL,
+            (vaddr_t)(uintptr_t)arm64_task_periodic_peer_entry,
+            "periodic-peer", 9, 'p', &context->task_probe_phase,
+            &context->task_probe_ttbr0) != 0) {
+        arm64_task_destroy(user, allocator, &bootstrap->context);
+        return -2;
+    }
+    if (arm64_dispatcher_init(&dispatcher, bootstrap, 3) != 0 ||
+        task_dispatcher_set_quantum(&dispatcher, quantum_ticks) != 0 ||
+        task_dispatcher_publish(&dispatcher, user) != 0 ||
+        task_dispatcher_publish(&dispatcher, peer) != 0)
+        result = -3;
+
+    peer->context.kernel.x[6] = (uint64_t)(uintptr_t)&dispatcher;
+    peer->context.kernel.x[7] =
+        USER_DATA_VA + USER_PREEMPT_FLAG_OFFSET;
+    arm64_exception_set_el0_context(
+        arm64_user_vm_space(&context->user_vm),
+        &user->context.user, 0);
+    arm64_exception_set_task_dispatcher(&dispatcher);
+
+    if (result == 0) {
+        if ((continuous_timer &&
+             arm64_timer_irq_start_periodic() != 0) ||
+            (!continuous_timer &&
+             arm64_timer_irq_arm_ticks(timer_ticks) != 0))
+            result = -4;
+        else
+            timer_armed = 1;
+    }
+    if (result == 0 && task_dispatcher_yield(&dispatcher) != 0)
+        result = -5;
+    if (timer_armed)
+        arm64_timer_irq_cancel();
+
+    if (result == 0 &&
+        (context->task_probe_phase != 1 ||
+         dispatcher.current != bootstrap ||
+         dispatcher.ready.head != user || dispatcher.ready.tail != peer ||
+         dispatcher.ready.count != 2 || dispatcher.dispatch_count != 3 ||
+         dispatcher.last_reason != TASK_DISPATCH_PREEMPT ||
+         dispatcher.need_resched != 0 || dispatcher.preempt_requests != 2 ||
+         dispatcher.preempt_deferred != 0 ||
+         dispatcher.preempt_serviced != 0 ||
+         dispatcher.timer_ticks != timer_ticks ||
+         dispatcher.quantum_expirations != 2 ||
+         dispatcher.quantum_ticks != quantum_ticks ||
+         dispatcher.slice_ticks != 0 ||
+         dispatcher.irq_critical_sections != timer_ticks + 4 ||
+         arm64_timer_irq_ticks() != timer_ticks ||
+         arm64_exception_el0_syscall_count() != 0 ||
+         *(volatile uint64_t *)(uintptr_t)(USER_DATA_VA +
+             USER_PREEMPT_FLAG_OFFSET) != 1 ||
+         user->state != TASK_READY || peer->state != TASK_READY ||
+         task_dispatcher_validate(&dispatcher) != 0))
+        result = -6;
+
+    if (result == 0 && task_dispatcher_yield(&dispatcher) != 0)
+        result = -7;
+    if (result == 0 &&
+        (context->task_probe_phase != 3 ||
+         dispatcher.current != bootstrap || dispatcher.ready.count != 0 ||
+         dispatcher.dispatch_count != 6 ||
+         dispatcher.last_reason != TASK_DISPATCH_BLOCK ||
+         dispatcher.preempt_requests != 2 ||
+         dispatcher.preempt_deferred != 0 ||
+         dispatcher.preempt_serviced != 2 ||
+         dispatcher.timer_ticks != timer_ticks ||
+         dispatcher.quantum_expirations != 2 ||
+         dispatcher.quantum_ticks != quantum_ticks ||
+         dispatcher.slice_ticks != 0 ||
+         dispatcher.irq_critical_sections != timer_ticks + 7 ||
+         arm64_timer_irq_ticks() != timer_ticks ||
+         bootstrap->state != TASK_RUNNING || bootstrap->running_cpu != 0 ||
+         bootstrap->switch_count != bootstrap_switch_before + 2 ||
+         user->state != TASK_BLOCKED || user->running_cpu != TASK_CPU_NONE ||
+         user->switch_count != 2 || peer->state != TASK_BLOCKED ||
+         peer->running_cpu != TASK_CPU_NONE || peer->switch_count != 2 ||
+         user->context.user.x[0] != USER_PREEMPT_EXIT_STATUS ||
+         user->context.user.x[8] != ARMOS_NR_EXIT ||
+         user->context.user.x[9] == 0 || user->context.user.x[11] != 1 ||
+         user->context.user.x[19] != USER_X19_SENTINEL ||
+         user->context.user.x[20] != USER_X20_SENTINEL ||
+         user->context.user.sp != PROBE_USER_STACK_TOP ||
+         user->context.user.pstate != ARM64_USER_PSTATE_EL0T ||
+         arm64_exception_el0_exit_status() != USER_PREEMPT_EXIT_STATUS ||
+         arm64_exception_el0_syscall_count() != 1 ||
+         *(volatile uint64_t *)(uintptr_t)(USER_DATA_VA +
+             USER_PREEMPT_FLAG_OFFSET) != 2 ||
+         task_dispatcher_validate(&dispatcher) != 0))
+        result = -8;
+
+    arm64_exception_set_task_dispatcher(NULL);
+    if (arm64_task_destroy(peer, allocator, &bootstrap->context) != 0)
+        return -9;
+    if (arm64_task_destroy(user, allocator, &bootstrap->context) != 0)
+        return -10;
+    if (peer->magic != TASK_MAGIC_DEAD || user->magic != TASK_MAGIC_DEAD)
+        return -11;
+    if (allocator->free_pages != free_before)
+        return -12;
+    return result;
+}
+
 static int arm64_task_address_space_smoke_test(
     arm64_high_context_t *context,
     uint64_t user_ttbr,
@@ -843,12 +1013,17 @@ static int arm64_task_address_space_smoke_test(
         return -1;
     probe = &context->probe_task.context;
 
-    bootstrap->context.user_vm = &context->user_vm;
+    bootstrap->context.vm_space = arm64_user_vm_space(&context->user_vm);
     bootstrap->context.ttbr0 = context->user_vm.l1;
     bootstrap->context.asid = context->user_vm.asid;
     probe->ttbr0 = context->user_vm.l1;
     probe->asid = context->empty_vm.asid;
-    if (arm64_task_switch(bootstrap, &context->probe_task) == 0 ||
+    if (bootstrap->context.vm_space != &context->user_vm.space ||
+        probe->vm_space != &context->empty_vm.space ||
+        arm64_user_vm_from_space(bootstrap->context.vm_space) !=
+            &context->user_vm ||
+        arm64_user_vm_from_space(probe->vm_space) != &context->empty_vm ||
+        arm64_task_switch(bootstrap, &context->probe_task) == 0 ||
         context->task_probe_phase != 0)
         result = -2;
 
@@ -1176,21 +1351,34 @@ static int test_dynamic_page_table(void)
 
     lifecycle_free_pages = early_allocator.free_pages;
     if (arm64_user_vm_init(&lifecycle_vm, &early_allocator) != 0 ||
+        arm64_user_vm_space(&lifecycle_vm) != &lifecycle_vm.space ||
+        arm64_user_vm_from_space(&lifecycle_vm.space) != &lifecycle_vm ||
         arm64_user_vm_map_new_page(
             &lifecycle_vm,
             &early_allocator,
-            0x0000000000600000ULL,
+            0x0000000000601000ULL,
             ARM64_USER_PAGE_READ | ARM64_USER_PAGE_WRITE,
             &lifecycle_page) != 0 ||
         early_allocator.free_pages != lifecycle_free_pages - 4 ||
         arm64_user_vm_map_new_page(
             &lifecycle_vm,
             &early_allocator,
-            0x0000000000601000ULL,
+            0x0000000000600000ULL,
+            ARM64_USER_PAGE_READ,
+            &lifecycle_page) != 0 ||
+        early_allocator.free_pages != lifecycle_free_pages - 5 ||
+        lifecycle_vm.space.vma_list != &lifecycle_vm.mappings[1].vma ||
+        lifecycle_vm.space.vma_list->next !=
+            &lifecycle_vm.mappings[0].vma ||
+        lifecycle_vm.space.vma_list->next->next != NULL ||
+        arm64_user_vm_map_new_page(
+            &lifecycle_vm,
+            &early_allocator,
+            0x0000000000602000ULL,
             ARM64_USER_PAGE_READ | ARM64_USER_PAGE_WRITE |
                 ARM64_USER_PAGE_EXEC,
             &lifecycle_page) == 0 ||
-        early_allocator.free_pages != lifecycle_free_pages - 4)
+        early_allocator.free_pages != lifecycle_free_pages - 5)
         return -1;
     recycled_asid = lifecycle_vm.asid;
     if (arm64_user_vm_destroy(&lifecycle_vm, &early_allocator) != 0 ||
@@ -1220,6 +1408,15 @@ static int test_dynamic_page_table(void)
             USER_STACK_VA,
             ARM64_USER_PAGE_READ | ARM64_USER_PAGE_WRITE,
             &user_stack_page) != 0)
+        return -1;
+    if (arm64_user_vm_validate_identity(&high_context.user_vm) != 0 ||
+        high_context.user_vm.space.vma_list !=
+            &high_context.user_vm.mappings[0].vma ||
+        high_context.user_vm.space.vma_list->next !=
+            &high_context.user_vm.mappings[1].vma ||
+        high_context.user_vm.space.vma_list->next->next !=
+            &high_context.user_vm.mappings[2].vma ||
+        high_context.user_vm.space.vma_list->next->next->next != NULL)
         return -1;
 
     payload_size = (uint64_t)(uintptr_t)arm64_el0_payload_end -
@@ -1274,7 +1471,9 @@ static void arm64_high_main(arm64_high_context_t *context)
     __asm__ volatile("mrs %0, vbar_el1" : "=r"(vbar));
     high_text = (arm64_mmu_u64)(uintptr_t)&__text_start;
     high_uart = arm64_mmu_kernel_address(PL011_BASE);
-    if (arm64_user_vm_lookup(&context->user_vm, USER_DATA_VA,
+    if (arm64_user_vm_rebind_space(&context->user_vm) != 0 ||
+        arm64_user_vm_rebind_space(&context->empty_vm) != 0 ||
+        arm64_user_vm_lookup(&context->user_vm, USER_DATA_VA,
                              &user_data_page, NULL) != 0) {
         arm64_early_puts("ARM64_USER_VM_LOOKUP_FAILED\n");
         goto halt;
@@ -1360,7 +1559,7 @@ static void arm64_high_main(arm64_high_context_t *context)
     }
     arm64_early_puts("ARM64_DEFERRED_PREEMPT_OK\n");
 
-    if (arm64_user_vm_activate(&context->user_vm) != 0) {
+    if (arm64_user_vm_activate_space(&context->user_vm.space) != 0) {
         arm64_early_puts("ARM64_USER_TTBR0_SWITCH_FAILED\n");
         goto halt;
     }
@@ -1389,7 +1588,7 @@ static void arm64_high_main(arm64_high_context_t *context)
         goto halt;
     }
 
-    if (arm64_user_vm_activate(&context->empty_vm) != 0) {
+    if (arm64_user_vm_activate_space(&context->empty_vm.space) != 0) {
         arm64_early_puts("ARM64_EMPTY_TTBR0_SWITCH_FAILED\n");
         goto halt;
     }
@@ -1400,7 +1599,7 @@ static void arm64_high_main(arm64_high_context_t *context)
         (arm64_mmu_translate_user_read(USER_DATA_VA) & 1u) == 0 ||
         (arm64_mmu_translate_read(high_text) & 1u) != 0 ||
         (arm64_mmu_translate_read(high_uart) & 1u) != 0 ||
-        arm64_user_vm_activate(&context->user_vm) != 0 ||
+        arm64_user_vm_activate_space(&context->user_vm.space) != 0 ||
         (arm64_mmu_translate_user_read(USER_DATA_VA) & 1u) != 0 ||
         *(volatile uint64_t *)(uintptr_t)(USER_DATA_VA +
                                          USER_VM_MAGIC_OFFSET) !=
@@ -1425,6 +1624,8 @@ static void arm64_high_main(arm64_high_context_t *context)
         goto halt;
     }
     arm64_early_puts("ARM64_TASK_TTBR0_SWITCH_OK\n");
+    arm64_early_puts("ARM64_GENERIC_VM_SPACE_OK\n");
+    arm64_early_puts("ARM64_GENERIC_VMA_OK\n");
     arm64_early_puts("ASID residency: flush=");
     arm64_early_puthex64(arm64_user_vm_tlb_flush_count());
     arm64_early_puts(" preserve=");
@@ -1446,16 +1647,44 @@ static void arm64_high_main(arm64_high_context_t *context)
     }
     arm64_early_puts("ARM64_EL0_TIMER_PREEMPT_OK\n");
 
+    probe_result = arm64_mixed_periodic_preempt_smoke_test(context, 2, 1, 0);
+    if (probe_result != 0) {
+        arm64_early_puts("ARM64_PERIODIC_MIXED_PREEMPT_FAILED code=");
+        arm64_early_puthex64((uint64_t)(unsigned int)(-probe_result));
+        arm64_early_puts("\n");
+        goto halt;
+    }
+    arm64_early_puts("ARM64_PERIODIC_MIXED_PREEMPT_OK\n");
+
+    probe_result = arm64_mixed_periodic_preempt_smoke_test(context, 4, 2, 0);
+    if (probe_result != 0) {
+        arm64_early_puts("ARM64_QUANTUM_ACCOUNTING_FAILED code=");
+        arm64_early_puthex64((uint64_t)(unsigned int)(-probe_result));
+        arm64_early_puts("\n");
+        goto halt;
+    }
+    arm64_early_puts("ARM64_QUANTUM_ACCOUNTING_OK\n");
+
+    probe_result = arm64_mixed_periodic_preempt_smoke_test(context, 4, 2, 1);
+    if (probe_result != 0) {
+        arm64_early_puts("ARM64_CONTINUOUS_TICK_LIFECYCLE_FAILED code=");
+        arm64_early_puthex64((uint64_t)(unsigned int)(-probe_result));
+        arm64_early_puts("\n");
+        goto halt;
+    }
+    arm64_early_puts("ARM64_CONTINUOUS_TICK_LIFECYCLE_OK\n");
+    arm64_early_puts("ARM64_IRQ_SAFE_DISPATCH_OK\n");
+
     arm64_early_puts("Testing high VBAR synchronous vector\n");
     __asm__ volatile("brk #0x64");
     clear_task_context(&context->user_task);
-    context->user_task.user_vm = &context->user_vm;
+    context->user_task.vm_space = arm64_user_vm_space(&context->user_vm);
     context->user_task.ttbr0 = context->user_vm.l1;
     context->user_task.asid = context->user_vm.asid;
     context->user_task.flags = ARM64_TASK_FLAG_RETURNS_TO_USER;
     prepare_user_registers(&context->user_task.user);
     arm64_exception_set_el0_context(
-        &context->user_vm,
+        arm64_user_vm_space(&context->user_vm),
         &context->user_task.user,
         (arm64_exception_u64)(uintptr_t)arm64_el0_return);
     arm64_early_puts("Entering EL0 at ");
@@ -1482,7 +1711,9 @@ static void arm64_el0_return(uint64_t result)
         *(volatile uint64_t *)(uintptr_t)(USER_DATA_VA +
                                          USER_ENOSYS_RESULT_OFFSET) !=
             USER_ENOSYS_RESULT ||
-        high_context.user_task.user_vm != &high_context.user_vm ||
+        high_context.user_task.vm_space != &high_context.user_vm.space ||
+        arm64_user_vm_from_space(high_context.user_task.vm_space) !=
+            &high_context.user_vm ||
         high_context.user_task.ttbr0 != high_context.user_vm.l1 ||
         high_context.user_task.asid != high_context.user_vm.asid ||
         high_context.user_task.flags != ARM64_TASK_FLAG_RETURNS_TO_USER ||

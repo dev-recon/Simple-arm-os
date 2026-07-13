@@ -263,6 +263,23 @@ The first executable milestone now provides an isolated EL1 serial bootstrap:
 - lower-EL timer preemption of an IRQ-enabled generic user task, preserving its
   suspended exception frame across a kernel-only peer and resuming EL0 at the
   interrupted computation before a normal blocking exit;
+- a bounded two-tick mixed schedule that preempts EL0, then a kernel-only task,
+  and proves that both suspended IRQ services resume and unwind on their owning
+  stacks before the workers block back to the bootstrap task;
+- dispatcher-owned timer and slice accounting with configurable quanta, proven
+  by four physical ticks that create only two scheduling requests at the two
+  expected expiration boundaries;
+- continuous physical-timer lifetime started and cancelled by scheduler code,
+  with the device backend remaining independent of tasks and quantum policy;
+- architecture-provided local IRQ save/mask/restore callbacks around generic
+  dispatcher mutations, including context-switch-spanning critical sections
+  and exact operation-count validation under continuous timer preemption;
+- an ARM64-owned backend embedded behind generic `vm_space_t`, with opaque
+  backend recovery, table/ASID consistency checks, task-context activation,
+  and SVC user-buffer validation all driven by the generic identity;
+- generic sorted `vma_t` ownership for ARM64 bootstrap mappings, with private
+  virtual/permission duplication removed, high-half link rebinding, W^X and
+  physical-page validation, and VMA-driven lookup/range checks;
 - separate ARM64 artifacts so ARM32 platform images are not overwritten.
 
 See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
@@ -270,8 +287,8 @@ See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
 Remaining AArch64 pieces:
 
 - synchronization and full physical-allocator integration;
-- attachment of the owned ARM64 user-VM backend to generic `vm_space`;
-- periodic EL0 timer quanta and scheduler critical-section integration;
+- dynamic VMA/mapping operations and a runtime ARM64 page allocator;
+- SMP locking and per-CPU ownership beyond local IRQ serialization;
 - SMP-safe ASID residency, rollover and remote TLB shootdown rules;
 - generic syscall-dispatch integration and the ELF64 process loader;
 - AArch64 signal frame;

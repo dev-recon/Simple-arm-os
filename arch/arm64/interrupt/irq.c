@@ -10,7 +10,8 @@
  *
  * Responsibilities:
  * - Bring up the QEMU virt GICv2 CPU and distributor interfaces.
- * - Drive the ARM physical timer PPI with bounded one-shot sequences.
+ * - Drive the ARM physical timer PPI with bounded tick sequences.
+ * - Keep an explicit periodic mode alive until scheduler-owned cancellation.
  * - Acknowledge and classify IRQs before returning events to exception code.
  *
  * Notes:
@@ -48,6 +49,7 @@ typedef unsigned char uint8_t;
 static volatile uint32_t timer_ticks;
 static volatile uint32_t unexpected_irq;
 static uint32_t timer_target_ticks;
+static uint32_t timer_periodic;
 static uint64_t timer_interval;
 static uint64_t timer_frequency;
 
@@ -99,7 +101,7 @@ uint32_t arm64_irq_dispatch(void)
     if (irq == ARM64_PHYS_TIMER_PPI) {
         timer_ticks++;
         events |= ARM64_IRQ_EVENT_TIMER;
-        if (timer_ticks < timer_target_ticks)
+        if (timer_periodic || timer_ticks < timer_target_ticks)
             timer_write_tval(timer_interval);
         else
             timer_write_ctl(0);
@@ -111,15 +113,16 @@ uint32_t arm64_irq_dispatch(void)
     return events;
 }
 
-static int timer_irq_prepare(uint32_t target_ticks)
+static int timer_irq_prepare(uint32_t target_ticks, uint32_t periodic)
 {
     uint32_t gic_type;
 
-    if (target_ticks == 0)
+    if (target_ticks == 0 && !periodic)
         return -1;
     timer_ticks = 0;
     unexpected_irq = 0;
     timer_target_ticks = target_ticks;
+    timer_periodic = periodic != 0;
     timer_frequency = timer_read_frequency();
     if (timer_frequency == 0)
         return -2;
@@ -157,11 +160,27 @@ void arm64_timer_irq_cancel(void)
     timer_write_ctl(0);
     mmio_write32(GICD_BASE + GICD_ICENABLER,
                  1u << ARM64_PHYS_TIMER_PPI);
+    timer_periodic = 0;
 }
 
 int arm64_timer_irq_arm_once(void)
 {
-    return timer_irq_prepare(1);
+    return arm64_timer_irq_arm_ticks(1);
+}
+
+int arm64_timer_irq_arm_ticks(uint32_t ticks)
+{
+    return timer_irq_prepare(ticks, 0);
+}
+
+int arm64_timer_irq_start_periodic(void)
+{
+    return timer_irq_prepare(0, 1);
+}
+
+uint32_t arm64_timer_irq_ticks(void)
+{
+    return timer_ticks;
 }
 
 static int timer_irq_run(uint32_t target_ticks)
@@ -169,7 +188,7 @@ static int timer_irq_run(uint32_t target_ticks)
     uint64_t saved_daif;
     int result;
 
-    result = timer_irq_prepare(target_ticks);
+    result = timer_irq_prepare(target_ticks, 0);
     if (result != 0)
         return result;
     __asm__ volatile("mrs %0, daif" : "=r"(saved_daif));
