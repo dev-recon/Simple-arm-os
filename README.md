@@ -61,7 +61,11 @@ ArmOS currently provides:
   a complete exception-vector table, a recoverable BRK/ERET smoke test, and a
   4 KiB long-descriptor identity MMU with Device/normal memory attributes,
   plus GICv2 physical-timer IRQ delivery through the EL1h vector and a shared
-  early physical-page allocator driven by FDT RAM and reservation discovery
+  early physical-page allocator driven by FDT RAM and reservation discovery;
+  TTBR0 then migrates from the static boot table to allocated L1/L2/L3 tables
+  with a tested 4 KiB unmap/remap path, while TTBR1 provides a canonical
+  permission-checked kernel alias used by the live PC, stack, and vectors;
+  the low RAM identity window is then removed from TTBR0
 - MMU enabled with split TTBR0/TTBR1 address spaces
 - ASID support and ASID rollover handling
 - typed physical/virtual address groundwork (`paddr_t`, `vaddr_t`, `pfn_t`)
@@ -330,8 +334,8 @@ Near-term work:
 Medium-term ideas:
 
 - improve POSIX compatibility for larger userland packages
-- extend ARM64 early allocation into the synchronized physical allocator and
-  dynamically managed page tables
+- introduce per-process ARM64 TTBR0 tables, then extend early allocation into
+  the synchronized physical allocator
 
 See [`ROADMAP.md`](ROADMAP.md) for more detail.
 

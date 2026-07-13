@@ -210,6 +210,14 @@ The first executable milestone now provides an isolated EL1 serial bootstrap:
   contiguous allocation, free, reuse, and memory-integrity smoke tests;
 - dependency-free FDT discovery of RAM, firmware reservations,
   `/reserved-memory`, and the DTB blob itself;
+- migration from the static boot translation table to allocated TTBR0
+  L1/L2/L3 tables, including a 4 KiB unmap/remap and targeted TLB invalidation,
+  followed by exception-return and timer-IRQ validation;
+- a 39-bit canonical TTBR1 kernel alias sharing the managed RAM hierarchy,
+  with page-aligned EL1 RX/RO/RW-NX permissions and EL0 exclusion tests;
+- live high-half PC, stack, and exception-vector execution through TTBR1,
+  followed by retirement of the low RAM identity window from TTBR0 and
+  successful BRK/timer-IRQ validation;
 - separate ARM64 artifacts so ARM32 platform images are not overwritten.
 
 See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
@@ -217,7 +225,7 @@ See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
 Remaining AArch64 pieces:
 
 - synchronization and full physical-allocator integration;
-- managed long-descriptor MMU and the final kernel/user VA split;
+- per-process TTBR0 user tables and the final kernel/user VA split;
 - AArch64 syscall ABI;
 - AArch64 context switch;
 - AArch64 signal frame;

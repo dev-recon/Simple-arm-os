@@ -86,3 +86,19 @@ _start:
     b .Lbad_el
 
 .size _start, . - _start
+
+/*
+ * Continue execution through the TTBR1 kernel alias.  The caller supplies
+ * the high entry PC, stack, vector base and one context argument.
+ */
+.global arm64_enter_high_alias
+.type arm64_enter_high_alias, %function
+arm64_enter_high_alias:
+    mov x4, x0
+    mov sp, x1
+    msr vbar_el1, x2
+    isb
+    mov x0, x3
+    br x4
+
+.size arm64_enter_high_alias, . - arm64_enter_high_alias

@@ -97,6 +97,65 @@ With the QEMU 10.0.2 1 GiB profile, the bootstrap discovers RAM at
 explicitly sized for at most 1 GiB of RAM; larger profiles are rejected until
 allocator metadata becomes dynamic.
 
+### Milestone 7: Allocated L1/L2/L3 Tables
+
+The static boot L1 table is now only the bridge used to enable translation.
+After FDT discovery and early-page initialization, the bootstrap allocates
+three contiguous 4 KiB pages for a new L1/L2/L3 hierarchy, cleans them to the
+point of coherency, and switches `TTBR0_EL1` to the allocated L1.
+
+The MMIO range remains a Device 1 GiB L1 block. The 1 GiB RAM range is split
+into 2 MiB L2 blocks, while its first 2 MiB containing the kernel, stack, and
+allocated tables is split again into 4 KiB L3 pages.
+
+The replacement follows the required ordering around the TTBR write and a
+local stage-1 TLB invalidation. Translation probes for PL011, kernel RAM, and
+the unmapped `0x80000000` boundary are repeated after the switch. A dedicated
+page is then removed from L3, checked as faulting through `AT S1E1R`, restored,
+and checked for its original contents after a targeted `TLBI VAE1`. A BRK/ERET
+round trip and a second three-interrupt timer test finally prove that vectors,
+code, stack, MMIO, and IRQ delivery remain usable through the new hierarchy.
+
+SMP-wide TLB invalidation is not enabled yet.
+
+### Milestone 8: TTBR1 Kernel Alias And Permissions
+
+The linker now aligns text, read-only data, and writable data on 4 KiB
+boundaries and exports their exact ranges. Before switching to the allocated
+tables, L3 descriptors enforce:
+
+- kernel text: EL1 read/execute, read-only, inaccessible to EL0;
+- kernel rodata: EL1 read-only and execute-never, inaccessible to EL0;
+- kernel data, BSS, stacks, and allocator pages: EL1 read/write and
+  execute-never, inaccessible to EL0.
+
+A fourth allocated L1 is installed in `TTBR1_EL1`. It reuses the existing RAM
+L2/L3 hierarchy and exposes the same physical pages at the canonical 39-bit
+kernel offset `0xFFFFFF8000000000`; kernel text therefore appears at
+`0xFFFFFF8040080000`. `TCR_EL1` now defines 4 KiB, inner-shareable WBWA walks
+for both TTBR0 and TTBR1.
+
+The smoke test compares data through low and high aliases, verifies their PAR
+physical addresses, checks privileged read/write permissions, and confirms
+that EL0 translation probes fail for text, rodata, and data.
+
+### Milestone 9: High-Half Execution And Low Identity Retirement
+
+An assembly trampoline now transfers the live PC, stack pointer, and
+`VBAR_EL1` to their canonical TTBR1 aliases. Because kernel code is linked as
+one position-preserving image, PC-relative calls and data references continue
+to resolve within the same physical image after the offset is applied.
+
+Once execution is demonstrably in `0xFFFFFF80...`, the high-half C entry clears
+only TTBR0 L1 entry 1, which removes the `0x40000000-0x7fffffff` RAM identity
+window. TTBR0 L1 entry 0 remains mapped as Device memory for the early PL011,
+GICv2, and timer paths. TTBR1 retains the shared RAM L2/L3 hierarchy.
+
+The post-transition smoke test verifies that the low kernel address faults,
+the high text address still translates, and PL011 MMIO remains available. It
+then takes and returns from a BRK through the high VBAR and receives three
+physical timer interrupts with no low RAM alias present.
+
 ## Toolchain
 
 On macOS, install the AArch64 bare-metal compiler and QEMU:
@@ -157,6 +216,19 @@ Early pages: base=0x000000004009F000 end=0x0000000080000000 ...
 FDT RAM: base=0x0000000040000000 size=0x0000000040000000 ...
 ARM64_FDT_MEMORY_OK
 ARM64_PHYS_ALLOC_OK
+TTBR0 allocated: old=... new=... L2=... L3=...
+ARM64_L3_PAGE_TLBI_OK
+TTBR1 kernel alias: table=... text=0xFFFFFF8040080000 TCR=...
+ARM64_TTBR1_PERMISSIONS_OK
+ARM64_DYNAMIC_PGTABLE_OK
+High kernel: PC=0xFFFFFF80... SP=0xFFFFFF80... VBAR=0xFFFFFF80...
+ARM64_TTBR1_EXECUTION_OK
+ARM64_LOW_KERNEL_UNMAPPED_OK
+Testing high VBAR synchronous vector
+ARM64_VECTOR_OK
+Testing timer IRQ without low RAM alias
+ARM64_TIMER_IRQ_OK
+ARM64_HIGH_KERNEL_OK
 ```
 
 Generated artifacts are isolated from ARM32 under:
@@ -170,8 +242,7 @@ build/images/kernel-arm64-qemu-virt.dis
 
 ## Next Milestones
 
-1. Graduate the early page allocator into the synchronized full
+1. Define per-process TTBR0 user tables and graduate the early allocator into
+   the synchronized full
    physical-memory path.
-2. Replace bootstrap blocks with dynamically allocated page tables and a kernel/user virtual
-   address contract.
-3. Define AArch64 task context, syscall, signal, ELF64, and userland ABIs.
+2. Define AArch64 task context, syscall, signal, ELF64, and userland ABIs.

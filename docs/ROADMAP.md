@@ -20,7 +20,9 @@ The v0.6 baseline is:
 - multi-arch work includes an ARM64/QEMU-virt EL1 serial bootstrap, exception
   vectors, a minimal long-descriptor identity MMU, GICv2/generic-timer IRQ
   delivery, a shared early page allocator, and FDT-driven RAM/reservation
-  discovery; the full Unix kernel and userland remain ARM32.
+  discovery, allocated TTBR0 L1/L2/L3 tables, and a permission-checked TTBR1
+  kernel alias now used for the live PC, stack, and vectors after retiring the
+  low RAM identity mapping; the full Unix kernel and userland remain ARM32.
 
 Post-v0.6 hardware milestone:
 

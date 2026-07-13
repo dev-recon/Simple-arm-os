@@ -18,6 +18,7 @@ SECTIONS
 {
     . = KERNEL_LINK_ADDR;
     __kernel_start = .;
+    __text_start = .;
 
     .text.boot : ALIGN(16) {
         KEEP(*(.text.boot))
@@ -30,16 +31,23 @@ SECTIONS
     .text : ALIGN(16) {
         *(.text)
         *(.text.*)
+        . = ALIGN(4096);
+        __text_end = .;
     } > RAM :text
 
-    .rodata : ALIGN(16) {
+    .rodata : ALIGN(4096) {
+        __rodata_start = .;
         *(.rodata)
         *(.rodata.*)
+        . = ALIGN(4096);
+        __rodata_end = .;
     } > RAM :text
 
-    .data : ALIGN(16) {
+    .data : ALIGN(4096) {
+        __data_start = .;
         *(.data)
         *(.data.*)
+        __data_end = .;
     } > RAM :data
 
     .bss (NOLOAD) : ALIGN(16) {
