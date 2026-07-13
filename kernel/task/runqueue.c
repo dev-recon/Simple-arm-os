@@ -149,6 +149,9 @@ static void runqueue_detach(task_runqueue_t *queue, task_t *task)
 
 int task_dispatcher_validate(const task_dispatcher_t *dispatcher)
 {
+    uint32_t sleeping_count = 0;
+    unsigned int index;
+
     if (!dispatcher || !dispatcher->current || !dispatcher->switch_task ||
         dispatcher->current->magic != TASK_MAGIC_ALIVE ||
         dispatcher->current->state != TASK_RUNNING ||
@@ -158,6 +161,25 @@ int task_dispatcher_validate(const task_dispatcher_t *dispatcher)
         ((dispatcher->irq_save == NULL) !=
          (dispatcher->irq_restore == NULL)) ||
         task_runqueue_validate(&dispatcher->ready) != 0)
+        return -1;
+    for (index = 0; index < TASK_DISPATCHER_MAX_SLEEPERS; index++) {
+        task_t *task = dispatcher->sleeping[index];
+        unsigned int previous;
+
+        if (!task)
+            continue;
+        if (task->magic != TASK_MAGIC_ALIVE || task->wakeup_time == 0 ||
+            (task->state != TASK_BLOCKED &&
+             !(task == dispatcher->current &&
+               task->state == TASK_RUNNING)))
+            return -1;
+        for (previous = 0; previous < index; previous++) {
+            if (dispatcher->sleeping[previous] == task)
+                return -1;
+        }
+        sleeping_count++;
+    }
+    if (sleeping_count != dispatcher->sleeping_count)
         return -1;
     return 0;
 }
@@ -174,6 +196,10 @@ int task_dispatcher_init(task_dispatcher_t *dispatcher,
         return -1;
     if (task_runqueue_init(&dispatcher->ready, capacity) != 0)
         return -2;
+    for (capacity = 0; capacity < TASK_DISPATCHER_MAX_SLEEPERS;
+         capacity++)
+        dispatcher->sleeping[capacity] = NULL;
+    dispatcher->sleeping_count = 0;
     dispatcher->current = current;
     dispatcher->switch_task = switch_task;
     dispatcher->irq_save = NULL;
@@ -350,9 +376,25 @@ static int task_dispatcher_request_preempt_locked(
 
 int task_dispatcher_timer_tick(task_dispatcher_t *dispatcher)
 {
+    unsigned int index;
+
     if (task_dispatcher_validate(dispatcher) != 0 ||
         dispatcher->quantum_ticks == 0)
         return -1;
+
+    for (index = 0; index < TASK_DISPATCHER_MAX_SLEEPERS; index++) {
+        task_t *task = dispatcher->sleeping[index];
+
+        if (!task ||
+            (int32_t)((uint32_t)dispatcher->timer_ticks -
+                      task->wakeup_time) < 0)
+            continue;
+        dispatcher->sleeping[index] = NULL;
+        dispatcher->sleeping_count--;
+        task->wakeup_time = 0;
+        if (task_runqueue_publish(&dispatcher->ready, task) != 0)
+            return -1;
+    }
 
     dispatcher->timer_ticks++;
     dispatcher->slice_ticks++;
@@ -362,6 +404,43 @@ int task_dispatcher_timer_tick(task_dispatcher_t *dispatcher)
     dispatcher->slice_ticks = 0;
     dispatcher->quantum_expirations++;
     return task_dispatcher_request_preempt_locked(dispatcher);
+}
+
+int task_dispatcher_sleep_until(task_dispatcher_t *dispatcher,
+                                uint32_t wake_tick)
+{
+    uint32_t saved_state = task_dispatcher_critical_enter(dispatcher);
+    task_t *current;
+    unsigned int slot;
+    int result;
+
+    if (task_dispatcher_validate(dispatcher) != 0 || wake_tick == 0 ||
+        dispatcher->sleeping_count >= TASK_DISPATCHER_MAX_SLEEPERS) {
+        result = -1;
+        goto out;
+    }
+    for (slot = 0; slot < TASK_DISPATCHER_MAX_SLEEPERS; slot++) {
+        if (!dispatcher->sleeping[slot])
+            break;
+    }
+    if (slot == TASK_DISPATCHER_MAX_SLEEPERS) {
+        result = -1;
+        goto out;
+    }
+
+    current = dispatcher->current;
+    current->wakeup_time = wake_tick;
+    dispatcher->sleeping[slot] = current;
+    dispatcher->sleeping_count++;
+    result = task_dispatcher_reschedule(dispatcher, TASK_DISPATCH_BLOCK);
+    if (result != 0) {
+        dispatcher->sleeping[slot] = NULL;
+        dispatcher->sleeping_count--;
+        current->wakeup_time = 0;
+    }
+out:
+    task_dispatcher_critical_leave(dispatcher, saved_state);
+    return result;
 }
 
 int task_dispatcher_request_preempt(task_dispatcher_t *dispatcher)

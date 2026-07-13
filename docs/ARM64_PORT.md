@@ -867,8 +867,8 @@ kernel before the corresponding status line can claim success.
 
 ## Generic I/O and AArch64 newlib userland
 
-The ARM64 bootstrap now routes its EL0 descriptor syscalls through the generic
-`io_model` layer. The bounded early namespace provides immutable VFS nodes,
+The ARM64 bootstrap currently routes its EL0 descriptor probes through the
+generic `io_model` layer. The bounded early namespace provides immutable nodes,
 shared open-file descriptions, per-process descriptors, byte-stream pipes and
 TTY callbacks. It also accepts an offset-based read-only provider; QEMU virt
 binds that provider to the ext2 reader over VirtIO. The serial integration
@@ -880,9 +880,11 @@ ARM64_VFS_FD_PIPE_TTY_OK
 ARM64_EXT2_VFS_READ_OK path=/etc/motd
 ```
 
-This is the architecture-neutral I/O contract needed by early ELF64 programs.
-Writable ext2, directory operations and blocking TTY input remain part of the
-later full-kernel integration.
+This is only a bootstrap mechanism test for early ELF64 programs. It is not the
+ArmOS VFS userspace contract and must not acquire parallel `stat`, directory,
+mount or process semantics. The production ARM64 userspace path must use the
+same VFS, descriptor, pipe and TTY core as ARM32; architecture code supplies
+only CPU/MMU and user-context mechanisms.
 
 Newlib 4.4 can now be built for both ArmOS ABIs in independent object trees.
 The AArch64 sysroot is installed under
@@ -957,12 +959,15 @@ DMA buffers receive explicit AArch64 cache maintenance and every completion
 poll is bounded by the architectural counter.
 
 The bootstrap reads sector zero, validates the MBR signature, discovers the
-first Linux/ext2 partition, then reads and validates its ext2 superblock. A
-dependency-free ext2 reader resolves absolute paths and reads complete files or
-byte ranges through direct, singly indirect and sparse file blocks. Before
-entering userspace, `/sbin/init` is read in full and verified as ELF64. Later,
-the VFS reads `/etc/motd` by offset and `execve` acquires `/sbin/mash` on
-demand. The milestones report:
+first Linux/ext2 partition, then reads and validates its ext2 superblock. Once
+the transport is negotiated, it registers `virtio0` with the common
+`block_device` core. All subsequent ext2 reads use `blk_read_sectors()` rather
+than calling the architecture driver directly. A dependency-free ext2 reader
+then resolves absolute paths and reads complete files or byte ranges through
+direct, singly indirect and sparse file blocks. Before entering userspace,
+`/sbin/init` is read in full and verified as ELF64. The temporary I/O model
+reads `/etc/motd` by offset and acquires `/sbin/mash` on demand. The milestones
+report:
 
 ```text
 ARM64_VIRTIO_BLOCK_OK capacity=... ext2_lba=...
@@ -972,7 +977,17 @@ ARM64_EXT2_EXEC_IMAGE_READY path=/sbin/mash size=...
 
 Both QEMU's default legacy transport and an explicitly forced modern transport
 have passed this probe. The driver and early ext2 provider remain intentionally
-read-only; registration in the full mounted VFS is still pending.
+read-only. The block transport now uses the production device core; mounting
+the production ext2 VFS and replacing `io_model` remain pending.
+
+The current image is linked at its physical address and later executed through
+a TTBR1 alias. Pointer-bearing bootstrap tables therefore have to be populated
+or rebound after the high-alias transition. This is acceptable for bounded
+bring-up objects, but not for the many static operation tables in the common
+VFS, process and driver cores. Before those cores become the active ARM64
+runtime, the linker/boot contract must give normal kernel objects their final
+high virtual addresses while retaining only a small physical boot trampoline.
+The low mapping can then be retired without per-subsystem pointer repair.
 
 Generated artifacts are isolated from ARM32 under:
 
@@ -1009,18 +1024,22 @@ newlib processes can share the scheduler without corrupting libc state.
 
 ## Next Milestones
 
-1. Bind exception, syscall and I/O ownership per scheduled task; publish the
-   eagerly cloned `fork` child and implement blocking `waitpid`, then run the
-   staged `pwd` and `sleep` from `mash`.
-2. Add directory descriptors, `getdents`, `stat` and `/proc` so `ls` and `ps`
-   use the same interfaces as ARM32.
-3. Replace temporary polling waits with scheduler-backed `nanosleep` and TTY
+1. Split the physical boot trampoline from the high-linked kernel image so
+   static common-kernel pointers are valid after the low alias is retired.
+2. Initialize the synchronized physical allocator and mount the existing
+   common ext2 VFS over the now-shared block-device core.
+3. Bind exception, syscall and I/O ownership to the common scheduled `task_t`;
+   publish the eagerly cloned `fork` child and implement blocking `waitpid`,
+   then run the staged `pwd` and `sleep` from `mash`.
+4. Route directory descriptors, `getdents`, `stat` and `/proc` through the
+   existing common implementations so `ls` and `ps` behave like ARM32.
+5. Replace temporary polling waits with scheduler-backed `nanosleep` and TTY
    wakeups, preserving timer preemption and kernel-task progress.
-4. Make `/sbin/init` the first scheduled disk-backed process and let it launch
+6. Make `/sbin/init` the first scheduled disk-backed process and let it launch
    the now-working interactive shell.
-5. Generalize the temporary four-entry `argv`/`envp` limits into the persistent
+7. Generalize the temporary four-entry `argv`/`envp` limits into the persistent
    process resource model used by `init` and `mash`.
-6. Replace the bounded ARM64 VMA/table inventories and early allocator with
+8. Replace the bounded ARM64 VMA/table inventories and early allocator with
    dynamic range nodes and synchronized physical-page backends.
-7. Add SMP synchronization, per-CPU scheduler ownership, ASID rollover, and
+9. Add SMP synchronization, per-CPU scheduler ownership, ASID rollover, and
    remote TLB shootdowns when secondary ARM64 CPUs are introduced.

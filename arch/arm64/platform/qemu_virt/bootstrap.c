@@ -29,12 +29,14 @@
 #include <asm/task.h>
 #include <asm/task_context.h>
 #include <asm/user_vm.h>
+#include <kernel/block_device.h>
 #include <kernel/early_page_allocator.h>
 #include <kernel/elf64.h>
 #include <kernel/ext2_reader.h>
 #include <kernel/fdt.h>
 #include <kernel/io_model.h>
 #include <kernel/process_model.h>
+#include <kernel/process_runtime.h>
 #include <kernel/syscall_dispatch.h>
 #include <kernel/task.h>
 #include <kernel/task_runqueue.h>
@@ -123,13 +125,15 @@
 #define ARMOS_MAP_PRIVATE         0x2u
 #define ARMOS_MAP_ANON            0x20u
 #define ARM64_BOOTSTRAP_PID       3
+#define ARM64_FORK_CHILD_PID      4
+#define ARM64_USER_KERNEL_STACK_PAGES 4u
 #define ARM64_EXEC_STACK_PAGES    16u
 #define ARM64_EXEC_STACK_BASE     \
     (USER_STACK_TOP - ARM64_EXEC_STACK_PAGES * PAGE_SIZE)
 #define ARM64_EXEC_STACK_DATA_PAGE (USER_STACK_TOP - PAGE_SIZE)
-#define ARM64_EXEC_MAX_ARGS       4u
-#define ARM64_EXEC_MAX_ENVS       4u
-#define ARM64_EXEC_STRING_SIZE    64u
+#define ARM64_EXEC_MAX_ARGS       16u
+#define ARM64_EXEC_MAX_ENVS       16u
+#define ARM64_EXEC_STRING_SIZE    128u
 
 static const char arm64_user_message[] = "ARM64 syscall write OK\n";
 static const char arm64_bootstrap_path[] = "/etc/motd";
@@ -155,6 +159,11 @@ typedef struct {
     char envp[ARM64_EXEC_MAX_ENVS][ARM64_EXEC_STRING_SIZE];
 } arm64_exec_arguments_t;
 
+typedef struct {
+    int64_t seconds;
+    int64_t nanoseconds;
+} arm64_user_timespec_t;
+
 extern uint8_t arm64_vectors[];
 extern uint8_t arm64_el0_payload_start[];
 extern uint8_t arm64_el0_payload_end[];
@@ -176,10 +185,13 @@ typedef struct {
     process_model_t child;
     io_model_vfs_t vfs;
     io_model_context_t io;
+    io_model_context_t child_io;
+    process_runtime_t lifecycle;
     arm64_user_vm_t *vm;
     early_page_allocator_t *allocator;
     ext2_reader_t *filesystem;
     char cwd[MAX_PATH];
+    int lifecycle_ready;
 } arm64_syscall_runtime_t;
 
 typedef struct {
@@ -187,8 +199,11 @@ typedef struct {
     arm64_user_vm_t user_vm;
     arm64_user_vm_t empty_vm;
     arm64_user_vm_t exec_vm;
+    arm64_user_vm_t child_vm;
+    arm64_user_vm_t candidate_vm;
     arm64_task_context_t user_task;
     task_t scheduled_user_task;
+    task_t child_user_task;
     task_t bootstrap_task;
     task_t probe_task;
     task_t second_probe_task;
@@ -437,6 +452,7 @@ static void arm64_bootstrap_shell_return(uint64_t result)
 static void arm64_runtime_scheduler_start(arm64_high_context_t *context)
     __attribute__((noreturn));
 static int arm64_prepare_exec_image(arm64_high_context_t *context,
+                                    arm64_user_vm_t *destination_vm,
                                     const char *path,
                                     const arm64_exec_arguments_t *arguments,
                                     arm64_user_context_t *registers);
@@ -444,12 +460,13 @@ static int arm64_exec_rollback_smoke_test(arm64_high_context_t *context);
 static int arm64_release_exec_source(arm64_high_context_t *context);
 static void arm64_exec_retire_previous_vm(const vm_space_t *previous_vm,
                                           void *owner);
+static int arm64_runtime_task_switch(task_t *previous, task_t *next);
 
 static int arm64_block_read_sectors(void *owner, uint64_t lba,
                                     uint32_t count, void *buffer)
 {
     (void)owner;
-    return arm64_virtio_block_read(lba, count, buffer);
+    return blk_read_sectors(lba, count, buffer);
 }
 
 static int arm64_ext2_provider_lookup(void *owner, const char *path,
@@ -649,6 +666,226 @@ static int arm64_dispatcher_init(task_dispatcher_t *dispatcher,
                                        NULL);
 }
 
+static int arm64_process_dispatcher_init(task_dispatcher_t *dispatcher,
+                                         task_t *current,
+                                         uint32_t capacity)
+{
+    if (task_dispatcher_init(dispatcher, current, capacity,
+                             arm64_runtime_task_switch) != 0)
+        return -1;
+    return task_dispatcher_set_irq_ops(dispatcher,
+                                       arm64_dispatch_irq_save,
+                                       arm64_dispatch_irq_restore,
+                                       NULL);
+}
+
+static int arm64_process_bind_task(void *owner, process_model_t *process,
+                                   task_t *task)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+    const arm64_user_vm_t *vm;
+
+    if (!runtime || !process || !task)
+        return -1;
+    vm = arm64_user_vm_from_space(process->vm_space);
+    if (!vm || task->context.vm_space != process->vm_space)
+        return -2;
+
+    runtime->vm = (arm64_user_vm_t *)(uintptr_t)vm;
+    arm64_exception_bind_el0_context(process->vm_space,
+                                     &task->context.user);
+    return 0;
+}
+
+static process_model_t *arm64_process_for_task(
+    arm64_syscall_runtime_t *runtime, task_t *task)
+{
+    if (runtime->process.task == task)
+        return &runtime->process;
+    if (runtime->child.task == task)
+        return &runtime->child;
+    return NULL;
+}
+
+static int arm64_runtime_task_switch(task_t *previous, task_t *next)
+{
+    arm64_syscall_runtime_t *runtime = active_syscall_runtime;
+    process_model_t *next_process;
+    process_model_t *previous_process;
+    int result;
+
+    if (!runtime)
+        return -1;
+    next_process = arm64_process_for_task(runtime, next);
+    previous_process = arm64_process_for_task(runtime, previous);
+    if (!next_process && next != &high_context.idle_task)
+        return -1;
+    if (next_process && process_runtime_select(
+            &runtime->lifecycle, next_process, next) != 0)
+        return -1;
+    result = arm64_task_switch_prepared(previous, next);
+    if (result != 0 && previous_process)
+        (void)process_runtime_select(&runtime->lifecycle,
+                                     previous_process, previous);
+    return result;
+}
+
+static int arm64_process_clone_vm(void *owner, const vm_space_t *source,
+                                  vm_space_t **destination)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+
+    if (!runtime || !source || !destination ||
+        high_context.child_vm.magic != 0 ||
+        arm64_user_vm_clone_eager(&high_context.child_vm,
+                                  arm64_user_vm_from_space(source),
+                                  runtime->allocator) != 0)
+        return -1;
+    *destination = &high_context.child_vm.space;
+    return 0;
+}
+
+static int arm64_process_destroy_vm(void *owner, vm_space_t *vm_space)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+    const arm64_user_vm_t *vm = arm64_user_vm_from_space(vm_space);
+
+    if (!runtime || !vm)
+        return -1;
+    return arm64_user_vm_destroy(
+        (arm64_user_vm_t *)(uintptr_t)vm, runtime->allocator);
+}
+
+static int arm64_process_clone_task(void *owner, const task_t *parent,
+                                    task_t *child, vm_space_t *child_vm)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+    task_t *mutable_parent = (task_t *)(uintptr_t)parent;
+
+    if (!runtime || !parent || !child || !child_vm ||
+        arm64_task_init(
+            child, runtime->allocator, child_vm,
+            (vaddr_t)(uintptr_t)arm64_user_task_probe_entry,
+            "fork-child", ARM64_FORK_CHILD_PID,
+            ARM64_USER_KERNEL_STACK_PAGES) != 0)
+        return -1;
+    child->type = TASK_TYPE_PROCESS;
+    child->context.flags = ARM64_TASK_FLAG_RETURNS_TO_USER;
+    arm64_simd_context_capture(&mutable_parent->context.simd);
+    copy_memory(&child->context.user, &parent->context.user,
+                sizeof(child->context.user));
+    copy_memory(&child->context.simd, &parent->context.simd,
+                sizeof(child->context.simd));
+    child->context.user.x[0] = 0;
+    child->context.kernel.x[0] = (uint64_t)(uintptr_t)child;
+    return 0;
+}
+
+static int arm64_process_destroy_task(void *owner, task_t *task,
+                                      const task_t *active_task)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+
+    if (!runtime || !active_task)
+        return -1;
+    return arm64_task_destroy(
+        task, runtime->allocator, &active_task->context);
+}
+
+static int arm64_process_clone_io(void *owner,
+                                  const process_model_t *parent,
+                                  void **child_io)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+
+    if (!runtime || !parent || !child_io ||
+        parent->io_context != &runtime->io ||
+        runtime->child_io.vfs != NULL ||
+        io_model_context_clone(&runtime->child_io,
+                               &runtime->io) != 0)
+        return -1;
+    *child_io = &runtime->child_io;
+    return 0;
+}
+
+static int arm64_process_destroy_io(void *owner, void *io_context)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+
+    if (!runtime || io_context != &runtime->child_io)
+        return -1;
+    io_model_context_reset(&runtime->child_io);
+    return 0;
+}
+
+static int arm64_process_publish_task(void *owner, task_t *task)
+{
+    (void)owner;
+    return task_dispatcher_publish(&high_context.runtime_dispatcher, task);
+}
+
+static int arm64_process_block_current(void *owner)
+{
+    (void)owner;
+    return task_dispatcher_block(&high_context.runtime_dispatcher);
+}
+
+static int arm64_process_validate_wait_status(
+    void *owner, const vm_space_t *vm_space, vaddr_t address)
+{
+    (void)owner;
+    return arm64_user_vm_validate_space_range(
+        vm_space, address, sizeof(int), VMA_WRITE);
+}
+
+static int arm64_process_write_wait_status(void *owner, vaddr_t address,
+                                           int status)
+{
+    (void)owner;
+    *(int *)(uintptr_t)address = status;
+    return 0;
+}
+
+static int arm64_process_replace_image(
+    void *owner, process_model_t *process, task_t *task,
+    vm_space_t *new_vm_space, const void *arch_image,
+    vm_space_t *previous_vm_space)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+    const arm64_user_context_t *registers = arch_image;
+    const arm64_user_vm_t *new_vm =
+        arm64_user_vm_from_space(new_vm_space);
+    arm64_task_context_t previous_context;
+    arm64_user_vm_t *previous_runtime_vm;
+
+    if (!runtime || !process || !task || !registers || !new_vm ||
+        process != runtime->lifecycle.current_process ||
+        task != runtime->lifecycle.current_task)
+        return -1;
+
+    copy_memory(&previous_context, &task->context,
+                sizeof(previous_context));
+    previous_runtime_vm = runtime->vm;
+    task->context.vm_space = new_vm_space;
+    task->context.ttbr0 = new_vm->l1;
+    task->context.asid = new_vm->asid;
+    task->context.flags = ARM64_TASK_FLAG_RETURNS_TO_USER;
+    copy_memory(&task->context.user, registers,
+                sizeof(task->context.user));
+    runtime->vm = (arm64_user_vm_t *)(uintptr_t)new_vm;
+
+    if (arm64_exception_request_exec(
+            new_vm_space, &task->context.user,
+            arm64_exec_retire_previous_vm, &high_context) == 0)
+        return 0;
+
+    runtime->vm = previous_runtime_vm;
+    copy_memory(&task->context, &previous_context,
+                sizeof(task->context));
+    (void)previous_vm_space;
+    return -1;
+}
+
 static ssize_t arm64_bootstrap_tty_read(void *owner, void *buffer,
                                         size_t length)
 {
@@ -684,6 +921,24 @@ static ssize_t arm64_bootstrap_tty_write(void *owner, const void *buffer,
             arm64_console_putc((char)bytes[index]);
     }
     return (ssize_t)length;
+}
+
+static process_model_t *arm64_current_process(
+    arm64_syscall_runtime_t *runtime)
+{
+    if (!runtime)
+        return NULL;
+    if (runtime->lifecycle_ready)
+        return runtime->lifecycle.current_process;
+    return &runtime->process;
+}
+
+static io_model_context_t *arm64_current_io(
+    arm64_syscall_runtime_t *runtime)
+{
+    process_model_t *process = arm64_current_process(runtime);
+
+    return process ? process->io_context : NULL;
 }
 
 static int arm64_copy_user_path(arm64_syscall_runtime_t *runtime,
@@ -824,7 +1079,8 @@ static syscall_result_t arm64_syscall_write(
     if (length > 256 || arm64_user_vm_validate_range(
             runtime->vm, address, length, VMA_READ) != 0)
         return -(syscall_result_t)EFAULT;
-    return io_model_write(&runtime->io, (int)request->arguments[0],
+    return io_model_write(arm64_current_io(runtime),
+                          (int)request->arguments[0],
                           (const void *)(uintptr_t)address, length);
 }
 
@@ -840,7 +1096,8 @@ static syscall_result_t arm64_syscall_read(
     if (length > 256 || arm64_user_vm_validate_range(
             runtime->vm, address, length, VMA_WRITE) != 0)
         return -(syscall_result_t)EFAULT;
-    return io_model_read(&runtime->io, (int)request->arguments[0],
+    return io_model_read(arm64_current_io(runtime),
+                         (int)request->arguments[0],
                          (void *)(uintptr_t)address, length);
 }
 
@@ -856,7 +1113,7 @@ static syscall_result_t arm64_syscall_open(
                                   path, sizeof(path));
     if (result != 0)
         return result;
-    return io_model_open(&runtime->io, path,
+    return io_model_open(arm64_current_io(runtime), path,
                          (unsigned int)request->arguments[1]);
 }
 
@@ -865,7 +1122,7 @@ static syscall_result_t arm64_syscall_close(
 {
     arm64_syscall_runtime_t *runtime = owner;
 
-    return runtime ? io_model_close(&runtime->io,
+    return runtime ? io_model_close(arm64_current_io(runtime),
                                     (int)request->arguments[0]) :
                      -(syscall_result_t)EINVAL;
 }
@@ -879,7 +1136,8 @@ static syscall_result_t arm64_syscall_pipe(
     if (!runtime || arm64_user_vm_validate_range(
             runtime->vm, address, 2u * sizeof(int), VMA_WRITE) != 0)
         return -(syscall_result_t)EFAULT;
-    return io_model_pipe(&runtime->io, (int *)(uintptr_t)address);
+    return io_model_pipe(arm64_current_io(runtime),
+                         (int *)(uintptr_t)address);
 }
 
 static syscall_result_t arm64_syscall_dup2(
@@ -887,7 +1145,7 @@ static syscall_result_t arm64_syscall_dup2(
 {
     arm64_syscall_runtime_t *runtime = owner;
 
-    return runtime ? io_model_dup2(&runtime->io,
+    return runtime ? io_model_dup2(arm64_current_io(runtime),
                                    (int)request->arguments[0],
                                    (int)request->arguments[1]) :
                      -(syscall_result_t)EINVAL;
@@ -901,15 +1159,64 @@ static syscall_result_t arm64_syscall_yield(
     return 0;
 }
 
+static syscall_result_t arm64_syscall_nanosleep(
+    void *owner, const syscall_request_t *request)
+{
+    arm64_syscall_runtime_t *runtime = owner;
+    arm64_user_timespec_t duration;
+    vaddr_t request_address = (vaddr_t)request->arguments[0];
+    vaddr_t remainder_address = (vaddr_t)request->arguments[1];
+    uint64_t milliseconds;
+    uint32_t deadline;
+
+    if (!runtime || !runtime->lifecycle_ready || request_address == 0 ||
+        arm64_user_vm_validate_range(
+            runtime->vm, request_address, sizeof(duration),
+            VMA_READ) != 0)
+        return -(syscall_result_t)EFAULT;
+    copy_memory(&duration, (const void *)(uintptr_t)request_address,
+                sizeof(duration));
+    if (duration.seconds < 0 || duration.nanoseconds < 0 ||
+        duration.nanoseconds >= 1000000000LL)
+        return -(syscall_result_t)EINVAL;
+    if (remainder_address != 0 && arm64_user_vm_validate_range(
+            runtime->vm, remainder_address, sizeof(duration),
+            VMA_WRITE) != 0)
+        return -(syscall_result_t)EFAULT;
+
+    milliseconds = (uint64_t)duration.seconds * 1000u +
+        ((uint64_t)duration.nanoseconds + 999999u) / 1000000u;
+    if (milliseconds == 0)
+        return 0;
+    if (milliseconds > 0x7fffffffu)
+        return -(syscall_result_t)EINVAL;
+    deadline = (uint32_t)high_context.runtime_dispatcher.timer_ticks +
+               (uint32_t)milliseconds;
+    if (deadline == 0)
+        deadline = 1;
+    if (task_dispatcher_sleep_until(
+            &high_context.runtime_dispatcher, deadline) != 0)
+        return -(syscall_result_t)EAGAIN;
+    if (remainder_address != 0) {
+        clear_memory((void *)(uintptr_t)remainder_address,
+                     sizeof(duration));
+    }
+    return 0;
+}
+
 static syscall_result_t arm64_syscall_exit(
     void *owner, const syscall_request_t *request)
 {
     arm64_syscall_runtime_t *runtime = owner;
 
-    if (!runtime || process_model_exit(
-            &runtime->process, (int)request->arguments[0]) != 0)
+    if (!runtime)
         return -(syscall_result_t)EINVAL;
-    return 0;
+    if (!runtime->lifecycle_ready)
+        return process_model_exit(
+            &runtime->process, (int)request->arguments[0]) == 0 ?
+            0 : -(syscall_result_t)EINVAL;
+    return process_runtime_exit(
+        &runtime->lifecycle, (int)request->arguments[0]);
 }
 
 static syscall_result_t arm64_syscall_getpid(
@@ -918,7 +1225,10 @@ static syscall_result_t arm64_syscall_getpid(
     arm64_syscall_runtime_t *runtime = owner;
 
     (void)request;
-    return runtime ? runtime->process.pid : -(syscall_result_t)ESRCH;
+    process_model_t *process = arm64_current_process(runtime);
+
+    return process ? process->pid :
+        -(syscall_result_t)ESRCH;
 }
 
 static syscall_result_t arm64_syscall_getppid(
@@ -927,7 +1237,10 @@ static syscall_result_t arm64_syscall_getppid(
     arm64_syscall_runtime_t *runtime = owner;
 
     (void)request;
-    return runtime ? runtime->process.ppid : -(syscall_result_t)ESRCH;
+    process_model_t *process = arm64_current_process(runtime);
+
+    return process ? process->ppid :
+        -(syscall_result_t)ESRCH;
 }
 
 static syscall_result_t arm64_syscall_chdir(
@@ -994,8 +1307,10 @@ static syscall_result_t arm64_syscall_setpgid(
 
     if (!runtime)
         return -(syscall_result_t)ESRCH;
-    if (pid == 0 || pid == runtime->process.pid)
-        process = &runtime->process;
+    if (!arm64_current_process(runtime))
+        return -(syscall_result_t)ESRCH;
+    if (pid == 0 || pid == arm64_current_process(runtime)->pid)
+        process = arm64_current_process(runtime);
     else if (pid == runtime->child.pid)
         process = &runtime->child;
     else
@@ -1014,7 +1329,10 @@ static syscall_result_t arm64_syscall_getpgrp(
     arm64_syscall_runtime_t *runtime = owner;
 
     (void)request;
-    return runtime ? runtime->process.pgid : -(syscall_result_t)ESRCH;
+    process_model_t *process = arm64_current_process(runtime);
+
+    return process ? process->pgid :
+        -(syscall_result_t)ESRCH;
 }
 
 static syscall_result_t arm64_syscall_fork(
@@ -1023,14 +1341,20 @@ static syscall_result_t arm64_syscall_fork(
     arm64_syscall_runtime_t *runtime = owner;
 
     (void)request;
-    if (!runtime ||
-        (runtime->child.state != PROCESS_MODEL_NEW &&
-         runtime->child.state != PROCESS_MODEL_DEAD))
-        return -(syscall_result_t)EAGAIN;
-    if (process_model_fork(&runtime->process, &runtime->child, 2,
-                           &runtime->vm->space, NULL) != 0)
-        return -(syscall_result_t)ENOMEM;
-    return runtime->child.pid;
+    if (!runtime)
+        return -(syscall_result_t)EINVAL;
+    if (!runtime->lifecycle_ready) {
+        if ((runtime->child.state != PROCESS_MODEL_NEW &&
+             runtime->child.state != PROCESS_MODEL_DEAD) ||
+            process_model_fork(
+                &runtime->process, &runtime->child, 2,
+                &runtime->vm->space, NULL) != 0)
+            return -(syscall_result_t)EAGAIN;
+        return runtime->child.pid;
+    }
+    return process_runtime_fork(
+        &runtime->lifecycle, &runtime->process, &runtime->child,
+        &high_context.child_user_task, ARM64_FORK_CHILD_PID);
 }
 
 static syscall_result_t arm64_syscall_waitpid(
@@ -1041,9 +1365,15 @@ static syscall_result_t arm64_syscall_waitpid(
 
     if (!runtime)
         return -(syscall_result_t)ESRCH;
-    return process_model_wait(&runtime->process,
-                              (pid_t)request->arguments[0], &status,
-                              (uint32_t)request->arguments[2]);
+    if (!runtime->lifecycle_ready)
+        return process_model_wait(
+            &runtime->process, (pid_t)request->arguments[0], &status,
+            (uint32_t)request->arguments[2]);
+    return process_runtime_wait(
+        &runtime->lifecycle, &runtime->process, &runtime->child,
+        (pid_t)request->arguments[0],
+        (vaddr_t)request->arguments[1],
+        (uint32_t)request->arguments[2]);
 }
 
 static syscall_result_t arm64_syscall_kill(
@@ -1071,7 +1401,9 @@ static syscall_result_t arm64_syscall_sigaction(
 
     if (!runtime || signal == 0 || signal >= PROCESS_MODEL_SIGNAL_COUNT)
         return -(syscall_result_t)EINVAL;
-    runtime->process.signal_handlers[signal] =
+    if (!arm64_current_process(runtime))
+        return -(syscall_result_t)ESRCH;
+    arm64_current_process(runtime)->signal_handlers[signal] =
         (vaddr_t)request->arguments[1];
     return 0;
 }
@@ -1082,14 +1414,8 @@ static syscall_result_t arm64_syscall_execve(
     arm64_syscall_runtime_t *runtime = owner;
     arm64_exec_arguments_t arguments;
     arm64_user_context_t prepared_registers;
-    arm64_task_context_t previous_task;
-    vm_space_t *previous_vm_space;
-    arm64_user_vm_t *previous_runtime_vm;
-    process_model_state_t previous_state;
-    uint32_t previous_pending_signals;
-    vaddr_t previous_signal_handlers[PROCESS_MODEL_SIGNAL_COUNT];
+    arm64_user_vm_t *destination_vm;
     char path[MAX_PATH];
-    unsigned int signal;
     int result;
 
     if (runtime != &high_context.syscall_runtime)
@@ -1097,68 +1423,56 @@ static syscall_result_t arm64_syscall_execve(
     result = arm64_copy_user_path(runtime,
                                   (vaddr_t)request->arguments[0],
                                   path, sizeof(path));
-    if (result != 0)
+    if (result != 0) {
+        arm64_probe_puts("ARM64_EXECVE_PATH_FAILED code=");
+        arm64_probe_puthex64((uint64_t)(int64_t)result);
+        arm64_probe_puts("\n");
         return result;
+    }
     result = arm64_copy_user_vector(
         runtime, (vaddr_t)request->arguments[1], arguments.argv,
         ARM64_EXEC_MAX_ARGS, &arguments.argc);
-    if (result != 0)
+    if (result != 0) {
+        arm64_probe_puts("ARM64_EXECVE_ARGV_FAILED code=");
+        arm64_probe_puthex64((uint64_t)(int64_t)result);
+        arm64_probe_puts("\n");
         return result;
+    }
     result = arm64_copy_user_vector(
         runtime, (vaddr_t)request->arguments[2], arguments.envp,
         ARM64_EXEC_MAX_ENVS, &arguments.envc);
-    if (result != 0)
+    if (result != 0) {
+        arm64_probe_puts("ARM64_EXECVE_ENVP_FAILED code=");
+        arm64_probe_puthex64((uint64_t)(int64_t)result);
+        arm64_probe_puts("\n");
         return result;
-    result = arm64_prepare_exec_image(&high_context, path, &arguments,
+    }
+    destination_vm = runtime->vm == &high_context.user_vm ?
+        &high_context.exec_vm : &high_context.candidate_vm;
+    if (destination_vm->magic != 0)
+        return -(syscall_result_t)EBUSY;
+    result = arm64_prepare_exec_image(&high_context, destination_vm,
+                                      path, &arguments,
                                       &prepared_registers);
-    if (result != 0)
+    if (result != 0) {
+        arm64_probe_puts("ARM64_EXECVE_LOAD_FAILED path=");
+        arm64_probe_puts(path);
+        arm64_probe_puts(" code=");
+        arm64_probe_puthex64((uint64_t)(int64_t)result);
+        arm64_probe_puts("\n");
         return -(syscall_result_t)ENOEXEC;
+    }
     arm64_probe_puts("ARM64_ELF64_PATH_LOAD_OK entry=");
     arm64_probe_puthex64(prepared_registers.pc);
     arm64_probe_puts(" stack=");
     arm64_probe_puthex64(prepared_registers.sp);
     arm64_probe_puts("\n");
 
-    previous_vm_space = runtime->process.vm_space;
-    previous_runtime_vm = runtime->vm;
-    previous_state = runtime->process.state;
-    previous_pending_signals = runtime->process.pending_signals;
-    for (signal = 0; signal < PROCESS_MODEL_SIGNAL_COUNT; signal++)
-        previous_signal_handlers[signal] =
-            runtime->process.signal_handlers[signal];
-    copy_memory(&previous_task, &high_context.user_task,
-                sizeof(previous_task));
-    if (process_model_exec(&runtime->process,
-                           &high_context.exec_vm.space) != 0) {
-        (void)arm64_user_vm_destroy(&high_context.exec_vm,
-                                    runtime->allocator);
-        (void)arm64_release_exec_source(&high_context);
-        return -(syscall_result_t)EINVAL;
-    }
-    runtime->process.state = PROCESS_MODEL_RUNNING;
-    runtime->vm = &high_context.exec_vm;
-    clear_task_context(&high_context.user_task);
-    high_context.user_task.vm_space =
-        arm64_user_vm_space(&high_context.exec_vm);
-    high_context.user_task.ttbr0 = high_context.exec_vm.l1;
-    high_context.user_task.asid = high_context.exec_vm.asid;
-    high_context.user_task.flags = ARM64_TASK_FLAG_RETURNS_TO_USER;
-    copy_memory(&high_context.user_task.user, &prepared_registers,
-                sizeof(prepared_registers));
-    if (arm64_exception_request_exec(
-            arm64_user_vm_space(&high_context.exec_vm),
-            &high_context.user_task.user,
-            arm64_exec_retire_previous_vm, &high_context) != 0) {
-        runtime->process.vm_space = previous_vm_space;
-        runtime->process.state = previous_state;
-        runtime->process.pending_signals = previous_pending_signals;
-        for (signal = 0; signal < PROCESS_MODEL_SIGNAL_COUNT; signal++)
-            runtime->process.signal_handlers[signal] =
-                previous_signal_handlers[signal];
-        runtime->vm = previous_runtime_vm;
-        copy_memory(&high_context.user_task, &previous_task,
-                    sizeof(previous_task));
-        (void)arm64_user_vm_destroy(&high_context.exec_vm,
+    if (process_runtime_exec(&runtime->lifecycle,
+                             &destination_vm->space,
+                             &prepared_registers) != 0) {
+        arm64_probe_puts("ARM64_EXECVE_COMMIT_FAILED\n");
+        (void)arm64_user_vm_destroy(destination_vm,
                                     runtime->allocator);
         (void)arm64_release_exec_source(&high_context);
         return -(syscall_result_t)EBUSY;
@@ -1236,10 +1550,12 @@ static int arm64_syscall_page_fault(vaddr_t address, int is_write,
 static int arm64_syscall_runtime_init(arm64_high_context_t *context)
 {
     arm64_syscall_runtime_t *runtime = &context->syscall_runtime;
+    process_runtime_ops_t lifecycle_ops;
 
     runtime->vm = &context->user_vm;
     runtime->allocator = high_early_allocator();
     runtime->filesystem = &context->disk_reader;
+    runtime->lifecycle_ready = 0;
     runtime->cwd[0] = '/';
     runtime->cwd[1] = '\0';
     io_model_vfs_init(&runtime->vfs);
@@ -1261,6 +1577,22 @@ static int arm64_syscall_runtime_init(arm64_high_context_t *context)
         return -1;
     runtime->process.state = PROCESS_MODEL_RUNNING;
     runtime->process.io_context = &runtime->io;
+    lifecycle_ops.clone_vm = arm64_process_clone_vm;
+    lifecycle_ops.destroy_vm = arm64_process_destroy_vm;
+    lifecycle_ops.clone_task = arm64_process_clone_task;
+    lifecycle_ops.destroy_task = arm64_process_destroy_task;
+    lifecycle_ops.clone_io = arm64_process_clone_io;
+    lifecycle_ops.destroy_io = arm64_process_destroy_io;
+    lifecycle_ops.publish_task = arm64_process_publish_task;
+    lifecycle_ops.block_current = arm64_process_block_current;
+    lifecycle_ops.bind_task = arm64_process_bind_task;
+    lifecycle_ops.validate_wait_status =
+        arm64_process_validate_wait_status;
+    lifecycle_ops.write_wait_status = arm64_process_write_wait_status;
+    lifecycle_ops.replace_image = arm64_process_replace_image;
+    if (process_runtime_init(&runtime->lifecycle, &lifecycle_ops,
+                             runtime) != 0)
+        return -1;
 
 #define REGISTER_BOOTSTRAP_SYSCALL(number, handler) \
     if (syscall_dispatcher_register(&runtime->dispatcher, (number), \
@@ -1287,6 +1619,8 @@ static int arm64_syscall_runtime_init(arm64_high_context_t *context)
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_GETPPID, arm64_syscall_getppid);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_SCHED_YIELD,
                                arm64_syscall_yield);
+    REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_NANOSLEEP,
+                               arm64_syscall_nanosleep);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_GETCWD, arm64_syscall_getcwd);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_MMAP, arm64_syscall_mmap);
     REGISTER_BOOTSTRAP_SYSCALL(ARMOS_NR_MUNMAP, arm64_syscall_munmap);
@@ -3487,6 +3821,7 @@ static unsigned int arm64_el0_validation_error(uint64_t result)
 }
 
 static int arm64_prepare_exec_image(arm64_high_context_t *context,
+                                    arm64_user_vm_t *destination_vm,
                                     const char *path,
                                     const arm64_exec_arguments_t *arguments,
                                     arm64_user_context_t *registers)
@@ -3515,7 +3850,8 @@ static int arm64_prepare_exec_image(arm64_high_context_t *context,
     int source_acquired = 0;
     int vm_initialized = 0;
 
-    if (!path || !arguments || !registers ||
+    if (!context || !destination_vm || !path || !arguments || !registers ||
+        destination_vm->magic != 0 ||
         arguments->argc > ARM64_EXEC_MAX_ARGS ||
         arguments->envc > ARM64_EXEC_MAX_ENVS)
         return -1;
@@ -3527,7 +3863,7 @@ static int arm64_prepare_exec_image(arm64_high_context_t *context,
         image_size = context->disk_exec_image_size;
         source_acquired = 1;
     }
-    if (arm64_user_vm_init(&context->exec_vm,
+    if (arm64_user_vm_init(destination_vm,
                            runtime->allocator) != 0) {
         if (source_acquired)
             (void)arm64_release_exec_source(context);
@@ -3538,7 +3874,7 @@ static int arm64_prepare_exec_image(arm64_high_context_t *context,
     loader_ops.map = arm64_elf_map;
     loader_ops.copy = arm64_elf_copy;
     loader_ops.zero = arm64_elf_zero;
-    load_context.vm = &context->exec_vm;
+    load_context.vm = destination_vm;
     load_context.allocator = runtime->allocator;
     if (elf64_load_aarch64(image, image_size, USER_SPACE_END,
                            &loader_ops, &load_context, &entry) != 0)
@@ -3550,7 +3886,7 @@ static int arm64_prepare_exec_image(arm64_high_context_t *context,
         uint8_t *page;
 
         if (arm64_user_vm_map_new_page(
-                &context->exec_vm, runtime->allocator,
+                destination_vm, runtime->allocator,
                 ARM64_EXEC_STACK_BASE + stack_index * PAGE_SIZE,
                 VMA_READ | VMA_WRITE, &page_physical) != 0)
             goto fail;
@@ -3614,9 +3950,9 @@ static int arm64_prepare_exec_image(arm64_high_context_t *context,
     for (argument = 0; argument < arguments->envc; argument++)
         initial_stack[table_index++] = envp_addresses[argument];
     initial_stack[table_index] = 0;
-    for (mapping = 0; mapping < context->exec_vm.mapping_count; mapping++) {
+    for (mapping = 0; mapping < destination_vm->mapping_count; mapping++) {
         const arm64_user_vm_mapping_t *mapped =
-            &context->exec_vm.mappings[mapping];
+            &destination_vm->mappings[mapping];
 
         if ((mapped->vma.flags & VMA_EXEC) != 0 &&
             mapped->physical_address != 0)
@@ -3633,7 +3969,7 @@ static int arm64_prepare_exec_image(arm64_high_context_t *context,
 
 fail:
     if (vm_initialized && arm64_user_vm_destroy(
-            &context->exec_vm, runtime->allocator) != 0)
+            destination_vm, runtime->allocator) != 0)
         result = -3;
     if (source_acquired && arm64_release_exec_source(context) != 0)
         result = -4;
@@ -3648,7 +3984,8 @@ static int arm64_exec_rollback_smoke_test(arm64_high_context_t *context)
 
     clear_memory(&arguments, sizeof(arguments));
     free_before = context->syscall_runtime.allocator->free_pages;
-    if (arm64_prepare_exec_image(context, arm64_exec_invalid_path,
+    if (arm64_prepare_exec_image(context, &context->exec_vm,
+                                 arm64_exec_invalid_path,
                                  &arguments, &registers) == 0 ||
         context->exec_vm.magic != 0 ||
         context->syscall_runtime.allocator->free_pages != free_before)
@@ -3660,9 +3997,11 @@ static void arm64_exec_retire_previous_vm(const vm_space_t *previous_vm,
                                           void *owner)
 {
     arm64_high_context_t *context = owner;
+    const arm64_user_vm_t *previous;
 
-    if (!context || previous_vm != &context->user_vm.space ||
-        arm64_user_vm_destroy(&context->user_vm,
+    previous = arm64_user_vm_from_space(previous_vm);
+    if (!context || !previous ||
+        arm64_user_vm_destroy((arm64_user_vm_t *)(uintptr_t)previous,
                               context->syscall_runtime.allocator) != 0) {
         if (context)
             context->exec_previous_vm_retired = 2;
@@ -3762,6 +4101,25 @@ static void arm64_el0_return(uint64_t result)
         goto halt;
     }
     arm64_probe_puts("ARM64_EXECVE_ROLLBACK_OK\n");
+    clear_memory(&runtime->child, sizeof(runtime->child));
+
+    if (arm64_task_init_current(
+            &high_context.scheduled_user_task,
+            arm64_user_vm_space(&high_context.user_vm),
+            "mash", ARM64_BOOTSTRAP_PID,
+            (vaddr_t)(uintptr_t)&__stack_bottom,
+            (vaddr_t)(uintptr_t)&__stack_top, 0) != 0) {
+        arm64_probe_puts("ARM64_EXECVE_TASK_INIT_FAILED\n");
+        goto halt;
+    }
+    high_context.scheduled_user_task.type = TASK_TYPE_PROCESS;
+    high_context.scheduled_user_task.context.flags =
+        ARM64_TASK_FLAG_RETURNS_TO_USER;
+    prepare_user_registers(
+        &high_context.scheduled_user_task.context.user);
+    high_context.scheduled_user_task.context.user.pc = USER_CODE_VA +
+        ((uint64_t)(uintptr_t)arm64_el0_exec_payload -
+         (uint64_t)(uintptr_t)arm64_el0_payload_start);
 
     if (process_model_init(&runtime->process, ARM64_BOOTSTRAP_PID, NULL,
                            &high_context.user_vm.space,
@@ -3772,19 +4130,43 @@ static void arm64_el0_return(uint64_t result)
     runtime->process.state = PROCESS_MODEL_RUNNING;
     runtime->process.io_context = &runtime->io;
     runtime->vm = &high_context.user_vm;
-    clear_task_context(&high_context.user_task);
-    high_context.user_task.vm_space =
-        arm64_user_vm_space(&high_context.user_vm);
-    high_context.user_task.ttbr0 = high_context.user_vm.l1;
-    high_context.user_task.asid = high_context.user_vm.asid;
-    high_context.user_task.flags = ARM64_TASK_FLAG_RETURNS_TO_USER;
-    prepare_user_registers(&high_context.user_task.user);
-    high_context.user_task.user.pc = USER_CODE_VA +
-        ((uint64_t)(uintptr_t)arm64_el0_exec_payload -
-         (uint64_t)(uintptr_t)arm64_el0_payload_start);
+    if (process_runtime_select(
+            &runtime->lifecycle, &runtime->process,
+            &high_context.scheduled_user_task) != 0 ||
+        arm64_process_dispatcher_init(
+            &high_context.runtime_dispatcher,
+            &high_context.scheduled_user_task, 4) != 0 ||
+        task_dispatcher_set_quantum(
+            &high_context.runtime_dispatcher, 4) != 0) {
+        arm64_probe_puts("ARM64_PROCESS_RUNTIME_INIT_FAILED\n");
+        goto halt;
+    }
+    runtime->lifecycle_ready = 1;
+    runtime_context = &high_context;
+    if (arm64_task_init(
+            &high_context.idle_task, runtime->allocator,
+            arm64_user_vm_space(&high_context.empty_vm),
+            (vaddr_t)(uintptr_t)arm64_idle_task_entry,
+            "idle0", 10, RUNTIME_TASK_STACK_PAGES) != 0) {
+        arm64_probe_puts("ARM64_PROCESS_IDLE_INIT_FAILED\n");
+        goto halt;
+    }
+    high_context.idle_task.priority = TASK_IDLE_PRIORITY;
+    if (task_dispatcher_publish(
+            &high_context.runtime_dispatcher,
+            &high_context.idle_task) != 0) {
+        arm64_probe_puts("ARM64_PROCESS_IDLE_PUBLISH_FAILED\n");
+        goto halt;
+    }
+    arm64_exception_set_task_dispatcher(
+        &high_context.runtime_dispatcher);
+    if (arm64_timer_irq_start_periodic() != 0) {
+        arm64_probe_puts("ARM64_PROCESS_TIMER_START_FAILED\n");
+        goto halt;
+    }
     arm64_exception_set_el0_context(
         arm64_user_vm_space(&high_context.user_vm),
-        &high_context.user_task.user,
+        &high_context.scheduled_user_task.context.user,
         (arm64_exception_u64)(uintptr_t)arm64_bootstrap_shell_return);
     arm64_boot_warn("Init: /sbin/init bypassed during ARM64 bring-up");
     arm64_boot_ok("Init: starting /sbin/mash");
@@ -3792,7 +4174,7 @@ static void arm64_el0_return(uint64_t result)
     arm64_probe_puts("ARM64_EXECVE_SYSCALL_ENTER path=");
     arm64_probe_puts(arm64_bootstrap_shell_path);
     arm64_probe_puts("\n");
-    arm64_enter_el0(&high_context.user_task.user);
+    arm64_enter_el0(&high_context.scheduled_user_task.context.user);
 
 halt:
     for (;;)

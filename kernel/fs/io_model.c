@@ -30,6 +30,16 @@ static void clear_bytes(void *object, size_t size)
         bytes[index] = 0;
 }
 
+static void copy_bytes(void *destination, const void *source, size_t size)
+{
+    uint8_t *output = destination;
+    const uint8_t *input = source;
+    size_t index;
+
+    for (index = 0; index < size; index++)
+        output[index] = input[index];
+}
+
 static int strings_equal(const char *left, const char *right)
 {
     if (!left || !right)
@@ -165,6 +175,68 @@ int io_model_context_init(io_model_context_t *context, io_model_vfs_t *vfs,
         context->fds[fd] = file;
     }
     return 0;
+}
+
+int io_model_context_clone(io_model_context_t *destination,
+                           const io_model_context_t *source)
+{
+    unsigned int fd;
+    unsigned int file_index;
+
+    if (!destination || !source || destination == source || !source->vfs)
+        return -EINVAL;
+    copy_bytes(destination, source, sizeof(*destination));
+
+    for (file_index = 0; file_index < IO_MODEL_MAX_FILES; file_index++) {
+        const io_model_pipe_t *source_pipe =
+            source->files[file_index].pipe;
+        unsigned int pipe_index;
+
+        if (!source_pipe) {
+            destination->files[file_index].pipe = NULL;
+            continue;
+        }
+        for (pipe_index = 0; pipe_index < IO_MODEL_MAX_PIPES;
+             pipe_index++) {
+            if (source_pipe == &source->pipes[pipe_index]) {
+                destination->files[file_index].pipe =
+                    &destination->pipes[pipe_index];
+                break;
+            }
+        }
+        if (pipe_index == IO_MODEL_MAX_PIPES)
+            goto invalid;
+    }
+
+    for (fd = 0; fd < IO_MODEL_MAX_FDS; fd++) {
+        const io_model_file_t *source_file = source->fds[fd];
+
+        if (!source_file) {
+            destination->fds[fd] = NULL;
+            continue;
+        }
+        for (file_index = 0; file_index < IO_MODEL_MAX_FILES;
+             file_index++) {
+            if (source_file == &source->files[file_index]) {
+                destination->fds[fd] =
+                    &destination->files[file_index];
+                break;
+            }
+        }
+        if (file_index == IO_MODEL_MAX_FILES)
+            goto invalid;
+    }
+    return 0;
+
+invalid:
+    clear_bytes(destination, sizeof(*destination));
+    return -EINVAL;
+}
+
+void io_model_context_reset(io_model_context_t *context)
+{
+    if (context)
+        clear_bytes(context, sizeof(*context));
 }
 
 int io_model_open(io_model_context_t *context, const char *path,

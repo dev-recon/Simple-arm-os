@@ -65,8 +65,9 @@ void init_kernel_heap(void)
     KINFO("=== HEAP INITIALIZATION WITH GLOBALS ===\n");
     KINFO("Heap configuration:\n");
     KINFO("  Base address: %p\n", heap_base);
-    KINFO("  Size:         %u MB (%u bytes)\n", 
-            heap_size / (1024*1024), heap_size);
+    KINFO("  Size:         %lu MB (%lu bytes)\n",
+            (unsigned long)(heap_size / (1024 * 1024)),
+            (unsigned long)heap_size);
     
     /* Verifications */
     if (!heap_base || heap_size < (64 * 1024)) {
@@ -85,7 +86,8 @@ void init_kernel_heap(void)
     free_list = initial_block;
     heap_initialized = true;
     
-    KINFO("Heap ready: %u bytes available\n", initial_block->size);
+    KINFO("Heap ready: %lu bytes available\n",
+          (unsigned long)initial_block->size);
 }
 
 

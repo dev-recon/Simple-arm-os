@@ -26,6 +26,7 @@
 
 #define PROCESS_MODEL_SIGNAL_COUNT 32u
 #define PROCESS_MODEL_WAIT_NOHANG  1u
+#define PROCESS_MODEL_WAIT_UNTRACED 2u
 
 typedef enum process_model_state {
     PROCESS_MODEL_NEW = 0,

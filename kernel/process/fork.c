@@ -115,7 +115,8 @@ void return_to_caller_with_value(int return_value)
 
         if (lr != 0) {
             arch_task_context_set_kernel_pc(&proc->context, lr);
-            KDEBUG("[WAITPID] PC mis a LR: 0x%08X\n", lr);
+            KDEBUG("[WAITPID] PC set to LR: 0x%lX\n",
+                   (unsigned long)lr);
         } else {
             KDEBUG("[WAITPID] Ni caller_lr ni LR disponible - continuation normale\n");
         }

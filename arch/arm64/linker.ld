@@ -18,6 +18,7 @@ SECTIONS
 {
     . = KERNEL_LINK_ADDR;
     __kernel_start = .;
+    __kernel_phys_start = .;
     __text_start = .;
 
     .text.boot : ALIGN(16) {
@@ -65,6 +66,7 @@ SECTIONS
     } > RAM :data
 
     __kernel_end = .;
+    __kernel_phys_end = .;
 
     /DISCARD/ : {
         *(.comment)

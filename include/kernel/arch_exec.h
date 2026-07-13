@@ -9,20 +9,21 @@
  * Layer: Kernel / architecture boundary
  *
  * Responsibilities:
- * - Declare architecture checks and cache maintenance needed by exec().
- * - Keep the ELF loader policy independent from ARM-specific machine IDs.
+ * - Parse the active CPU executable ABI into the common image layout.
+ * - Declare cache maintenance needed after loading executable pages.
  *
  * Notes:
- * - The generic loader still owns ELF layout validation and VMA creation.
+ * - The generic loader owns VFS reads, VM policy and physical pages.
  */
 
 #ifndef _KERNEL_ARCH_EXEC_H
 #define _KERNEL_ARCH_EXEC_H
 
-#include <kernel/elf32.h>
+#include <kernel/exec.h>
 #include <kernel/types.h>
 
-bool arch_validate_elf_header(const elf32_ehdr_t* header);
+int arch_exec_parse_image(const void *image, size_t image_size,
+                          exec_image_layout_t *layout);
 /*
  * The page has just been filled through a kernel temporary mapping.  The arch
  * hook owns the cache maintenance needed before the same physical page is

@@ -26,6 +26,11 @@ typedef unsigned long long arm64_mmu_u64;
 #define ARM64_USER_PAGE_WRITE (1u << 1)
 #define ARM64_USER_PAGE_EXEC  (1u << 2)
 
+#define ARCH_ASID_BITS     8u
+#define ARCH_ASID_MAX      ((1u << ARCH_ASID_BITS) - 1u)
+#define ARCH_ASID_MIN_USER 1u
+#define ARCH_ASID_KERNEL   0u
+
 int arm64_mmu_enable_identity_map(void);
 int arm64_mmu_prepare_identity_tables(arm64_mmu_u64 l1_address,
                                       arm64_mmu_u64 l2_address,

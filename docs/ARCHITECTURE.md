@@ -9,6 +9,32 @@ CPU model, short-descriptor page tables, split `TTBR0` / `TTBR1`, ASIDs, an
 ext2 root filesystem, a FAT32 compatibility mount, procfs, VirtIO block I/O,
 an UART-backed rescue TTY, and an optional VirtIO-GPU graphical TTY.
 
+## Common-Kernel Architecture Rule
+
+Every supported architecture attaches to the same kernel core. Process
+lifecycle, scheduler policy, syscalls, VFS, filesystems, descriptors, pipes,
+TTY policy, IPC, signals and generic virtual-memory policy belong to `kernel/`
+and must not be reimplemented under `arch/`.
+
+Architecture code is limited to CPU and MMU mechanisms: boot entry, exception
+and interrupt entry/return, register and task-context transfer, page-table and
+TLB operations, cache maintenance, atomics and the hardware timer primitives
+needed by the common kernel. Board and SoC device discovery belongs to the
+platform layer and drivers, not to an architecture-specific kernel runtime.
+
+In particular:
+
+- all architectures enter the common kernel initialization path;
+- syscall numbers and implementations are shared across architectures;
+- architecture code may copy or validate user ABI state, but does not own
+  process, descriptor or filesystem semantics;
+- ELF and signal frame layout may have architecture backends while lifecycle
+  and policy remain common;
+- early bootstrap readers and bounded test models must be retired before a
+  userspace milestone is described as VFS or process integration;
+- a new architecture must keep existing architecture builds and behavior
+  nominal while it is connected to the common core.
+
 ## Boot And DTB Detection
 
 QEMU passes a Device Tree Blob (DTB/FDT) pointer to the kernel at boot. ArmOS

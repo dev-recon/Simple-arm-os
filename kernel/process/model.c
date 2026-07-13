@@ -125,7 +125,9 @@ pid_t process_model_wait(process_model_t *parent, pid_t selector,
     process_model_t *child;
     int eligible = 0;
 
-    if (!parent || (options & ~PROCESS_MODEL_WAIT_NOHANG) != 0)
+    if (!parent ||
+        (options & ~(PROCESS_MODEL_WAIT_NOHANG |
+                     PROCESS_MODEL_WAIT_UNTRACED)) != 0)
         return -EINVAL;
     link = &parent->first_child;
     while (*link) {

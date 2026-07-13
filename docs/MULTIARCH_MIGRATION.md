@@ -163,6 +163,12 @@ Kernel code that should remain architecture-neutral:
 - signal policy above signal-frame layout;
 - userland build and root filesystem layout.
 
+This separation is an invariant. An architecture port must join the existing
+kernel process, syscall, scheduler and VFS implementations; it must not grow an
+architecture-local replacement for them. Temporary bootstrap models may prove
+CPU, MMU and exception mechanisms, but they are not substitutes for common
+kernel integration and must not become the production userspace path.
+
 ## Phase C - Second ARM32 Platform
 
 Status: implemented.

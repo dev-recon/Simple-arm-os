@@ -67,8 +67,7 @@ void arm64_exception_set_el0_context(const vm_space_t *vm_space,
                                      arm64_user_context_t *registers,
                                      arm64_exception_u64 exit_address)
 {
-    el0_vm_space = vm_space;
-    el0_registers = registers;
+    arm64_exception_bind_el0_context(vm_space, registers);
     el0_exit_address = exit_address;
     el0_exit_status = 0;
     el0_syscall_count = 0;
@@ -76,6 +75,13 @@ void arm64_exception_set_el0_context(const vm_space_t *vm_space,
     pending_exec_registers = NULL;
     pending_exec_commit_hook = NULL;
     pending_exec_commit_owner = NULL;
+}
+
+void arm64_exception_bind_el0_context(const vm_space_t *vm_space,
+                                      arm64_user_context_t *registers)
+{
+    el0_vm_space = vm_space;
+    el0_registers = registers;
 }
 
 int arm64_exception_request_exec(const vm_space_t *vm_space,
@@ -165,6 +171,7 @@ static void arm64_bootstrap_syscall(arm64_exception_frame_t *frame)
         uint64_t exit_argument = registers->x[0];
         unsigned int index;
 
+        save_el0_registers(registers);
         request.number = (uint32_t)number;
         for (index = 0; index < ARMOS_SYSCALL_ARGUMENT_COUNT; index++)
             request.arguments[index] = registers->x[index];

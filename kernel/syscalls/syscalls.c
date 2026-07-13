@@ -23,7 +23,7 @@
 #include <kernel/stddef.h>
 #include <kernel/string.h>
 #include <kernel/task.h>
-#include <kernel/elf32.h>
+#include <kernel/exec.h>
 #include <kernel/userspace.h>
 #include <kernel/shm.h>
 #include <kernel/power.h>
@@ -144,10 +144,6 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
 
 /* Forward declarations de toutes les fonctions statiques */
 extern void cleanup_exec_args(char* filename, char** argv, char** envp);
-extern int read_elf_header(inode_t* inode, elf32_ehdr_t* header);
-extern bool validate_elf_header(elf32_ehdr_t* header);
-extern int load_elf_segments(inode_t* inode, elf32_ehdr_t* elf_header, vm_space_t* vm);
-extern int load_segment(inode_t* inode, elf32_phdr_t* phdr, vm_space_t* vm);
 extern int setup_user_stack(vm_space_t* vm, char** argv, char** envp);
 extern int count_strings(char** strings);
 extern char** setup_stack_strings(char** strings, char** stack_ptr, int count,
@@ -314,11 +310,12 @@ static void snapshot_exec_metadata(task_t *task, const char *filename,
 }
 
 void dump_svc_stack(task_t *task, uint32_t *sp) {
-    kprintf("SVC stack @%08x:\n", (unsigned)sp);
+    kprintf("SVC stack @%p:\n", sp);
     for (int i=0;i<12;i++) {
         kprintf(" +%02x: %08x\n", i*4, sp[i]);
     }
-    kprintf("Offset of context = %d\n", (uint32_t)&(task->context) - (uint32_t)task );
+    kprintf("Offset of context = %lu\n",
+            (unsigned long)((uintptr_t)&task->context - (uintptr_t)task));
 }
 
 void print_cpu_mode(void){
@@ -401,7 +398,7 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     char** kernel_argv;
     char** kernel_envp;
     inode_t* exe_inode;
-    elf32_ehdr_t elf_header;
+    vaddr_t entry;
     vm_space_t* old_vm;
     vm_space_t* new_vm;
     uid_t exec_uid;
@@ -469,15 +466,6 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
     exec_gid = exe_inode->gid;
     exec_mode = exe_inode->mode;
 
-    
-    /* Valider l'en-tete ELF */
-    if (read_elf_header(exe_inode, &elf_header) < 0) {
-        KERROR("sys_execve: Failed to read ELF header\n");
-        put_inode(exe_inode);
-        cleanup_exec_args(kernel_filename, kernel_argv, kernel_envp);
-        return -ENOEXEC;
-    }
-    
     /* Sauvegarder l'ancien espace memoire pour rollback - ACCeS CORRECT */
     old_vm = proc->process->vm;
     
@@ -499,8 +487,8 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         return -ENOMEM;
     }
 
-    /* Charger les segments ELF */
-    if (load_elf_segments(exe_inode, &elf_header, new_vm) < 0) {
+    /* Load through the common VFS/VM path and active ELF ABI parser. */
+    if (exec_load_image(exe_inode, new_vm, &entry) < 0) {
         KERROR("sys_execve: Failed to load ELF segments\n");
         destroy_vm_space(new_vm);
         put_inode(exe_inode);
@@ -538,13 +526,16 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
                                       (uintptr_t)new_vm->pgdir,
                                       new_vm->asid,
                                       (vaddr_t)(uintptr_t)proc->stack_top,
-                                      elf_header.e_entry,
+                                      entry,
                                       new_vm->stack_start);
 
     /* Arguments initiaux (argc, argv, etc.) */
-    arch_task_context_set_user_register(&proc->context, 0, (uint32_t)kernel_filename);
-    arch_task_context_set_user_register(&proc->context, 1, (uint32_t)kernel_argv);
-    arch_task_context_set_user_register(&proc->context, 2, (uint32_t)kernel_envp);
+    arch_task_context_set_user_register(&proc->context, 0,
+                                        (uintptr_t)kernel_filename);
+    arch_task_context_set_user_register(&proc->context, 1,
+                                        (uintptr_t)kernel_argv);
+    arch_task_context_set_user_register(&proc->context, 2,
+                                        (uintptr_t)kernel_envp);
     arch_task_context_set_user_register(&proc->context, 3, argc);
 
    /* Fermer tous les fichiers CLOEXEC - ACCeS CORRECT */
@@ -1001,64 +992,6 @@ void print_task_offsets(void) {
     KDEBUG("Total size: %zu\n", sizeof(task_t));
 }
 
-
-void print_context_offsets(void) {
-    KDEBUG("\n=== CONTEXT STRUCTURE OFFSETS ===\n");
-    KDEBUG("r0: %zu\n", offsetof(task_context_t, r0));
-    KDEBUG("r1: %zu\n", offsetof(task_context_t, r1));
-    KDEBUG("r2: %zu\n", offsetof(task_context_t, r2));
-    KDEBUG("r3: %zu\n", offsetof(task_context_t, r3));
-    KDEBUG("r4: %zu\n", offsetof(task_context_t, r4));
-    KDEBUG("r5: %zu\n", offsetof(task_context_t, r5));
-    KDEBUG("r6: %zu\n", offsetof(task_context_t, r6));
-    KDEBUG("r7: %zu\n", offsetof(task_context_t, r7));
-    KDEBUG("r8: %zu\n", offsetof(task_context_t, r8));
-    KDEBUG("r9: %zu\n", offsetof(task_context_t, r9));
-    KDEBUG("r10: %zu\n", offsetof(task_context_t, r10));
-    KDEBUG("r11: %zu\n", offsetof(task_context_t, r11));
-    KDEBUG("r12: %zu\n", offsetof(task_context_t, r12));
-
-    //
-
-    KDEBUG("sp: %zu\n", offsetof(task_context_t, sp));
-    KDEBUG("lr: %zu\n", offsetof(task_context_t, lr));
-    KDEBUG("pc: %zu\n", offsetof(task_context_t, pc));
-    KDEBUG("cpsr: %zu\n", offsetof(task_context_t, cpsr));
-
-    //
-
-    KDEBUG("is_first_run: %zu\n", offsetof(task_context_t, is_first_run));
-    KDEBUG("ttbr0: %zu\n", offsetof(task_context_t, ttbr0));
-    KDEBUG("asid: %zu\n", offsetof(task_context_t, asid));
-    KDEBUG("spsr: %zu\n", offsetof(task_context_t, spsr));
-    KDEBUG("returns_to_user: %zu\n", offsetof(task_context_t, returns_to_user));
-
-    KDEBUG("usr_r[0]: %zu\n", offsetof(task_context_t, usr_r[0]));
-    KDEBUG("usr_r[1]: %zu\n", offsetof(task_context_t, usr_r[1]));
-    KDEBUG("usr_r[2]: %zu\n", offsetof(task_context_t, usr_r[2]));
-    KDEBUG("usr_r[3]: %zu\n", offsetof(task_context_t, usr_r[3]));
-    KDEBUG("usr_r[4]: %zu\n", offsetof(task_context_t, usr_r[4]));
-    KDEBUG("usr_r[5]: %zu\n", offsetof(task_context_t, usr_r[5]));
-    KDEBUG("usr_r[6]: %zu\n", offsetof(task_context_t, usr_r[6]));
-    KDEBUG("usr_r[7]: %zu\n", offsetof(task_context_t, usr_r[7]));
-    KDEBUG("usr_r[8]: %zu\n", offsetof(task_context_t, usr_r[8]));
-    KDEBUG("usr_r[9]: %zu\n", offsetof(task_context_t, usr_r[9]));
-    KDEBUG("usr_r[10]: %zu\n", offsetof(task_context_t, usr_r[10]));
-    KDEBUG("usr_r[11]: %zu\n", offsetof(task_context_t, usr_r[11]));
-    KDEBUG("usr_r[12]: %zu\n", offsetof(task_context_t, usr_r[12]));
-
-
-    KDEBUG("usr_sp: %zu\n", offsetof(task_context_t, usr_sp));
-    KDEBUG("usr_lr: %zu\n", offsetof(task_context_t, usr_lr));
-    KDEBUG("usr_pc: %zu\n", offsetof(task_context_t, usr_pc));
-    KDEBUG("usr_cpsr: %zu\n", offsetof(task_context_t, usr_cpsr));
-    KDEBUG("svc_sp_top: %zu\n", offsetof(task_context_t, svc_sp_top));
-    KDEBUG("svc_sp: %zu\n", offsetof(task_context_t, svc_sp));
-    KDEBUG("svc_lr_saved: %zu\n", offsetof(task_context_t, svc_lr_saved));
-
-
-    KDEBUG("Total size: %zu\n", sizeof(task_context_t));
-}
 
 int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2, 
                    uint32_t arg3, uint32_t arg4, uint32_t arg5)

@@ -38,6 +38,8 @@ typedef void (*arm64_exec_commit_hook_t)(const vm_space_t *previous_vm,
 void arm64_exception_set_el0_context(const vm_space_t *vm_space,
                                      arm64_user_context_t *registers,
                                      arm64_exception_u64 exit_address);
+void arm64_exception_bind_el0_context(const vm_space_t *vm_space,
+                                      arm64_user_context_t *registers);
 int arm64_exception_request_exec(const vm_space_t *vm_space,
                                  arm64_user_context_t *registers,
                                  arm64_exec_commit_hook_t commit_hook,

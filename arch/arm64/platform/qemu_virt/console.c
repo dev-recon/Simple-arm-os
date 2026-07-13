@@ -50,6 +50,11 @@ void arm64_console_putc(char c)
     mmio_write32(PL011_BASE + PL011_DR, (uint32_t)c);
 }
 
+void putchar_kernel(char c)
+{
+    arm64_console_putc(c);
+}
+
 void arm64_console_puts(const char *text)
 {
     while (text && *text)

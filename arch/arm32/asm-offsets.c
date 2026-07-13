@@ -22,6 +22,11 @@
 #define DEFINE(sym, val) \
     __asm__ volatile("\n.ascii \"->" #sym " %0 " #val "\"" : : "i" (val))
 
+_Static_assert(offsetof(task_t, context) == 48,
+               "task_t.context offset must match ARM32 assembly");
+_Static_assert(sizeof(task_context_t) == 168,
+               "task_context_t layout must match ARM32 assembly");
+
 void arm_os_emit_asm_offsets(void)
 {
     DEFINE(TASK_CONTEXT_OFF, offsetof(task_t, context));

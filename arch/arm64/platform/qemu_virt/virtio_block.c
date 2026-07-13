@@ -19,6 +19,7 @@
  */
 
 #include <asm/mmu.h>
+#include <kernel/block_device.h>
 #include <kernel/types.h>
 
 #include "virtio_block.h"
@@ -108,6 +109,12 @@ typedef struct {
 } arm64_virtio_block_state_t;
 
 static arm64_virtio_block_state_t block_state;
+
+static int block_device_read(block_device_t *device, uint64_t lba,
+                             uint32_t count, void *buffer);
+
+static block_device_ops_t block_device_ops;
+static block_device_t block_device;
 
 static uint32_t mmio_read32(volatile uint32_t *base, uint32_t offset)
 {
@@ -390,6 +397,22 @@ int arm64_virtio_block_probe(early_page_allocator_t *allocator,
                     sector) != 0 ||
         read_le16(sector + EXT2_MAGIC_OFFSET) != EXT2_MAGIC)
         return -1;
+    /*
+     * Populate pointer-bearing tables after entering the high kernel alias.
+     * Static link-time pointers still name the temporary low boot mapping.
+     */
+    block_device_ops.read_sectors = block_device_read;
+    block_device_ops.write_sectors = NULL;
+    block_device_ops.flush = NULL;
+    block_device_ops.shutdown = NULL;
+    block_device.name = "virtio0";
+    block_device.capacity_sectors = block_state.capacity_sectors;
+    block_device.sector_size = 512;
+    block_device.read_only = true;
+    block_device.ops = &block_device_ops;
+    block_device.driver_data = &block_state;
+    if (!blk_register(&block_device))
+        return -1;
     result->capacity_sectors = block_state.capacity_sectors;
     result->ext2_start_lba = ext2_lba;
     result->ext2_sector_count = ext2_sectors;
@@ -410,4 +433,12 @@ int arm64_virtio_block_read(uint64_t lba, uint32_t count, void *buffer)
             return -1;
     }
     return 0;
+}
+
+static int block_device_read(block_device_t *device, uint64_t lba,
+                             uint32_t count, void *buffer)
+{
+    if (device != &block_device)
+        return -1;
+    return arm64_virtio_block_read(lba, count, buffer);
 }

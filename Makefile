@@ -133,6 +133,7 @@ KERNEL_OBJS = \
 	$(ARCH_DIR)/interrupt/vectors.o \
 	$(ARCH_DIR)/interrupt/exception.o \
 	$(ARCH_DIR)/interrupt/irq.o \
+	$(ARCH_DIR)/cpu/cpu.o \
 	$(ARCH_DIR)/mmu/mmu.o \
 	$(ARCH_DIR)/mmu/user_vm.o \
 	$(ARCH_DIR)/task/task.o \
@@ -140,10 +141,15 @@ KERNEL_OBJS = \
 	$(ARCH_DIR)/task/context_switch.o \
 	kernel/syscalls/dispatch.o \
 	kernel/process/model.o \
+	kernel/process/runtime.o \
 	kernel/process/elf64.o \
+	kernel/drivers/block_device.o \
 	kernel/fs/ext2_reader.o \
 	kernel/fs/io_model.o \
 	kernel/task/runqueue.o \
+	kernel/lib/kprintf.o \
+	kernel/sync/spinlock.o \
+	$(ARCH_DIR)/smp/smp.o \
 	$(ARCH_DIR)/user/el0.o \
 	kernel/lib/fdt_memory.o \
 	kernel/memory/early_page_allocator.o \

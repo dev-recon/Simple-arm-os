@@ -65,6 +65,16 @@ typedef struct arch_task_user_context {
     uint32_t cpsr;
 } arch_task_user_context_t;
 
+typedef struct arch_user_signal_frame {
+    uint32_t r[13];
+    uint32_t sp;
+    uint32_t lr;
+    uint32_t pc;
+    uint32_t cpsr;
+    uint32_t old_blocked;
+    uint32_t sig;
+} arch_user_signal_frame_t;
+
 #define ARCH_TASK_KERNEL_CPSR          0x13u
 #define ARCH_TASK_USER_CPSR            0x60000010u
 #define ARCH_TASK_STACK_ALIGNMENT      8u
@@ -73,6 +83,14 @@ typedef struct arch_task_user_context {
 static inline vaddr_t arch_task_stack_align(vaddr_t sp)
 {
     return sp & ~(vaddr_t)(ARCH_TASK_STACK_ALIGNMENT - 1u);
+}
+
+static inline uintptr_t arch_task_current_pointer(void)
+{
+    uint32_t pointer;
+
+    __asm__ volatile("mrc p15, 0, %0, c13, c0, 4" : "=r"(pointer));
+    return (uintptr_t)pointer;
 }
 
 static inline vaddr_t arch_task_context_kernel_sp(const task_context_t *ctx)
@@ -309,6 +327,60 @@ static inline void arch_task_context_prepare_kernel_fork(task_context_t *child,
     child->spsr = saved_status;
     arch_task_context_mark_first_run(child);
     arch_task_context_set_returns_to_user(child, false);
+}
+
+static inline void arch_task_signal_frame_save(
+    arch_user_signal_frame_t *frame,
+    const task_context_t *ctx,
+    uint32_t old_blocked,
+    uint32_t sig)
+{
+    arch_task_user_context_t user;
+    uint32_t i;
+
+    arch_task_context_capture_user(ctx, &user);
+    for (i = 0; i < 13u; i++)
+        frame->r[i] = user.r[i];
+    frame->sp = (uint32_t)user.sp;
+    frame->lr = (uint32_t)user.lr;
+    frame->pc = (uint32_t)user.pc;
+    frame->cpsr = user.cpsr;
+    frame->old_blocked = old_blocked;
+    frame->sig = sig;
+}
+
+static inline void arch_task_signal_frame_restore(
+    task_context_t *ctx,
+    const arch_user_signal_frame_t *frame)
+{
+    arch_task_user_context_t user;
+    uint32_t i;
+
+    for (i = 0; i < 13u; i++)
+        user.r[i] = frame->r[i];
+    user.sp = (vaddr_t)frame->sp;
+    user.lr = (vaddr_t)frame->lr;
+    user.pc = (vaddr_t)frame->pc;
+    user.cpsr = frame->cpsr;
+    arch_task_context_restore_user(ctx, &user);
+}
+
+static inline uint32_t arch_task_signal_frame_status(
+    const arch_user_signal_frame_t *frame)
+{
+    return frame->cpsr;
+}
+
+static inline uint32_t arch_task_signal_frame_blocked(
+    const arch_user_signal_frame_t *frame)
+{
+    return frame->old_blocked;
+}
+
+static inline uint32_t arch_task_signal_frame_signal(
+    const arch_user_signal_frame_t *frame)
+{
+    return frame->sig;
 }
 
 #endif /* _ASM_TASK_CONTEXT_H */

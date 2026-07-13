@@ -346,7 +346,7 @@ static int itoa_helper(int value, char* str, int base)
     return len;
 }
 
-static int utoa_helper(unsigned int value, char* str, int base)
+static int utoa_helper(unsigned long value, char* str, int base)
 {
     char* ptr = str;
     char* ptr1 = str;
@@ -545,7 +545,7 @@ int vsnprintf(char* str, size_t size, const char* format, va_list args)
                 
             case 'u': {
                 unsigned long val = is_long ? va_arg(args, unsigned long) : va_arg(args, unsigned int);
-                temp_len = utoa_helper((unsigned int)val, temp_buf, 10);
+                temp_len = utoa_helper(val, temp_buf, 10);
                 if (!left_align && width > temp_len) {
                     for (i = 0; i < width - temp_len; i++) {
                         if (out < out_end) *out++ = pad_char;
@@ -566,7 +566,8 @@ int vsnprintf(char* str, size_t size, const char* format, va_list args)
             }
                 
             case 'p': {
-                unsigned int val = (unsigned int)va_arg(args, void*);
+                unsigned long val =
+                    (unsigned long)(uintptr_t)va_arg(args, void*);
                 temp_buf[0] = '0';
                 temp_buf[1] = 'x';
                 temp_len = utoa_helper(val, temp_buf + 2, 16) + 2;
@@ -593,7 +594,7 @@ int vsnprintf(char* str, size_t size, const char* format, va_list args)
             case 'X':
                 {
                     unsigned long val = is_long ? va_arg(args, unsigned long) : va_arg(args, unsigned int);
-                    temp_len = utoa_helper((unsigned int)val, temp_buf, 16);
+                    temp_len = utoa_helper(val, temp_buf, 16);
                     if (spec == 'X') {
                         for (i = 0; i < temp_len; i++) {
                             if (temp_buf[i] >= 'a' && temp_buf[i] <= 'f')

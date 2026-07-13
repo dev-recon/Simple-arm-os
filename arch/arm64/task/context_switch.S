@@ -93,6 +93,52 @@ arm64_task_context_switch:
     ret
 .size arm64_task_context_switch, . - arm64_task_context_switch
 
+.align 4
+.global arm64_task_kernel_entry_trampoline
+.type arm64_task_kernel_entry_trampoline, %function
+arm64_task_kernel_entry_trampoline:
+    mov x0, x20
+    blr x19
+1:
+    wfe
+    b 1b
+.size arm64_task_kernel_entry_trampoline, . - arm64_task_kernel_entry_trampoline
+
+.align 4
+.global arm64_task_user_entry_trampoline
+.type arm64_task_user_entry_trampoline, %function
+arm64_task_user_entry_trampoline:
+    mov x0, x19
+    b arm64_enter_el0
+.size arm64_task_user_entry_trampoline, . - arm64_task_user_entry_trampoline
+
+.align 4
+.global arm64_simd_context_capture
+.type arm64_simd_context_capture, %function
+arm64_simd_context_capture:
+    stp q0,  q1,  [x0, #0]
+    stp q2,  q3,  [x0, #32]
+    stp q4,  q5,  [x0, #64]
+    stp q6,  q7,  [x0, #96]
+    stp q8,  q9,  [x0, #128]
+    stp q10, q11, [x0, #160]
+    stp q12, q13, [x0, #192]
+    stp q14, q15, [x0, #224]
+    stp q16, q17, [x0, #256]
+    stp q18, q19, [x0, #288]
+    stp q20, q21, [x0, #320]
+    stp q22, q23, [x0, #352]
+    stp q24, q25, [x0, #384]
+    stp q26, q27, [x0, #416]
+    stp q28, q29, [x0, #448]
+    stp q30, q31, [x0, #480]
+    mrs x1, fpcr
+    str x1, [x0, #512]
+    mrs x1, fpsr
+    str x1, [x0, #520]
+    ret
+.size arm64_simd_context_capture, . - arm64_simd_context_capture
+
 /*
  * Initial probe state:
  *   x19 = probe task, x20 = bootstrap task, x21 = phase address

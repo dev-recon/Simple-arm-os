@@ -197,11 +197,14 @@ static inline void verify_fat32_alignment(void)
     
     kprintf("[FAT32] Structure alignment verification:\n");
     kprintf("  fat32_boot_sector_t: size=%u, align=%u\n", 
-            sizeof(fat32_boot_sector_t), __alignof__(fat32_boot_sector_t));
+            (unsigned int)sizeof(fat32_boot_sector_t),
+            (unsigned int)__alignof__(fat32_boot_sector_t));
     kprintf("  fat32_dir_entry_t: size=%u, align=%u\n", 
-            sizeof(fat32_dir_entry_t), __alignof__(fat32_dir_entry_t));
+            (unsigned int)sizeof(fat32_dir_entry_t),
+            (unsigned int)__alignof__(fat32_dir_entry_t));
     kprintf("  fat32_fs_t: size=%u, align=%u\n", 
-            sizeof(fat32_fs_t), __alignof__(fat32_fs_t));
+            (unsigned int)sizeof(fat32_fs_t),
+            (unsigned int)__alignof__(fat32_fs_t));
     
     if (__alignof__(fat32_boot_sector_t) >= 4) {
         kprintf("  OK All FAT32 structures properly aligned\n");

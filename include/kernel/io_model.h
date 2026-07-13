@@ -12,6 +12,7 @@
  * - Define a bounded VFS namespace suitable for early userspace bring-up.
  * - Attach an optional offset-based provider for persistent read-only files.
  * - Own process file descriptors and shared open-file descriptions.
+ * - Clone bootstrap descriptor tables at the generic fork boundary.
  * - Provide regular-file, pipe and TTY operations without architecture types.
  *
  * Notes:
@@ -112,6 +113,9 @@ int io_model_vfs_set_readonly_provider(io_model_vfs_t *vfs,
 int io_model_context_init(io_model_context_t *context, io_model_vfs_t *vfs,
                           io_model_tty_read_t tty_read,
                           io_model_tty_write_t tty_write, void *tty_owner);
+int io_model_context_clone(io_model_context_t *destination,
+                           const io_model_context_t *source);
+void io_model_context_reset(io_model_context_t *context);
 int io_model_open(io_model_context_t *context, const char *path,
                   unsigned int flags);
 int io_model_close(io_model_context_t *context, int fd);

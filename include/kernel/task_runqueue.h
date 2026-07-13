@@ -12,6 +12,7 @@
  * - Define a bounded intrusive FIFO runqueue for generic task_t objects.
  * - Publish blocked tasks as ready and select ready tasks cooperatively.
  * - Drive voluntary, blocking, and timer-preemption reschedules.
+ * - Track bounded timer sleepers and publish them when deadlines expire.
  * - Coalesce timer requests and service them only at declared safe points.
  * - Account timer slices and request preemption at quantum expiration.
  * - Validate queue links, task lifetime guards, and membership accounting.
@@ -29,6 +30,8 @@
 #define _KERNEL_TASK_RUNQUEUE_H
 
 #include <kernel/task.h>
+
+#define TASK_DISPATCHER_MAX_SLEEPERS 16u
 
 typedef struct task_runqueue {
     task_t *head;
@@ -51,6 +54,8 @@ typedef void (*task_dispatch_irq_restore_t)(void *context,
 
 typedef struct task_dispatcher {
     task_runqueue_t ready;
+    task_t *sleeping[TASK_DISPATCHER_MAX_SLEEPERS];
+    uint32_t sleeping_count;
     task_t *current;
     task_dispatch_switch_t switch_task;
     task_dispatch_irq_save_t irq_save;
@@ -88,6 +93,8 @@ int task_dispatcher_yield(task_dispatcher_t *dispatcher);
 int task_dispatcher_set_quantum(task_dispatcher_t *dispatcher,
                                 uint32_t quantum_ticks);
 int task_dispatcher_timer_tick(task_dispatcher_t *dispatcher);
+int task_dispatcher_sleep_until(task_dispatcher_t *dispatcher,
+                                uint32_t wake_tick);
 int task_dispatcher_request_preempt(task_dispatcher_t *dispatcher);
 int task_dispatcher_preempt_disable(task_dispatcher_t *dispatcher);
 int task_dispatcher_preempt_enable(task_dispatcher_t *dispatcher);
