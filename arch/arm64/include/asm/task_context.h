@@ -10,12 +10,13 @@
  *
  * Responsibilities:
  * - Group kernel callee-saved state, EL0 state and address-space identity.
+ * - Preserve the complete FP/SIMD register file across task switches.
  * - Reference user address spaces through the generic vm_space_t contract.
  * - Define the bootstrap contract consumed by the task-switch boundary.
  *
  * Notes:
  * - task_context_t is the generic-kernel alias for this concrete layout.
- * - SMP residency and SIMD state remain future work.
+ * - SMP residency remains future work.
  */
 
 #ifndef ASM_ARM64_TASK_CONTEXT_H
@@ -33,9 +34,16 @@ typedef struct arm64_kernel_context {
     uint64_t pc;
 } arm64_kernel_context_t;
 
+typedef struct arm64_simd_context {
+    uint64_t q[64];
+    uint64_t fpcr;
+    uint64_t fpsr;
+} __attribute__((aligned(16))) arm64_simd_context_t;
+
 typedef struct arm64_task_context {
     arm64_kernel_context_t kernel;
     arm64_user_context_t user;
+    arm64_simd_context_t simd;
     const vm_space_t *vm_space;
     paddr_t ttbr0;
     uint32_t asid;
@@ -46,7 +54,9 @@ typedef arm64_task_context_t task_context_t;
 
 _Static_assert(sizeof(arm64_kernel_context_t) == 112,
                "AArch64 kernel context ABI size changed");
-_Static_assert(sizeof(arm64_task_context_t) == 416,
+_Static_assert(sizeof(arm64_simd_context_t) == 528,
+               "AArch64 SIMD context ABI size changed");
+_Static_assert(sizeof(arm64_task_context_t) == 944,
                "AArch64 task context ABI size changed");
 
 void arm64_task_context_switch(arm64_task_context_t *previous,

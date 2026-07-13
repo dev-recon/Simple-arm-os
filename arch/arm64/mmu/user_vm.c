@@ -12,6 +12,7 @@
  * - Own bootstrap user tables, mapped pages and ASID allocation.
  * - Grow bounded L2/L3 table inventories and retire mapped pages.
  * - Provide transactional anonymous range mapping and table reclamation.
+ * - Clone user spaces transactionally with independent resident pages.
  * - Reserve lazy brk/mmap pages and resolve their EL0 translation faults.
  * - Bind the ARM64 backend to the generic vm_space_t identity.
  * - Maintain a sorted generic VMA list for every bootstrap mapping.
@@ -76,6 +77,16 @@ static void clear_bytes(void *address, size_t length)
 
     for (index = 0; index < length; index++)
         bytes[index] = 0;
+}
+
+static void copy_bytes(void *destination, const void *source, size_t length)
+{
+    uint8_t *destination_bytes = destination;
+    const uint8_t *source_bytes = source;
+    size_t index;
+
+    for (index = 0; index < length; index++)
+        destination_bytes[index] = source_bytes[index];
 }
 
 static int asid_is_allocated(unsigned int asid)
@@ -502,6 +513,70 @@ int arm64_user_vm_init(arm64_user_vm_t *vm,
     vm->space.asid = asid;
     vm->magic = ARM64_USER_VM_MAGIC;
     return 0;
+}
+
+int arm64_user_vm_clone_eager(arm64_user_vm_t *destination,
+                              const arm64_user_vm_t *source,
+                              early_page_allocator_t *allocator)
+{
+    const arm64_user_vm_mapping_t *source_mapping;
+    arm64_user_vm_mapping_t *destination_mapping;
+    paddr_t destination_page;
+    unsigned int destination_index;
+    unsigned int flags;
+    unsigned int index;
+    int result;
+
+    if (!destination || !source || destination == source || !allocator ||
+        arm64_user_vm_validate_identity(source) != 0)
+        return -1;
+    if (arm64_user_vm_init(destination, allocator) != 0)
+        return -2;
+
+    for (index = 0; index < source->mapping_count; index++) {
+        source_mapping = &source->mappings[index];
+        if (source_mapping->vma.shm_id != 0)
+            goto failed;
+        flags = source_mapping->vma.flags;
+        if (source_mapping->physical_address == 0) {
+            result = arm64_user_vm_reserve_anonymous(
+                destination, source_mapping->vma.start, PAGE_SIZE, flags);
+        } else {
+            result = arm64_user_vm_map_new_page(
+                destination, allocator, source_mapping->vma.start,
+                flags & ~VMA_LAZY, &destination_page);
+            if (result == 0) {
+                copy_bytes(
+                    (void *)(uintptr_t)arm64_mmu_kernel_address(
+                        destination_page),
+                    (const void *)(uintptr_t)arm64_mmu_kernel_address(
+                        source_mapping->physical_address),
+                    PAGE_SIZE);
+                if ((flags & VMA_EXEC) != 0)
+                    arm64_mmu_sync_code(
+                        arm64_mmu_kernel_address(destination_page),
+                        PAGE_SIZE);
+            }
+        }
+        if (result != 0)
+            goto failed;
+
+        destination_index = arm64_user_vm_mapping_index(
+            destination, source_mapping->vma.start);
+        if (destination_index == destination->mapping_count)
+            goto failed;
+        destination_mapping = &destination->mappings[destination_index];
+        destination_mapping->vma.shm_id = source_mapping->vma.shm_id;
+    }
+
+    destination->space.brk = source->space.brk;
+    if (arm64_user_vm_validate_identity(destination) != 0)
+        goto failed;
+    return 0;
+
+failed:
+    (void)arm64_user_vm_destroy(destination, allocator);
+    return -3;
 }
 
 int arm64_user_vm_map_new_page(arm64_user_vm_t *vm,

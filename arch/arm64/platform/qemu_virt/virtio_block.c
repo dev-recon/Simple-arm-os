@@ -363,6 +363,7 @@ int arm64_virtio_block_probe(early_page_allocator_t *allocator,
 {
     uint8_t sector[512];
     uint32_t ext2_lba = 0;
+    uint32_t ext2_sectors = 0;
     unsigned int partition;
 
     if (!allocator || !result)
@@ -380,16 +381,18 @@ int arm64_virtio_block_probe(early_page_allocator_t *allocator,
 
         if (entry[4] == MBR_TYPE_EXT2) {
             ext2_lba = read_le32(entry + 8);
+            ext2_sectors = read_le32(entry + 12);
             break;
         }
     }
-    if (ext2_lba == 0 ||
+    if (ext2_lba == 0 || ext2_sectors == 0 ||
         read_sector((uint64_t)ext2_lba + EXT2_SUPERBLOCK_SECTOR,
                     sector) != 0 ||
         read_le16(sector + EXT2_MAGIC_OFFSET) != EXT2_MAGIC)
         return -1;
     result->capacity_sectors = block_state.capacity_sectors;
     result->ext2_start_lba = ext2_lba;
+    result->ext2_sector_count = ext2_sectors;
     return 0;
 }
 

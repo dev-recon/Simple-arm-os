@@ -300,6 +300,25 @@ int ext2_reader_file_size(ext2_reader_t *reader, const char *path,
     return 0;
 }
 
+int ext2_reader_path_info(ext2_reader_t *reader, const char *path,
+                          ext2_reader_path_info_t *info)
+{
+    ext2_reader_inode_t inode;
+    uint16_t type;
+
+    if (!info || lookup_path(reader, path, &inode) != 0)
+        return -1;
+    type = inode.mode & EXT2_MODE_TYPE_MASK;
+    if (type == EXT2_MODE_REGULAR)
+        info->type = EXT2_READER_PATH_REGULAR;
+    else if (type == EXT2_MODE_DIRECTORY)
+        info->type = EXT2_READER_PATH_DIRECTORY;
+    else
+        return -1;
+    info->size = inode.size;
+    return 0;
+}
+
 int ext2_reader_read_file(ext2_reader_t *reader, const char *path,
                           void *buffer, size_t capacity,
                           size_t *file_size)

@@ -10,7 +10,7 @@
  *
  * Responsibilities:
  * - Define a dependency-free, callback-driven ext2 reader.
- * - Expose bounded path lookup plus complete and ranged regular-file reads.
+ * - Expose bounded path metadata plus complete and ranged regular-file reads.
  *
  * Notes:
  * - This interface is used before the persistent VFS and block cache exist.
@@ -23,6 +23,16 @@
 
 typedef int (*ext2_reader_read_sectors_t)(void *owner, uint64_t lba,
                                           uint32_t count, void *buffer);
+
+typedef enum ext2_reader_path_type {
+    EXT2_READER_PATH_REGULAR = 1,
+    EXT2_READER_PATH_DIRECTORY = 2
+} ext2_reader_path_type_t;
+
+typedef struct {
+    ext2_reader_path_type_t type;
+    size_t size;
+} ext2_reader_path_info_t;
 
 typedef struct {
     void *owner;
@@ -41,6 +51,8 @@ int ext2_reader_init(ext2_reader_t *reader, void *owner,
                      ext2_reader_read_sectors_t read_sectors,
                      uint64_t partition_lba, void *scratch,
                      size_t scratch_size);
+int ext2_reader_path_info(ext2_reader_t *reader, const char *path,
+                          ext2_reader_path_info_t *info);
 int ext2_reader_file_size(ext2_reader_t *reader, const char *path,
                           size_t *file_size);
 int ext2_reader_read_file(ext2_reader_t *reader, const char *path,

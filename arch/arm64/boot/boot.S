@@ -11,6 +11,7 @@
  * Responsibilities:
  * - Normalize QEMU virt entry from EL2 or EL1 into the EL1h kernel context.
  * - Establish the boot stack, clear BSS and install the first vector table.
+ * - Enable the AArch64 FP/SIMD register file for EL0 and EL1 execution.
  * - Transfer execution between the low bootstrap and high TTBR1 alias.
  *
  * Notes:
@@ -22,7 +23,7 @@
 .global _start
 .type _start, %function
 
-.extern arm64_early_main
+.extern arm64_bootstrap_main
 .extern arm64_vectors
 .extern __bss_start
 .extern __bss_end
@@ -68,6 +69,14 @@ _start:
     ldr x1, =__stack_top
     mov sp, x1
 
+    /* Newlib may use FP/SIMD even when an application is integer-only. */
+    mrs x1, cpacr_el1
+    orr x1, x1, #(3 << 20)
+    msr cpacr_el1, x1
+    isb
+    msr fpcr, xzr
+    msr fpsr, xzr
+
     ldr x1, =__bss_start
     ldr x2, =__bss_end
 .Lclear_bss:
@@ -82,7 +91,7 @@ _start:
     isb
 
     mov x0, x20
-    bl arm64_early_main
+    bl arm64_bootstrap_main
 
 .Lhalt:
     wfe

@@ -24,7 +24,7 @@
  * - Unexpected exceptions print architectural state and halt deterministically.
  */
 
-#include <asm/early_console.h>
+#include <asm/console.h>
 #include <asm/exception.h>
 #include <asm/exception_frame.h>
 #include <asm/irq.h>
@@ -237,7 +237,6 @@ static void arm64_bootstrap_syscall(arm64_exception_frame_t *frame)
         uint64_t fd = registers->x[0];
         vaddr_t address = (vaddr_t)registers->x[1];
         size_t length = (size_t)registers->x[2];
-        size_t index;
 
         if (fd != 1 && fd != 2) {
             registers->x[0] = syscall_error(EBADF);
@@ -252,8 +251,6 @@ static void arm64_bootstrap_syscall(arm64_exception_frame_t *frame)
             save_el0_registers(registers);
             return;
         }
-        for (index = 0; index < length; index++)
-            arm64_early_putc(*(const char *)(uintptr_t)(address + index));
         registers->x[0] = length;
         save_el0_registers(registers);
         return;
@@ -282,7 +279,7 @@ static void arm64_bootstrap_syscall(arm64_exception_frame_t *frame)
 
 static void arm64_exception_halt(void)
 {
-    arm64_early_puts("ARM64_EXCEPTION_HALT\n");
+    arm64_console_puts("ARM64_EXCEPTION_HALT\n");
     for (;;) {
         __asm__ volatile("wfe");
     }
@@ -334,27 +331,26 @@ void arm64_exception_dispatch(arm64_exception_frame_t *frame)
             return;
     }
 
-    arm64_early_puts("Exception vector: ");
-    arm64_early_puthex64(frame->vector);
-    arm64_early_puts("\nESR_EL1: ");
-    arm64_early_puthex64(frame->esr);
-    arm64_early_puts(" EC: ");
-    arm64_early_puthex64(ec);
-    arm64_early_puts("\nELR_EL1: ");
-    arm64_early_puthex64(frame->user.pc);
-    arm64_early_puts(" FAR_EL1: ");
-    arm64_early_puthex64(frame->far);
-    arm64_early_puts("\nSPSR_EL1: ");
-    arm64_early_puthex64(frame->user.pstate);
-    arm64_early_puts("\n");
-
     if (frame->vector == ARM64_VECTOR_SYNC_CURRENT_SPX &&
         ec == ESR_EC_BRK64 &&
         (iss & 0xffffu) == ARM64_BRK_VECTOR_TEST) {
         frame->user.pc += 4;
-        arm64_early_puts("ARM64_VECTOR_OK\n");
         return;
     }
+
+    arm64_console_puts("Exception vector: ");
+    arm64_console_puthex64(frame->vector);
+    arm64_console_puts("\nESR_EL1: ");
+    arm64_console_puthex64(frame->esr);
+    arm64_console_puts(" EC: ");
+    arm64_console_puthex64(ec);
+    arm64_console_puts("\nELR_EL1: ");
+    arm64_console_puthex64(frame->user.pc);
+    arm64_console_puts(" FAR_EL1: ");
+    arm64_console_puthex64(frame->far);
+    arm64_console_puts("\nSPSR_EL1: ");
+    arm64_console_puthex64(frame->user.pstate);
+    arm64_console_puts("\n");
 
     arm64_exception_halt();
 }

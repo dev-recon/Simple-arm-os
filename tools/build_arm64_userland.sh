@@ -15,7 +15,7 @@ usage()
 usage: tools/build_arm64_userland.sh [--rebuild-newlib] [target ...]
 
 Builds the AArch64 ArmOS newlib glue and selected user programs without
-modifying userfs. Targets default to: hello64 hello init mash.
+modifying userfs. Targets default to: hello64 hello init mash ls ps sleep pwd.
 EOF
 }
 
@@ -41,7 +41,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "${#TARGETS[@]}" -eq 0 ]; then
-    TARGETS=(hello64 hello init mash)
+    TARGETS=(hello64 hello init mash ls ps sleep pwd)
 fi
 
 if [ "$REBUILD_NEWLIB" -eq 1 ] ||
@@ -70,6 +70,9 @@ for target in "${TARGETS[@]}"; do
             ;;
         hello|hello64)
             binary="$ROOT_DIR/build/userland-arm64/out/usr/bin/$target"
+            ;;
+        ls|ps|sleep|pwd)
+            binary="$ROOT_DIR/build/userland-arm64/out/bin/$target"
             ;;
         *)
             continue

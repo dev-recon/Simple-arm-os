@@ -19,7 +19,7 @@
  * - The timer helpers reinitialize GIC state for deterministic boot probes.
  */
 
-#include <asm/early_console.h>
+#include <asm/console.h>
 #include <asm/irq.h>
 #include <asm/mmu.h>
 
@@ -218,15 +218,7 @@ int arm64_timer_irq_smoke_test(void)
 {
     int result = timer_irq_run(TIMER_TEST_TICKS);
 
-    arm64_early_puts("CNTFRQ_EL0: ");
-    arm64_early_puthex64(timer_frequency);
-    arm64_early_puts(" timer ticks: ");
-    arm64_early_puthex64(timer_ticks);
-    arm64_early_puts("\n");
-
     if (result != 0)
         return result;
-
-    arm64_early_puts("ARM64_TIMER_IRQ_OK\n");
     return 0;
 }

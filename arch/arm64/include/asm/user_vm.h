@@ -12,6 +12,7 @@
  * - Own bootstrap user translation tables, mappings and ASID identity.
  * - Grow bounded L2/L3 inventories and unmap owned pages at runtime.
  * - Map and unmap anonymous page ranges with transactional allocation.
+ * - Clone complete user spaces with independent eagerly copied pages.
  * - Expose that identity through the generic vm_space_t contract.
  * - Publish mapped user pages through the generic sorted VMA list.
  * - Track mapping generations for safe resident-ASID activation.
@@ -30,7 +31,7 @@
 #include <kernel/memory.h>
 #include <kernel/types.h>
 
-#define ARM64_USER_VM_MAX_MAPPINGS 64u
+#define ARM64_USER_VM_MAX_MAPPINGS 128u
 #define ARM64_USER_VM_MAX_L2_TABLES 16u
 #define ARM64_USER_VM_MAX_L3_TABLES 16u
 #define ARM64_USER_VM_MAGIC 0x41564D36u
@@ -77,6 +78,9 @@ int arm64_user_vm_validate_space_range(const vm_space_t *space,
 
 int arm64_user_vm_init(arm64_user_vm_t *vm,
                        early_page_allocator_t *allocator);
+int arm64_user_vm_clone_eager(arm64_user_vm_t *destination,
+                              const arm64_user_vm_t *source,
+                              early_page_allocator_t *allocator);
 int arm64_user_vm_map_new_page(arm64_user_vm_t *vm,
                                early_page_allocator_t *allocator,
                                vaddr_t virtual_address,

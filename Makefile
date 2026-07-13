@@ -148,7 +148,8 @@ KERNEL_OBJS = \
 	kernel/lib/fdt_memory.o \
 	kernel/memory/early_page_allocator.o \
 	$(PLATFORM_OBJS) \
-	$(PLATFORM_DIR)/early_console.o
+	$(PLATFORM_DIR)/console.o \
+	$(PLATFORM_DIR)/bootstrap.o
 endif
 
 # Tous les objets
@@ -381,9 +382,11 @@ $(PLATFORM_DISK_IMG): $(ARM64_BOOTSTRAP_ELF) \
 		tools/build_arm64_disk.sh tools/build_arm64_userland.sh \
 		tools/make_mbr.py userland/programs/hello/main.c \
 		userland/system/init/main.c \
+		userland/coreutils/src/ls.c userland/coreutils/src/ps.c \
+		userland/coreutils/src/sleep.c userland/coreutils/src/pwd.c \
 		$(wildcard userland/system/mash/src/*.c) \
 		$(wildcard userland/system/mash/include/*.h)
-	./tools/build_arm64_userland.sh hello init mash
+	./tools/build_arm64_userland.sh hello init mash ls ps sleep pwd
 	./tools/build_arm64_disk.sh --skip-userland --output $@
 else ifeq ($(PLATFORM_DISK_LAYOUT),fat32-first)
 $(PLATFORM_DISK_IMG): $(FAT32_IMG) $(EXT2_IMG) $(MBR_TOOL) Makefile $(PLATFORM_MK)

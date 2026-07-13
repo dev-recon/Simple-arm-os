@@ -34,7 +34,7 @@ usage()
 usage: tools/build_arm64_disk.sh [--skip-userland] [--output FILE]
 
 Builds a compact ext2-only QEMU disk containing the generated AArch64
-hello64, hello, init and mash executables.
+hello64, hello, init, mash and initial core utilities.
 EOF
 }
 
@@ -85,7 +85,12 @@ HELLO64="$ROOT_DIR/build/userland-arm64/out/usr/bin/hello64"
 HELLO="$ROOT_DIR/build/userland-arm64/out/usr/bin/hello"
 INIT="$ROOT_DIR/build/userland-arm64/out/sbin/init"
 MASH="$ROOT_DIR/build/userland-arm64/out/sbin/mash"
-for binary in "$HELLO64" "$HELLO" "$INIT" "$MASH"; do
+LS="$ROOT_DIR/build/userland-arm64/out/bin/ls"
+PS="$ROOT_DIR/build/userland-arm64/out/bin/ps"
+SLEEP="$ROOT_DIR/build/userland-arm64/out/bin/sleep"
+PWD="$ROOT_DIR/build/userland-arm64/out/bin/pwd"
+for binary in "$HELLO64" "$HELLO" "$INIT" "$MASH" \
+              "$LS" "$PS" "$SLEEP" "$PWD"; do
     if [ ! -x "$binary" ]; then
         echo "error: missing AArch64 executable: $binary" >&2
         exit 1
@@ -93,14 +98,19 @@ for binary in "$HELLO64" "$HELLO" "$INIT" "$MASH"; do
 done
 
 rm -rf "$STAGING"
-mkdir -p "$STAGING/usr/bin" "$STAGING/sbin" "$STAGING/dev" \
+mkdir -p "$STAGING/bin" "$STAGING/usr/bin" "$STAGING/sbin" "$STAGING/dev" \
     "$STAGING/etc" "$STAGING/home/user" "$STAGING/root" "$STAGING/tmp"
 cp "$HELLO64" "$STAGING/usr/bin/hello64"
 cp "$HELLO" "$STAGING/usr/bin/hello"
 cp "$INIT" "$STAGING/sbin/init"
 cp "$MASH" "$STAGING/sbin/mash"
+cp "$LS" "$STAGING/bin/ls"
+cp "$PS" "$STAGING/bin/ps"
+cp "$SLEEP" "$STAGING/bin/sleep"
+cp "$PWD" "$STAGING/bin/pwd"
 chmod 0755 "$STAGING/usr/bin/hello64" "$STAGING/usr/bin/hello" \
-    "$STAGING/sbin/init" "$STAGING/sbin/mash"
+    "$STAGING/sbin/init" "$STAGING/sbin/mash" "$STAGING/bin/ls" \
+    "$STAGING/bin/ps" "$STAGING/bin/sleep" "$STAGING/bin/pwd"
 printf 'ArmOS ARM64 qemu-virt root filesystem\n' > "$STAGING/etc/motd"
 chmod 1777 "$STAGING/tmp"
 

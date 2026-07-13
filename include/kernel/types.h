@@ -144,6 +144,7 @@ typedef enum {
 #define EPIPE          32       /* Broken pipe */
 #define EDOM           33       /* Math argument out of domain */
 #define ERANGE         34       /* Math result not representable */
+#define ENAMETOOLONG   36       /* File name too long */
 #define ENOSYS         38       /* Function not implemented */
 #define ENOTEMPTY      39       /* Directory not empty */
 #define ELOOP          40       /* Too many symbolic links */

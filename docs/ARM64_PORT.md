@@ -834,82 +834,36 @@ TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./run.sh
 The expected serial milestone is:
 
 ```text
-ArmOS ARM64 bring-up
-Architecture: AArch64
-Current EL: EL1
-DTB: 0x0000000048000000
-ARM64_BOOT_OK
-Testing EL1 synchronous vector with BRK #0x64
-Exception vector: 0x0000000000000004
-ESR_EL1: 0x00000000F2000064 EC: 0x000000000000003C
-ARM64_VECTOR_OK
-ARM64_EXCEPTION_RETURN_OK
-Enabling ARMv8 4K identity MMU
-ARM64_MMU_OK
-Testing synchronous vector with MMU enabled
-ARM64_VECTOR_OK
-ARM64_MMU_EXCEPTION_OK
-Testing GICv2 physical timer PPI 30
-CNTFRQ_EL0: 0x0000000003B9ACA0 timer ticks: 0x0000000000000003
-ARM64_TIMER_IRQ_OK
-Early pages: base=0x000000004009F000 end=0x0000000080000000 ...
-FDT RAM: base=0x0000000040000000 size=0x0000000040000000 ...
-ARM64_FDT_MEMORY_OK
-ARM64_PHYS_ALLOC_OK
-TTBR0 allocated: old=... new=... L2=... L3=...
-ARM64_L3_PAGE_TLBI_OK
-TTBR1 kernel alias: table=... text=0xFFFFFF8040080000 TCR=...
-ARM64_TTBR1_PERMISSIONS_OK
-ARM64_USER_VM_LIFECYCLE_OK
-ARM64_DYNAMIC_PGTABLE_OK
-High kernel: PC=0xFFFFFF80... SP=0xFFFFFF80... VBAR=0xFFFFFF80...
-ARM64_TTBR1_EXECUTION_OK
-ARM64_HIGH_MMIO_OK
-ARM64_LOW_MAP_RETIRED_OK
-ARM64_TASK_CONTEXT_SWITCH_OK
-ARM64_TASK_STACK_LIFECYCLE_OK
-ARM64_GENERIC_TASK_LIFECYCLE_OK
-ARM64_TASK_STATE_SWITCH_OK
-ARM64_COOPERATIVE_RUNQUEUE_OK
-ARM64_MULTITASK_RUNQUEUE_OK
-ARM64_COOPERATIVE_DISPATCHER_OK
-User TTBR0: mapped=0x0001... empty=0x0002... VA=0x0000000000401000 PA=...
-ARM64_USER_TTBR0_ASID_OK
-ARM64_TASK_TTBR0_SWITCH_OK
-ARM64_GENERIC_VM_SPACE_OK
-ARM64_GENERIC_VMA_OK
-ARM64_DYNAMIC_USER_VM_OK
-ARM64_ANON_RANGE_VM_OK
-ARM64_PROCESS_MODEL_OK
-ARM64_ELF64_LOADER_OK
-ASID residency: flush=... preserve=...
-ARM64_TASK_TLB_RESIDENCY_OK
-ARM64 syscall write OK
-ARM64_EL0_YIELD_DISPATCH_OK
-ARM64_EL0_TIMER_PREEMPT_OK
-ARM64_PERIODIC_MIXED_PREEMPT_OK
-ARM64_QUANTUM_ACCOUNTING_OK
-ARM64_CONTINUOUS_TICK_LIFECYCLE_OK
-ARM64_IRQ_SAFE_DISPATCH_OK
-Testing high VBAR synchronous vector
-ARM64_VECTOR_OK
-ARM64_GENERIC_SYSCALL_DISPATCH_OK
-Entering EL0 at 0x0000000000400000 stack=0x0000000000403000
-ARM64 syscall write OK
-EL0 exit status: 0x000000000000002A syscall count: 0x000000000000000D
-ARM64_EL0_SYSCALL_ABI_OK
-ARM64_EL0_CONTEXT_OK
-ARM64_GENERIC_SYSCALL_ABI_OK
-ARM64_PROCESS_SYSCALLS_OK
-ARM64_BRK_MMAP_PAGE_FAULT_OK
-Testing timer IRQ after EL0 return
-ARM64_TIMER_IRQ_OK
-ARM64_HIGH_KERNEL_OK
-ARM64_IDLE0_KINIT_READY
-ARM64_KINIT_RUNNING
-ARM64_BOOTSTRAP_RETIRED
-ARM64_IDLE_KINIT_SWITCH_OK
-ARM64_RUNTIME_SCHEDULER_OK
+ArmOS 0.6 aarch64
+CPU: ARM Cortex-A72 @ QEMU virt                          [ OK ]
+Calibrating delay loop... 2.00 BogoMIPS                  [ OK ]
+Memory: physical allocator                               [ OK ]
+Memory: early init                                       [ OK ]
+Memory: 1024MB total, 1022MB available                   [ OK ]
+Kernel: 0xFFFFFF8040080000-0xFFFFFF80400C5000            [ OK ]
+MMU: split TTBR enabled, ASID pool 255                   [ OK ]
+IRQ: GICv2 physical interrupt controller                 [ OK ]
+Timer: ARM generic timer @ 62500000 Hz, tick 1000 us     [ OK ]
+SMP: 1 CPU(s) configured, 1 online, seen=0x1             [ OK ]
+TTY: console tty0 on qemu-virt PL011 uart0               [ OK ]
+Block: vd0 65MB on VirtIO                                [ OK ]
+Partition: vd0p1 ext2 64MB                               [ OK ]
+VFS: read-only ext2 provider on /                        [ OK ]
+VFS: proc unavailable before generic VFS handoff         [WARN]
+Process: scheduler ready                                 [ OK ]
+Init: /sbin/init bypassed during ARM64 bring-up          [WARN]
+Init: starting /sbin/mash                                [ OK ]
+
+arm-os shell on newlib
+type 'help' for builtins, PATH=/bin:/usr/bin:/sbin
+
+mash$>
+```
+
+Atomic bring-up probes still run before this summary, including exception,
+MMU, timer, VM, task-switch, syscall and ELF64 checks. They are intentionally
+silent on success; a failed probe prints its diagnostic marker and stops the
+kernel before the corresponding status line can claim success.
 
 ## Generic I/O and AArch64 newlib userland
 
@@ -946,31 +900,31 @@ Subsequent builds reuse the sysroot:
 ./tools/build_arm64_userland.sh
 ```
 
-The default targets are `hello64`, `hello`, `init` and `mash`. They are emitted
-as static AArch64 ELF64 executables under `build/userland-arm64/out`; the script
-never overwrites the ARM32 programs staged in `userfs`.
+The default targets are `hello64`, `hello`, `init`, `mash`, `ls`, `ps`,
+`sleep` and `pwd`. They are emitted as static AArch64 ELF64 executables under
+`build/userland-arm64/out`; the script never overwrites the ARM32 programs
+staged in `userfs`.
 
-`hello64` is the deliberately small first execution target. It is installed in
-the dedicated ARM64 ext2 image at `/usr/bin/hello64`; it is no longer embedded
-in the kernel or preloaded during boot. `execve` resolves it from ext2 on
-demand, acquires the complete ELF into temporary physical pages, loads its
-segments into a fresh TTBR0 address space, creates an AAPCS64
-`argc`/`argv`/`envp` stack and enters the newlib CRT in EL0. A successful run
-emits:
+`hello64` was the deliberately small first execution target and remains
+installed at `/usr/bin/hello64` as a diagnostic. Its successful execution
+validated ext2 acquisition, ELF64 loading, the newlib CRT, `write` and `exit`.
+The normal bootstrap now uses the same transactional `execve` path to enter
+`/sbin/mash` directly. It loads the ELF into a fresh TTBR0 address space,
+creates a 64 KiB AAPCS64 `argc`/`argv`/`envp` stack and enters the newlib CRT in
+EL0. A successful interactive startup emits:
 
 ```text
-ARM64_EXT2_EXEC_IMAGE_READY path=/usr/bin/hello64 size=...
+ARM64_EXECVE_SYSCALL_ENTER path=/sbin/mash
+ARM64_EXT2_EXEC_IMAGE_READY path=/sbin/mash size=...
 ARM64_ELF64_PATH_LOAD_OK entry=... stack=...
-hello64: newlib ELF64 execution OK
-ARM64_EXECVE_SOURCE_RETIRED_OK
-ARM64_EXECVE_OLD_VM_RETIRED_OK
-ARM64_EXECVE_COMMIT_OK
-ARM64_ELF64_PATH_EXEC_OK
+arm-os shell on newlib
+mash$>
 ```
 
-This validates real generated ELF64 execution, including the VFS acquisition,
-loader, page permissions, instruction-cache synchronization, newlib CRT,
-`write` and `exit`. A dedicated EL0 caller now issues `execve`; the syscall
+This validates a substantial generated ELF64 program, including VFS
+acquisition, loader permissions, instruction-cache synchronization, FP/SIMD
+enablement, newlib startup, heap growth, environment setup and blocking PL011
+input. A dedicated EL0 caller issues `execve`; the syscall
 prepares the new VM and the exception return atomically commits its TTBR0 and
 register image before `ERET`, preserving the process PID and open descriptors.
 The syscall copies at most four arguments and four environment strings of up
@@ -990,9 +944,10 @@ instead of reusing the 577 MiB ARM32 image. Build it with:
 ./tools/build_arm64_disk.sh
 ```
 
-Its single ext2 partition contains the AArch64 `hello64`, `hello`, `init` and
-`mash` executables. `make TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt
-platform-disk` rebuilds the same image without modifying `userfs`.
+Its single ext2 partition contains the AArch64 `hello64`, `hello`, `init`,
+`mash`, `ls`, `ps`, `sleep` and `pwd` executables. `make TARGET_ARCH=arm64
+TARGET_PLATFORM=qemu-virt platform-disk` rebuilds the same image without
+modifying `userfs`.
 
 A bounded
 read-only VirtIO block driver scans the QEMU MMIO transports, supports both the
@@ -1006,13 +961,13 @@ first Linux/ext2 partition, then reads and validates its ext2 superblock. A
 dependency-free ext2 reader resolves absolute paths and reads complete files or
 byte ranges through direct, singly indirect and sparse file blocks. Before
 entering userspace, `/sbin/init` is read in full and verified as ELF64. Later,
-the VFS reads `/etc/motd` by offset and `execve` acquires `/usr/bin/hello64` on
+the VFS reads `/etc/motd` by offset and `execve` acquires `/sbin/mash` on
 demand. The milestones report:
 
 ```text
 ARM64_VIRTIO_BLOCK_OK capacity=... ext2_lba=...
 ARM64_EXT2_PATH_READ_OK path=/sbin/init size=... elf_class=2
-ARM64_EXT2_EXEC_IMAGE_READY path=/usr/bin/hello64 size=...
+ARM64_EXT2_EXEC_IMAGE_READY path=/sbin/mash size=...
 ```
 
 Both QEMU's default legacy transport and an explicitly forced modern transport
@@ -1030,15 +985,42 @@ build/images/disk-arm64-qemu-virt.img
 build/images/rootfs-arm64-qemu-virt.ext2
 ```
 
+The former `early_console` unit has been retired. `console.c` now owns the
+polling PL011 character transport, while `bootstrap.c` owns the temporary boot
+probes and transition to userland. Successful probes are hidden behind the
+same concise, column-aligned status summary as ARM32; failures remain visible
+and halt before userland. At the current prompt, `help`, `env`, line
+editing/history recall and the `cd` builtin work; `chdir`, `getcwd`, `setpgid`
+and `getpgrp` are backed by the ARM64 runtime. The four external core utilities
+are valid ELF64 files and are staged in `/bin`, but launching them from `mash`
+still requires publishing a runnable child and implementing blocking `waitpid`.
+
+The VM backend now provides a transactional eager clone for the first real
+`fork` implementation. It allocates a distinct ASID and page-table hierarchy,
+copies every resident page, preserves lazy `brk`/`mmap` reservations, and rolls
+the complete child back on failure. Its boot probe checks distinct physical
+pages, byte-for-byte contents, parent/child write isolation and exact allocator
+balance. Copy-on-write remains a later optimization.
+
+Task switches now preserve all 32 128-bit FP/SIMD registers together with
+`FPCR` and `FPSR`. The context-switch probe seeds and verifies both ends of the
+vector register file across two resumptions. This is required before two
+newlib processes can share the scheduler without corrupting libc state.
+
 ## Next Milestones
 
-1. Make `/sbin/init` the first scheduled disk-backed process and route its
-   process, TTY and signal operations through persistent runtime objects.
-2. Run `init` and `mash` progressively, completing the writable file,
-   TTY and process syscalls each program exposes.
-3. Generalize the temporary four-entry `argv`/`envp` limits into the persistent
+1. Bind exception, syscall and I/O ownership per scheduled task; publish the
+   eagerly cloned `fork` child and implement blocking `waitpid`, then run the
+   staged `pwd` and `sleep` from `mash`.
+2. Add directory descriptors, `getdents`, `stat` and `/proc` so `ls` and `ps`
+   use the same interfaces as ARM32.
+3. Replace temporary polling waits with scheduler-backed `nanosleep` and TTY
+   wakeups, preserving timer preemption and kernel-task progress.
+4. Make `/sbin/init` the first scheduled disk-backed process and let it launch
+   the now-working interactive shell.
+5. Generalize the temporary four-entry `argv`/`envp` limits into the persistent
    process resource model used by `init` and `mash`.
-4. Replace the bounded ARM64 VMA/table inventories and early allocator with
+6. Replace the bounded ARM64 VMA/table inventories and early allocator with
    dynamic range nodes and synchronized physical-page backends.
-5. Add SMP synchronization, per-CPU scheduler ownership, ASID rollover, and
+7. Add SMP synchronization, per-CPU scheduler ownership, ASID rollover, and
    remote TLB shootdowns when secondary ARM64 CPUs are introduced.

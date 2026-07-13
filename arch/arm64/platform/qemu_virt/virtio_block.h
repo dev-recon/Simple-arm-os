@@ -24,6 +24,7 @@
 typedef struct {
     uint64_t capacity_sectors;
     uint32_t ext2_start_lba;
+    uint32_t ext2_sector_count;
 } arm64_virtio_block_probe_t;
 
 int arm64_virtio_block_probe(early_page_allocator_t *allocator,

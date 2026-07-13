@@ -57,6 +57,12 @@ void arm64_emit_asm_offsets(void)
            offsetof(arm64_task_context_t, kernel.pc));
     DEFINE(ARM64_TASK_USER,
            offsetof(arm64_task_context_t, user));
+    DEFINE(ARM64_TASK_SIMD_Q0,
+           offsetof(arm64_task_context_t, simd.q[0]));
+    DEFINE(ARM64_TASK_SIMD_FPCR,
+           offsetof(arm64_task_context_t, simd.fpcr));
+    DEFINE(ARM64_TASK_SIMD_FPSR,
+           offsetof(arm64_task_context_t, simd.fpsr));
     DEFINE(ARM64_TASK_VM_SPACE,
            offsetof(arm64_task_context_t, vm_space));
     DEFINE(ARM64_TASK_TTBR0,
