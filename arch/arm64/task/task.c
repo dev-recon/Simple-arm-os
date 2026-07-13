@@ -12,6 +12,7 @@
  * - Allocate and clear task_t kernel stacks from the early page allocator.
  * - Initialize generic task metadata and ARM64 context state.
  * - Release stack ownership while protecting the active context.
+ * - Maintain task state and CPU ownership around cooperative context switches.
  *
  * Notes:
  * - Stack pages are accessed only through the TTBR1 kernel alias.
@@ -42,6 +43,35 @@ static void copy_task_name(char *destination, const char *name)
         index++;
     }
     destination[index] = '\0';
+}
+
+static void initialize_task_metadata(struct task *task,
+                                     const char *name,
+                                     uint32_t task_id,
+                                     task_state_t state,
+                                     uint32_t running_cpu)
+{
+    task->task_id = task_id;
+    copy_task_name(task->name, name);
+    task->state = state;
+    task->priority = TASK_DEFAULT_PRIORITY;
+    task->type = TASK_TYPE_KERNEL;
+    task->running_cpu = running_cpu;
+    task->last_cpu = running_cpu;
+}
+
+static int task_stack_valid(const struct task *task)
+{
+    vaddr_t stack_base;
+    vaddr_t stack_top;
+
+    if (!task || !task->stack_base || !task->stack_top ||
+        task->stack_size == 0)
+        return 0;
+    stack_base = (vaddr_t)(uintptr_t)task->stack_base;
+    stack_top = (vaddr_t)(uintptr_t)task->stack_top;
+    return stack_base >= ARM64_KERNEL_VA_BASE &&
+           stack_top == stack_base + task->stack_size;
 }
 
 int arm64_task_init(struct task *task,
@@ -81,13 +111,8 @@ int arm64_task_init(struct task *task,
         return -5;
     }
 
-    task->task_id = task_id;
-    copy_task_name(task->name, name);
-    task->state = TASK_BLOCKED;
-    task->priority = TASK_DEFAULT_PRIORITY;
-    task->type = TASK_TYPE_KERNEL;
-    task->running_cpu = TASK_CPU_NONE;
-    task->last_cpu = TASK_CPU_NONE;
+    initialize_task_metadata(task, name, task_id, TASK_BLOCKED,
+                             TASK_CPU_NONE);
     task->stack_phys_base = (void *)(uintptr_t)stack;
     task->stack_base = (void *)(uintptr_t)stack_alias;
     task->stack_size = (uint32_t)stack_size;
@@ -95,6 +120,35 @@ int arm64_task_init(struct task *task,
     task->context.kernel.sp =
         (stack_alias + stack_size) & ~(vaddr_t)0xfu;
     task->context.kernel.pc = kernel_entry;
+    task->context.user_vm = user_vm;
+    if (user_vm) {
+        task->context.ttbr0 = user_vm->l1;
+        task->context.asid = user_vm->asid;
+    }
+    task->magic = TASK_MAGIC_ALIVE;
+    return 0;
+}
+
+int arm64_task_init_current(struct task *task,
+                            const arm64_user_vm_t *user_vm,
+                            const char *name,
+                            uint32_t task_id,
+                            vaddr_t kernel_stack_base,
+                            vaddr_t kernel_stack_top,
+                            uint32_t cpu_id)
+{
+    if (!task || kernel_stack_base < ARM64_KERNEL_VA_BASE ||
+        kernel_stack_top <= kernel_stack_base ||
+        kernel_stack_top - kernel_stack_base > 0xffffffffULL)
+        return -1;
+    if (task->magic == TASK_MAGIC_ALIVE)
+        return -2;
+
+    clear_bytes(task, sizeof(*task));
+    initialize_task_metadata(task, name, task_id, TASK_RUNNING, cpu_id);
+    task->stack_base = (void *)(uintptr_t)kernel_stack_base;
+    task->stack_top = (void *)(uintptr_t)kernel_stack_top;
+    task->stack_size = (uint32_t)(kernel_stack_top - kernel_stack_base);
     task->context.user_vm = user_vm;
     if (user_vm) {
         task->context.ttbr0 = user_vm->l1;
@@ -128,4 +182,64 @@ int arm64_task_destroy(struct task *task,
     clear_bytes(task, sizeof(*task));
     task->magic = TASK_MAGIC_DEAD;
     return 0;
+}
+
+int arm64_task_switch(struct task *previous, struct task *next)
+{
+    task_state_t previous_state;
+    task_state_t next_state;
+    uint32_t previous_cpu;
+    uint32_t next_cpu;
+    int result;
+
+    if (!previous || !next || previous == next ||
+        previous->magic != TASK_MAGIC_ALIVE ||
+        next->magic != TASK_MAGIC_ALIVE)
+        return -1;
+    if (previous->state != TASK_RUNNING ||
+        (next->state != TASK_BLOCKED && next->state != TASK_READY))
+        return -2;
+    if (!task_stack_valid(previous) || !task_stack_valid(next))
+        return -3;
+
+    previous_state = previous->state;
+    next_state = next->state;
+    previous_cpu = previous->running_cpu;
+    next_cpu = next->running_cpu;
+
+    previous->state = TASK_BLOCKED;
+    previous->running_cpu = TASK_CPU_NONE;
+    next->state = TASK_RUNNING;
+    next->running_cpu = previous_cpu;
+    next->last_cpu = previous_cpu;
+    previous->switch_count++;
+
+    result = arm64_task_context_switch_address_space(&previous->context,
+                                                     &next->context);
+    if (result != 0) {
+        previous->switch_count--;
+        previous->state = previous_state;
+        previous->running_cpu = previous_cpu;
+        next->state = next_state;
+        next->running_cpu = next_cpu;
+    }
+    return result;
+}
+
+int arm64_task_switch_prepared(struct task *previous, struct task *next)
+{
+    if (!previous || !next || previous == next ||
+        previous->magic != TASK_MAGIC_ALIVE ||
+        next->magic != TASK_MAGIC_ALIVE)
+        return -1;
+    if ((previous->state != TASK_BLOCKED &&
+         previous->state != TASK_READY) ||
+        next->state != TASK_RUNNING ||
+        previous->running_cpu != TASK_CPU_NONE ||
+        next->running_cpu == TASK_CPU_NONE)
+        return -2;
+    if (!task_stack_valid(previous) || !task_stack_valid(next))
+        return -3;
+    return arm64_task_context_switch_address_space(&previous->context,
+                                                    &next->context);
 }

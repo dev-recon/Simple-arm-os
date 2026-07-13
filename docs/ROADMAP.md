@@ -36,8 +36,21 @@ The v0.6 baseline is:
   without per-switch TLBI on the single bootstrap CPU; the bootstrap task now
   allocates, clears, and releases its owned high-half kernel stack with exact
   page-accounting checks, and that probe now uses the generic `task_t` identity,
-  state, stack metadata, and lifetime guards; the full Unix kernel and userland
-  remain ARM32.
+  state, stack metadata, and lifetime guards; task-level switching now moves
+  `RUNNING/BLOCKED` state and CPU ownership between the borrowed bootstrap stack
+  and owned probe stack; a bounded single-CPU generic FIFO now publishes the
+  blocked probe as ready, rejects duplicate publication, selects it, and drives
+  two validated cooperative switch cycles; two simultaneously ready tasks now
+  rotate deterministically in `A, B, A, B` order with independent owned stacks
+  and balanced page recovery; a reusable dispatcher now owns current-task,
+  yield, block, requeue, rollback, and safe-point preemption policy; a
+  generic EL0 task now yields through SVC, resumes after the trap, and exits by
+  blocking through that dispatcher; physical timer events now coalesce into
+  `need_resched`, defer while preemption is disabled, and switch a kernel task
+  only after IRQ acknowledgement at a complete exception-return frame; a real
+  lower-EL timer IRQ also suspends an EL0 task on its owned kernel stack, runs a
+  kernel peer, and resumes the interrupted user computation before normal
+  exit; the full Unix kernel and userland remain ARM32.
 
 Post-v0.6 hardware milestone:
 

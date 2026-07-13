@@ -336,6 +336,170 @@ Success reports `ARM64_GENERIC_TASK_LIFECYCLE_OK`. Scheduler publication,
 runtime task allocation, and synchronization remain deliberately outside this
 bootstrap milestone.
 
+### Milestone 20: Generic Task State Switch
+
+Both sides of the cooperative switch are now generic `task_t` objects. The
+bootstrap task describes the live high-half boot stack as borrowed storage,
+while the probe task owns its allocated stack. The task-level switch validates
+both lifetime guards and stack bounds before delegating TTBR0/ASID activation
+and register transfer to the ARM64 context backend.
+
+Each departure moves the previous task from `RUNNING` to `BLOCKED`, clears its
+CPU ownership, promotes the incoming task to `RUNNING` on bootstrap CPU0, and
+increments the outgoing switch count. If address-space activation fails before
+the register transfer, all state changes are rolled back. The two probes each
+require two departures per task and a final bootstrap state of `RUNNING` on
+CPU0. Success reports `ARM64_TASK_STATE_SWITCH_OK`.
+
+This is still cooperative and explicitly selected. The next scheduler step is
+a bounded generic runqueue that chooses the next ready task; timer preemption
+and SMP ownership remain later milestones.
+
+### Milestone 21: Bounded Cooperative Runqueue
+
+The first generic ARM64 runqueue is a bounded, intrusive FIFO over the existing
+`task_t` runqueue links. Publication accepts only live `BLOCKED` tasks, rejects
+duplicate insertion and capacity overflow, and promotes accepted tasks to
+`READY`. Selection removes the oldest ready task while preserving that state
+for the task-switch boundary, which then performs the final transition to
+`RUNNING`.
+
+The bootstrap probe uses a capacity-one queue to exercise the complete
+cooperative cycle twice: publish, reject a duplicate, select, switch from the
+borrowed-stack bootstrap task to the owned-stack probe, return, republish, and
+select again. It validates the queue links, count, capacity, task states, CPU
+ownership, and balanced switch counts at each boundary. Success reports
+`ARM64_COOPERATIVE_RUNQUEUE_OK`.
+
+This queue is intentionally single-CPU and lockless. The next scheduler
+milestone will publish multiple ready tasks and make selection deterministic
+across them before timer-driven preemption or SMP runqueue ownership is added.
+
+### Milestone 22: Deterministic Multi-Task Rotation
+
+The cooperative runqueue probe now owns two generic tasks with independent
+kernel stacks and saved contexts. Both tasks are published simultaneously in
+FIFO order. After the first task runs and blocks, republishing it places it
+behind the still-ready second task; the same rotation is then repeated in the
+opposite direction.
+
+The probe requires the exact dispatch order `A, B, A, B`, two departures from
+each owned task, four departures from the bootstrap task, valid queue links at
+every selection boundary, and exact recovery of both allocated stack pages.
+It also verifies that a task already present in the full queue cannot be
+published again. Success reports `ARM64_MULTITASK_RUNQUEUE_OK`.
+
+Task selection is now deterministic for multiple ready contexts, but the boot
+probe still performs selection and switching explicitly. The next milestone
+is a reusable cooperative dispatcher that owns dequeue, switch, and requeue
+policy before timer preemption is introduced.
+
+### Milestone 23: Cooperative Dispatcher
+
+A generic single-CPU dispatcher now owns the current task, bounded ready queue,
+architecture switch callback, dispatch count, and last scheduling reason. The
+three reasons are voluntary `YIELD`, future timer `PREEMPT`, and `BLOCK`.
+Yield and preemption rotate the current task to the tail; blocking leaves it
+off the ready queue. Failed architecture activation restores task states, CPU
+ownership, counters, and the original FIFO order.
+
+Two kernel-only probe tasks now invoke the dispatcher from their own saved
+contexts. The bootstrap yields into A, A yields into B, and B yields back to
+the bootstrap. A second round runs the same order while A and B block instead
+of requeueing themselves. The probe requires six dispatches, two departures
+per task, an empty final queue, and balanced stack-page recovery. Success
+reports `ARM64_COOPERATIVE_DISPATCHER_OK`.
+
+The dispatcher exposes preemption as a separate policy operation. A timer
+handler must first preserve the interrupted kernel or EL0 frame and defer
+scheduling while preemption is disabled. Milestone 25 adds the `need_resched`
+handoff used by the IRQ return path; the device handler never switches directly
+from the middle of interrupt acknowledgement.
+
+### Milestone 24: EL0 Yield Through SVC
+
+The dispatcher now runs a generic user `task_t` with an owned kernel stack,
+the validated user VM and ASID, and an EL0 register image. Its kernel entry
+trampoline executes `ERET`; the lower-EL SVC vector then leaves the complete
+exception frame on that task's kernel stack. Syscall number 158 follows the
+Linux-compatible `sched_yield` slot and enters the same dispatcher used by
+kernel-only tasks.
+
+The probe schedules a user task and a kernel peer. The user payload writes its
+message and yields from EL0, the peer yields, and the bootstrap observes both
+tasks ready. A second bootstrap yield resumes the user immediately after its
+`svc #0`; the payload completes its fault and unknown-syscall checks, then
+`exit` blocks the user task. The peer resumes once more, blocks, and returns the
+CPU to the bootstrap task.
+
+The test validates five user syscalls, six dispatcher switches, the preserved
+EL0 nonvolatile registers and stack, both blocked final states, an empty queue,
+and exact recovery of both owned kernel stacks. Success reports
+`ARM64_EL0_YIELD_DISPATCH_OK`. A yield with no dispatcher remains a successful
+no-op, preserving the existing single-user bootstrap path.
+
+This remains voluntary scheduling. The next milestone will let the timer set a
+deferred `need_resched` request and service it only from an architecture-safe
+exception-return boundary with a complete interrupted frame.
+
+### Milestone 25: Deferred Timer Preemption
+
+The GIC/timer layer now returns acknowledged event bits instead of invoking
+scheduler policy. A physical-timer PPI reports `ARM64_IRQ_EVENT_TIMER` only
+after the timer state is updated and the GIC end-of-interrupt write completes.
+Both the EL1h IRQ vector and lower-EL AArch64 IRQ vector reach the same
+exception dispatcher.
+
+An active task dispatcher coalesces timer events into `need_resched`. It also
+tracks a bounded preemption-disable depth plus request, deferral, and service
+counters. The exception layer attempts service only after the IRQ device
+dispatcher returns, while the complete interrupted frame remains on the
+current task's kernel stack. A disabled dispatcher or an empty ready queue
+keeps the request pending for a later safe point; a failed architecture switch
+restores it.
+
+The kernel-only probe first disables preemption and fires a real one-shot
+physical timer. It requires one pending request, one deferral, no dispatch, and
+an untouched worker. After preemption is enabled, a second timer IRQ switches
+to the owned-stack worker at the IRQ-return boundary. The worker yields back,
+is resumed once more to block, and its stack page is recovered exactly. The
+test requires two requests, one serviced preemption, four total dispatches,
+balanced task states, and reports `ARM64_DEFERRED_PREEMPT_OK`.
+
+This milestone validates the mechanism on one CPU with a kernel task. A
+periodic user quantum, scheduler critical-section integration, and SMP-safe
+runqueue ownership remain later work; user tasks already preserve their full
+EL0 frame when voluntarily yielding through SVC.
+
+### Milestone 26: EL0 Timer Preemption
+
+Scheduled EL0 tasks can now enter with IRQs enabled instead of the masked
+bootstrap PSTATE. A nonblocking one-shot timer is armed while EL1 remains
+masked; `ERET` to EL0t makes the timer interruptible. The lower-EL AArch64 IRQ
+vector saves the complete user register image on that task's owned kernel
+stack, acknowledges the physical-timer PPI, and services `need_resched` at the
+same safe boundary validated for kernel tasks.
+
+The preemption payload polls a user-visible completion flag with a bounded
+timeout. The timer rotates it out before any syscall and selects a kernel-only
+peer. That peer sets the flag, executes a memory barrier, and yields to the
+bootstrap task. The bootstrap verifies that the user task and peer are both
+ready while the original IRQ service remains suspended on the user stack. A
+second yield resumes that exact service frame; `ERET` continues the interrupted
+EL0 loop, which observes the flag and exits normally. The peer then resumes and
+blocks back to the bootstrap task.
+
+The probe requires one timer request, no deferral, one completed preemption,
+six dispatches, preservation of the EL0 nonvolatile registers and stack,
+evidence that the flag path beat the timeout, blocked final tasks, an empty
+queue, and exact recovery of both owned stacks. Success reports
+`ARM64_EL0_TIMER_PREEMPT_OK`.
+
+This remains a deterministic one-shot and single-CPU test. Turning it into the
+runtime scheduler tick requires periodic rearming, per-task/per-CPU preemption
+state, IRQ-safe runqueue synchronization, and a quantum policy independent of
+the timer device driver.
+
 ## Toolchain
 
 On macOS, install the AArch64 bare-metal compiler and QEMU:
@@ -409,11 +573,17 @@ ARM64_LOW_MAP_RETIRED_OK
 ARM64_TASK_CONTEXT_SWITCH_OK
 ARM64_TASK_STACK_LIFECYCLE_OK
 ARM64_GENERIC_TASK_LIFECYCLE_OK
+ARM64_TASK_STATE_SWITCH_OK
+ARM64_COOPERATIVE_RUNQUEUE_OK
+ARM64_MULTITASK_RUNQUEUE_OK
+ARM64_COOPERATIVE_DISPATCHER_OK
 User TTBR0: mapped=0x0001... empty=0x0002... VA=0x0000000000401000 PA=...
 ARM64_USER_TTBR0_ASID_OK
 ARM64_TASK_TTBR0_SWITCH_OK
 ASID residency: flush=0x0000000000000002 preserve=...
 ARM64_TASK_TLB_RESIDENCY_OK
+ARM64 syscall write OK
+ARM64_EL0_YIELD_DISPATCH_OK
 Testing high VBAR synchronous vector
 ARM64_VECTOR_OK
 Entering EL0 at 0x0000000000400000 stack=0x0000000000403000
@@ -437,8 +607,8 @@ build/images/kernel-arm64-qemu-virt.dis
 
 ## Next Milestones
 
-1. Publish generic ARM64 tasks through a minimal scheduler lifecycle without
-   importing ARM32 register or MMU assumptions.
+1. Add deferred `need_resched` handling and service timer preemption only at a
+   safe IRQ-return boundary with the interrupted task frame fully preserved.
 2. Attach the owned ARM64 address space to the generic `vm_space`
    contract, then replace its early allocator and ASID pool with synchronized
    runtime backends.

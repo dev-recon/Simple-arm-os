@@ -54,5 +54,8 @@ int arm64_task_context_switch_address_space(
     arm64_task_context_t *previous,
     const arm64_task_context_t *next);
 void arm64_task_context_probe_entry(void) __attribute__((noreturn));
+void arm64_task_dispatcher_probe_entry(void) __attribute__((noreturn));
+void arm64_task_preempt_peer_entry(void) __attribute__((noreturn));
+void arm64_user_task_probe_entry(void) __attribute__((noreturn));
 
 #endif

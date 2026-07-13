@@ -22,6 +22,7 @@
 
 #include <kernel/types.h>
 
+#define ARM64_USER_PSTATE_EL0T        0x000ULL
 #define ARM64_USER_PSTATE_EL0T_MASKED 0x3c0ULL
 
 typedef struct arm64_user_context {

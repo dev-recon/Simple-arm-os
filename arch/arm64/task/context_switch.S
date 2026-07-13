@@ -10,7 +10,7 @@
  *
  * Responsibilities:
  * - Save and restore AAPCS64 kernel callee-saved registers and stack state.
- * - Provide a deterministic two-context bootstrap probe.
+ * - Provide deterministic context, dispatcher, and preemption peer probes.
  *
  * Notes:
  * - Address-space activation is performed by task_context.c before entry.
@@ -53,7 +53,7 @@ arm64_task_context_switch:
 
 /*
  * Initial probe state:
- *   x19 = probe context, x20 = bootstrap context, x21 = phase address
+ *   x19 = probe task, x20 = bootstrap task, x21 = phase address
  *   x22/x23 = preservation sentinels, x24 = observed TTBR0 address
  */
 .align 4
@@ -66,7 +66,7 @@ arm64_task_context_probe_entry:
     str x9, [x21]
     mov x0, x19
     mov x1, x20
-    bl arm64_task_context_switch_address_space
+    bl arm64_task_switch
 
     mrs x9, ttbr0_el1
     str x9, [x24]
@@ -81,7 +81,7 @@ arm64_task_context_probe_entry:
     str x9, [x21]
     mov x0, x19
     mov x1, x20
-    bl arm64_task_context_switch_address_space
+    bl arm64_task_switch
     b .Lprobe_halt
 
 .Lprobe_failed:
@@ -89,9 +89,87 @@ arm64_task_context_probe_entry:
     str x9, [x21]
     mov x0, x19
     mov x1, x20
-    bl arm64_task_context_switch_address_space
+    bl arm64_task_switch
 
 .Lprobe_halt:
     wfe
     b .Lprobe_halt
 .size arm64_task_context_probe_entry, . - arm64_task_context_probe_entry
+
+/*
+ * Dispatcher probe state:
+ *   x21 = phase address, x22/x23 = preservation sentinels
+ *   x25 = task_dispatcher_t pointer
+ */
+.align 4
+.global arm64_task_dispatcher_probe_entry
+.type arm64_task_dispatcher_probe_entry, %function
+arm64_task_dispatcher_probe_entry:
+    mov x9, #1
+    str x9, [x21]
+    mov x0, x25
+    bl task_dispatcher_yield
+
+    ldr x9, =0x2222222222222222
+    cmp x22, x9
+    b.ne .Ldispatcher_probe_failed
+    ldr x9, =0x2323232323232323
+    cmp x23, x9
+    b.ne .Ldispatcher_probe_failed
+
+    mov x9, #3
+    str x9, [x21]
+    mov x0, x25
+    bl task_dispatcher_block
+    b .Ldispatcher_probe_halt
+
+.Ldispatcher_probe_failed:
+    mov x9, #0xff
+    str x9, [x21]
+    mov x0, x25
+    bl task_dispatcher_block
+
+.Ldispatcher_probe_halt:
+    wfe
+    b .Ldispatcher_probe_halt
+.size arm64_task_dispatcher_probe_entry, . - arm64_task_dispatcher_probe_entry
+
+/*
+ * EL0 preemption peer state:
+ *   x21 = phase address, x22/x23 = preservation sentinels
+ *   x25 = task_dispatcher_t pointer, x26 = user-visible completion flag
+ */
+.align 4
+.global arm64_task_preempt_peer_entry
+.type arm64_task_preempt_peer_entry, %function
+arm64_task_preempt_peer_entry:
+    mov x9, #1
+    str x9, [x21]
+    str x9, [x26]
+    dmb ish
+    mov x0, x25
+    bl task_dispatcher_yield
+
+    ldr x9, =0x2222222222222222
+    cmp x22, x9
+    b.ne .Lpreempt_peer_failed
+    ldr x9, =0x2323232323232323
+    cmp x23, x9
+    b.ne .Lpreempt_peer_failed
+
+    mov x9, #3
+    str x9, [x21]
+    mov x0, x25
+    bl task_dispatcher_block
+    b .Lpreempt_peer_halt
+
+.Lpreempt_peer_failed:
+    mov x9, #0xff
+    str x9, [x21]
+    mov x0, x25
+    bl task_dispatcher_block
+
+.Lpreempt_peer_halt:
+    wfe
+    b .Lpreempt_peer_halt
+.size arm64_task_preempt_peer_entry, . - arm64_task_preempt_peer_entry

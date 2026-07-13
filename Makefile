@@ -137,6 +137,7 @@ KERNEL_OBJS = \
 	$(ARCH_DIR)/task/task.o \
 	$(ARCH_DIR)/task/task_context.o \
 	$(ARCH_DIR)/task/context_switch.o \
+	kernel/task/runqueue.o \
 	$(ARCH_DIR)/user/el0.o \
 	kernel/lib/fdt_memory.o \
 	kernel/memory/early_page_allocator.o \

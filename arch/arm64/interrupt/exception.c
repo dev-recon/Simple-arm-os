@@ -12,6 +12,8 @@
  * - Dispatch EL1 IRQs and synchronous exceptions from vectors.S.
  * - Implement the bounded bootstrap AArch64 syscall ABI.
  * - Capture the active EL0 register image across syscall entry and return.
+ * - Route user yield and exit through the cooperative task dispatcher.
+ * - Convert timer IRQ events into deferred preemption at IRQ-return points.
  *
  * Notes:
  * - Console write and controlled exit are bring-up backends, not generic VFS.
@@ -22,6 +24,7 @@
 #include <asm/exception.h>
 #include <asm/exception_frame.h>
 #include <asm/irq.h>
+#include <kernel/task_runqueue.h>
 #include <uapi/armos/syscall.h>
 
 typedef unsigned long long uint64_t;
@@ -33,6 +36,7 @@ typedef unsigned long long uint64_t;
 #define ARM64_VECTOR_SYNC_CURRENT_SPX 4u
 #define ARM64_VECTOR_IRQ_CURRENT_SPX  5u
 #define ARM64_VECTOR_SYNC_LOWER_A64   8u
+#define ARM64_VECTOR_IRQ_LOWER_A64    9u
 #define ARM64_BRK_VECTOR_TEST 0x64u
 #define ARM64_SVC_SYSCALL      0u
 #define SPSR_EL1H_MASKED       0x3c5u
@@ -43,6 +47,7 @@ static arm64_user_context_t *el0_registers;
 static uint64_t el0_exit_address;
 static uint64_t el0_exit_status;
 static unsigned int el0_syscall_count;
+static task_dispatcher_t *active_dispatcher;
 
 void arm64_exception_set_el0_context(const arm64_user_vm_t *vm,
                                      arm64_user_context_t *registers,
@@ -53,6 +58,11 @@ void arm64_exception_set_el0_context(const arm64_user_vm_t *vm,
     el0_exit_address = exit_address;
     el0_exit_status = 0;
     el0_syscall_count = 0;
+}
+
+void arm64_exception_set_task_dispatcher(task_dispatcher_t *dispatcher)
+{
+    active_dispatcher = dispatcher;
 }
 
 unsigned int arm64_exception_el0_syscall_count(void)
@@ -89,6 +99,16 @@ static void arm64_bootstrap_syscall(arm64_exception_frame_t *frame)
     uint64_t number = registers->x[8];
 
     el0_syscall_count++;
+    if (number == ARMOS_NR_SCHED_YIELD) {
+        registers->x[0] = 0;
+        save_el0_registers(registers);
+        if (active_dispatcher &&
+            task_dispatcher_yield(active_dispatcher) != 0)
+            registers->x[0] = syscall_error(EAGAIN);
+        save_el0_registers(registers);
+        return;
+    }
+
     if (number == ARMOS_NR_WRITE) {
         uint64_t fd = registers->x[0];
         vaddr_t address = (vaddr_t)registers->x[1];
@@ -110,6 +130,15 @@ static void arm64_bootstrap_syscall(arm64_exception_frame_t *frame)
         for (index = 0; index < length; index++)
             arm64_early_putc(*(const char *)(uintptr_t)(address + index));
         registers->x[0] = length;
+        save_el0_registers(registers);
+        return;
+    }
+
+    if (number == ARMOS_NR_EXIT && active_dispatcher != NULL) {
+        el0_exit_status = registers->x[0];
+        save_el0_registers(registers);
+        if (task_dispatcher_block(active_dispatcher) != 0)
+            registers->x[0] = syscall_error(EAGAIN);
         save_el0_registers(registers);
         return;
     }
@@ -139,8 +168,17 @@ void arm64_exception_dispatch(arm64_exception_frame_t *frame)
     uint64_t ec = (frame->esr >> ESR_EC_SHIFT) & ESR_EC_MASK;
     uint64_t iss = frame->esr & 0x01ffffffu;
 
-    if (frame->vector == ARM64_VECTOR_IRQ_CURRENT_SPX) {
-        arm64_irq_dispatch();
+    if (frame->vector == ARM64_VECTOR_IRQ_CURRENT_SPX ||
+        frame->vector == ARM64_VECTOR_IRQ_LOWER_A64) {
+        uint32_t events = arm64_irq_dispatch();
+
+        if ((events & ARM64_IRQ_EVENT_TIMER) != 0 &&
+            active_dispatcher != NULL) {
+            if (task_dispatcher_request_preempt(active_dispatcher) != 0 ||
+                task_dispatcher_service_preempt_at_safe_point(
+                    active_dispatcher) != 0)
+                arm64_exception_halt();
+        }
         return;
     }
 

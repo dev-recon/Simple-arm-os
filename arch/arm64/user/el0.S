@@ -10,10 +10,13 @@
  *
  * Responsibilities:
  * - Restore an arm64_user_context_t and enter EL0t through ERET.
+ * - Enter EL0 from a scheduled generic task's owned kernel stack.
  * - Provide the position-independent syscall ABI smoke-test payload.
+ * - Provide a bounded compute payload for timer-preemption validation.
  *
  * Notes:
  * - The payload is copied to an RX user page during early bring-up.
+ * - Its yield syscall can resume through the preserved lower-EL frame.
  * - Context offsets are generated from the C layout by asm-offsets.c.
  */
 
@@ -52,11 +55,23 @@ arm64_enter_el0:
 .size arm64_enter_el0, . - arm64_enter_el0
 
 .align 4
+.global arm64_user_task_probe_entry
+.type arm64_user_task_probe_entry, %function
+arm64_user_task_probe_entry:
+    mov x0, x19
+    bl arm64_user_task_probe_enter
+1:
+    wfe
+    b 1b
+.size arm64_user_task_probe_entry, . - arm64_user_task_probe_entry
+
+.align 4
 .global arm64_el0_payload_start
 .global arm64_el0_payload_end
 .type arm64_el0_payload_start, %function
 .equ ARMOS_NR_EXIT,  1
 .equ ARMOS_NR_WRITE, 4
+.equ ARMOS_NR_SCHED_YIELD, 158
 .equ ARMOS_NR_UNKNOWN_TEST, 511
 .equ ARM64_TEST_MESSAGE_LENGTH, 23
 
@@ -75,6 +90,9 @@ arm64_el0_payload_start:
     ldr x0, [sp]
     add sp, sp, #16
     str x0, [x3, #0x100]
+
+    mov x8, #ARMOS_NR_SCHED_YIELD
+    svc #0
 
     mov x8, #ARMOS_NR_WRITE
     mov x0, #1
@@ -96,5 +114,31 @@ arm64_el0_payload_start:
 2:
 1:
     b 1b
+
+.align 4
+.global arm64_el0_preempt_payload
+.type arm64_el0_preempt_payload, %function
+arm64_el0_preempt_payload:
+    movz x3, #0x1000
+    movk x3, #0x40, lsl #16
+    movz x9, #0
+    movk x9, #0x0800, lsl #16
+3:
+    ldr w11, [x3, #0x300]
+    cbnz w11, 5f
+    subs x9, x9, #1
+    b.ne 3b
+    mov x0, #44
+    b 6f
+5:
+    mov x0, #43
+6:
+    msr nzcv, xzr
+    mov x8, #ARMOS_NR_EXIT
+    svc #0
+4:
+    b 4b
+.size arm64_el0_preempt_payload, . - arm64_el0_preempt_payload
+
 arm64_el0_payload_end:
 .size arm64_el0_payload_start, . - arm64_el0_payload_start

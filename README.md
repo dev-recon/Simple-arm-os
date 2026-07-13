@@ -347,12 +347,11 @@ Near-term work:
 Medium-term ideas:
 
 - improve POSIX compatibility for larger userland packages
-- connect the validated ARM64 TTBR0/ASID and EL0-entry primitives to tasks,
-  publish the validated generic task through scheduler lifetime, make ASID
-  residency SMP-safe, move early allocation into the synchronized physical
-  allocator, and
-  connect the validated syscall registers to the generic dispatcher and ELF64
-  process loader
+- extend the validated ARM64 timer `need_resched` path from one-shot kernel and
+  EL0 probes to periodic quanta, make ASID residency SMP-safe, move early
+  allocation into the synchronized physical allocator, and connect the
+  validated syscall registers to the generic dispatcher and ELF64 process
+  loader
 
 See [`ROADMAP.md`](ROADMAP.md) for more detail.
 

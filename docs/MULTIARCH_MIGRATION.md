@@ -243,6 +243,26 @@ The first executable milestone now provides an isolated EL1 serial bootstrap:
 - replacement of that parallel object by generic `task_t`, including common
   identity/state/stack metadata, lifetime guards, an ARM64 `task_context_t`
   alias, a 39-bit user layout, and DAIF local interrupt-state primitives;
+- task-level cooperative switching between a borrowed-stack bootstrap task and
+  an owned-stack task, with state, CPU ownership, switch-count, and MMU-error
+  rollback validation;
+- a bounded single-CPU generic runqueue that publishes blocked tasks as ready,
+  rejects duplicate publication, selects them FIFO, and drives two complete
+  cooperative task-switch cycles;
+- deterministic `A, B, A, B` rotation between two simultaneously ready generic
+  tasks, with independent owned stacks, contexts, switch counts, and balanced
+  page recovery;
+- a reusable cooperative dispatcher shared by kernel-task yield, blocking, and
+  a deliberately safe-point-only timer-preemption policy entry;
+- a generic EL0 task with its own kernel stack and user VM that yields through
+  SVC, resumes after the trapping instruction, and exits by blocking through
+  that same dispatcher;
+- timer IRQs reduced to acknowledged event bits, with coalesced `need_resched`,
+  preemption-disable depth, and deferred dispatch from a complete IRQ-return
+  frame, validated by a real one-shot kernel-task preemption probe;
+- lower-EL timer preemption of an IRQ-enabled generic user task, preserving its
+  suspended exception frame across a kernel-only peer and resuming EL0 at the
+  interrupted computation before a normal blocking exit;
 - separate ARM64 artifacts so ARM32 platform images are not overwritten.
 
 See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
@@ -251,8 +271,7 @@ Remaining AArch64 pieces:
 
 - synchronization and full physical-allocator integration;
 - attachment of the owned ARM64 user-VM backend to generic `vm_space`;
-- scheduler publication and ownership of the validated generic AArch64 task,
-  context switch, owned kernel stack, and user VM;
+- periodic EL0 timer quanta and scheduler critical-section integration;
 - SMP-safe ASID residency, rollover and remote TLB shootdown rules;
 - generic syscall-dispatch integration and the ELF64 process loader;
 - AArch64 signal frame;

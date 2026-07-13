@@ -12,6 +12,7 @@
  * - Initialize generic task_t objects with ARM64 context and stack resources.
  * - Prepare an initial high-half kernel entry and address-space identity.
  * - Return architecture-owned stack pages when a task is destroyed.
+ * - Switch cooperative generic tasks while maintaining common task state.
  *
  * Notes:
  * - The early allocator is supplied explicitly until the runtime physical
@@ -36,8 +37,17 @@ int arm64_task_init(struct task *task,
                     const char *name,
                     uint32_t task_id,
                     unsigned int kernel_stack_pages);
+int arm64_task_init_current(struct task *task,
+                            const arm64_user_vm_t *user_vm,
+                            const char *name,
+                            uint32_t task_id,
+                            vaddr_t kernel_stack_base,
+                            vaddr_t kernel_stack_top,
+                            uint32_t cpu_id);
 int arm64_task_destroy(struct task *task,
                        early_page_allocator_t *allocator,
                        const arm64_task_context_t *active_context);
+int arm64_task_switch(struct task *previous, struct task *next);
+int arm64_task_switch_prepared(struct task *previous, struct task *next);
 
 #endif
