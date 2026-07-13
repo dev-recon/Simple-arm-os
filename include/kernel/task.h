@@ -115,6 +115,12 @@ typedef struct sched_trace_event {
 
 typedef struct task task_t;
 
+typedef int (*task_poll_wait_handler_t)(void *owner);
+
+int task_register_poll_wait_handler(task_poll_wait_handler_t handler,
+                                    void *owner);
+int task_poll_wait_once(void);
+
 void sched_trace_record(sched_trace_event_type_t event, task_t* task);
 void sched_trace_snapshot(sched_trace_event_t* out, uint32_t max,
                           uint32_t* total, uint32_t* written);
@@ -201,6 +207,8 @@ struct inode {
     /* Operations */
     inode_operations_t* i_op;
     file_operations_t* f_op;
+    void* private_data;
+    void (*release_private)(struct inode* inode);
     
     struct inode* next;
 };
@@ -528,6 +536,8 @@ extern task_t* init_process;
 
 task_t* task_current_on_cpu(uint32_t cpu_id);
 task_t* task_current_local(void);
+int task_current_publish(uint32_t cpu_id, task_t* task);
+void task_current_clear_all(void);
 task_t* task_idle_on_cpu(uint32_t cpu_id);
 bool task_is_valid(task_t* task);
 bool task_is_idle_task(task_t* task);

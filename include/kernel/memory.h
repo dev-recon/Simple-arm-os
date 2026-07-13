@@ -253,7 +253,8 @@ void init_temp_mapping_system(void);
 vaddr_t map_temp_page_large(paddr_t phys_addr, uint32_t size);
 
 /* Kernel malloc */
-void init_kernel_heap(void);
+bool init_kernel_heap(void);
+bool init_kernel_heap_region(void* base, size_t size);
 void* kmalloc(size_t size);
 void kfree(void* ptr);
 void* kcalloc(size_t nmemb, size_t size);

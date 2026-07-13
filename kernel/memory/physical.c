@@ -499,7 +499,10 @@ bool init_memory(void)
     /* Reserve bitmap pages */
     reserve_bitmap_pages();
         
-    init_kernel_heap();
+    if (!init_kernel_heap()) {
+        KERROR("[MEM] Kernel heap initialization failed\n");
+        return false;
+    }
 
     reserve_heap_pages();
 

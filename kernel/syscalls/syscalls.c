@@ -37,7 +37,9 @@
 #include <kernel/timer.h>
 
 /* Syscall table */
-typedef int (*syscall_func_t)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+typedef syscall_word_t (*syscall_func_t)(
+    syscall_word_t, syscall_word_t, syscall_word_t,
+    syscall_word_t, syscall_word_t, syscall_word_t);
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-function-type"
@@ -993,15 +995,35 @@ void print_task_offsets(void) {
 }
 
 
-int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2, 
-                   uint32_t arg3, uint32_t arg4, uint32_t arg5)
+static syscall_result_t normalize_syscall_result(uint32_t syscall_num,
+                                                 syscall_word_t raw_result)
 {
-    //KDEBUG("====== SYSCALL HANDLER ===========\n");
-    //char str[100];
+    switch (syscall_num) {
+    case __NR_mmap:
+    case __NR_shm_map:
+    case __NR_lseek:
+    case __NR_readv:
+    case __NR_writev:
+        return (syscall_result_t)raw_result;
+    case __NR_rt_sigreturn:
+        return 0;
+    default:
+        return (syscall_result_t)(int32_t)(uint32_t)raw_result;
+    }
+}
+
+syscall_result_t syscall_dispatch_common_request(
+    const syscall_request_t *request)
+{
     task_t *proc;
     signal_check_result_t sig_result = SIGNAL_CHECK_NONE;
-    int result;
+    syscall_word_t raw_result;
+    syscall_result_t result;
+    uint32_t syscall_num;
 
+    if (!request)
+        return -EINVAL;
+    syscall_num = request->number;
     if (syscall_num >= MAX_SYSCALLS || !syscall_table[syscall_num]) {
         return -ENOSYS;
     }
@@ -1026,8 +1048,11 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
 
     //debug_print_ctx(&proc->context, "----->>>>>> ENTER SYSCALL HANDLER");
     
-    /* Call syscall */
-    result = syscall_table[syscall_num](arg1, arg2, arg3, arg4, arg5);
+    raw_result = syscall_table[syscall_num](
+        request->arguments[0], request->arguments[1],
+        request->arguments[2], request->arguments[3],
+        request->arguments[4], request->arguments[5]);
+    result = normalize_syscall_result(syscall_num, raw_result);
 
     proc = task_current_local();
 
@@ -1036,7 +1061,8 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
      * construire une eventuelle frame signal. rt_sigreturn a deja restaure r0.
      */
     if (proc && syscall_num != __NR_rt_sigreturn) {
-        arch_task_context_set_user_register(&proc->context, 0, (uint32_t)result);
+        arch_task_context_set_user_register(&proc->context, 0,
+                                            (uintptr_t)result);
     }
 
     if (proc && syscall_num != __NR_rt_sigreturn) {
@@ -1071,6 +1097,24 @@ int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
 
     proc->current_syscall = 0;
     return result;
+}
+
+syscall_result_t syscall_dispatch_common_handler(
+    void *owner, const syscall_request_t *request)
+{
+    (void)owner;
+    return syscall_dispatch_common_request(request);
+}
+
+int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2,
+                    uint32_t arg3, uint32_t arg4, uint32_t arg5)
+{
+    syscall_request_t request = {
+        .number = syscall_num,
+        .arguments = {arg1, arg2, arg3, arg4, arg5, 0}
+    };
+
+    return (int)syscall_dispatch_common_request(&request);
 }
 
 /**

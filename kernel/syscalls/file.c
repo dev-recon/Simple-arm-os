@@ -104,7 +104,7 @@ int sys_read(int fd, void* buf, size_t count)
      * prevents a partially unmapped user buffer from aborting the kernel
      * inside a filesystem or driver memcpy().
      */
-    if (memory_is_kernel_address((vaddr_t)(uintptr_t)buf)) {
+    if (is_kernel_pointer(buf)) {
         result = file->f_op->read(file, buf, count);
         return (int)result;
     }
@@ -146,7 +146,7 @@ int sys_write(int fd, const void* buf, size_t count)
     if (!can_write(file)) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
 
-    if (memory_is_kernel_address((vaddr_t)(uintptr_t)buf)) {
+    if (is_kernel_pointer(buf)) {
         result = file->f_op->write(file, buf, count);
         return (int)result;
     }
@@ -342,7 +342,85 @@ int split_path(const char* full_path, char** parent_path, char** filename) {
     return 0;
 }
 
+static int install_open_file(task_t *task, inode_t *inode, int flags,
+                             const char *opened_name)
+{
+    file_t *file;
+    int fd;
 
+    fd = allocate_fd(task);
+    if (fd < 0) {
+        put_inode(inode);
+        return -EMFILE;
+    }
+    file = create_file();
+    if (!file) {
+        put_inode(inode);
+        return -ENOMEM;
+    }
+    file->inode = inode;
+    file->flags = flags & ~O_CLOEXEC;
+    file->offset = flags & O_APPEND ? inode->size : 0;
+    file->f_op = inode->f_op;
+    vfs_inode_opened(inode);
+    strncpy(file->name, opened_name, sizeof(file->name) - 1u);
+    file->name[sizeof(file->name) - 1u] = '\0';
+
+    if (file->f_op && file->f_op->open) {
+        int result = file->f_op->open(inode, file);
+
+        if (result < 0) {
+            close_file(file);
+            return result;
+        }
+    }
+    task->process->files[fd] = file;
+    task->process->fd_flags[fd] = flags & O_CLOEXEC;
+    return fd;
+}
+
+int kernel_open_existing(char* kernel_path, int flags)
+{
+    task_t *task = task_current_local();
+    inode_t *inode;
+    char opened_name[256];
+    char *slash;
+    const char *base;
+
+    if (!task || !task->process || !kernel_path)
+        return -EINVAL;
+    slash = strrchr(kernel_path, '/');
+    base = slash ? slash + 1 : kernel_path;
+    strncpy(opened_name, base, sizeof(opened_name) - 1u);
+    opened_name[sizeof(opened_name) - 1u] = '\0';
+
+    inode = flags & O_NOFOLLOW ? path_lookup_ex(kernel_path, false) :
+                                path_lookup(kernel_path);
+    kfree(kernel_path);
+    if (!inode)
+        return -ENOENT;
+    if ((flags & O_NOFOLLOW) && S_ISLNK(inode->mode)) {
+        put_inode(inode);
+        return -ELOOP;
+    }
+    if ((flags & O_CREAT) && (flags & O_EXCL)) {
+        put_inode(inode);
+        return -EEXIST;
+    }
+    if (!check_file_permission(inode, flags)) {
+        put_inode(inode);
+        return -EACCES;
+    }
+    if ((flags & O_DIRECTORY) && !S_ISDIR(inode->mode)) {
+        put_inode(inode);
+        return -ENOTDIR;
+    }
+    if (flags & O_TRUNC) {
+        put_inode(inode);
+        return -EROFS;
+    }
+    return install_open_file(task, inode, flags, opened_name);
+}
 
 int kernel_open(char* kernel_path, int flags, mode_t mode)
 {
@@ -358,6 +436,9 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     
     /* Suppression du warning unused parameter */
     (void)mode;
+
+    if (!(flags & (O_CREAT | O_TRUNC)))
+        return kernel_open_existing(kernel_path, flags);
     
     /* Find inode */
     inode = (flags & O_NOFOLLOW) ? path_lookup_ex(kernel_path, false)
@@ -735,6 +816,34 @@ int vfs_check_search_permission(const char* path, bool include_final)
     return 0;
 }
 
+int sys_open_vfs(const char* pathname, int flags, mode_t mode)
+{
+    char *kernel_path;
+    char *full_path;
+    int search_result;
+
+    (void)mode;
+    if (!task_current_local() || !task_current_local()->process)
+        return -EINVAL;
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path)
+        return -EFAULT;
+    full_path = resolve_path(kernel_path);
+    kfree(kernel_path);
+    if (!full_path)
+        return -ENOENT;
+    search_result = vfs_check_search_permission(full_path, false);
+    if (search_result < 0) {
+        kfree(full_path);
+        return search_result;
+    }
+    if (flags & (O_CREAT | O_TRUNC)) {
+        kfree(full_path);
+        return -EROFS;
+    }
+    return kernel_open_existing(full_path, flags);
+}
+
 int sys_open(const char* pathname, int flags, mode_t mode)
 {
     task_t* task = task_current_local();
@@ -954,6 +1063,50 @@ static void fill_stat_from_inode(struct stat* kstat, inode_t* inode)
     kstat->st_atime = inode->atime;
     kstat->st_mtime = inode->mtime;
     kstat->st_ctime = inode->ctime;
+}
+
+static int sys_stat_vfs_impl(const char *pathname, struct stat *statbuf,
+                             bool follow_final_symlink)
+{
+    char *kernel_path;
+    char *full_path;
+    inode_t *inode;
+    struct stat kernel_stat;
+    int search_result;
+
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path)
+        return -EFAULT;
+    full_path = resolve_path(kernel_path);
+    kfree(kernel_path);
+    if (!full_path)
+        return -ENOENT;
+    search_result = vfs_check_search_permission(full_path, false);
+    if (search_result < 0) {
+        kfree(full_path);
+        return search_result;
+    }
+    inode = path_lookup_ex(full_path, follow_final_symlink);
+    kfree(full_path);
+    if (!inode)
+        return -ENOENT;
+    fill_stat_from_inode(&kernel_stat, inode);
+    if (copy_to_user(statbuf, &kernel_stat, sizeof(kernel_stat)) < 0) {
+        put_inode(inode);
+        return -EFAULT;
+    }
+    put_inode(inode);
+    return 0;
+}
+
+int sys_stat_vfs(const char *pathname, struct stat *statbuf)
+{
+    return sys_stat_vfs_impl(pathname, statbuf, true);
+}
+
+int sys_lstat_vfs(const char *pathname, struct stat *statbuf)
+{
+    return sys_stat_vfs_impl(pathname, statbuf, false);
 }
 
 int sys_stat(const char* pathname, struct stat* statbuf)
@@ -1256,8 +1409,7 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         return -EINVAL;
     }
 
-    if (!memory_is_kernel_address((vaddr_t)(uintptr_t)dirp) &&
-        kernel_count > SYSCALL_IO_BOUNCE_SIZE)
+    if (kernel_count > SYSCALL_IO_BOUNCE_SIZE)
         kernel_count = SYSCALL_IO_BOUNCE_SIZE;
     
     //KDEBUG("Reading entries from %s fd=%d\n", file->name, fd);
@@ -1270,14 +1422,10 @@ int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
         return -ENOSYS;
     }
 
-    if (memory_is_kernel_address((vaddr_t)(uintptr_t)dirp)) {
-        buf_ptr = (char *)dirp;
-    } else {
-        kbuf = kmalloc(kernel_count);
-        if (!kbuf)
-            return -ENOMEM;
-        buf_ptr = kbuf;
-    }
+    kbuf = kmalloc(kernel_count);
+    if (!kbuf)
+        return -ENOMEM;
+    buf_ptr = kbuf;
 
     //KDEBUG("[GETDENTS] fd=%u file=%p inode=%p f_op=%p readdir=%p\n",
     //       fd, file, file->inode, file->f_op, file->f_op->readdir);

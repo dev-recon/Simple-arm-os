@@ -69,7 +69,8 @@ CFLAGS = -std=gnu99 $(ARCH_CFLAGS) $(PLATFORM_CFLAGS) $(MATH_FLAGS) \
 # them while evaluating parametric addresses.
 LDFLAGS = $(PLATFORM_LDFLAGS) -T $(LINKER_SCRIPT) -nostdlib -Map=kernel.map
 
-TASK_OBJS = kernel/task/task.o \
+TASK_OBJS = kernel/task/current.o \
+            kernel/task/task.o \
             $(ARCH_DIR)/task/task_switch.o \
             $(ARCH_DIR)/task/context_debug.o \
 			kernel/task/kernel_tasks.o \
@@ -125,6 +126,8 @@ KERNEL_OBJS = \
 ifeq ($(TARGET_ARCH),arm64)
 # ARM64 keeps a focused object graph while generic kernel contracts migrate
 # incrementally from the stable ARM32 kernel.
+CFLAGS += -ffunction-sections -fdata-sections
+LDFLAGS += --gc-sections
 ARM64_BOOTSTRAP_ELF = $(BUILD_DIR)/userland-arm64/out/usr/bin/hello64
 TASK_OBJS =
 LIB_OBJ =
@@ -145,12 +148,21 @@ KERNEL_OBJS = \
 	kernel/process/elf64.o \
 	kernel/drivers/block_device.o \
 	kernel/fs/ext2_reader.o \
+	kernel/fs/ext2_reader_vfs.o \
 	kernel/fs/io_model.o \
+	kernel/fs/vfs.o \
+	kernel/task/current.o \
 	kernel/task/runqueue.o \
 	kernel/lib/kprintf.o \
+	kernel/lib/string.o \
+	kernel/memory/kmalloc.o \
 	kernel/sync/spinlock.o \
+	kernel/syscalls/file.o \
+	kernel/syscalls/process_syscalls.o \
+	kernel/syscalls/vfs_dispatch.o \
 	$(ARCH_DIR)/smp/smp.o \
 	$(ARCH_DIR)/user/el0.o \
+	$(ARCH_DIR)/user/userspace.o \
 	kernel/lib/fdt_memory.o \
 	kernel/memory/early_page_allocator.o \
 	$(PLATFORM_OBJS) \

@@ -88,6 +88,7 @@ struct statfs {
 
 /* VFS functions */
 bool init_vfs(void);
+bool vfs_install_root(inode_t* root);
 int  vfs_mount(const char* path, inode_t* root);
 int  vfs_mount_ex(const char* path, inode_t* root, const char* source,
                   const char* fstype, const char* options);

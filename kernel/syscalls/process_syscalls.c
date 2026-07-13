@@ -279,19 +279,7 @@ int sys_statfs(const char* path, struct statfs* buf)
 
 static int pipe_wait_interruptible(void)
 {
-    task_t *task = task_current_local();
-
-    if (!task)
-        return -EINTR;
-
-    task_set_interruptible_until(task, get_system_ticks() + 1);
-    yield();
-    task_set_wakeup_time(task, 0);
-
-    if (has_pending_signals(task))
-        return -EINTR;
-
-    return 0;
+    return task_poll_wait_once() == 0 ? 0 : -EINTR;
 }
 
 bool can_read(file_t* file) {
@@ -448,6 +436,16 @@ int sys_pipe(int pipefd[2])
     if (!pipefd || !task || !task->process) {
         return -EFAULT;
     }
+
+    /*
+     * ARM64 enters the common kernel through its high alias after retiring
+     * the low bootstrap map.  Populate callback addresses at runtime so the
+     * shared file-operation tables follow the active kernel alias.
+     */
+    pipe_read_fops.read = pipe_read;
+    pipe_read_fops.close = pipe_close;
+    pipe_write_fops.write = pipe_write;
+    pipe_write_fops.close = pipe_close;
     
     /* Allouer deux descripteurs de fichiers */
     fd_read = allocate_fd(task);
@@ -748,7 +746,8 @@ int sys_dup2(int oldfd, int newfd)
     task->process->fd_flags[newfd] = 0;
 
     if (newfd == STDIN_FILENO && file_is_tty(new_file))
-        task->process->controlling_tty = tty_id_from_file(new_file);
+        task->process->controlling_tty =
+            (int)(uintptr_t)new_file->private_data;
     
     return newfd;
 }
@@ -790,7 +789,7 @@ static bool fd_write_ready(file_t *file)
     return file->f_op && file->f_op->write;
 }
 
-int sys_fcntl(int fd, int cmd, uint32_t arg)
+int sys_fcntl(int fd, int cmd, uintptr_t arg)
 {
     task_t *task = task_current_local();
     file_t* file;
@@ -863,7 +862,7 @@ int sys_fcntl(int fd, int cmd, uint32_t arg)
     }
 }
 
-int sys_ioctl(int fd, uint32_t request, uint32_t arg)
+int sys_ioctl(int fd, uint32_t request, uintptr_t arg)
 {
     task_t *task = task_current_local();
     file_t* file;
@@ -2585,7 +2584,7 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
 {
     task_t *task = task_current_local();
     vm_space_t *vm;
-    uint32_t size;
+    size_t size;
     vaddr_t hint = (vaddr_t)addr;
     vaddr_t vaddr;
     uint32_t vma_flags = 0;
@@ -2612,7 +2611,7 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
     if (prot == 0)
         return (void *)-EINVAL;
 
-    size = ALIGN_UP((uint32_t)length, PAGE_SIZE);
+    size = ALIGN_UP(length, PAGE_SIZE);
     if (size == 0 || size > USER_MMAP_END - USER_MMAP_START)
         return (void *)-ENOMEM;
 
@@ -2653,7 +2652,7 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
     if (!is_anon) {
         file_t *file = task->process->files[fd];
         uint32_t saved_offset;
-        uint32_t copied = 0;
+        size_t copied = 0;
 
         if (!file || !can_read(file) || !file->f_op || !file->f_op->read) {
             vm_unmap_range(vm, vaddr, size);
@@ -2665,8 +2664,8 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
         while (copied < length) {
             vaddr_t page = vaddr + ALIGN_DOWN(copied, PAGE_SIZE);
             paddr_t phys = get_physical_address(vm->pgdir, page);
-            uint32_t page_off = copied % PAGE_SIZE;
-            uint32_t chunk = PAGE_SIZE - page_off;
+            size_t page_off = copied % PAGE_SIZE;
+            size_t chunk = PAGE_SIZE - page_off;
             int ret;
 
             if (!phys) {
@@ -2681,12 +2680,12 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
             if (ret < 0) {
                 file->offset = saved_offset;
                 vm_unmap_range(vm, vaddr, size);
-                return (void *)ret;
+                return (void *)(intptr_t)ret;
             }
             if (ret == 0)
                 break;
-            copied += (uint32_t)ret;
-            if ((uint32_t)ret < chunk)
+            copied += (size_t)ret;
+            if ((size_t)ret < chunk)
                 break;
         }
         file->offset = saved_offset;

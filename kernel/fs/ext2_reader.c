@@ -210,8 +210,9 @@ static int lookup_child(ext2_reader_t *reader,
     return -1;
 }
 
-static int lookup_path(ext2_reader_t *reader, const char *path,
-                       ext2_reader_inode_t *inode)
+static int lookup_path_number(ext2_reader_t *reader, const char *path,
+                              ext2_reader_inode_t *inode,
+                              uint32_t *resolved_inode_number)
 {
     ext2_reader_inode_t current;
     uint32_t inode_number = EXT2_ROOT_INODE;
@@ -237,7 +238,15 @@ static int lookup_path(ext2_reader_t *reader, const char *path,
             cursor++;
     }
     *inode = current;
+    if (resolved_inode_number)
+        *resolved_inode_number = inode_number;
     return 0;
+}
+
+static int lookup_path(ext2_reader_t *reader, const char *path,
+                       ext2_reader_inode_t *inode)
+{
+    return lookup_path_number(reader, path, inode, NULL);
 }
 
 int ext2_reader_init(ext2_reader_t *reader, void *owner,
@@ -304,9 +313,11 @@ int ext2_reader_path_info(ext2_reader_t *reader, const char *path,
                           ext2_reader_path_info_t *info)
 {
     ext2_reader_inode_t inode;
+    uint32_t inode_number;
     uint16_t type;
 
-    if (!info || lookup_path(reader, path, &inode) != 0)
+    if (!info || lookup_path_number(reader, path, &inode,
+                                    &inode_number) != 0)
         return -1;
     type = inode.mode & EXT2_MODE_TYPE_MASK;
     if (type == EXT2_MODE_REGULAR)
@@ -315,6 +326,7 @@ int ext2_reader_path_info(ext2_reader_t *reader, const char *path,
         info->type = EXT2_READER_PATH_DIRECTORY;
     else
         return -1;
+    info->inode = inode_number;
     info->size = inode.size;
     return 0;
 }
@@ -401,4 +413,65 @@ ssize_t ext2_reader_read_range(ext2_reader_t *reader, const char *path,
         copied += chunk;
     }
     return (ssize_t)copied;
+}
+
+int ext2_reader_read_directory(ext2_reader_t *reader, const char *path,
+                               size_t *offset,
+                               ext2_reader_dir_entry_t *entry)
+{
+    ext2_reader_inode_t directory;
+    size_t cursor;
+
+    if (!reader || !path || !offset || !entry ||
+        lookup_path(reader, path, &directory) != 0 ||
+        (directory.mode & EXT2_MODE_TYPE_MASK) != EXT2_MODE_DIRECTORY)
+        return -1;
+
+    cursor = *offset;
+    while (cursor < directory.size) {
+        uint32_t logical_block = (uint32_t)(cursor / reader->block_size);
+        uint32_t block_offset = (uint32_t)(cursor % reader->block_size);
+        uint32_t disk_block;
+        uint32_t block_bytes = directory.size -
+            (uint32_t)((size_t)logical_block * reader->block_size);
+        const uint8_t *disk_entry;
+        uint32_t inode_number;
+        uint16_t record_length;
+        uint8_t name_length;
+        uint8_t file_type;
+        unsigned int index;
+
+        if (block_bytes > reader->block_size)
+            block_bytes = reader->block_size;
+        if (block_offset + 8u > block_bytes ||
+            inode_data_block(reader, &directory, logical_block,
+                             &disk_block) != 0 ||
+            disk_block == 0 || read_block(reader, disk_block) != 0)
+            return -1;
+
+        disk_entry = reader->scratch + block_offset;
+        inode_number = read_le32(disk_entry);
+        record_length = read_le16(disk_entry + 4u);
+        name_length = disk_entry[6];
+        file_type = disk_entry[7];
+        if (record_length < 8u || (record_length & 3u) != 0 ||
+            block_offset + record_length > block_bytes ||
+            name_length > record_length - 8u)
+            return -1;
+
+        cursor += record_length;
+        *offset = cursor;
+        if (inode_number == 0)
+            continue;
+
+        entry->inode = inode_number;
+        entry->type = file_type == 2u ? EXT2_READER_PATH_DIRECTORY :
+            EXT2_READER_PATH_REGULAR;
+        for (index = 0; index < name_length; index++)
+            entry->name[index] = (char)disk_entry[8u + index];
+        entry->name[name_length] = '\0';
+        return 1;
+    }
+
+    return 0;
 }

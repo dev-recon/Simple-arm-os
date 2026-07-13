@@ -233,6 +233,9 @@ int arm64_task_switch(struct task *previous, struct task *next)
 
 int arm64_task_switch_prepared(struct task *previous, struct task *next)
 {
+    uint32_t cpu_id;
+    int result;
+
     if (!previous || !next || previous == next ||
         previous->magic != TASK_MAGIC_ALIVE ||
         next->magic != TASK_MAGIC_ALIVE)
@@ -245,6 +248,12 @@ int arm64_task_switch_prepared(struct task *previous, struct task *next)
         return -2;
     if (!task_stack_valid(previous) || !task_stack_valid(next))
         return -3;
-    return arm64_task_context_switch_address_space(&previous->context,
-                                                    &next->context);
+    cpu_id = next->running_cpu;
+    if (task_current_publish(cpu_id, next) != 0)
+        return -4;
+    result = arm64_task_context_switch_address_space(&previous->context,
+                                                     &next->context);
+    if (result != 0)
+        task_current_publish(cpu_id, previous);
+    return result;
 }

@@ -40,6 +40,8 @@ typedef syscall_result_t (*syscall_dispatch_handler_t)(
 typedef struct syscall_dispatcher {
     syscall_dispatch_handler_t handlers[ARMOS_SYSCALL_MAX];
     void *owners[ARMOS_SYSCALL_MAX];
+    syscall_dispatch_handler_t fallback;
+    void *fallback_owner;
     uint64_t calls;
     uint64_t rejected;
 } syscall_dispatcher_t;
@@ -49,6 +51,13 @@ int syscall_dispatcher_register(syscall_dispatcher_t *dispatcher,
                                 uint32_t number,
                                 syscall_dispatch_handler_t handler,
                                 void *owner);
+int syscall_dispatcher_bind(syscall_dispatcher_t *dispatcher,
+                            uint32_t number,
+                            syscall_dispatch_handler_t handler,
+                            void *owner);
+int syscall_dispatcher_set_fallback(syscall_dispatcher_t *dispatcher,
+                                    syscall_dispatch_handler_t handler,
+                                    void *owner);
 syscall_result_t syscall_dispatcher_dispatch(
     syscall_dispatcher_t *dispatcher,
     const syscall_request_t *request);

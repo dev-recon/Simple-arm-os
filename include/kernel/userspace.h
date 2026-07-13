@@ -25,6 +25,7 @@
 
 
 bool is_valid_user_range(const void* ptr, size_t size);
+bool is_kernel_pointer(const void* ptr);
 
 int copy_to_user(void* to, const void* from, size_t n);
 

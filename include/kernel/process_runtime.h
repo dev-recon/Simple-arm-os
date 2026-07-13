@@ -71,4 +71,8 @@ pid_t process_runtime_wait(process_runtime_t *runtime,
                            pid_t selector, vaddr_t status_address,
                            uint32_t options);
 
+int process_runtime_clone_process(process_t *child, const process_t *parent,
+                                  vm_space_t *child_vm, pid_t child_pid);
+void process_runtime_release_process(process_t *process);
+
 #endif /* _KERNEL_PROCESS_RUNTIME_H */

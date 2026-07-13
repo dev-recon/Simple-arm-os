@@ -217,24 +217,6 @@ char* strtok_r(char* str, const char* delim, char** saveptr)
     return token_start;
 }
 
-void init_spinlock2(spinlock_t* lock)
-{
-    lock->locked = 0;
-}
-
-void spin_lock2(spinlock_t* lock)
-{
-    while (__sync_lock_test_and_set(&lock->locked, 1)) {
-        /* Spin */
-    }
-}
-
-void spin_unlock2(spinlock_t* lock)
-{
-    __sync_lock_release(&lock->locked);
-}
-
-
 char tolower(char c)
 {
     if (c >= 'A' && c <= 'Z') {

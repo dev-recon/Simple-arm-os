@@ -39,8 +39,6 @@
 //const uint32_t TASK_CONTEXT_OFF = offsetof(task_t, context);
 
 /* Variables globales du scheduler */
-task_t* current_task = NULL;
-task_t* current_tasks[ARMOS_MAX_CPUS];
 task_t* task_list_head = NULL;
 typedef struct runqueue {
     task_t* head[TASK_PRIORITY_LEVELS];
@@ -97,41 +95,6 @@ static uint32_t task_reserve_pid(void)
     pid = next_pid++;
     spin_unlock_irqrestore(&task_lock, flags);
     return pid;
-}
-
-task_t* task_current_on_cpu(uint32_t cpu_id)
-{
-    task_t* task;
-
-    if (cpu_id >= ARMOS_MAX_CPUS)
-        return NULL;
-
-    task = current_tasks[cpu_id];
-    return task_header_plausible(task) ? task : NULL;
-}
-
-static task_t* task_current_from_cpu_register(void)
-{
-    task_t* task;
-
-    /*
-     * TPIDRPRW is private to each CPU and cannot be modified by userland.
-     * It is therefore a better SMP source of truth than a shared global array
-     * for the hot "who am I?" path. current_tasks[] remains useful for /proc
-     * and cross-CPU diagnostics.
-     */
-    task = (task_t*)arch_task_current_pointer();
-    return task_header_plausible(task) ? task : NULL;
-}
-
-task_t* task_current_local(void)
-{
-    task_t* task = task_current_from_cpu_register();
-
-    if (task)
-        return task;
-
-    return task_current_on_cpu(smp_processor_id());
 }
 
 void scheduler_request_resched_current_cpu(void)
@@ -501,22 +464,6 @@ extern void __task_switch_asm_debug(task_context_t* old_ctx, task_context_t* new
 extern void __task_switch(task_context_t* old_ctx, task_context_t* new_ctx);
 extern void print_system_stats(void);
 
-
-uid_t current_uid(void) {
-    task_t* task = task_current_local();
-    if (task && task->process) {
-        return task->process->uid;
-    }
-    return 0;  /* Root par défaut */
-}
-
-uid_t current_gid(void) {
-    task_t* task = task_current_local();
-    if (task && task->process) {
-        return task->process->gid;
-    }
-    return 0;  /* Root group par défaut */
-}
 
 static bool task_stack_metadata_valid(task_t* task)
 {
@@ -1339,6 +1286,19 @@ void switch_to_idle_stack(void)
 /**
  * Initialiser le systeme de taches
  */
+static int task_legacy_poll_wait(void *owner)
+{
+    task_t *task = task_current_local();
+
+    (void)owner;
+    if (!task)
+        return -EINTR;
+    task_set_interruptible_until(task, get_system_ticks() + 1);
+    yield();
+    task_set_wakeup_time(task, 0);
+    return has_pending_signals(task) ? -EINTR : 0;
+}
+
 void init_task_system(void)
 {
     if (scheduler_initialized) {
@@ -1349,12 +1309,12 @@ void init_task_system(void)
     KINFO("Initializing task system...\n");
     
     /* Initialiser les variables globales */
-    current_task = NULL;
-    memset(current_tasks, 0, sizeof(current_tasks));
+    task_current_clear_all();
     task_list_head = NULL;
     runqueue_clear_locked();
     next_task_id = 1;
     task_count = 0;
+    (void)task_register_poll_wait_handler(task_legacy_poll_wait, NULL);
     
   
     scheduler_initialized = true;
@@ -1392,8 +1352,7 @@ void cleanup_task_system(void)
     memset(idle_tasks, 0, sizeof(idle_tasks));
     
     /* Reinitialiser les variables */
-    current_task = NULL;
-    memset(current_tasks, 0, sizeof(current_tasks));
+    task_current_clear_all();
     task_list_head = NULL;
     runqueue_clear_locked();
     next_task_id = 1;

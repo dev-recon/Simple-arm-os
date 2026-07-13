@@ -98,6 +98,12 @@ static inline uintptr_t arch_task_current_pointer(void)
     return (uintptr_t)pointer;
 }
 
+static inline void arch_task_set_current_pointer(uintptr_t pointer)
+{
+    __asm__ volatile("msr tpidr_el1, %0" : : "r"((uint64_t)pointer)
+                     : "memory");
+}
+
 static inline vaddr_t arch_task_context_kernel_sp(const task_context_t *ctx)
 {
     return (vaddr_t)ctx->kernel.sp;

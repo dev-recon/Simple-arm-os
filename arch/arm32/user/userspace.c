@@ -35,6 +35,11 @@ bool is_valid_user_ptr(const void* ptr)
     return memory_is_user_address((vaddr_t)(uintptr_t)ptr);
 }
 
+bool is_kernel_pointer(const void* ptr)
+{
+    return ptr && memory_is_kernel_address((vaddr_t)(uintptr_t)ptr);
+}
+
 
 /* Macros pour simplifier l'utilisation */
 #define put_user(value, ptr) ({ \

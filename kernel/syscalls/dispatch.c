@@ -47,6 +47,29 @@ int syscall_dispatcher_register(syscall_dispatcher_t *dispatcher,
     return 0;
 }
 
+int syscall_dispatcher_bind(syscall_dispatcher_t *dispatcher,
+                            uint32_t number,
+                            syscall_dispatch_handler_t handler,
+                            void *owner)
+{
+    if (!dispatcher || !handler || number >= ARMOS_SYSCALL_MAX)
+        return -1;
+    dispatcher->handlers[number] = handler;
+    dispatcher->owners[number] = owner;
+    return 0;
+}
+
+int syscall_dispatcher_set_fallback(syscall_dispatcher_t *dispatcher,
+                                    syscall_dispatch_handler_t handler,
+                                    void *owner)
+{
+    if (!dispatcher || !handler || dispatcher->fallback)
+        return -1;
+    dispatcher->fallback = handler;
+    dispatcher->fallback_owner = owner;
+    return 0;
+}
+
 syscall_result_t syscall_dispatcher_dispatch(
     syscall_dispatcher_t *dispatcher,
     const syscall_request_t *request)
@@ -60,8 +83,13 @@ syscall_result_t syscall_dispatcher_dispatch(
     }
     handler = dispatcher->handlers[request->number];
     if (!handler) {
-        dispatcher->rejected++;
-        return -(syscall_result_t)ENOSYS;
+        handler = dispatcher->fallback;
+        if (!handler) {
+            dispatcher->rejected++;
+            return -(syscall_result_t)ENOSYS;
+        }
+        dispatcher->calls++;
+        return handler(dispatcher->fallback_owner, request);
     }
     dispatcher->calls++;
     return handler(dispatcher->owners[request->number], request);

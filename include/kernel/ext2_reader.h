@@ -30,9 +30,18 @@ typedef enum ext2_reader_path_type {
 } ext2_reader_path_type_t;
 
 typedef struct {
+    uint32_t inode;
     ext2_reader_path_type_t type;
     size_t size;
 } ext2_reader_path_info_t;
+
+#define EXT2_READER_NAME_MAX 255u
+
+typedef struct ext2_reader_dir_entry {
+    uint32_t inode;
+    ext2_reader_path_type_t type;
+    char name[EXT2_READER_NAME_MAX + 1u];
+} ext2_reader_dir_entry_t;
 
 typedef struct {
     void *owner;
@@ -60,5 +69,8 @@ int ext2_reader_read_file(ext2_reader_t *reader, const char *path,
                           size_t *file_size);
 ssize_t ext2_reader_read_range(ext2_reader_t *reader, const char *path,
                                size_t offset, void *buffer, size_t length);
+int ext2_reader_read_directory(ext2_reader_t *reader, const char *path,
+                               size_t *offset,
+                               ext2_reader_dir_entry_t *entry);
 
 #endif /* _KERNEL_EXT2_READER_H */

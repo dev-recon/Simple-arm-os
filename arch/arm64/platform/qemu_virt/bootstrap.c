@@ -33,13 +33,19 @@
 #include <kernel/early_page_allocator.h>
 #include <kernel/elf64.h>
 #include <kernel/ext2_reader.h>
+#include <kernel/ext2_reader_vfs.h>
 #include <kernel/fdt.h>
+#include <kernel/file.h>
 #include <kernel/io_model.h>
+#include <kernel/memory.h>
 #include <kernel/process_model.h>
 #include <kernel/process_runtime.h>
 #include <kernel/syscall_dispatch.h>
+#include <kernel/syscalls.h>
+#include <kernel/string.h>
 #include <kernel/task.h>
 #include <kernel/task_runqueue.h>
+#include <kernel/vfs.h>
 #include <uapi/armos/syscall.h>
 
 #include "virtio_block.h"
@@ -134,6 +140,7 @@
 #define ARM64_EXEC_MAX_ARGS       16u
 #define ARM64_EXEC_MAX_ENVS       16u
 #define ARM64_EXEC_STRING_SIZE    128u
+#define ARM64_COMMON_HEAP_PAGES   512u
 
 static const char arm64_user_message[] = "ARM64 syscall write OK\n";
 static const char arm64_bootstrap_path[] = "/etc/motd";
@@ -201,6 +208,9 @@ typedef struct {
     arm64_user_vm_t exec_vm;
     arm64_user_vm_t child_vm;
     arm64_user_vm_t candidate_vm;
+    file_operations_t common_console_file_operations;
+    process_t common_process;
+    process_t common_child_process;
     arm64_task_context_t user_task;
     task_t scheduled_user_task;
     task_t child_user_task;
@@ -778,6 +788,13 @@ static int arm64_process_clone_task(void *owner, const task_t *parent,
                 sizeof(child->context.simd));
     child->context.user.x[0] = 0;
     child->context.kernel.x[0] = (uint64_t)(uintptr_t)child;
+    if (!parent->process || process_runtime_clone_process(
+            &high_context.common_child_process, parent->process,
+            child_vm, ARM64_FORK_CHILD_PID) != 0)
+        return -1;
+    child->process = &high_context.common_child_process;
+    child->process->parent = (task_t *)(uintptr_t)parent;
+    ((task_t *)(uintptr_t)parent)->process->children = child;
     return 0;
 }
 
@@ -788,6 +805,12 @@ static int arm64_process_destroy_task(void *owner, task_t *task,
 
     if (!runtime || !active_task)
         return -1;
+    if (task == &high_context.child_user_task && task->process) {
+        if (task->process->parent && task->process->parent->process)
+            task->process->parent->process->children = NULL;
+        process_runtime_release_process(task->process);
+        task->process = NULL;
+    }
     return arm64_task_destroy(
         task, runtime->allocator, &active_task->context);
 }
@@ -828,6 +851,13 @@ static int arm64_process_block_current(void *owner)
 {
     (void)owner;
     return task_dispatcher_block(&high_context.runtime_dispatcher);
+}
+
+static int arm64_process_poll_wait(void *owner)
+{
+    task_dispatcher_t *dispatcher = owner;
+
+    return dispatcher ? task_dispatcher_yield(dispatcher) : -1;
 }
 
 static int arm64_process_validate_wait_status(
@@ -876,8 +906,11 @@ static int arm64_process_replace_image(
 
     if (arm64_exception_request_exec(
             new_vm_space, &task->context.user,
-            arm64_exec_retire_previous_vm, &high_context) == 0)
+            arm64_exec_retire_previous_vm, &high_context) == 0) {
+        if (task->process && task->process->vm == previous_vm_space)
+            task->process->vm = new_vm_space;
         return 0;
+    }
 
     runtime->vm = previous_runtime_vm;
     copy_memory(&task->context, &previous_context,
@@ -921,6 +954,21 @@ static ssize_t arm64_bootstrap_tty_write(void *owner, const void *buffer,
             arm64_console_putc((char)bytes[index]);
     }
     return (ssize_t)length;
+}
+
+static ssize_t arm64_bootstrap_tty_file_read(file_t *file, void *buffer,
+                                             size_t length)
+{
+    (void)file;
+    return arm64_bootstrap_tty_read(NULL, buffer, length);
+}
+
+static ssize_t arm64_bootstrap_tty_file_write(file_t *file,
+                                              const void *buffer,
+                                              size_t length)
+{
+    (void)file;
+    return arm64_bootstrap_tty_write(NULL, buffer, length);
 }
 
 static process_model_t *arm64_current_process(
@@ -1629,6 +1677,98 @@ static int arm64_syscall_runtime_init(arm64_high_context_t *context)
     active_syscall_runtime = runtime;
     arm64_exception_set_syscall_dispatcher(&runtime->dispatcher);
     arm64_exception_set_page_fault_hook(arm64_syscall_page_fault);
+    return 0;
+}
+
+static int arm64_attach_common_process(arm64_high_context_t *context)
+{
+    arm64_user_vm_t *active_vm = context->syscall_runtime.vm;
+    process_t *process = &context->common_process;
+    task_t *task = &context->scheduled_user_task;
+    paddr_t heap_physical;
+    unsigned int fd;
+
+    if (!active_vm ||
+        arm64_user_vm_from_space(task->context.vm_space) != active_vm)
+        return -1;
+    if (early_page_alloc_pages(high_early_allocator(),
+                               ARM64_COMMON_HEAP_PAGES,
+                               &heap_physical) != 0)
+        return -2;
+    if (!init_kernel_heap_region(
+            (void *)(uintptr_t)arm64_mmu_kernel_address(heap_physical),
+            ARM64_COMMON_HEAP_PAGES * PAGE_SIZE))
+        return -3;
+    if (!ext2_reader_vfs_mount_root(&context->disk_reader))
+        return -4;
+
+    clear_memory(&context->common_console_file_operations,
+                 sizeof(context->common_console_file_operations));
+    context->common_console_file_operations.read =
+        arm64_bootstrap_tty_file_read;
+    context->common_console_file_operations.write =
+        arm64_bootstrap_tty_file_write;
+
+    clear_memory(process, sizeof(*process));
+    process->pid = ARM64_BOOTSTRAP_PID;
+    process->ppid = 0;
+    process->pgid = ARM64_BOOTSTRAP_PID;
+    process->sid = ARM64_BOOTSTRAP_PID;
+    process->controlling_tty = 0;
+    process->vm = &active_vm->space;
+    process->uid = 0;
+    process->gid = 0;
+    process->umask = 0022;
+    process->state = PROC_RUNNING;
+    process->cwd[0] = '/';
+    process->cwd[1] = '\0';
+    strncpy(process->exe_path, arm64_bootstrap_shell_path,
+            sizeof(process->exe_path) - 1u);
+
+    for (fd = 0; fd < 3; fd++) {
+        file_t *file = create_file();
+
+        if (!file)
+            return -5;
+        file->type = FILE_TYPE_TTY;
+        file->flags = fd == 0 ? O_RDONLY : O_WRONLY;
+        file->f_op = &context->common_console_file_operations;
+        strncpy(file->name, fd == 0 ? "stdin" :
+                fd == 1 ? "stdout" : "stderr",
+                sizeof(file->name) - 1u);
+        process->files[fd] = file;
+    }
+
+    task->type = TASK_TYPE_PROCESS;
+    task->process = process;
+    if (task_current_publish(0, task) != 0)
+        return -6;
+
+#define BIND_VFS_SYSCALL(number) \
+    if (syscall_dispatcher_bind( \
+            &context->syscall_runtime.dispatcher, (number), \
+            syscall_dispatch_vfs_handler, NULL) != 0) \
+        return -7
+    BIND_VFS_SYSCALL(ARMOS_NR_OPEN);
+    BIND_VFS_SYSCALL(ARMOS_NR_READ);
+    BIND_VFS_SYSCALL(ARMOS_NR_WRITE);
+    BIND_VFS_SYSCALL(ARMOS_NR_PIPE);
+    BIND_VFS_SYSCALL(ARMOS_NR_DUP2);
+    BIND_VFS_SYSCALL(ARMOS_NR_CLOSE);
+    BIND_VFS_SYSCALL(ARMOS_NR_CHDIR);
+    BIND_VFS_SYSCALL(ARMOS_NR_GETCWD);
+    BIND_VFS_SYSCALL(__NR_lseek);
+    BIND_VFS_SYSCALL(__NR_stat);
+    BIND_VFS_SYSCALL(__NR_lstat);
+    BIND_VFS_SYSCALL(__NR_fstat);
+    BIND_VFS_SYSCALL(__NR_getdents);
+#undef BIND_VFS_SYSCALL
+
+    if (task_register_poll_wait_handler(
+            arm64_process_poll_wait,
+            &context->runtime_dispatcher) != 0)
+        return -8;
+
     return 0;
 }
 
@@ -4160,6 +4300,11 @@ static void arm64_el0_return(uint64_t result)
     }
     arm64_exception_set_task_dispatcher(
         &high_context.runtime_dispatcher);
+    if (arm64_attach_common_process(&high_context) != 0) {
+        arm64_probe_puts("ARM64_COMMON_PROCESS_ATTACH_FAILED\n");
+        goto halt;
+    }
+    arm64_probe_puts("ARM64_COMMON_PROCESS_VFS_OK\n");
     if (arm64_timer_irq_start_periodic() != 0) {
         arm64_probe_puts("ARM64_PROCESS_TIMER_START_FAILED\n");
         goto halt;

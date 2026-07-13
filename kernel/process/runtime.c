@@ -12,6 +12,7 @@
  * - Apply generic fork, exec, exit and wait ordering to process_model_t.
  * - Roll back partially created children and rejected exec transitions.
  * - Coordinate scheduler publication, blocking and zombie reaping.
+ * - Clone and release the common process_t descriptor and file references.
  *
  * Notes:
  * - Architecture backends own concrete VM and task-context mechanics.
@@ -19,6 +20,7 @@
  */
 
 #include <kernel/process_runtime.h>
+#include <kernel/vfs.h>
 
 static void clear_process(process_model_t *process)
 {
@@ -27,6 +29,72 @@ static void clear_process(process_model_t *process)
 
     for (index = 0; index < sizeof(*process); index++)
         bytes[index] = 0;
+}
+
+static void clear_kernel_process(process_t *process)
+{
+    uint8_t *bytes = (uint8_t *)process;
+    size_t index;
+
+    for (index = 0; index < sizeof(*process); index++)
+        bytes[index] = 0;
+}
+
+int process_runtime_clone_process(process_t *child, const process_t *parent,
+                                  vm_space_t *child_vm, pid_t child_pid)
+{
+    size_t index;
+    unsigned int fd;
+
+    if (!child || !parent || !child_vm || child_pid <= 0)
+        return -EINVAL;
+
+    clear_kernel_process(child);
+    child->pid = child_pid;
+    child->ppid = parent->pid;
+    child->pgid = parent->pgid;
+    child->sid = parent->sid;
+    child->controlling_tty = parent->controlling_tty;
+    child->vm = child_vm;
+    child->uid = parent->uid;
+    child->gid = parent->gid;
+    child->umask = parent->umask;
+    child->state = PROC_READY;
+    child->signals = parent->signals;
+    child->signal_stack_base = parent->signal_stack_base;
+    child->signal_stack_size = parent->signal_stack_size;
+    child->cmdline_len = parent->cmdline_len;
+    child->environ_len = parent->environ_len;
+
+    for (index = 0; index < sizeof(child->cwd); index++)
+        child->cwd[index] = parent->cwd[index];
+    for (index = 0; index < sizeof(child->exe_path); index++)
+        child->exe_path[index] = parent->exe_path[index];
+    for (index = 0; index < sizeof(child->cmdline); index++)
+        child->cmdline[index] = parent->cmdline[index];
+    for (index = 0; index < sizeof(child->environ); index++)
+        child->environ[index] = parent->environ[index];
+    for (fd = 0; fd < MAX_FILES; fd++) {
+        child->fd_flags[fd] = parent->fd_flags[fd];
+        if (parent->files[fd])
+            child->files[fd] = get_file(parent->files[fd]);
+    }
+    return 0;
+}
+
+void process_runtime_release_process(process_t *process)
+{
+    unsigned int fd;
+
+    if (!process)
+        return;
+    for (fd = 0; fd < MAX_FILES; fd++) {
+        if (process->files[fd])
+            close_file(process->files[fd]);
+        process->files[fd] = NULL;
+        process->fd_flags[fd] = 0;
+    }
+    clear_kernel_process(process);
 }
 
 static int runtime_ops_valid(const process_runtime_ops_t *ops)
