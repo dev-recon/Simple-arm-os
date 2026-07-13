@@ -64,8 +64,11 @@ ArmOS currently provides:
   early physical-page allocator driven by FDT RAM and reservation discovery;
   TTBR0 then migrates from the static boot table to allocated L1/L2/L3 tables
   with a tested 4 KiB unmap/remap path, while TTBR1 provides a canonical
-  permission-checked kernel alias used by the live PC, stack, and vectors;
-  the low RAM identity window is then removed from TTBR0
+  permission-checked kernel alias used by the live PC, stack, vectors, and
+  MMIO; all low kernel mappings are then removed and isolated user-only TTBR0
+  tables are exercised with distinct ASIDs; a copied EL0t payload now runs on
+  separate RX code and RW/NX data/stack pages, returns through the lower-EL SVC
+  vector, and leaves the physical timer operational
 - MMU enabled with split TTBR0/TTBR1 address spaces
 - ASID support and ASID rollover handling
 - typed physical/virtual address groundwork (`paddr_t`, `vaddr_t`, `pfn_t`)
@@ -334,8 +337,9 @@ Near-term work:
 Medium-term ideas:
 
 - improve POSIX compatibility for larger userland packages
-- introduce per-process ARM64 TTBR0 tables, then extend early allocation into
-  the synchronized physical allocator
+- connect the validated ARM64 TTBR0/ASID and EL0-entry primitives to tasks,
+  extend early allocation into the synchronized physical allocator, and
+  define the real syscall and ELF64 process ABIs
 
 See [`ROADMAP.md`](ROADMAP.md) for more detail.
 

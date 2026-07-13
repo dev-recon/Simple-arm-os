@@ -128,6 +128,7 @@ KERNEL_OBJS = \
 	$(ARCH_DIR)/interrupt/exception.o \
 	$(ARCH_DIR)/interrupt/irq.o \
 	$(ARCH_DIR)/mmu/mmu.o \
+	$(ARCH_DIR)/user/el0.o \
 	kernel/lib/fdt_memory.o \
 	kernel/memory/early_page_allocator.o \
 	$(PLATFORM_DIR)/early_console.o

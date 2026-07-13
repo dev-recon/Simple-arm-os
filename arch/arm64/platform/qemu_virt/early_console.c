@@ -7,6 +7,7 @@
  */
 
 #include <asm/early_console.h>
+#include <asm/exception.h>
 #include <asm/irq.h>
 #include <asm/mmu.h>
 #include <kernel/early_page_allocator.h>
@@ -21,6 +22,16 @@
 #define EARLY_ALLOC_MAX_PAGES    (EARLY_ALLOC_MAX_RAM / PAGE_SIZE)
 #define EARLY_ALLOC_BITMAP_BYTES ((EARLY_ALLOC_MAX_PAGES + 7u) / 8u)
 #define PAR_PA_MASK              0x0000FFFFFFFFF000ULL
+#define TTBR_TABLE_MASK          0x0000FFFFFFFFF000ULL
+#define TTBR_ASID_SHIFT          48u
+#define USER_CODE_VA             0x0000000000400000ULL
+#define USER_DATA_VA             0x0000000000401000ULL
+#define USER_STACK_VA            0x0000000000402000ULL
+#define USER_STACK_TOP           0x0000000000403000ULL
+#define USER_TEST_ASID           1u
+#define EMPTY_TEST_ASID          2u
+#define USER_TEST_MAGIC          0x5553455254544252ULL
+#define USER_SVC_RESULT          0x0000000000001235ULL
 
 extern uint8_t __kernel_end[];
 extern uint8_t __text_start[];
@@ -29,27 +40,44 @@ extern uint8_t __rodata_start[];
 extern uint8_t __rodata_end[];
 extern uint8_t __stack_top[];
 extern uint8_t arm64_vectors[];
+extern uint8_t arm64_el0_payload_start[];
+extern uint8_t arm64_el0_payload_end[];
 
 extern void arm64_enter_high_alias(uint64_t entry,
                                    uint64_t stack,
                                    uint64_t vectors,
                                    uint64_t context)
     __attribute__((noreturn));
+extern void arm64_enter_el0(uint64_t entry, uint64_t stack)
+    __attribute__((noreturn));
+
+typedef struct {
+    paddr_t boot_l1;
+    paddr_t user_l1;
+    paddr_t empty_l1;
+    paddr_t user_page;
+    vaddr_t user_address;
+} arm64_high_context_t;
 
 static early_page_allocator_t early_allocator;
 static uint8_t early_allocator_bitmap[EARLY_ALLOC_BITMAP_BYTES]
     __attribute__((aligned(ARCH_CACHE_LINE_SIZE)));
+static arm64_high_context_t high_context;
 
-static void arm64_high_main(uint64_t ttbr0_l1_address)
+static void arm64_high_main(arm64_high_context_t *context)
+    __attribute__((noreturn));
+static void arm64_el0_return(uint64_t result)
     __attribute__((noreturn));
 
 static inline void mmio_write32(unsigned long address, uint32_t value)
 {
+    address = (unsigned long)arm64_mmu_kernel_address(address);
     *(volatile uint32_t *)address = value;
 }
 
 static inline uint32_t mmio_read32(unsigned long address)
 {
+    address = (unsigned long)arm64_mmu_kernel_address(address);
     return *(volatile uint32_t *)address;
 }
 
@@ -203,6 +231,9 @@ static int test_dynamic_page_table(void)
     paddr_t l3_page;
     paddr_t test_page;
     paddr_t ttbr1_page;
+    paddr_t user_table_pages;
+    paddr_t user_pages;
+    paddr_t empty_l1_page;
     arm64_mmu_u64 old_ttbr;
     arm64_mmu_u64 new_ttbr;
     arm64_mmu_u64 high_text;
@@ -211,6 +242,8 @@ static int test_dynamic_page_table(void)
     arm64_mmu_u64 par_uart;
     arm64_mmu_u64 par_kernel;
     arm64_mmu_u64 par_unmapped;
+    uint64_t payload_size;
+    uint64_t offset;
 
     if (early_page_alloc_pages(&early_allocator, 3, &table_pages) != 0 ||
         early_page_alloc_pages(&early_allocator, 1, &test_page) != 0)
@@ -305,6 +338,46 @@ static int test_dynamic_page_table(void)
     arm64_early_puthex64(arm64_mmu_read_tcr());
     arm64_early_puts("\nARM64_TTBR1_PERMISSIONS_OK\n");
 
+    if (early_page_alloc_pages(&early_allocator, 3, &user_table_pages) != 0 ||
+        early_page_alloc_pages(&early_allocator, 3, &user_pages) != 0 ||
+        early_page_alloc_pages(&early_allocator, 1, &empty_l1_page) != 0 ||
+        arm64_mmu_prepare_user_page(
+            user_table_pages,
+            user_table_pages + PAGE_SIZE,
+            user_table_pages + 2 * PAGE_SIZE,
+            USER_DATA_VA,
+            user_pages + PAGE_SIZE,
+            ARM64_USER_PAGE_READ | ARM64_USER_PAGE_WRITE) != 0 ||
+        arm64_mmu_prepare_user_l3_page(
+            user_table_pages + 2 * PAGE_SIZE,
+            USER_CODE_VA,
+            user_pages,
+            ARM64_USER_PAGE_READ | ARM64_USER_PAGE_EXEC) != 0 ||
+        arm64_mmu_prepare_user_l3_page(
+            user_table_pages + 2 * PAGE_SIZE,
+            USER_STACK_VA,
+            user_pages + 2 * PAGE_SIZE,
+            ARM64_USER_PAGE_READ | ARM64_USER_PAGE_WRITE) != 0 ||
+        arm64_mmu_prepare_empty_ttbr0(empty_l1_page) != 0)
+        return -1;
+
+    payload_size = (uint64_t)(uintptr_t)arm64_el0_payload_end -
+                   (uint64_t)(uintptr_t)arm64_el0_payload_start;
+    if (payload_size == 0 || payload_size > PAGE_SIZE)
+        return -1;
+    for (offset = 0; offset < payload_size; offset++)
+        *(volatile uint8_t *)(uintptr_t)(user_pages + offset) =
+            arm64_el0_payload_start[offset];
+    arm64_mmu_sync_code(user_pages, payload_size);
+
+    *(volatile uint64_t *)(uintptr_t)(user_pages + PAGE_SIZE) =
+        USER_TEST_MAGIC;
+    high_context.boot_l1 = l1_page;
+    high_context.user_l1 = user_table_pages;
+    high_context.empty_l1 = empty_l1_page;
+    high_context.user_page = user_pages + PAGE_SIZE;
+    high_context.user_address = USER_DATA_VA;
+
     if (early_page_free_pages(&early_allocator, test_page, 1) != 0)
         return -1;
 
@@ -316,22 +389,29 @@ static int test_dynamic_page_table(void)
             (arm64_mmu_u64)(uintptr_t)__stack_top,
         ARM64_KERNEL_VA_BASE +
             (arm64_mmu_u64)(uintptr_t)arm64_vectors,
-        l1_page);
+        ARM64_KERNEL_VA_BASE +
+            (arm64_mmu_u64)(uintptr_t)&high_context);
 }
 
-static void arm64_high_main(uint64_t ttbr0_l1_address)
+static void arm64_high_main(arm64_high_context_t *context)
 {
     arm64_mmu_u64 pc;
     arm64_mmu_u64 sp;
     arm64_mmu_u64 vbar;
     arm64_mmu_u64 high_text;
+    arm64_mmu_u64 high_uart;
+    arm64_mmu_u64 high_user_page;
     arm64_mmu_u64 par_low_kernel;
     arm64_mmu_u64 par_high_kernel;
+    arm64_mmu_u64 user_ttbr;
+    arm64_mmu_u64 empty_ttbr;
 
     __asm__ volatile("adr %0, ." : "=r"(pc));
     __asm__ volatile("mov %0, sp" : "=r"(sp));
     __asm__ volatile("mrs %0, vbar_el1" : "=r"(vbar));
     high_text = (arm64_mmu_u64)(uintptr_t)__text_start;
+    high_uart = arm64_mmu_kernel_address(PL011_BASE);
+    high_user_page = ARM64_KERNEL_VA_BASE + context->user_page;
 
     arm64_early_puts("High kernel: PC=");
     arm64_early_puthex64(pc);
@@ -349,8 +429,15 @@ static void arm64_high_main(uint64_t ttbr0_l1_address)
     }
     arm64_early_puts("ARM64_TTBR1_EXECUTION_OK\n");
 
-    if (arm64_mmu_retire_low_ram(ttbr0_l1_address) != 0) {
-        arm64_early_puts("ARM64_LOW_KERNEL_UNMAP_FAILED\n");
+    if ((arm64_mmu_translate_read(high_uart) & 1u) != 0 ||
+        (arm64_mmu_translate_user_read(high_uart) & 1u) == 0) {
+        arm64_early_puts("ARM64_HIGH_MMIO_FAILED\n");
+        goto halt;
+    }
+    arm64_early_puts("ARM64_HIGH_MMIO_OK\n");
+
+    if (arm64_mmu_retire_low_map(context->boot_l1) != 0) {
+        arm64_early_puts("ARM64_LOW_MAP_RETIRE_FAILED\n");
         goto halt;
     }
 
@@ -358,17 +445,103 @@ static void arm64_high_main(uint64_t ttbr0_l1_address)
     par_high_kernel = arm64_mmu_translate_read(high_text);
     if ((par_low_kernel & 1u) == 0 ||
         (par_high_kernel & 1u) != 0 ||
-        (arm64_mmu_translate_read(PL011_BASE) & 1u) != 0) {
-        arm64_early_puts("ARM64_LOW_KERNEL_UNMAP_VERIFY_FAILED\n");
+        (arm64_mmu_translate_read(PL011_BASE) & 1u) == 0 ||
+        (arm64_mmu_translate_read(high_uart) & 1u) != 0) {
+        arm64_early_puts("ARM64_LOW_MAP_RETIRE_VERIFY_FAILED\n");
         goto halt;
     }
-    arm64_early_puts("ARM64_LOW_KERNEL_UNMAPPED_OK\n");
+    arm64_early_puts("ARM64_LOW_MAP_RETIRED_OK\n");
+
+    if (arm64_mmu_switch_user_ttbr0(context->user_l1,
+                                    USER_TEST_ASID) != 0) {
+        arm64_early_puts("ARM64_USER_TTBR0_SWITCH_FAILED\n");
+        goto halt;
+    }
+    user_ttbr = arm64_mmu_read_ttbr0();
+    if ((user_ttbr & TTBR_TABLE_MASK) != context->user_l1 ||
+        ((user_ttbr >> TTBR_ASID_SHIFT) & 0xffu) != USER_TEST_ASID ||
+        (arm64_mmu_translate_user_read(USER_CODE_VA) & 1u) != 0 ||
+        (arm64_mmu_translate_user_write(USER_CODE_VA) & 1u) == 0 ||
+        (arm64_mmu_translate_user_read(context->user_address) & 1u) != 0 ||
+        (arm64_mmu_translate_user_write(context->user_address) & 1u) != 0 ||
+        (arm64_mmu_translate_user_read(USER_STACK_VA) & 1u) != 0 ||
+        (arm64_mmu_translate_user_write(USER_STACK_VA) & 1u) != 0 ||
+        (arm64_mmu_translate_read(context->user_address) & 1u) != 0 ||
+        *(volatile uint64_t *)(uintptr_t)context->user_address !=
+            USER_TEST_MAGIC ||
+        *(volatile uint64_t *)(uintptr_t)high_user_page != USER_TEST_MAGIC ||
+        (arm64_mmu_translate_read(0x40080000ULL) & 1u) == 0 ||
+        (arm64_mmu_translate_read(PL011_BASE) & 1u) == 0 ||
+        (arm64_mmu_translate_read(high_text) & 1u) != 0 ||
+        (arm64_mmu_translate_read(high_uart) & 1u) != 0) {
+        arm64_early_puts("ARM64_USER_TTBR0_VERIFY_FAILED\n");
+        goto halt;
+    }
+
+    if (arm64_mmu_switch_user_ttbr0(context->empty_l1,
+                                    EMPTY_TEST_ASID) != 0) {
+        arm64_early_puts("ARM64_EMPTY_TTBR0_SWITCH_FAILED\n");
+        goto halt;
+    }
+    empty_ttbr = arm64_mmu_read_ttbr0();
+    if ((empty_ttbr & TTBR_TABLE_MASK) != context->empty_l1 ||
+        ((empty_ttbr >> TTBR_ASID_SHIFT) & 0xffu) != EMPTY_TEST_ASID ||
+        (arm64_mmu_translate_user_read(context->user_address) & 1u) == 0 ||
+        (arm64_mmu_translate_read(high_text) & 1u) != 0 ||
+        (arm64_mmu_translate_read(high_uart) & 1u) != 0 ||
+        arm64_mmu_switch_user_ttbr0(context->user_l1,
+                                    USER_TEST_ASID) != 0 ||
+        (arm64_mmu_translate_user_read(context->user_address) & 1u) != 0 ||
+        *(volatile uint64_t *)(uintptr_t)context->user_address !=
+            USER_TEST_MAGIC) {
+        arm64_early_puts("ARM64_TTBR0_ISOLATION_FAILED\n");
+        goto halt;
+    }
+
+    arm64_early_puts("User TTBR0: mapped=");
+    arm64_early_puthex64(user_ttbr);
+    arm64_early_puts(" empty=");
+    arm64_early_puthex64(empty_ttbr);
+    arm64_early_puts(" VA=");
+    arm64_early_puthex64(context->user_address);
+    arm64_early_puts(" PA=");
+    arm64_early_puthex64(context->user_page);
+    arm64_early_puts("\nARM64_USER_TTBR0_ASID_OK\n");
 
     arm64_early_puts("Testing high VBAR synchronous vector\n");
     __asm__ volatile("brk #0x64");
-    arm64_early_puts("Testing timer IRQ without low RAM alias\n");
+    arm64_exception_set_el0_exit(
+        (arm64_exception_u64)(uintptr_t)arm64_el0_return);
+    arm64_early_puts("Entering EL0 at ");
+    arm64_early_puthex64(USER_CODE_VA);
+    arm64_early_puts(" stack=");
+    arm64_early_puthex64(USER_STACK_TOP);
+    arm64_early_puts("\n");
+    arm64_enter_el0(USER_CODE_VA, USER_STACK_TOP);
+
+halt:
+    for (;;)
+        __asm__ volatile("wfe");
+}
+
+static void arm64_el0_return(uint64_t result)
+{
+    if (current_el() != 1 || result != USER_SVC_RESULT ||
+        *(volatile uint64_t *)(uintptr_t)USER_DATA_VA != USER_SVC_RESULT ||
+        arm64_exception_el0_svc_count() != 2) {
+        arm64_early_puts("ARM64_EL0_SVC_RETURN_FAILED\n");
+        goto halt;
+    }
+
+    arm64_early_puts("EL0 result: ");
+    arm64_early_puthex64(result);
+    arm64_early_puts(" SVC count: ");
+    arm64_early_puthex64(arm64_exception_el0_svc_count());
+    arm64_early_puts("\nARM64_EL0_SVC_RETURN_OK\n");
+
+    arm64_early_puts("Testing timer IRQ after EL0 return\n");
     if (arm64_timer_irq_smoke_test() != 0) {
-        arm64_early_puts("ARM64_HIGH_TIMER_IRQ_FAILED\n");
+        arm64_early_puts("ARM64_POST_EL0_TIMER_IRQ_FAILED\n");
         goto halt;
     }
     arm64_early_puts("ARM64_HIGH_KERNEL_OK\n");

@@ -156,6 +156,42 @@ the high text address still translates, and PL011 MMIO remains available. It
 then takes and returns from a BRK through the high VBAR and receives three
 physical timer interrupts with no low RAM alias present.
 
+### Milestone 10: User-Only TTBR0 And ASIDs
+
+The TTBR1 L1 now also maps the physical MMIO gigabyte as EL1-only Device
+memory. Early UART and GIC accessors derive either the physical address or its
+canonical kernel alias from the current PC, so the same drivers work on both
+sides of the high-half trampoline. Once execution is high, both low L1 entries
+are retired and no kernel RAM or MMIO mapping remains in TTBR0.
+
+The bootstrap then exercises the first user-address-space contract. ASID 1
+owns a private three-level TTBR0 with one RW/NX EL0 page at `0x00400000`;
+ASID 2 owns an empty L1. Switching to ASID 2 makes the page fault, while
+TTBR1 kernel text and MMIO remain translated. Switching back to ASID 1 restores
+the page and its contents without changing TTBR1.
+
+This is the page-table and context-switch primitive for future processes, not
+yet integration with `task`, `vm_space`, the full allocator, or EL0 execution.
+
+### Milestone 11: First EL0 Execution And SVC Return
+
+The bootstrap now enters EL0t through an `ERET` trampoline with a private
+three-page user layout: RX code at `0x00400000`, RW/NX data at `0x00401000`,
+and an RW/NX stack at `0x00402000`. The code page is copied into place before
+entry and receives the required data-cache clean and instruction-cache
+invalidation. Mapping helpers reject writable executable user pages.
+
+The copied payload uses its EL0 stack, invokes a private smoke-test SVC, resumes
+in EL0 with the returned value, stores `0x1235` in its data page, and invokes a
+second SVC to return to a registered EL1h continuation. The lower-EL AArch64
+synchronous vector dispatches both calls and preserves the architectural SVC
+return PC. A physical timer IRQ after the round trip confirms that exception
+and interrupt state remains usable.
+
+These two SVC numbers are bring-up probes only. They are not the public ArmOS
+syscall ABI, and this payload is not yet owned by a scheduler task or
+`vm_space`.
+
 ## Toolchain
 
 On macOS, install the AArch64 bare-metal compiler and QEMU:
@@ -223,10 +259,16 @@ ARM64_TTBR1_PERMISSIONS_OK
 ARM64_DYNAMIC_PGTABLE_OK
 High kernel: PC=0xFFFFFF80... SP=0xFFFFFF80... VBAR=0xFFFFFF80...
 ARM64_TTBR1_EXECUTION_OK
-ARM64_LOW_KERNEL_UNMAPPED_OK
+ARM64_HIGH_MMIO_OK
+ARM64_LOW_MAP_RETIRED_OK
+User TTBR0: mapped=0x0001... empty=0x0002... VA=0x0000000000401000 PA=...
+ARM64_USER_TTBR0_ASID_OK
 Testing high VBAR synchronous vector
 ARM64_VECTOR_OK
-Testing timer IRQ without low RAM alias
+Entering EL0 at 0x0000000000400000 stack=0x0000000000403000
+EL0 result: 0x0000000000001235 SVC count: 0x0000000000000002
+ARM64_EL0_SVC_RETURN_OK
+Testing timer IRQ after EL0 return
 ARM64_TIMER_IRQ_OK
 ARM64_HIGH_KERNEL_OK
 ```
@@ -242,7 +284,7 @@ build/images/kernel-arm64-qemu-virt.dis
 
 ## Next Milestones
 
-1. Define per-process TTBR0 user tables and graduate the early allocator into
-   the synchronized full
-   physical-memory path.
-2. Define AArch64 task context, syscall, signal, ELF64, and userland ABIs.
+1. Integrate TTBR0/ASID ownership with `task` and `vm_space`, and graduate the
+   early allocator into the synchronized full physical-memory path.
+2. Define the real syscall ABI, then add ELF64 loading, AArch64 context switch,
+   signal frames, and the userland target.

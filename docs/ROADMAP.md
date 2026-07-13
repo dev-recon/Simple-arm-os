@@ -22,7 +22,10 @@ The v0.6 baseline is:
   delivery, a shared early page allocator, and FDT-driven RAM/reservation
   discovery, allocated TTBR0 L1/L2/L3 tables, and a permission-checked TTBR1
   kernel alias now used for the live PC, stack, and vectors after retiring the
-  low RAM identity mapping; the full Unix kernel and userland remain ARM32.
+  complete low kernel/MMIO map; isolated user-only TTBR0 tables and ASID
+  switching are validated; a first EL0t smoke payload runs with separate
+  RX and RW/NX mappings, returns through SVC, and preserves timer IRQ delivery,
+  while the full Unix kernel and userland remain ARM32.
 
 Post-v0.6 hardware milestone:
 

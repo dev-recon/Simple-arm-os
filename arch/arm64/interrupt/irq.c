@@ -8,6 +8,7 @@
 
 #include <asm/early_console.h>
 #include <asm/irq.h>
+#include <asm/mmu.h>
 
 typedef unsigned long long uint64_t;
 typedef unsigned int uint32_t;
@@ -39,16 +40,19 @@ static uint64_t timer_frequency;
 
 static inline void mmio_write32(unsigned long address, uint32_t value)
 {
+    address = (unsigned long)arm64_mmu_kernel_address(address);
     *(volatile uint32_t *)address = value;
 }
 
 static inline uint32_t mmio_read32(unsigned long address)
 {
+    address = (unsigned long)arm64_mmu_kernel_address(address);
     return *(volatile uint32_t *)address;
 }
 
 static inline void mmio_write8(unsigned long address, uint8_t value)
 {
+    address = (unsigned long)arm64_mmu_kernel_address(address);
     *(volatile uint8_t *)address = value;
 }
 

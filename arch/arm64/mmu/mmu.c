@@ -22,6 +22,8 @@ typedef unsigned long long uint64_t;
 #define DESC_ATTR_INDEX(n) ((uint64_t)(n) << 2)
 #define DESC_AF          (1ULL << 10)
 #define DESC_AP_RO_EL1   (2ULL << 6)
+#define DESC_AP_RW_EL0   (1ULL << 6)
+#define DESC_AP_RO_EL0   (3ULL << 6)
 #define DESC_SH_OUTER    (2ULL << 8)
 #define DESC_SH_INNER    (3ULL << 8)
 #define DESC_PXN         (1ULL << 53)
@@ -48,6 +50,9 @@ typedef unsigned long long uint64_t;
 #define SCTLR_SA         (1ULL << 3)
 #define SCTLR_SA0        (1ULL << 4)
 #define SCTLR_I          (1ULL << 12)
+
+#define TTBR_ASID_SHIFT  48u
+#define TTBR_ASID_MAX    255u
 
 static uint64_t arm64_l1_table[ARM64_L1_ENTRIES]
     __attribute__((aligned(4096)));
@@ -127,6 +132,55 @@ static uint64_t normal_memory_descriptor(uint64_t address, int page)
     return descriptor;
 }
 
+static uint64_t device_block_descriptor(void)
+{
+    return DESC_VALID |
+           DESC_ATTR_INDEX(0) |
+           DESC_AF |
+           DESC_SH_OUTER |
+           DESC_PXN |
+           DESC_UXN;
+}
+
+static int user_page_flags_valid(unsigned int flags)
+{
+    if ((flags & ARM64_USER_PAGE_READ) == 0 ||
+        (flags & ~(ARM64_USER_PAGE_READ |
+                   ARM64_USER_PAGE_WRITE |
+                   ARM64_USER_PAGE_EXEC)) != 0)
+        return 0;
+    return (flags & (ARM64_USER_PAGE_WRITE | ARM64_USER_PAGE_EXEC)) !=
+           (ARM64_USER_PAGE_WRITE | ARM64_USER_PAGE_EXEC);
+}
+
+static uint64_t user_page_descriptor(uint64_t physical_address,
+                                     unsigned int flags)
+{
+    uint64_t descriptor =
+        (physical_address & ARM64_TABLE_MASK) |
+        DESC_VALID | DESC_TABLE_PAGE |
+        DESC_ATTR_INDEX(1) | DESC_AF | DESC_SH_INNER |
+        DESC_PXN;
+
+    if (flags & ARM64_USER_PAGE_WRITE)
+        descriptor |= DESC_AP_RW_EL0;
+    else
+        descriptor |= DESC_AP_RO_EL0;
+    if ((flags & ARM64_USER_PAGE_EXEC) == 0)
+        descriptor |= DESC_UXN;
+    return descriptor;
+}
+
+arm64_mmu_u64 arm64_mmu_kernel_address(arm64_mmu_u64 physical_address)
+{
+    uint64_t pc;
+
+    __asm__ volatile("adr %0, ." : "=r"(pc));
+    if (pc >= ARM64_KERNEL_VA_BASE)
+        return ARM64_KERNEL_VA_BASE + physical_address;
+    return physical_address;
+}
+
 arm64_mmu_u64 arm64_mmu_read_sctlr(void)
 {
     uint64_t value;
@@ -180,6 +234,16 @@ arm64_mmu_u64 arm64_mmu_translate_user_read(arm64_mmu_u64 address)
     uint64_t result;
 
     __asm__ volatile("at s1e0r, %0" :: "r"(address));
+    arm64_isb();
+    __asm__ volatile("mrs %0, par_el1" : "=r"(result));
+    return result;
+}
+
+arm64_mmu_u64 arm64_mmu_translate_user_write(arm64_mmu_u64 address)
+{
+    uint64_t result;
+
+    __asm__ volatile("at s1e0w, %0" :: "r"(address));
     arm64_isb();
     __asm__ volatile("mrs %0, par_el1" : "=r"(result));
     return result;
@@ -379,6 +443,7 @@ int arm64_mmu_install_ttbr1(arm64_mmu_u64 l1_address,
     l1 = (uint64_t *)l1_address;
     for (i = 0; i < ARM64_L1_ENTRIES; i++)
         l1[i] = 0;
+    l1[0] = device_block_descriptor();
     l1[1] = (shared_l2_address & ARM64_TABLE_MASK) |
             DESC_VALID | DESC_TABLE_PAGE;
     clean_range_to_poc(l1, 4096u);
@@ -401,7 +466,7 @@ int arm64_mmu_install_ttbr1(arm64_mmu_u64 l1_address,
     return 0;
 }
 
-int arm64_mmu_retire_low_ram(arm64_mmu_u64 ttbr0_l1_address)
+int arm64_mmu_retire_low_map(arm64_mmu_u64 ttbr0_l1_address)
 {
     uint64_t *l1;
 
@@ -412,17 +477,156 @@ int arm64_mmu_retire_low_ram(arm64_mmu_u64 ttbr0_l1_address)
         return -2;
 
     l1 = (uint64_t *)ttbr0_l1_address;
-    if ((l1[1] & (DESC_VALID | DESC_TABLE_PAGE)) !=
+    if ((l1[0] & DESC_VALID) == 0 ||
+        (l1[1] & (DESC_VALID | DESC_TABLE_PAGE)) !=
         (DESC_VALID | DESC_TABLE_PAGE))
         return -3;
 
-    /* Keep L1[0] for low MMIO; retire only the identity-mapped RAM window. */
+    l1[0] = 0;
     l1[1] = 0;
-    clean_range_to_poc(&l1[1], sizeof(l1[1]));
+    clean_range_to_poc(&l1[0], 2 * sizeof(l1[0]));
 
     __asm__ volatile("dsb ishst" ::: "memory");
     __asm__ volatile("tlbi vmalle1");
     __asm__ volatile("dsb ish" ::: "memory");
     arm64_isb();
     return 0;
+}
+
+int arm64_mmu_prepare_empty_ttbr0(arm64_mmu_u64 l1_address)
+{
+    uint64_t *l1;
+    unsigned int i;
+
+    if (!table_address_valid(l1_address))
+        return -1;
+
+    l1 = (uint64_t *)l1_address;
+    for (i = 0; i < ARM64_L1_ENTRIES; i++)
+        l1[i] = 0;
+    clean_range_to_poc(l1, 4096u);
+    return 0;
+}
+
+int arm64_mmu_prepare_user_page(arm64_mmu_u64 l1_address,
+                                arm64_mmu_u64 l2_address,
+                                arm64_mmu_u64 l3_address,
+                                arm64_mmu_u64 virtual_address,
+                                arm64_mmu_u64 physical_address,
+                                unsigned int flags)
+{
+    uint64_t *l1;
+    uint64_t *l2;
+    uint64_t *l3;
+    uint64_t l1_index;
+    uint64_t l2_index;
+    uint64_t l3_index;
+    unsigned int i;
+
+    if (!table_address_valid(l1_address) ||
+        !table_address_valid(l2_address) ||
+        !table_address_valid(l3_address) ||
+        l1_address == l2_address || l1_address == l3_address ||
+        l2_address == l3_address ||
+        (virtual_address & 0xfffu) != 0 ||
+        (physical_address & 0xfffu) != 0 ||
+        virtual_address >= (1ULL << 39) ||
+        !user_page_flags_valid(flags))
+        return -1;
+
+    l1 = (uint64_t *)l1_address;
+    l2 = (uint64_t *)l2_address;
+    l3 = (uint64_t *)l3_address;
+    for (i = 0; i < ARM64_L1_ENTRIES; i++) {
+        l1[i] = 0;
+        l2[i] = 0;
+        l3[i] = 0;
+    }
+
+    l1_index = (virtual_address >> 30) & 0x1ffu;
+    l2_index = (virtual_address >> 21) & 0x1ffu;
+    l3_index = (virtual_address >> 12) & 0x1ffu;
+    l1[l1_index] = (l2_address & ARM64_TABLE_MASK) |
+                   DESC_VALID | DESC_TABLE_PAGE;
+    l2[l2_index] = (l3_address & ARM64_TABLE_MASK) |
+                   DESC_VALID | DESC_TABLE_PAGE;
+    l3[l3_index] = user_page_descriptor(physical_address, flags);
+
+    clean_range_to_poc(l1, 4096u);
+    clean_range_to_poc(l2, 4096u);
+    clean_range_to_poc(l3, 4096u);
+    return 0;
+}
+
+int arm64_mmu_prepare_user_l3_page(arm64_mmu_u64 l3_address,
+                                   arm64_mmu_u64 virtual_address,
+                                   arm64_mmu_u64 physical_address,
+                                   unsigned int flags)
+{
+    uint64_t *l3;
+    uint64_t l3_index;
+
+    if (!table_address_valid(l3_address) ||
+        (virtual_address & 0xfffu) != 0 ||
+        (physical_address & 0xfffu) != 0 ||
+        virtual_address >= (1ULL << 39) ||
+        !user_page_flags_valid(flags))
+        return -1;
+
+    l3 = (uint64_t *)l3_address;
+    l3_index = (virtual_address >> 12) & 0x1ffu;
+    l3[l3_index] = user_page_descriptor(physical_address, flags);
+    clean_range_to_poc(&l3[l3_index], sizeof(l3[l3_index]));
+    return 0;
+}
+
+int arm64_mmu_switch_user_ttbr0(arm64_mmu_u64 table_address,
+                                unsigned int asid)
+{
+    uint64_t operand;
+    uint64_t ttbr;
+
+    if (!table_address_valid(table_address) || asid == 0 ||
+        asid > TTBR_ASID_MAX)
+        return -1;
+    if ((arm64_mmu_read_sctlr() & SCTLR_M) == 0)
+        return -2;
+
+    operand = (uint64_t)asid << TTBR_ASID_SHIFT;
+    ttbr = operand | table_address;
+    __asm__ volatile("dsb ishst" ::: "memory");
+    __asm__ volatile("tlbi aside1, %0" :: "r"(operand));
+    __asm__ volatile("dsb ish" ::: "memory");
+    __asm__ volatile("msr ttbr0_el1, %0" :: "r"(ttbr) : "memory");
+    arm64_isb();
+    return 0;
+}
+
+void arm64_mmu_sync_code(arm64_mmu_u64 address,
+                         arm64_mmu_u64 length)
+{
+    uint64_t ctr;
+    uint64_t dline_size;
+    uint64_t iline_size;
+    uint64_t cursor;
+    uint64_t end = address + length;
+
+    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
+    dline_size = 4ULL << ((ctr >> 16) & 0xfu);
+    iline_size = 4ULL << (ctr & 0xfu);
+
+    cursor = address & ~(dline_size - 1u);
+    while (cursor < end) {
+        __asm__ volatile("dc cvau, %0" :: "r"(cursor) : "memory");
+        cursor += dline_size;
+    }
+    __asm__ volatile("dsb ish" ::: "memory");
+
+    cursor = address & ~(iline_size - 1u);
+    while (cursor < end) {
+        __asm__ volatile("ic ivau, %0" :: "r"(cursor) : "memory");
+        cursor += iline_size;
+    }
+    __asm__ volatile("dsb ish" ::: "memory");
+    arm64_isb();
 }

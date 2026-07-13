@@ -218,6 +218,11 @@ The first executable milestone now provides an isolated EL1 serial bootstrap:
 - live high-half PC, stack, and exception-vector execution through TTBR1,
   followed by retirement of the low RAM identity window from TTBR0 and
   successful BRK/timer-IRQ validation;
+- EL1-only high MMIO through TTBR1, complete retirement of low kernel/MMIO
+  mappings, and isolated user-only TTBR0 prototypes tagged with ASIDs 1 and 2;
+- a first EL0t payload with separate RX code, RW/NX data and stack pages,
+  lower-EL AArch64 SVC dispatch, return to EL0, and a controlled EL1h
+  continuation followed by a timer-IRQ check;
 - separate ARM64 artifacts so ARM32 platform images are not overwritten.
 
 See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
@@ -225,8 +230,9 @@ See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
 Remaining AArch64 pieces:
 
 - synchronization and full physical-allocator integration;
-- per-process TTBR0 user tables and the final kernel/user VA split;
-- AArch64 syscall ABI;
+- task/`vm_space` ownership of the validated TTBR0/ASID primitives;
+- scheduler ownership of the validated EL0 entry and exception-return path;
+- the public AArch64 syscall ABI and ELF64 process loader;
 - AArch64 context switch;
 - AArch64 signal frame;
 - AArch64 toolchain/userland target.
