@@ -325,13 +325,12 @@ void smp_secondary_main(uint32_t cpu_id)
             task_start_secondary_scheduler(cpu_id);
 
         /*
-         * The secondary CPU is alive in C, but still outside the scheduler.
-         * Only diagnostic SGIs are enabled here. It must not run tasks or handle
-         * device interrupts until the scheduler and per-CPU timer path are SMP
-         * aware. WFI avoids the old busy WFE heartbeat storm.
+         * The scheduler authorization is published before SEV, so WFE is the
+         * matching holding-pen primitive. The loop remains asleep without an
+         * event and does not depend on a local timer interrupt to make progress.
          */
         data_sync_barrier();
-        wait_for_interrupt();
+        arch_wait_for_event();
     }
 }
 

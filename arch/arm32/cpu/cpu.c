@@ -68,6 +68,11 @@ void arch_wait_for_interrupt(void)
     wait_for_interrupt();
 }
 
+void arch_wait_for_event(void)
+{
+    wait_for_event();
+}
+
 void arch_disable_branch_predictor(void)
 {
     uint32_t sctlr;

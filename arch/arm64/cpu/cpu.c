@@ -76,6 +76,11 @@ void arch_wait_for_interrupt(void)
     __asm__ volatile("wfi" ::: "memory");
 }
 
+void arch_wait_for_event(void)
+{
+    __asm__ volatile("wfe" ::: "memory");
+}
+
 void arch_disable_branch_predictor(void)
 {
     __asm__ volatile("dsb sy\n\tisb" ::: "memory");

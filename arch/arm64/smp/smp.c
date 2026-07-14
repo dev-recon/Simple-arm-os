@@ -10,8 +10,8 @@
  *
  * Responsibilities:
  * - Discover CPU topology from the firmware device tree.
- * - Release QEMU CPUs through PSCI and eager Raspberry Pi cores through the
- *   architecture holding pen.
+ * - Release QEMU CPUs through PSCI and Raspberry Pi cores through the
+ *   firmware spin table and local mailbox 3.
  * - Publish per-CPU lifecycle state to the common scheduler contract.
  *
  * Notes:
@@ -35,6 +35,15 @@
 #define PSCI_0_2_FN64_CPU_ON     0xC4000003ULL
 #define SMP_BOOT_GATE_HOLD       0x484F4C44434F5245ULL
 
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
+#define RASPI_LOCAL_MAILBOX3_SET0       0x08Cu
+#define RASPI_LOCAL_MAILBOX3_CLEAR0     0x0CCu
+#define RASPI_LOCAL_MAILBOX_STRIDE      0x010u
+#define RASPI_SECONDARY_BOOT_TIMEOUT_MS 1000u
+#define RASPI_SPIN_TABLE_BASE           0x0D8u
+#define RASPI_SPIN_TABLE_STRIDE         0x008u
+#endif
+
 volatile uint64_t smp_boot_gate = SMP_BOOT_GATE_HOLD;
 volatile uint64_t smp_secondary_release_entry[ARMOS_MAX_CPUS];
 
@@ -46,6 +55,8 @@ static volatile uint32_t scheduler_banned_mask;
 static volatile uint32_t shutdown_park_mask;
 static volatile uint32_t online_count;
 static volatile uint32_t scheduler_reject_count;
+static volatile uint32_t release_mailbox3_value[ARMOS_MAX_CPUS];
+static volatile uint32_t release_spin_table_value[ARMOS_MAX_CPUS];
 static uint32_t boot_cpu_id;
 static uint32_t possible_count;
 
@@ -147,6 +158,97 @@ static int32_t psci_cpu_on(uint64_t target_cpu, uint64_t entry,
     return (int32_t)x0;
 }
 
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
+static volatile uint32_t *raspi_smp_local_base(void)
+{
+    if (!arch_mmu_enabled())
+        return (volatile uint32_t *)(uintptr_t)
+            arch_platform_irqctrl_phys_start();
+    return (volatile uint32_t *)(uintptr_t)
+        arch_platform_kernel_mmio_irqctrl_base();
+}
+
+static void raspi_smp_local_write(uint32_t offset, uint32_t value)
+{
+    volatile uint8_t *base = (volatile uint8_t *)raspi_smp_local_base();
+
+    *(volatile uint32_t *)(base + offset) = value;
+    arch_data_sync_barrier();
+}
+
+static uint32_t raspi_smp_local_read(uint32_t offset)
+{
+    volatile uint8_t *base = (volatile uint8_t *)raspi_smp_local_base();
+    uint32_t value = *(volatile uint32_t *)(base + offset);
+
+    arch_data_sync_barrier();
+    return value;
+}
+
+static void raspi_smp_write_spin_table(uint32_t cpu, uint64_t entry)
+{
+    uintptr_t release_address;
+    volatile uint64_t *release;
+
+    if (cpu >= 4)
+        return;
+
+    release_address = RASPI_SPIN_TABLE_BASE +
+                      RASPI_SPIN_TABLE_STRIDE * cpu;
+    release = (volatile uint64_t *)release_address;
+    *release = entry;
+    release_spin_table_value[cpu] = (uint32_t)*release;
+    arch_clean_dcache_by_mva((const void *)release_address,
+                             sizeof(*release));
+    arch_data_sync_barrier();
+}
+
+static int32_t raspi_smp_cpu_on(uint32_t cpu, uint64_t entry)
+{
+    uint64_t start;
+    uint64_t timeout_ticks;
+    uint32_t mailbox_offset;
+
+    if (cpu >= ARMOS_MAX_CPUS || cpu >= 4 || (entry >> 32) != 0)
+        return -EINVAL;
+
+    release_mailbox3_value[cpu] = 0xffffffffu;
+    release_spin_table_value[cpu] = 0;
+    raspi_smp_write_spin_table(cpu, entry);
+
+    /*
+     * BCM2836/BCM2837 firmware parks secondary cores behind per-core
+     * spin-table slots and local mailbox 3. Keep both release mechanisms in
+     * step with ARM32: real boards consume them, while emulated eager cores
+     * may already be waiting on smp_secondary_release_entry[] in boot.S.
+     */
+    mailbox_offset = RASPI_LOCAL_MAILBOX_STRIDE * cpu;
+    raspi_smp_local_write(RASPI_LOCAL_MAILBOX3_CLEAR0 + mailbox_offset,
+                          0xffffffffu);
+    raspi_smp_local_write(RASPI_LOCAL_MAILBOX3_SET0 + mailbox_offset,
+                          (uint32_t)entry);
+    arch_send_event();
+    arch_instruction_sync_barrier();
+
+    start = get_timer_count();
+    timeout_ticks = (uint64_t)(get_timer_frequency() / 1000u) *
+                    RASPI_SECONDARY_BOOT_TIMEOUT_MS;
+    if (timeout_ticks == 0)
+        timeout_ticks = 1;
+
+    while ((get_timer_count() - start) < timeout_ticks) {
+        release_mailbox3_value[cpu] =
+            raspi_smp_local_read(RASPI_LOCAL_MAILBOX3_CLEAR0 +
+                                 mailbox_offset);
+        if (smp_cpu_seen(cpu) && smp_cpu_state(cpu) == SMP_CPU_PARKED)
+            return 0;
+        arch_cpu_relax();
+    }
+
+    return -ETIMEDOUT;
+}
+#endif
+
 static uint32_t detect_possible_cpus(void)
 {
     uint32_t count = fdt_count_cpus((void *)(uintptr_t)dtb_address,
@@ -194,6 +296,8 @@ void smp_init_boot_cpu(void)
         cpu_info[cpu].park_heartbeat = 0;
         cpu_info[cpu].start_result = cpu == boot_cpu_id ? 0 : -ENOSYS;
         smp_secondary_release_entry[cpu] = 0;
+        release_mailbox3_value[cpu] = 0;
+        release_spin_table_value[cpu] = 0;
     }
     arch_data_sync_barrier();
 }
@@ -212,10 +316,18 @@ void smp_start_secondary_cpus(void)
         arch_clean_dcache_by_mva(
             (const void *)&smp_secondary_release_entry[cpu],
             sizeof(smp_secondary_release_entry[cpu]));
-        if (arch_platform_has_psci())
+        if (arch_platform_has_psci()) {
             cpu_info[cpu].start_result = psci_cpu_on(cpu, entry, cpu);
-        else
-            cpu_info[cpu].start_result = 0;
+        }
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
+        else {
+            cpu_info[cpu].start_result = raspi_smp_cpu_on(cpu, entry);
+        }
+#else
+        else {
+            cpu_info[cpu].start_result = -ENOSYS;
+        }
+#endif
 
         if (cpu_info[cpu].start_result != 0)
             cpu_info[cpu].state = SMP_CPU_OFFLINE;
@@ -249,7 +361,13 @@ void smp_secondary_main(uint32_t cpu_id)
         cpu_info[cpu_id].park_heartbeat++;
         if (smp_scheduler_cpu_enabled(cpu_id))
             task_start_secondary_scheduler(cpu_id);
-        arch_wait_for_interrupt();
+
+        /*
+         * smp_enable_scheduler_cpu() publishes the scheduler mask before
+         * issuing SEV. WFE is the matching holding-pen primitive; WFI would
+         * only wake accidentally when a local interrupt happened to arrive.
+         */
+        arch_wait_for_event();
     }
 }
 
@@ -271,14 +389,12 @@ uint32_t smp_cpu_release_entry(uint32_t cpu_id)
 
 uint32_t smp_cpu_release_mailbox3_value(uint32_t cpu_id)
 {
-    (void)cpu_id;
-    return 0;
+    return cpu_id < ARMOS_MAX_CPUS ? release_mailbox3_value[cpu_id] : 0;
 }
 
 uint32_t smp_cpu_release_spin_table_value(uint32_t cpu_id)
 {
-    (void)cpu_id;
-    return 0;
+    return cpu_id < ARMOS_MAX_CPUS ? release_spin_table_value[cpu_id] : 0;
 }
 
 smp_cpu_state_t smp_cpu_state(uint32_t cpu_id)

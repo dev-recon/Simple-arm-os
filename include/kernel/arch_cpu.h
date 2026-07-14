@@ -43,6 +43,7 @@ void arch_enable_interrupts(void);
 void arch_enable_async_abort(void);
 void arch_enable_smp_coherency(void);
 void arch_wait_for_interrupt(void);
+void arch_wait_for_event(void);
 void arch_disable_branch_predictor(void);
 uint32_t arch_timer_frequency(void);
 uint64_t arch_timer_counter(void);
