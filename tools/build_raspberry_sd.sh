@@ -429,6 +429,10 @@ case "$PUSH_MODE" in
         [ -w "$SD_VOLUME" ] || die "boot volume is not writable: $SD_VOLUME"
         validate_boot_target
 
+        echo "=== Boot partition update only ==="
+        echo "note: kernel/firmware will be updated, but the SD root filesystem will not."
+        echo "note: userland changes such as a rebuilt top require --mode raw."
+
         if [ "$INSTALL_FIRMWARE" = "1" ]; then
             [ -d "$RASPI_FIRMWARE_DIR" ] || die "firmware directory not found: $RASPI_FIRMWARE_DIR"
             for file in bootcode.bin start.elf fixup.dat "$DEVICE_TREE"; do
