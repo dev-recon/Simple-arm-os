@@ -4,16 +4,29 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGET_ARCH="${TARGET_ARCH:-arm32}"
-TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
+TARGET_ARCH="${TARGET_ARCH:-arm64}"
+TARGET_PLATFORM="${TARGET_PLATFORM:-raspi3}"
 if [ "$TARGET_ARCH" = "arm64" ]; then
     ARCH="${ARCH:-aarch64-elf-}"
 else
     ARCH="${ARCH:-arm-none-eabi-}"
 fi
 BUILD_XV_DEPS="${BUILD_XV_DEPS:-0}"
+BUILD_ALL_USERLAND="${BUILD_ALL_USERLAND:-0}"
 BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 BUILD_BSD="${BUILD_BSD:-0}"
+if [ "$BUILD_ALL_USERLAND" = "1" ]; then
+    BUILD_TCC=1
+    BUILD_BSD=1
+    BUILD_NCURSES=1
+    BUILD_NANO=1
+    BUILD_ZLIB=1
+    BUILD_LIBJPEG=1
+    BUILD_LIBPNG=1
+    BUILD_LIBTIFF=1
+    BUILD_FBVIEW=1
+    BUILD_XV_DEPS=1
+fi
 if [ "$BUILD_XV_DEPS" = "1" ]; then
     BUILD_TCC="${BUILD_TCC:-0}"
     BUILD_ZLIB="${BUILD_ZLIB:-1}"
@@ -31,8 +44,10 @@ else
 fi
 BUILD_NCURSES="${BUILD_NCURSES:-0}"
 BUILD_NANO="${BUILD_NANO:-0}"
-DEFAULT_NEWLIB_SYSROOT="$ROOT_DIR/build/newlib-sysroot/arm-none-eabi"
-NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$DEFAULT_NEWLIB_SYSROOT}"
+
+# shellcheck source=tools/cross_target_env.sh
+source "$ROOT_DIR/tools/cross_target_env.sh"
+IMAGE_SUFFIX="${TARGET_ARCH}-${TARGET_PLATFORM}"
 
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
@@ -47,23 +62,6 @@ cd "$ROOT_DIR"
 
 echo "=== BUILD ARMOS ==="
 echo "Target: ${TARGET_ARCH}/${TARGET_PLATFORM}"
-
-if [ "$TARGET_ARCH" = "arm64" ]; then
-    for tool in make "${ARCH}gcc" "${ARCH}ld" "${ARCH}objcopy" "${ARCH}objdump"; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            echo "Error: required ARM64 bootstrap tool '$tool' not found" >&2
-            exit 1
-        fi
-    done
-
-    echo "=== Building ARM64 serial bootstrap ==="
-    make platform-kernel \
-        ARCH="$ARCH" CROSS_COMPILE="$ARCH" \
-        TARGET_ARCH="$TARGET_ARCH" TARGET_PLATFORM="$TARGET_PLATFORM"
-    echo "=== ARM64 BOOTSTRAP BUILD DONE ==="
-    echo "Kernel image: build/images/kernel-arm64-qemu-virt.bin"
-    exit 0
-fi
 
 for dir in userfs userland kernel newlib-port; do
     if [ ! -d "$dir" ]; then
@@ -82,13 +80,16 @@ done
 if [ "$BUILD_NEWLIB" = "1" ]; then
     if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_SYSROOT/lib/libc.a" ]; then
         echo "=== Building repo-local newlib sysroot ==="
-        ARCH="$ARCH" NEWLIB_INSTALL_ROOT="$ROOT_DIR/build/newlib-sysroot" ./tools/build_newlib.sh
+        TARGET="$TARGET_TRIPLET" ARCH="$ARCH" \
+            NEWLIB_INSTALL_ROOT="$ROOT_DIR/build/newlib-sysroot" \
+            ./tools/build_newlib.sh
     fi
 fi
 
 echo "=== Rebuilding userland ==="
-make -C userland clean
+make -C userland clean TARGET_ARCH="$TARGET_ARCH" ARCH="$ARCH"
 make -C userland install \
+    TARGET_ARCH="$TARGET_ARCH" \
     BUILD_NEWLIB="$BUILD_NEWLIB" \
     ENABLE_TCC="$BUILD_TCC" \
     ARCH="$ARCH" \
@@ -229,11 +230,14 @@ echo "=== Rebuilding kernel ==="
 make platform-kernel ARCH="$ARCH" CROSS_COMPILE="$ARCH" TARGET_ARCH="$TARGET_ARCH" TARGET_PLATFORM="$TARGET_PLATFORM"
 
 echo "=== Recreating disk image ==="
-rm -f disk.img fat32.img ext2.img "build/images/disk-${TARGET_PLATFORM}.img"
+rm -f disk.img fat32.img ext2.img "build/images/disk-${IMAGE_SUFFIX}.img"
 make platform-disk ARCH="$ARCH" CROSS_COMPILE="$ARCH" TARGET_ARCH="$TARGET_ARCH" TARGET_PLATFORM="$TARGET_PLATFORM"
 
+echo "=== Validating installed userfs ELF architecture ==="
+TARGET_ARCH="$TARGET_ARCH" ARCH="$ARCH" ./tools/validate_userfs_arch.sh
+
 echo "=== BUILD DONE ==="
-echo "Kernel image: build/images/kernel-${TARGET_PLATFORM}.bin"
-echo "Disk image:   build/images/disk-${TARGET_PLATFORM}.img"
+echo "Kernel image: build/images/kernel-${IMAGE_SUFFIX}.bin"
+echo "Disk image:   build/images/disk-${IMAGE_SUFFIX}.img"
 echo "Boot existing build with: ./boot.sh"
 echo "Rebuild and boot with:    ./run.sh"

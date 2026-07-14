@@ -4,7 +4,7 @@ This directory contains the low-level ARM32 Raspberry Pi device backend shared
 by two deliberately separate build profiles:
 
 - `TARGET_PLATFORM=raspi2`: QEMU `raspi2b`, Cortex-A7;
-- `TARGET_PLATFORM=pi3`: Raspberry Pi 3 hardware, Cortex-A53 in AArch32.
+- `TARGET_PLATFORM=raspi3`: Raspberry Pi 3 hardware, Cortex-A53 in AArch32.
 
 The target distinction matters. QEMU and hardware expose different timer,
 firmware handoff, poweroff, and SMP behavior even when they share BCM283x MMIO
@@ -23,8 +23,8 @@ Implemented shared facilities:
 
 The PI3 target-specific build contract lives in:
 
-- `arch/arm32/platform/pi3/platform.mk`;
-- `arch/arm32/include/asm/platform/pi3.h`;
+- `arch/arm32/platform/raspi3/platform.mk`;
+- `arch/arm32/include/asm/platform/raspi3.h`;
 - `docs/RASPBERRY_PI3.md`.
 
 Graphics, USB input, and networking are not part of the current Raspberry Pi

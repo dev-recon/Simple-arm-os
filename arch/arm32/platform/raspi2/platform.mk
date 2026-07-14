@@ -20,10 +20,11 @@ PLATFORM_DISK_LAYOUT ?= fat32-first
 # Some firmware revisions may ignore hidden FAT32 partition types (0x1B/0x1C).
 PLATFORM_DISK_HIDDEN_BOOT ?= 0
 
+RASPBERRYPI_PLATFORM_DIR = kernel/platform/raspberrypi
 PLATFORM_OBJS = \
-	$(PLATFORM_DIR)/devices.o \
-	$(PLATFORM_DIR)/irq.o \
-	$(PLATFORM_DIR)/power.o \
+	$(RASPBERRYPI_PLATFORM_DIR)/devices.o \
+	$(RASPBERRYPI_PLATFORM_DIR)/irq.o \
+	$(RASPBERRYPI_PLATFORM_DIR)/power.o \
 	kernel/drivers/mmc/bcm2835_emmc.o \
 	kernel/drivers/keyboard.o \
 	kernel/drivers/display.o \

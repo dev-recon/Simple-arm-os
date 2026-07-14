@@ -50,6 +50,11 @@ static inline void asm_instruction_sync_barrier(void)
     instruction_sync_barrier();
 }
 
+static inline void asm_send_event(void)
+{
+    send_event();
+}
+
 static inline void asm_clean_dcache_by_mva(const void *addr, size_t size)
 {
     clean_dcache_by_mva(addr, size);

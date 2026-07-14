@@ -18,14 +18,13 @@ BUNDLE_BIN="$BUNDLE_PREFIX/bin"
 BUNDLE_SHARE="$BUNDLE_PREFIX/share"
 
 ARCH="${ARCH:-arm-none-eabi-}"
+# shellcheck source=tools/cross_target_env.sh
+source "$ROOT_DIR/tools/cross_target_env.sh"
 CC="${ARCH}gcc"
 STRIP="${ARCH}strip"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-ARM_FLAGS="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft"
-NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$ROOT_DIR/build/newlib-sysroot/arm-none-eabi}"
-NEWLIB_LIBC="${NEWLIB_LIBC:-$NEWLIB_SYSROOT/lib/libc.a}"
 LIBGCC="${LIBGCC:-$("$CC" -print-libgcc-file-name)}"
 
 if [ ! -f "$SRC_DIR/configure" ]; then
@@ -39,9 +38,9 @@ if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_LIBC" ]; then
     exit 1
 fi
 
-if [ ! -f "$ROOT_DIR/newlib-port/build/crt0_newlib.o" ] ||
-   [ ! -f "$ROOT_DIR/newlib-port/build/syscall_raw.o" ] ||
-   [ ! -f "$ROOT_DIR/newlib-port/build/syscalls.o" ]; then
+if [ ! -f "$NEWLIB_RUNTIME_DIR/crt0_newlib.o" ] ||
+   [ ! -f "$NEWLIB_RUNTIME_DIR/syscall_raw.o" ] ||
+   [ ! -f "$NEWLIB_RUNTIME_DIR/syscalls.o" ]; then
     echo "error: newlib-port runtime objects are missing" >&2
     echo "hint: make -C newlib-port NEWLIB_SYSROOT=$NEWLIB_SYSROOT" >&2
     exit 1
@@ -64,11 +63,11 @@ cd "$BUILD_DIR"
 
 CC="$CC" \
 CFLAGS="$BMAKE_CFLAGS" \
-LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition $ROOT_DIR/newlib-port/build/crt0_newlib.o $ROOT_DIR/newlib-port/build/syscall_raw.o $ROOT_DIR/newlib-port/build/syscalls.o" \
+LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=$TARGET_TEXT_ADDRESS -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition $RUNTIME_OBJECTS" \
 LIBS="$NEWLIB_LIBC $LIBGCC" \
 "$SRC_DIR/configure" \
-    --host=arm-none-eabi \
-    --target=arm-none-eabi \
+    --host="$TARGET_TRIPLET" \
+    --target="$TARGET_TRIPLET" \
     --prefix=/opt/bmake \
     --without-meta \
     --without-filemon \

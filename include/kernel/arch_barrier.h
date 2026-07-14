@@ -14,9 +14,8 @@
  * - Keep driver code from including ARM-specific helper headers directly.
  *
  * Notes:
- * - These wrappers intentionally preserve the exact ARM32 primitive semantics.
- *   A second architecture should implement equivalent ordering at this
- *   boundary rather than teaching each driver about that architecture.
+ * - Every architecture provides equivalent ordering and cache semantics at
+ *   this boundary.
  */
 
 #ifndef _KERNEL_ARCH_BARRIER_H
@@ -53,6 +52,11 @@ static inline void arch_data_sync_barrier_inner_shareable_write(void)
 static inline void arch_instruction_sync_barrier(void)
 {
     asm_instruction_sync_barrier();
+}
+
+static inline void arch_send_event(void)
+{
+    asm_send_event();
 }
 
 static inline void arch_clean_dcache_by_mva(const void *addr, size_t size)

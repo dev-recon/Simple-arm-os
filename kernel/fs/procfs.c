@@ -36,9 +36,8 @@
 #include <kernel/smp.h>
 #include <kernel/tlb.h>
 #include <kernel/arch_cpu.h>
+#include <kernel/arch_mmu_debug.h>
 #include <kernel/arch_platform.h>
-#include <asm/arm.h>
-#include <asm/mmu.h>
 
 extern uint32_t task_count;
 extern task_t* task_list_head;
@@ -639,8 +638,11 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
     uint32_t boot = smp_boot_cpu_id();
     uint32_t possible = smp_possible_cpu_count();
     uint32_t seen = smp_seen_cpu_mask();
-    uint32_t midr = arm_read_midr();
-    uint32_t part = arm_midr_part(midr);
+    arch_cpuinfo_t cpuinfo;
+    arch_mmu_debug_state_t mmu;
+
+    arch_get_cpuinfo(&cpuinfo);
+    arch_mmu_debug_snapshot(&mmu);
 
     proc_append(buf, cap, len, "current_cpu: %u\n", current);
     proc_append(buf, cap, len, "boot_cpu:    %u\n", boot);
@@ -654,9 +656,14 @@ static void proc_fill_smp(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "tlb_gen:     %u\n", tlb_shootdown_generation());
     proc_append(buf, cap, len, "sched_guard: %u\n", smp_scheduler_reject_count());
     proc_append(buf, cap, len,
-                "sysreg_cpu%u: midr=0x%08x part=0x%03x sctlr=0x%08x actlr=0x%08x ttbr0=0x%08x ttbr1=0x%08x ttbcr=0x%08x dacr=0x%08x\n",
-                current, midr, part, get_sctlr(), get_actlr(), get_ttbr0(),
-                get_ttbr1(), get_ttbcr(), get_dacr());
+                "sysreg_cpu%u: midr_impl=0x%02x part=0x%03x sctlr=%p actlr=%p ttbr0=%p ttbr1=%p tcr=%p access=%p\n",
+                current, cpuinfo.implementer, cpuinfo.part,
+                (void *)(uintptr_t)mmu.control,
+                (void *)(uintptr_t)mmu.auxiliary,
+                (void *)(uintptr_t)mmu.root0,
+                (void *)(uintptr_t)mmu.root1,
+                (void *)(uintptr_t)mmu.translation_control,
+                (void *)(uintptr_t)mmu.access_control);
     proc_append(buf, cap, len, "\n");
     proc_append(buf, cap, len, "cpu state   seen sched rq      irq  ipi    timer    hb tlb idle  cur_tid cur_pid pri current      psci idle-work idle-sched idle-fb\n");
 

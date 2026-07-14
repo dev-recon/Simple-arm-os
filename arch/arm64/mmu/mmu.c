@@ -19,6 +19,12 @@
  */
 
 #include <asm/mmu.h>
+#include <asm/platform.h>
+#include <kernel/arch_mmu_debug.h>
+#include <kernel/arch_memory.h>
+#include <kernel/memory.h>
+#include <kernel/user_layout.h>
+#include <kernel/uart.h>
 
 typedef unsigned long long uint64_t;
 
@@ -26,14 +32,12 @@ typedef unsigned long long uint64_t;
 #define ARM64_L1_BLOCK_SIZE (1ULL << 30)
 #define ARM64_L2_BLOCK_SIZE (1ULL << 21)
 #define ARM64_TABLE_MASK 0x0000FFFFFFFFF000ULL
-#define ARM64_QEMU_RAM_BASE 0x40000000ULL
-#define ARM64_L3_WINDOW_END (ARM64_QEMU_RAM_BASE + ARM64_L2_BLOCK_SIZE)
 
 #define DESC_VALID       (1ULL << 0)
 #define DESC_TABLE_PAGE  (1ULL << 1)
 #define DESC_ATTR_INDEX(n) ((uint64_t)(n) << 2)
 #define DESC_AF          (1ULL << 10)
-#define DESC_AP_RO_EL1   (2ULL << 6)
+#define DESC_NG          (1ULL << 11)
 #define DESC_AP_RW_EL0   (1ULL << 6)
 #define DESC_AP_RO_EL0   (3ULL << 6)
 #define DESC_SH_OUTER    (2ULL << 8)
@@ -54,7 +58,6 @@ typedef unsigned long long uint64_t;
 #define TCR_ORGN1_WBWA   (1ULL << 26)
 #define TCR_SH1_INNER    (3ULL << 28)
 #define TCR_TG1_4K       (2ULL << 30)
-#define TCR_TTBR1_FIELDS (0xFFFFULL << 16)
 #define TCR_IPS_SHIFT    32u
 
 #define SCTLR_M          (1ULL << 0)
@@ -66,8 +69,35 @@ typedef unsigned long long uint64_t;
 #define TTBR_ASID_SHIFT  48u
 #define TTBR_ASID_MAX    255u
 
+void arch_mmu_debug_snapshot(arch_mmu_debug_state_t *state)
+{
+    if (!state)
+        return;
+
+    __asm__ volatile("mrs %0, sctlr_el1" : "=r"(state->control));
+    __asm__ volatile("mrs %0, actlr_el1" : "=r"(state->auxiliary));
+    __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(state->root0));
+    __asm__ volatile("mrs %0, ttbr1_el1" : "=r"(state->root1));
+    __asm__ volatile("mrs %0, tcr_el1" : "=r"(state->translation_control));
+    __asm__ volatile("mrs %0, mair_el1" : "=r"(state->access_control));
+}
+
 static uint64_t arm64_l1_table[ARM64_L1_ENTRIES]
     __attribute__((aligned(4096)));
+static uint64_t arm64_kernel_l1_table[ARM64_L1_ENTRIES]
+    __attribute__((aligned(4096)));
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
+static uint64_t arm64_identity_l2_low[ARM64_L1_ENTRIES]
+    __attribute__((aligned(4096)));
+static uint64_t arm64_identity_l2_high[ARM64_L1_ENTRIES]
+    __attribute__((aligned(4096)));
+static uint64_t arm64_kernel_l2_low[ARM64_L1_ENTRIES]
+    __attribute__((aligned(4096)));
+static uint64_t arm64_kernel_l2_high[ARM64_L1_ENTRIES]
+    __attribute__((aligned(4096)));
+#endif
+
+static uint64_t device_block_descriptor(uint64_t physical_address);
 
 static inline void arm64_dsb_sy(void)
 {
@@ -86,14 +116,37 @@ static void populate_identity_l1(uint64_t *table)
     for (i = 0; i < ARM64_L1_ENTRIES; i++)
         table[i] = 0;
 
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
+    for (i = 0; i < ARM64_L1_ENTRIES; i++) {
+        uint64_t low_phys = (uint64_t)i * ARM64_L2_BLOCK_SIZE;
+        uint64_t high_phys = ARM64_L1_BLOCK_SIZE + low_phys;
+
+        arm64_identity_l2_low[i] = 0;
+        arm64_identity_l2_high[i] = 0;
+        if ((low_phys - ARMOS_PLATFORM_RAM_START) <
+            ARMOS_PLATFORM_RAM_FALLBACK_SIZE) {
+            arm64_identity_l2_low[i] =
+                low_phys | DESC_VALID | DESC_ATTR_INDEX(1) | DESC_AF |
+                DESC_SH_INNER;
+        } else if (low_phys >= ARMOS_PLATFORM_DEVICE_START &&
+                   low_phys < ARMOS_PLATFORM_DEVICE_END) {
+            arm64_identity_l2_low[i] =
+                device_block_descriptor(low_phys);
+        }
+        if (high_phys >= ARMOS_PLATFORM_DEVICE_START &&
+            high_phys < ARMOS_PLATFORM_DEVICE_END) {
+            arm64_identity_l2_high[i] =
+                device_block_descriptor(high_phys);
+        }
+    }
+    table[0] = ((uint64_t)arm64_identity_l2_low & ARM64_TABLE_MASK) |
+               DESC_VALID | DESC_TABLE_PAGE;
+    table[1] = ((uint64_t)arm64_identity_l2_high & ARM64_TABLE_MASK) |
+               DESC_VALID | DESC_TABLE_PAGE;
+#else
     /* 0x00000000-0x3fffffff: QEMU virt MMIO, never executable. */
     table[0] =
-        DESC_VALID |
-        DESC_ATTR_INDEX(0) |
-        DESC_AF |
-        DESC_SH_OUTER |
-        DESC_PXN |
-        DESC_UXN;
+        device_block_descriptor(0);
 
     /* 0x40000000-0x7fffffff: QEMU RAM containing kernel, stack and DTB. */
     table[1] =
@@ -102,6 +155,35 @@ static void populate_identity_l1(uint64_t *table)
         DESC_ATTR_INDEX(1) |
         DESC_AF |
         DESC_SH_INNER;
+#endif
+}
+
+static void populate_kernel_l1(uint64_t *table)
+{
+    unsigned int i;
+
+    for (i = 0; i < ARM64_L1_ENTRIES; i++)
+        table[i] = 0;
+
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
+    for (i = 0; i < ARM64_L1_ENTRIES; i++) {
+        arm64_kernel_l2_low[i] = arm64_identity_l2_low[i];
+        arm64_kernel_l2_high[i] = arm64_identity_l2_high[i];
+    }
+    table[0] = ((uint64_t)arm64_kernel_l2_low & ARM64_TABLE_MASK) |
+               DESC_VALID | DESC_TABLE_PAGE;
+    table[1] = ((uint64_t)arm64_kernel_l2_high & ARM64_TABLE_MASK) |
+               DESC_VALID | DESC_TABLE_PAGE;
+#else
+    /* Kernel-only aliases at ARM64_KERNEL_VA_BASE + physical address. */
+    table[0] = device_block_descriptor(0);
+    table[1] =
+        ARM64_L1_BLOCK_SIZE |
+        DESC_VALID |
+        DESC_ATTR_INDEX(1) |
+        DESC_AF |
+        DESC_SH_INNER;
+#endif
 }
 
 static void clean_range_to_poc(void *start, uint64_t length)
@@ -128,25 +210,10 @@ static int table_address_valid(uint64_t address)
            (address & ~ARM64_TABLE_MASK) == 0;
 }
 
-static uint64_t normal_memory_descriptor(uint64_t address, int page)
+static uint64_t device_block_descriptor(uint64_t physical_address)
 {
-    uint64_t descriptor =
-        (address & ARM64_TABLE_MASK) |
-        DESC_VALID |
-        DESC_ATTR_INDEX(1) |
-        DESC_AF |
-        DESC_SH_INNER |
-        DESC_PXN |
-        DESC_UXN;
-
-    if (page)
-        descriptor |= DESC_TABLE_PAGE;
-    return descriptor;
-}
-
-static uint64_t device_block_descriptor(void)
-{
-    return DESC_VALID |
+    return (physical_address & ARM64_TABLE_MASK) |
+           DESC_VALID |
            DESC_ATTR_INDEX(0) |
            DESC_AF |
            DESC_SH_OUTER |
@@ -172,7 +239,7 @@ static void invalidate_user_page(uint64_t virtual_address,
                        (virtual_address >> 12);
 
     __asm__ volatile("dsb ishst" ::: "memory");
-    __asm__ volatile("tlbi vae1, %0" :: "r"(operand));
+    __asm__ volatile("tlbi vae1is, %0" :: "r"(operand));
     __asm__ volatile("dsb ish" ::: "memory");
     arm64_isb();
 }
@@ -220,7 +287,7 @@ static uint64_t user_page_descriptor(uint64_t physical_address,
     uint64_t descriptor =
         (physical_address & ARM64_TABLE_MASK) |
         DESC_VALID | DESC_TABLE_PAGE |
-        DESC_ATTR_INDEX(1) | DESC_AF | DESC_SH_INNER |
+        DESC_ATTR_INDEX(1) | DESC_AF | DESC_NG | DESC_SH_INNER |
         DESC_PXN;
 
     if (flags & ARM64_USER_PAGE_WRITE)
@@ -234,11 +301,6 @@ static uint64_t user_page_descriptor(uint64_t physical_address,
 
 arm64_mmu_u64 arm64_mmu_kernel_address(arm64_mmu_u64 physical_address)
 {
-    uint64_t pc;
-
-    __asm__ volatile("adr %0, ." : "=r"(pc));
-    if (pc >= ARM64_KERNEL_VA_BASE)
-        return ARM64_KERNEL_VA_BASE + physical_address;
     return physical_address;
 }
 
@@ -327,6 +389,7 @@ int arm64_mmu_enable_identity_map(void)
         return -1;
 
     populate_identity_l1(arm64_l1_table);
+    populate_kernel_l1(arm64_kernel_l1_table);
 
     mair = MAIR_ATTR_DEVICE_NGNRE |
            (MAIR_ATTR_NORMAL_WBWA << 8);
@@ -334,7 +397,11 @@ int arm64_mmu_enable_identity_map(void)
           TCR_IRGN0_WBWA |
           TCR_ORGN0_WBWA |
           TCR_SH0_INNER |
-          TCR_EPD1 |
+          TCR_T1SZ_39BIT |
+          TCR_IRGN1_WBWA |
+          TCR_ORGN1_WBWA |
+          TCR_SH1_INNER |
+          TCR_TG1_4K |
           (parange << TCR_IPS_SHIFT);
 
     sctlr = arm64_mmu_read_sctlr();
@@ -345,6 +412,8 @@ int arm64_mmu_enable_identity_map(void)
     __asm__ volatile("msr mair_el1, %0" :: "r"(mair));
     __asm__ volatile("msr tcr_el1, %0" :: "r"(tcr));
     __asm__ volatile("msr ttbr0_el1, %0" :: "r"((uint64_t)arm64_l1_table));
+    __asm__ volatile("msr ttbr1_el1, %0" ::
+                     "r"((uint64_t)arm64_kernel_l1_table));
     arm64_isb();
 
     __asm__ volatile("tlbi vmalle1");
@@ -355,53 +424,52 @@ int arm64_mmu_enable_identity_map(void)
     __asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr) : "memory");
     arm64_isb();
 
+    uart_use_kernel_mmio_alias();
+
     return 0;
 }
 
-int arm64_mmu_prepare_identity_tables(arm64_mmu_u64 l1_address,
-                                      arm64_mmu_u64 l2_address,
-                                      arm64_mmu_u64 l3_address)
+int arm64_mmu_enable_secondary(void)
 {
-    uint64_t *l1;
-    uint64_t *l2;
-    uint64_t *l3;
-    unsigned int i;
+    uint64_t mmfr0;
+    uint64_t parange;
+    uint64_t tgran4;
+    uint64_t mair;
+    uint64_t tcr;
+    uint64_t sctlr;
 
-    if (!table_address_valid(l1_address) ||
-        !table_address_valid(l2_address) ||
-        !table_address_valid(l3_address) ||
-        l1_address == l2_address || l1_address == l3_address ||
-        l2_address == l3_address)
+    __asm__ volatile("mrs %0, id_aa64mmfr0_el1" : "=r"(mmfr0));
+    parange = mmfr0 & 0xfu;
+    tgran4 = (mmfr0 >> 28) & 0xfu;
+    if (tgran4 == 0xfu || parange > 6u)
         return -1;
 
-    l1 = (uint64_t *)arm64_mmu_kernel_address(l1_address);
-    l2 = (uint64_t *)arm64_mmu_kernel_address(l2_address);
-    l3 = (uint64_t *)arm64_mmu_kernel_address(l3_address);
-    for (i = 0; i < ARM64_L1_ENTRIES; i++) {
-        l1[i] = 0;
-        l2[i] = normal_memory_descriptor(
-            ARM64_QEMU_RAM_BASE + (uint64_t)i * ARM64_L2_BLOCK_SIZE,
-            0);
-        l3[i] = normal_memory_descriptor(
-            ARM64_QEMU_RAM_BASE + (uint64_t)i * 4096u,
-            1);
-    }
+    mair = MAIR_ATTR_DEVICE_NGNRE | (MAIR_ATTR_NORMAL_WBWA << 8);
+    tcr = TCR_T0SZ_39BIT |
+          TCR_IRGN0_WBWA | TCR_ORGN0_WBWA | TCR_SH0_INNER |
+          TCR_T1SZ_39BIT |
+          TCR_IRGN1_WBWA | TCR_ORGN1_WBWA | TCR_SH1_INNER |
+          TCR_TG1_4K | (parange << TCR_IPS_SHIFT);
 
-    l1[0] =
-        DESC_VALID |
-        DESC_ATTR_INDEX(0) |
-        DESC_AF |
-        DESC_SH_OUTER |
-        DESC_PXN |
-        DESC_UXN;
-    l1[1] = (l2_address & ARM64_TABLE_MASK) |
-            DESC_VALID | DESC_TABLE_PAGE;
-    l2[0] = (l3_address & ARM64_TABLE_MASK) |
-            DESC_VALID | DESC_TABLE_PAGE;
+    sctlr = arm64_mmu_read_sctlr();
+    if (sctlr & SCTLR_M)
+        return -2;
 
-    clean_range_to_poc(l1, 4096u);
-    clean_range_to_poc(l2, 4096u);
-    clean_range_to_poc(l3, 4096u);
+    arm64_dsb_sy();
+    __asm__ volatile("msr mair_el1, %0" :: "r"(mair));
+    __asm__ volatile("msr tcr_el1, %0" :: "r"(tcr));
+    __asm__ volatile("msr ttbr0_el1, %0" ::
+                     "r"((uint64_t)arm64_l1_table));
+    __asm__ volatile("msr ttbr1_el1, %0" ::
+                     "r"((uint64_t)arm64_kernel_l1_table));
+    arm64_isb();
+    __asm__ volatile("tlbi vmalle1");
+    arm64_dsb_sy();
+    arm64_isb();
+
+    sctlr |= SCTLR_M | SCTLR_C | SCTLR_I | SCTLR_SA | SCTLR_SA0;
+    __asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr) : "memory");
+    arm64_isb();
     return 0;
 }
 
@@ -421,140 +489,7 @@ int arm64_mmu_switch_ttbr0(arm64_mmu_u64 table_address)
     return 0;
 }
 
-int arm64_mmu_update_identity_page(arm64_mmu_u64 l3_address,
-                                   arm64_mmu_u64 address,
-                                   int present)
-{
-    uint64_t *l3;
-    uint64_t index;
-    uint64_t operand;
-
-    if (!table_address_valid(l3_address) ||
-        (address & 0xfffu) != 0 ||
-        address < ARM64_QEMU_RAM_BASE || address >= ARM64_L3_WINDOW_END)
-        return -1;
-
-    l3 = (uint64_t *)arm64_mmu_kernel_address(l3_address);
-    index = (address - ARM64_QEMU_RAM_BASE) >> 12;
-    l3[index] = present ? normal_memory_descriptor(address, 1) : 0;
-    clean_range_to_poc(&l3[index], sizeof(l3[index]));
-
-    operand = address >> 12;
-    __asm__ volatile("dsb ishst" ::: "memory");
-    __asm__ volatile("tlbi vae1, %0" :: "r"(operand));
-    __asm__ volatile("dsb ish" ::: "memory");
-    arm64_isb();
-    return 0;
-}
-
-int arm64_mmu_protect_kernel_image(arm64_mmu_u64 l3_address,
-                                   arm64_mmu_u64 text_start,
-                                   arm64_mmu_u64 text_end,
-                                   arm64_mmu_u64 rodata_start,
-                                   arm64_mmu_u64 rodata_end)
-{
-    uint64_t *l3;
-    uint64_t address;
-    uint64_t index;
-
-    if (!table_address_valid(l3_address) ||
-        text_start >= text_end || rodata_start >= rodata_end ||
-        (text_start & 0xfffu) != 0 || (text_end & 0xfffu) != 0 ||
-        (rodata_start & 0xfffu) != 0 || (rodata_end & 0xfffu) != 0 ||
-        text_start < ARM64_QEMU_RAM_BASE ||
-        rodata_end > ARM64_L3_WINDOW_END)
-        return -1;
-
-    l3 = (uint64_t *)arm64_mmu_kernel_address(l3_address);
-    for (address = text_start; address < text_end; address += 4096u) {
-        index = (address - ARM64_QEMU_RAM_BASE) >> 12;
-        l3[index] =
-            (address & ARM64_TABLE_MASK) |
-            DESC_VALID | DESC_TABLE_PAGE |
-            DESC_ATTR_INDEX(1) | DESC_AF | DESC_SH_INNER |
-            DESC_AP_RO_EL1 | DESC_UXN;
-    }
-    for (address = rodata_start; address < rodata_end; address += 4096u) {
-        index = (address - ARM64_QEMU_RAM_BASE) >> 12;
-        l3[index] =
-            (address & ARM64_TABLE_MASK) |
-            DESC_VALID | DESC_TABLE_PAGE |
-            DESC_ATTR_INDEX(1) | DESC_AF | DESC_SH_INNER |
-            DESC_AP_RO_EL1 | DESC_PXN | DESC_UXN;
-    }
-
-    clean_range_to_poc(l3, 4096u);
-    return 0;
-}
-
-int arm64_mmu_install_ttbr1(arm64_mmu_u64 l1_address,
-                            arm64_mmu_u64 shared_l2_address)
-{
-    uint64_t *l1;
-    uint64_t tcr;
-    unsigned int i;
-
-    if (!table_address_valid(l1_address) ||
-        !table_address_valid(shared_l2_address) ||
-        l1_address == shared_l2_address)
-        return -1;
-    if ((arm64_mmu_read_sctlr() & SCTLR_M) == 0)
-        return -2;
-
-    l1 = (uint64_t *)arm64_mmu_kernel_address(l1_address);
-    for (i = 0; i < ARM64_L1_ENTRIES; i++)
-        l1[i] = 0;
-    l1[0] = device_block_descriptor();
-    l1[1] = (shared_l2_address & ARM64_TABLE_MASK) |
-            DESC_VALID | DESC_TABLE_PAGE;
-    clean_range_to_poc(l1, 4096u);
-
-    tcr = arm64_mmu_read_tcr();
-    tcr &= ~TCR_TTBR1_FIELDS;
-    tcr |= TCR_T1SZ_39BIT |
-           TCR_IRGN1_WBWA |
-           TCR_ORGN1_WBWA |
-           TCR_SH1_INNER |
-           TCR_TG1_4K;
-
-    __asm__ volatile("dsb ishst" ::: "memory");
-    __asm__ volatile("msr ttbr1_el1, %0" :: "r"(l1_address) : "memory");
-    __asm__ volatile("msr tcr_el1, %0" :: "r"(tcr) : "memory");
-    arm64_isb();
-    __asm__ volatile("tlbi vmalle1");
-    __asm__ volatile("dsb ish" ::: "memory");
-    arm64_isb();
-    return 0;
-}
-
-int arm64_mmu_retire_low_map(arm64_mmu_u64 ttbr0_l1_address)
-{
-    uint64_t *l1;
-
-    if (!table_address_valid(ttbr0_l1_address) ||
-        (arm64_mmu_read_ttbr0() & ARM64_TABLE_MASK) != ttbr0_l1_address)
-        return -1;
-    if ((arm64_mmu_read_ttbr1() & ARM64_TABLE_MASK) == 0)
-        return -2;
-
-    l1 = (uint64_t *)arm64_mmu_kernel_address(ttbr0_l1_address);
-    if ((l1[0] & DESC_VALID) == 0 ||
-        (l1[1] & (DESC_VALID | DESC_TABLE_PAGE)) !=
-        (DESC_VALID | DESC_TABLE_PAGE))
-        return -3;
-
-    l1[0] = 0;
-    l1[1] = 0;
-    clean_range_to_poc(&l1[0], 2 * sizeof(l1[0]));
-
-    __asm__ volatile("dsb ishst" ::: "memory");
-    __asm__ volatile("tlbi vmalle1");
-    __asm__ volatile("dsb ish" ::: "memory");
-    arm64_isb();
-    return 0;
-}
-
-int arm64_mmu_prepare_empty_ttbr0(arm64_mmu_u64 l1_address)
+int arm64_mmu_prepare_user_ttbr0(arm64_mmu_u64 l1_address)
 {
     uint64_t *l1;
     unsigned int i;
@@ -565,6 +500,19 @@ int arm64_mmu_prepare_empty_ttbr0(arm64_mmu_u64 l1_address)
     l1 = (uint64_t *)arm64_mmu_kernel_address(l1_address);
     for (i = 0; i < ARM64_L1_ENTRIES; i++)
         l1[i] = 0;
+
+    /* Keep the low-linked kernel privileged while TTBR0 names user space. */
+#if defined(ARMOS_PLATFORM_RASPBERRYPI)
+    l1[0] = ((uint64_t)arm64_identity_l2_low & ARM64_TABLE_MASK) |
+            DESC_VALID | DESC_TABLE_PAGE;
+#else
+    l1[1] =
+        ARM64_L1_BLOCK_SIZE |
+        DESC_VALID |
+        DESC_ATTR_INDEX(1) |
+        DESC_AF |
+        DESC_SH_INNER;
+#endif
     clean_range_to_poc(l1, 4096u);
     return 0;
 }
@@ -858,4 +806,31 @@ void arm64_mmu_sync_code(arm64_mmu_u64 address,
     }
     __asm__ volatile("dsb ish" ::: "memory");
     arm64_isb();
+}
+
+bool setup_mmu(void)
+{
+    if ((arm64_mmu_read_sctlr() & SCTLR_M) != 0)
+        return true;
+    return arm64_mmu_enable_identity_map() == 0;
+}
+
+void setup_svc_stack(void)
+{
+}
+
+vaddr_t get_split_boundary(void)
+{
+    return USER_SPACE_END;
+}
+
+arch_addrspace_context_t arch_kernel_address_space_context(void)
+{
+    return (arch_addrspace_context_t)
+        (arm64_mmu_read_ttbr0() & ARM64_TABLE_MASK);
+}
+
+vaddr_t arch_userfs_load_address(void)
+{
+    return 0;
 }

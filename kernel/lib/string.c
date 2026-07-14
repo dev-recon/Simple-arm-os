@@ -333,7 +333,7 @@ static int utoa_helper(unsigned long value, char* str, int base)
     char* ptr = str;
     char* ptr1 = str;
     char tmp_char;
-    unsigned int tmp_value;
+    unsigned long tmp_value;
     int len = 0;
     
     /* Handle 0 explicitly */

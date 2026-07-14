@@ -9,287 +9,194 @@
  * Layer: ARM64 / exception dispatch
  *
  * Responsibilities:
- * - Dispatch EL1 IRQs and synchronous exceptions from vectors.S.
- * - Decode the AArch64 syscall ABI and invoke the generic syscall dispatcher.
- * - Capture the active EL0 register image across syscall entry and return.
- * - Validate user buffers through the active generic vm_space_t identity.
- * - Route lower-EL translation faults to the active VM page-fault backend.
- * - Route user yield and exit through the cooperative task dispatcher.
- * - Invoke scheduler wakeup policy on physical-timer ticks.
- * - Convert timer IRQ events into deferred preemption at IRQ-return points.
+ * - Decode AArch64 exception classes and the EL0 syscall register ABI.
+ * - Route syscalls, page faults and device IRQs into common kernel services.
+ * - Preserve the current task's EL0 register image across kernel entry.
  *
  * Notes:
- * - A bounded fallback remains available before the generic table is enabled.
- * - Console write and controlled exit are bring-up backends, not generic VFS.
- * - Unexpected exceptions print architectural state and halt deterministically.
+ * - Process, VFS, signal and scheduling policy remain architecture-neutral.
+ * - Timer preemption is requested by the common timer and serviced at safe
+ *   task-switch points.
  */
 
-#include <asm/console.h>
-#include <asm/exception.h>
 #include <asm/exception_frame.h>
-#include <asm/irq.h>
-#include <asm/user_vm.h>
-#include <kernel/task_runqueue.h>
-#include <uapi/armos/syscall.h>
+#include <kernel/arch_cpu.h>
+#include <kernel/interrupt.h>
+#include <kernel/kprintf.h>
+#include <kernel/memory.h>
+#include <kernel/signal.h>
+#include <kernel/smp.h>
+#include <kernel/syscalls.h>
+#include <kernel/task.h>
+#include <kernel/timer.h>
 
-typedef unsigned long long uint64_t;
+#define ESR_EC_SHIFT             26u
+#define ESR_EC_MASK              0x3fu
+#define ESR_EC_SVC64             0x15u
+#define ESR_EC_INSN_ABORT_LOWER  0x20u
+#define ESR_EC_DATA_ABORT_LOWER  0x24u
+#define ARM64_VECTOR_IRQ_SPX      5u
+#define ARM64_VECTOR_SYNC_LOWER   8u
+#define ARM64_VECTOR_IRQ_LOWER    9u
 
-#define ESR_EC_SHIFT 26u
-#define ESR_EC_MASK  0x3fu
-#define ESR_EC_SVC64 0x15u
-#define ESR_EC_INSN_ABORT_LOWER 0x20u
-#define ESR_EC_DATA_ABORT_LOWER 0x24u
-#define ESR_EC_BRK64 0x3cu
-#define ARM64_VECTOR_SYNC_CURRENT_SPX 4u
-#define ARM64_VECTOR_IRQ_CURRENT_SPX  5u
-#define ARM64_VECTOR_SYNC_LOWER_A64   8u
-#define ARM64_VECTOR_IRQ_LOWER_A64    9u
-#define ARM64_BRK_VECTOR_TEST 0x64u
-#define ARM64_SVC_SYSCALL      0u
-#define SPSR_EL1H_MASKED       0x3c5u
-#define ARM64_BOOTSTRAP_WRITE_MAX 256u
+extern void arm64_exception_depth_enter(void);
+extern void arm64_exception_depth_leave(void);
 
-static const vm_space_t *el0_vm_space;
-static arm64_user_context_t *el0_registers;
-static const vm_space_t *pending_exec_vm_space;
-static arm64_user_context_t *pending_exec_registers;
-static arm64_exec_commit_hook_t pending_exec_commit_hook;
-static void *pending_exec_commit_owner;
-static uint64_t el0_exit_address;
-static uint64_t el0_exit_status;
-static unsigned int el0_syscall_count;
-static task_dispatcher_t *active_dispatcher;
-static syscall_dispatcher_t *active_syscall_dispatcher;
-static arm64_timer_tick_hook_t active_timer_tick_hook;
-static arm64_page_fault_hook_t active_page_fault_hook;
-
-void arm64_exception_set_el0_context(const vm_space_t *vm_space,
-                                     arm64_user_context_t *registers,
-                                     arm64_exception_u64 exit_address)
+static void halt_exception(const arm64_exception_frame_t *frame)
 {
-    arm64_exception_bind_el0_context(vm_space, registers);
-    el0_exit_address = exit_address;
-    el0_exit_status = 0;
-    el0_syscall_count = 0;
-    pending_exec_vm_space = NULL;
-    pending_exec_registers = NULL;
-    pending_exec_commit_hook = NULL;
-    pending_exec_commit_owner = NULL;
+    task_t *task = task_current_local();
+    uint64_t ec = (frame->esr >> ESR_EC_SHIFT) & ESR_EC_MASK;
+
+    KERROR("ARM64 exception vector=%lu EC=0x%lX ESR=0x%lX\n",
+           (unsigned long)frame->vector, (unsigned long)ec,
+           (unsigned long)frame->esr);
+    KERROR("ELR=0x%lX FAR=0x%lX SPSR=0x%lX\n",
+           (unsigned long)frame->user.pc, (unsigned long)frame->far,
+           (unsigned long)frame->user.pstate);
+    KERROR("X0=0x%lX X1=0x%lX X2=0x%lX X29=0x%lX X30=0x%lX SP0=0x%lX\n",
+           (unsigned long)frame->user.x[0],
+           (unsigned long)frame->user.x[1],
+           (unsigned long)frame->user.x[2],
+           (unsigned long)frame->user.x[29],
+           (unsigned long)frame->user.x[30],
+           (unsigned long)frame->user.sp);
+    if (task) {
+        KERROR("CPU=%u TID=%u PID=%d TASK=%s STATE=%u FLAGS=0x%X\n",
+               smp_processor_id(), task->task_id,
+               task->type == TASK_TYPE_PROCESS && task->process
+                   ? task->process->pid : -1,
+               task->name,
+               (unsigned int)task->state, task->context.flags);
+        KERROR("TASK EL0 PC=0x%lX SP=0x%lX X29=0x%lX X30=0x%lX\n",
+               (unsigned long)task->context.user.pc,
+               (unsigned long)task->context.user.sp,
+               (unsigned long)task->context.user.x[29],
+               (unsigned long)task->context.user.x[30]);
+    }
+    arch_disable_interrupts();
+    for (;;)
+        arch_wait_for_interrupt();
 }
 
-void arm64_exception_bind_el0_context(const vm_space_t *vm_space,
-                                      arm64_user_context_t *registers)
+static void dispatch_syscall(arm64_exception_frame_t *frame)
 {
-    el0_vm_space = vm_space;
-    el0_registers = registers;
+    syscall_request_t request;
+    task_t *task = task_current_local();
+    syscall_result_t result;
+    uint32_t index;
+
+    if (task) {
+        task->context.user = frame->user;
+        arch_task_context_set_returns_to_user(&task->context, true);
+    }
+    request.number = (uint32_t)frame->user.x[8];
+    for (index = 0; index < ARMOS_SYSCALL_ARGUMENT_COUNT; index++)
+        request.arguments[index] = (syscall_word_t)frame->user.x[index];
+    result = syscall_dispatch_common_request(&request);
+
+    /*
+     * The common dispatcher owns the canonical user context. It may install a
+     * signal frame, restore rt_sigreturn state, or yield before returning.
+     * Always restore that final context into the architectural exception frame
+     * instead of overwriting it with the stale syscall-entry registers.
+     */
+    task = task_current_local();
+    if (task && task->type == TASK_TYPE_PROCESS) {
+        frame->user = task->context.user;
+        arch_task_context_set_returns_to_user(&task->context, true);
+    } else {
+        frame->user.x[0] = (uint64_t)result;
+    }
 }
 
-int arm64_exception_request_exec(const vm_space_t *vm_space,
-                                 arm64_user_context_t *registers,
-                                 arm64_exec_commit_hook_t commit_hook,
-                                 void *commit_owner)
+static bool dispatch_user_page_fault(arm64_exception_frame_t *frame,
+                                     uint64_t ec, uint64_t iss)
 {
-    if (!vm_space || !registers || pending_exec_vm_space ||
-        pending_exec_registers)
-        return -1;
-    pending_exec_vm_space = vm_space;
-    pending_exec_registers = registers;
-    pending_exec_commit_hook = commit_hook;
-    pending_exec_commit_owner = commit_owner;
-    return 0;
-}
+    task_t *task = task_current_local();
+    uint32_t status = (uint32_t)(iss & 0x3fu);
+    bool translation = status >= 4u && status <= 7u;
+    bool permission = status >= 12u && status <= 15u;
+    bool write = ec == ESR_EC_DATA_ABORT_LOWER && (iss & (1u << 6)) != 0;
 
-void arm64_exception_set_task_dispatcher(task_dispatcher_t *dispatcher)
-{
-    active_dispatcher = dispatcher;
-}
+    if (translation) {
+        if (handle_user_stack_fault((vaddr_t)frame->far) == 0)
+            return true;
+        if (handle_lazy_anon_fault((vaddr_t)frame->far, write) == 0)
+            return true;
+    }
+    if (permission && write) {
+        int result = handle_cow_fault((vaddr_t)frame->far);
 
-void arm64_exception_set_syscall_dispatcher(
-    syscall_dispatcher_t *dispatcher)
-{
-    active_syscall_dispatcher = dispatcher;
-}
-
-void arm64_exception_set_timer_tick_hook(arm64_timer_tick_hook_t hook)
-{
-    active_timer_tick_hook = hook;
-}
-
-void arm64_exception_set_page_fault_hook(arm64_page_fault_hook_t hook)
-{
-    active_page_fault_hook = hook;
-}
-
-unsigned int arm64_exception_el0_syscall_count(void)
-{
-    return el0_syscall_count;
-}
-
-arm64_exception_u64 arm64_exception_el0_exit_status(void)
-{
-    return el0_exit_status;
-}
-
-static uint64_t syscall_error(unsigned int error)
-{
-    return 0ULL - (uint64_t)error;
-}
-
-static void save_el0_registers(const arm64_user_context_t *registers)
-{
-    unsigned int index;
-
-    if (!el0_registers)
-        return;
-    for (index = 0; index < 31; index++)
-        el0_registers->x[index] = registers->x[index];
-    el0_registers->sp = registers->sp;
-    el0_registers->pc = registers->pc;
-    el0_registers->pstate = registers->pstate;
-}
-
-static void restore_el0_registers(arm64_user_context_t *destination,
-                                  const arm64_user_context_t *source)
-{
-    unsigned int index;
-
-    for (index = 0; index < 31; index++)
-        destination->x[index] = source->x[index];
-    destination->sp = source->sp;
-    destination->pc = source->pc;
-    destination->pstate = source->pstate;
-}
-
-static void arm64_bootstrap_syscall(arm64_exception_frame_t *frame)
-{
-    arm64_user_context_t *registers = &frame->user;
-    uint64_t number = registers->x[8];
-
-    if (active_syscall_dispatcher != NULL) {
-        syscall_request_t request;
-        syscall_result_t result;
-        uint64_t exit_argument = registers->x[0];
-        unsigned int index;
-
-        save_el0_registers(registers);
-        request.number = (uint32_t)number;
-        for (index = 0; index < ARMOS_SYSCALL_ARGUMENT_COUNT; index++)
-            request.arguments[index] = registers->x[index];
-        el0_syscall_count++;
-        result = syscall_dispatcher_dispatch(active_syscall_dispatcher,
-                                             &request);
-        registers->x[0] = (uint64_t)result;
-        if (number == ARMOS_NR_EXECVE && result == 0 &&
-            pending_exec_vm_space && pending_exec_registers) {
-            const vm_space_t *new_vm = pending_exec_vm_space;
-            const vm_space_t *previous_vm = el0_vm_space;
-            arm64_user_context_t *new_registers = pending_exec_registers;
-            arm64_exec_commit_hook_t commit_hook =
-                pending_exec_commit_hook;
-            void *commit_owner = pending_exec_commit_owner;
-
-            pending_exec_vm_space = NULL;
-            pending_exec_registers = NULL;
-            pending_exec_commit_hook = NULL;
-            pending_exec_commit_owner = NULL;
-            if (arm64_user_vm_activate_space(new_vm) != 0) {
-                registers->x[0] = syscall_error(EFAULT);
-                save_el0_registers(registers);
-                return;
+        if (result == 0) {
+            if (task) {
+                task->page_faults++;
+                task->cow_faults++;
             }
-            el0_vm_space = new_vm;
-            el0_registers = new_registers;
-            restore_el0_registers(registers, new_registers);
-            if (commit_hook)
-                commit_hook(previous_vm, commit_owner);
-            return;
+            return true;
         }
-        save_el0_registers(registers);
-
-        if (number == ARMOS_NR_SCHED_YIELD && result == 0 &&
-            active_dispatcher != NULL &&
-            task_dispatcher_yield(active_dispatcher) != 0)
-            registers->x[0] = syscall_error(EAGAIN);
-        if (number == ARMOS_NR_EXIT && result == 0) {
-            el0_exit_status = exit_argument;
-            registers->x[0] = exit_argument;
-            save_el0_registers(registers);
-            if (active_dispatcher != NULL) {
-                if (task_dispatcher_block(active_dispatcher) != 0) {
-                    registers->x[0] = syscall_error(EAGAIN);
-                    save_el0_registers(registers);
-                }
-            } else if (el0_exit_address != 0) {
-                registers->pc = el0_exit_address;
-                registers->pstate = SPSR_EL1H_MASKED;
-                return;
-            }
-        }
-        save_el0_registers(registers);
-        return;
+        KERROR("ARM64 COW fault unresolved: pid=%d address=0x%lX result=%d\n",
+               task && task->process ? task->process->pid : -1,
+               (unsigned long)frame->far, result);
     }
-
-    el0_syscall_count++;
-    if (number == ARMOS_NR_SCHED_YIELD) {
-        registers->x[0] = 0;
-        save_el0_registers(registers);
-        if (active_dispatcher &&
-            task_dispatcher_yield(active_dispatcher) != 0)
-            registers->x[0] = syscall_error(EAGAIN);
-        save_el0_registers(registers);
-        return;
-    }
-
-    if (number == ARMOS_NR_WRITE) {
-        uint64_t fd = registers->x[0];
-        vaddr_t address = (vaddr_t)registers->x[1];
-        size_t length = (size_t)registers->x[2];
-
-        if (fd != 1 && fd != 2) {
-            registers->x[0] = syscall_error(EBADF);
-            save_el0_registers(registers);
-            return;
-        }
-        if (registers->x[2] > ARM64_BOOTSTRAP_WRITE_MAX ||
-            arm64_user_vm_validate_space_range(
-                el0_vm_space, address, length,
-                ARM64_USER_PAGE_READ) != 0) {
-            registers->x[0] = syscall_error(EFAULT);
-            save_el0_registers(registers);
-            return;
-        }
-        registers->x[0] = length;
-        save_el0_registers(registers);
-        return;
-    }
-
-    if (number == ARMOS_NR_EXIT && active_dispatcher != NULL) {
-        el0_exit_status = registers->x[0];
-        save_el0_registers(registers);
-        if (task_dispatcher_block(active_dispatcher) != 0)
-            registers->x[0] = syscall_error(EAGAIN);
-        save_el0_registers(registers);
-        return;
-    }
-
-    if (number == ARMOS_NR_EXIT && el0_exit_address != 0) {
-        el0_exit_status = registers->x[0];
-        save_el0_registers(registers);
-        registers->pc = el0_exit_address;
-        registers->pstate = SPSR_EL1H_MASKED;
-        return;
-    }
-
-    registers->x[0] = syscall_error(ENOSYS);
-    save_el0_registers(registers);
+    return false;
 }
 
-static void arm64_exception_halt(void)
+static bool task_state_requires_reschedule(const task_t *task)
 {
-    arm64_console_puts("ARM64_EXCEPTION_HALT\n");
-    for (;;) {
-        __asm__ volatile("wfe");
+    if (!task)
+        return false;
+
+    return task->state == TASK_BLOCKED ||
+           task->state == TASK_INTERRUPTIBLE ||
+           task->state == TASK_UNINTERRUPTIBLE ||
+           task->state == TASK_STOPPED ||
+           task->state == TASK_ZOMBIE ||
+           task->state == TASK_TERMINATED;
+}
+
+static void dispatch_irq_return_to_user(arm64_exception_frame_t *frame)
+{
+    task_t *task = task_current_local();
+    signal_check_result_t signal_result = SIGNAL_CHECK_NONE;
+    uint32_t cpu = smp_processor_id();
+
+    if (!task || task->type != TASK_TYPE_PROCESS || !task->process ||
+        !smp_scheduler_cpu_enabled(cpu) || get_critical_section())
+        return;
+    if (!scheduler_resched_pending_on_cpu(cpu) &&
+        !has_pending_signals(task))
+        return;
+
+    /*
+     * The exception frame lives on this task's kernel stack, so it remains
+     * valid while the common scheduler runs another task. Preserve the EL0
+     * image in the canonical task context before making the task switchable.
+     */
+    task->context.user = frame->user;
+    arch_task_context_set_returns_to_user(&task->context, true);
+
+    arch_enable_interrupts();
+    if (has_pending_signals(task)) {
+        signal_result = check_pending_signals();
+        task = task_current_local();
     }
+    signal_consume_user_return_override();
+
+    task = task_current_local();
+    if (task &&
+        (signal_result == SIGNAL_CHECK_EXITED ||
+         signal_result == SIGNAL_CHECK_STOPPED ||
+         task_state_requires_reschedule(task))) {
+        yield();
+    } else if (scheduler_take_resched_current_cpu()) {
+        yield();
+    }
+
+    /* vectors.S restores the final EL0 image directly from this frame. */
+    arch_disable_interrupts();
+    task = task_current_local();
+    if (task && task->type == TASK_TYPE_PROCESS)
+        frame->user = task->context.user;
 }
 
 void arm64_exception_dispatch(arm64_exception_frame_t *frame)
@@ -297,67 +204,27 @@ void arm64_exception_dispatch(arm64_exception_frame_t *frame)
     uint64_t ec = (frame->esr >> ESR_EC_SHIFT) & ESR_EC_MASK;
     uint64_t iss = frame->esr & 0x01ffffffu;
 
-    if (frame->vector == ARM64_VECTOR_IRQ_CURRENT_SPX ||
-        frame->vector == ARM64_VECTOR_IRQ_LOWER_A64) {
-        uint32_t events = arm64_irq_dispatch();
-
-        if ((events & ARM64_IRQ_EVENT_TIMER) != 0) {
-            if ((active_timer_tick_hook != NULL &&
-                 active_timer_tick_hook(arm64_timer_irq_ticks()) != 0) ||
-                (active_dispatcher != NULL &&
-                 (task_dispatcher_timer_tick(active_dispatcher) != 0 ||
-                  task_dispatcher_service_preempt_at_safe_point(
-                      active_dispatcher) != 0)))
-                arm64_exception_halt();
-        }
+    if (frame->vector == ARM64_VECTOR_IRQ_SPX ||
+        frame->vector == ARM64_VECTOR_IRQ_LOWER) {
+        arm64_exception_depth_enter();
+        irq_c_handler();
+        arm64_exception_depth_leave();
+        if (frame->vector == ARM64_VECTOR_IRQ_LOWER)
+            dispatch_irq_return_to_user(frame);
         return;
     }
 
-    if (frame->vector == ARM64_VECTOR_SYNC_LOWER_A64 &&
-        ec == ESR_EC_SVC64 && (frame->user.pstate & 0xfu) == 0) {
-        uint64_t immediate = iss & 0xffffu;
-
-        if (immediate == ARM64_SVC_SYSCALL && el0_vm_space != NULL) {
-            arm64_bootstrap_syscall(frame);
-            return;
-        }
-    }
-
-    if (frame->vector == ARM64_VECTOR_SYNC_LOWER_A64 &&
-        active_page_fault_hook != NULL &&
-        (ec == ESR_EC_DATA_ABORT_LOWER ||
-         ec == ESR_EC_INSN_ABORT_LOWER)) {
-        unsigned int fault_status = (unsigned int)(iss & 0x3fu);
-        int is_translation_fault = fault_status >= 4u && fault_status <= 7u;
-        int is_write = ec == ESR_EC_DATA_ABORT_LOWER &&
-                       (iss & (1u << 6)) != 0;
-
-        if (is_translation_fault &&
-            active_page_fault_hook((vaddr_t)frame->far, is_write,
-                                   ec == ESR_EC_INSN_ABORT_LOWER) == 0)
-            return;
-    }
-
-    if (frame->vector == ARM64_VECTOR_SYNC_CURRENT_SPX &&
-        ec == ESR_EC_BRK64 &&
-        (iss & 0xffffu) == ARM64_BRK_VECTOR_TEST) {
-        frame->user.pc += 4;
+    if (frame->vector == ARM64_VECTOR_SYNC_LOWER && ec == ESR_EC_SVC64 &&
+        (iss & 0xffffu) == 0) {
+        dispatch_syscall(frame);
         return;
     }
 
-    arm64_console_puts("Exception vector: ");
-    arm64_console_puthex64(frame->vector);
-    arm64_console_puts("\nESR_EL1: ");
-    arm64_console_puthex64(frame->esr);
-    arm64_console_puts(" EC: ");
-    arm64_console_puthex64(ec);
-    arm64_console_puts("\nELR_EL1: ");
-    arm64_console_puthex64(frame->user.pc);
-    arm64_console_puts(" FAR_EL1: ");
-    arm64_console_puthex64(frame->far);
-    arm64_console_puts("\nSPSR_EL1: ");
-    arm64_console_puthex64(frame->user.pstate);
-    arm64_console_puts("\n");
+    if (frame->vector == ARM64_VECTOR_SYNC_LOWER &&
+        (ec == ESR_EC_DATA_ABORT_LOWER || ec == ESR_EC_INSN_ABORT_LOWER) &&
+        dispatch_user_page_fault(frame, ec, iss)) {
+        return;
+    }
 
-    arm64_exception_halt();
+    halt_exception(frame);
 }

@@ -11,7 +11,7 @@
  * Responsibilities:
  * - Save and mask the local EL1 IRQ/FIQ state through DAIF.
  * - Restore a previously saved local interrupt-mask state.
- * - Report acknowledged bootstrap IRQ events to the exception layer.
+ * - Report acknowledged IRQ events to the common interrupt layer.
  * - Declare bounded timer probes used during scheduler bring-up.
  *
  * Notes:
@@ -47,7 +47,6 @@ static inline void asm_irq_fiq_restore(uint32_t saved_state)
     __asm__ volatile("msr daif, %0" :: "r"(state) : "memory");
 }
 
-uint32_t arm64_irq_dispatch(void);
 int arm64_timer_irq_arm_ticks(uint32_t ticks);
 int arm64_timer_irq_arm_once(void);
 int arm64_timer_irq_start_periodic(void);

@@ -883,8 +883,8 @@ void init_display(void)
     }
     framebuffer_base = (uint8_t*)phys_to_virt(framebuffer_phys);
     
-    KINFO("Framebuffer allocated at: phys=0x%08X virt=0x%08X\n",
-          framebuffer_phys, (vaddr_t)(uintptr_t)framebuffer_base);
+    KINFO("Framebuffer allocated at: phys=%p virt=%p\n",
+          (void *)(uintptr_t)framebuffer_phys, (void *)framebuffer_base);
     
     display.width = FB_WIDTH;
     display.height = FB_HEIGHT;

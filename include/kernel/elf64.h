@@ -6,16 +6,14 @@
  * See LICENSE for details.
  *
  * File: include/kernel/elf64.h
- * Layer: Kernel / ELF64 image loading
+ * Layer: Kernel / executable ABI definitions
  *
  * Responsibilities:
- * - Define the ELF64 file and program-header ABI used by AArch64 exec.
- * - Validate loadable AArch64 executable images with overflow checks.
- * - Load segments through VM callbacks independent of VFS acquisition.
+ * - Define architecture-neutral ELF64 file and program-header layouts.
+ * - Publish ELF constants shared by executable ABI adapters.
  *
  * Notes:
- * - Image acquisition is provided by VFS; this layer only validates and maps
- *   an already resident executable image.
+ * - Machine-specific validation belongs to the active architecture adapter.
  */
 
 #ifndef _KERNEL_ELF64_H
@@ -31,7 +29,6 @@
 #define ELF64_PF_W       2u
 #define ELF64_PF_R       4u
 #define ELF64_ET_EXEC    2u
-#define ELF64_EM_AARCH64 183u
 
 typedef struct elf64_header {
     uint8_t ident[ELF64_IDENT_SIZE];
@@ -60,19 +57,5 @@ typedef struct elf64_program_header {
     uint64_t memsz;
     uint64_t align;
 } elf64_program_header_t;
-
-typedef struct elf64_loader_ops {
-    int (*map)(void *context, vaddr_t start, size_t length,
-               unsigned int flags);
-    int (*copy)(void *context, vaddr_t destination,
-                const void *source, size_t length);
-    int (*zero)(void *context, vaddr_t destination, size_t length);
-} elf64_loader_ops_t;
-
-int elf64_validate_aarch64(const void *image, size_t image_size,
-                           vaddr_t user_limit);
-int elf64_load_aarch64(const void *image, size_t image_size,
-                       vaddr_t user_limit, const elf64_loader_ops_t *ops,
-                       void *context, vaddr_t *entry);
 
 #endif /* _KERNEL_ELF64_H */

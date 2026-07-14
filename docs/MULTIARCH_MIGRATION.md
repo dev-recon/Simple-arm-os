@@ -176,21 +176,23 @@ Status: implemented.
 The second ARM32 family now has two explicit profiles:
 
 - `TARGET_PLATFORM=raspi2` for QEMU `raspi2b` / Cortex-A7;
-- `TARGET_PLATFORM=pi3` for Raspberry Pi 3 hardware / Cortex-A53 in AArch32.
+- `TARGET_PLATFORM=raspi3` for Raspberry Pi 3 hardware / Cortex-A53 in AArch32.
 
-They share the BCM283x UART, local interrupt controller, timer, SD/eMMC, and
-power backend under `arch/arm32/platform/raspi2/`, while target-specific build
-flags and quirks remain separate. This phase validated the platform interfaces
-without changing pointer width, exception level, or page-table format.
+They select the common BCM283x UART, local interrupt controller, timer,
+SD/eMMC, and power backends under `kernel/platform/raspberrypi/`, while
+architecture and target-specific build flags and quirks remain separate. This
+phase validated the platform interfaces without changing pointer width,
+exception level, or page-table format.
 
 Landed milestones:
 
 - PL011 `tty0` recovery console;
 - Raspberry Pi interrupt-controller backend implementing the generic IRQ/IPI
   contract;
-- SD/eMMC block device, MBR partitions, hidden FAT32 boot, and ext2 root;
+- SD/eMMC block device, MBR partitions, dedicated FAT32 boot, and ext2 root;
 - four-CPU scheduler participation and shutdown parking;
-- PI3-specific CPU identity, timer, firmware handoff, and AArch32 build profile;
+- raspi3-specific CPU identity, timer, firmware handoff, and AArch32 build
+  profile;
 - no fake VirtIO, PL050, or legacy IDE capabilities on Raspberry Pi targets.
 
 The hardware build and validation contract is documented in
@@ -198,125 +200,43 @@ The hardware build and validation contract is documented in
 
 ## Phase D - AArch64
 
-Status: started on `TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt`.
+Status: implemented on `arm64/qemu-virt` and `arm64/raspi3`; both targets now
+enter the common kernel and run the shared ELF64 userland.
 
-The first executable milestone now provides an isolated EL1 serial bootstrap:
+The production AArch64 path now provides:
 
-- AArch64 image linked at `0x40080000`;
-- EL2-to-EL1h transition when required;
-- boot stack and BSS initialization;
-- PL011 output and DTB handoff diagnostics;
-- a complete EL1 vector table, architecture-local exception frame, synchronous
-  fault diagnostics, and a recoverable BRK/ERET smoke test;
-- a 4 KiB/39-bit long-descriptor identity map with distinct Device and normal
-  memory attributes, plus AT/PAR translation checks;
-- GICv2 CPU/distributor initialization and a three-interrupt physical timer PPI
-  smoke test through the EL1h IRQ vector;
-- architecture-neutral early physical-page allocation with reservation,
-  contiguous allocation, free, reuse, and memory-integrity smoke tests;
-- dependency-free FDT discovery of RAM, firmware reservations,
-  `/reserved-memory`, and the DTB blob itself;
-- migration from the static boot translation table to allocated TTBR0
-  L1/L2/L3 tables, including a 4 KiB unmap/remap and targeted TLB invalidation,
-  followed by exception-return and timer-IRQ validation;
-- a 39-bit canonical TTBR1 kernel alias sharing the managed RAM hierarchy,
-  with page-aligned EL1 RX/RO/RW-NX permissions and EL0 exclusion tests;
-- live high-half PC, stack, and exception-vector execution through TTBR1,
-  followed by retirement of the low RAM identity window from TTBR0 and
-  successful BRK/timer-IRQ validation;
-- EL1-only high MMIO through TTBR1, complete retirement of low kernel/MMIO
-  mappings, and isolated user-only TTBR0 prototypes tagged with ASIDs 1 and 2;
-- a first EL0t payload with separate RX code, RW/NX data and stack pages,
-  lower-EL AArch64 SVC dispatch, return to EL0, and a controlled EL1h
-  continuation followed by a timer-IRQ check;
-- an owned bootstrap user-VM object covering TTBR0 tables, mapped pages and
-  ASIDs, with W^X enforcement and balanced create/map/destroy validation;
-- an AArch64 `svc #0` register ABI using shared ArmOS syscall numbers, with
-  validated user buffers and bootstrap `write`, `-EFAULT`, `-ENOSYS`, and
-  `exit` coverage;
-- an explicit AArch64 EL0 register context shared by entry and exception
-  capture, with C-generated assembly offsets and preservation checks across
-  the complete bootstrap syscall sequence;
-- an AArch64 bootstrap task context and cooperative two-stack switch covering
-  `x19-x30`, SP and resume PC, with the EL0 image and TTBR0/ASID identity
-  carried by the same object;
-- a context-switch boundary that activates the incoming TTBR0/ASID and proves
-  mapped-versus-empty user-space isolation across both resumable contexts;
-- single-CPU ASID residency keyed by VM mapping generation, avoiding redundant
-  TLBI operations across four validated task-context switches;
-- an architecture-local bootstrap task object that allocates, clears, and
-  releases its owned kernel stack with exact allocator-balance validation;
-- replacement of that parallel object by generic `task_t`, including common
-  identity/state/stack metadata, lifetime guards, an ARM64 `task_context_t`
-  alias, a 39-bit user layout, and DAIF local interrupt-state primitives;
-- task-level cooperative switching between a borrowed-stack bootstrap task and
-  an owned-stack task, with state, CPU ownership, switch-count, and MMU-error
-  rollback validation;
-- a bounded single-CPU generic runqueue that publishes blocked tasks as ready,
-  rejects duplicate publication, selects them FIFO, and drives two complete
-  cooperative task-switch cycles;
-- deterministic `A, B, A, B` rotation between two simultaneously ready generic
-  tasks, with independent owned stacks, contexts, switch counts, and balanced
-  page recovery;
-- a reusable cooperative dispatcher shared by kernel-task yield, blocking, and
-  a deliberately safe-point-only timer-preemption policy entry;
-- a generic EL0 task with its own kernel stack and user VM that yields through
-  SVC, resumes after the trapping instruction, and exits by blocking through
-  that same dispatcher;
-- timer IRQs reduced to acknowledged event bits, with coalesced `need_resched`,
-  preemption-disable depth, and deferred dispatch from a complete IRQ-return
-  frame, validated by a real one-shot kernel-task preemption probe;
-- lower-EL timer preemption of an IRQ-enabled generic user task, preserving its
-  suspended exception frame across a kernel-only peer and resuming EL0 at the
-  interrupted computation before a normal blocking exit;
-- a bounded two-tick mixed schedule that preempts EL0, then a kernel-only task,
-  and proves that both suspended IRQ services resume and unwind on their owning
-  stacks before the workers block back to the bootstrap task;
-- dispatcher-owned timer and slice accounting with configurable quanta, proven
-  by four physical ticks that create only two scheduling requests at the two
-  expected expiration boundaries;
-- continuous physical-timer lifetime started and cancelled by scheduler code,
-  with the device backend remaining independent of tasks and quantum policy;
-- architecture-provided local IRQ save/mask/restore callbacks around generic
-  dispatcher mutations, including context-switch-spanning critical sections
-  and exact operation-count validation under continuous timer preemption;
-- an ARM64-owned backend embedded behind generic `vm_space_t`, with opaque
-  backend recovery, table/ASID consistency checks, task-context activation,
-  and SVC user-buffer validation all driven by the generic identity;
-- generic sorted `vma_t` ownership for ARM64 bootstrap mappings, with private
-  virtual/permission duplication removed, high-half link rebinding, W^X and
-  physical-page validation, and VMA-driven lookup/range checks;
-- separate ARM64 artifacts so ARM32 platform images are not overwritten.
+- EL2-to-EL1 entry, exception vectors, EL0 transition and complete task
+  context switching;
+- the common preemptive scheduler on four CPUs;
+- dynamic physical memory, generic VMAs, lazy anonymous pages, fork/COW,
+  ASIDs and SMP TLB shootdown;
+- the common syscall dispatcher, VFS, ext2, FAT32, pipes, TTY and procfs;
+- ELF64 `execve`, process lifecycle, signals and core dumps;
+- a newlib AArch64 sysroot and the same installed userland paths as ARM32;
+- QEMU VirtIO block storage and Raspberry Pi SD/eMMC through common drivers;
+- common init, mash, kernel tasks, timer accounting and shutdown;
+- artifacts isolated by architecture and platform.
+
+Architecture code owns CPU registers, translation tables, TLB operations,
+exception frames and context-switch assembly. Process, VM, scheduling, VFS and
+device policy remain in the common kernel. The temporary ARM64 bootstrap task,
+runtime, VFS and block implementations have been removed.
 
 See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
 
-Remaining AArch64 pieces:
-
-- synchronization and full physical-allocator integration;
-- dynamic VMA/mapping operations and a runtime ARM64 page allocator;
-- SMP locking and per-CPU ownership beyond local IRQ serialization;
-- SMP-safe ASID residency, rollover and remote TLB shootdown rules;
-- generic syscall-dispatch integration and the ELF64 process loader;
-- AArch64 signal frame;
-- AArch64 toolchain/userland target.
-
-Expected reusable pieces:
-
-- FDT parser;
-- VirtIO MMIO drivers, after DMA/address cleanup;
-- VFS;
-- procfs;
-- scheduler policy;
-- TTY core;
-- newlib-oriented userland organization.
+Remaining work is hardening rather than a parallel bring-up runtime: complete
+high-half kernel execution, repeated mixed hardware stress, better ASID/TLB
+residency tracking, and Raspberry Pi graphics, USB and networking.
 
 ## Validation Policy
 
-For this branch, the minimum validation after each mechanical extraction is:
+Common-kernel changes must compile and boot on both QEMU reference ABIs:
 
-```text
-make kernel.bin ARCH=arm-none-eabi- CROSS_COMPILE=arm-none-eabi-
+```sh
+make TARGET_ARCH=arm32 TARGET_PLATFORM=qemu-virt platform-kernel
+make TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt platform-kernel
 ```
 
-Do not run QEMU automatically from this branch unless explicitly requested. The
-interactive stress matrix remains user-driven while the code is being reshaped.
+Hardware-facing changes must additionally build `arm64/raspi3` and run the
+validation sequence in `docs/RASPBERRY_PI3.md`. QEMU success does not replace
+Pi 3 testing for timer, SD/eMMC, cache, TLB or firmware-entry behavior.

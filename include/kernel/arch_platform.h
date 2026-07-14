@@ -80,6 +80,11 @@
 #define ARMOS_PLATFORM_IRQCTRL2_PHYS_SECTION_BASE 0u
 #endif
 
+#ifndef ARMOS_PLATFORM_IRQCTRL2_PHYS_BASE
+#define ARMOS_PLATFORM_IRQCTRL2_PHYS_BASE \
+    ARMOS_PLATFORM_IRQCTRL2_PHYS_SECTION_BASE
+#endif
+
 #ifndef ARMOS_PLATFORM_HAS_EMMC
 #define ARMOS_PLATFORM_HAS_EMMC 0u
 #endif
@@ -296,6 +301,11 @@ static inline vaddr_t arch_platform_kernel_mmio_irqctrl2_base(void)
 static inline paddr_t arch_platform_irqctrl2_phys_section_base(void)
 {
     return (paddr_t)ARMOS_PLATFORM_IRQCTRL2_PHYS_SECTION_BASE;
+}
+
+static inline paddr_t arch_platform_irqctrl2_phys_base(void)
+{
+    return (paddr_t)ARMOS_PLATFORM_IRQCTRL2_PHYS_BASE;
 }
 
 static inline bool arch_platform_has_irqctrl2_alias(void)

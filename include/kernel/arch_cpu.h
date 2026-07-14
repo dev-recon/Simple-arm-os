@@ -40,6 +40,8 @@ void arch_get_cpuinfo(arch_cpuinfo_t* info);
 const char* arch_machine_name(void);
 void arch_disable_interrupts(void);
 void arch_enable_interrupts(void);
+void arch_enable_async_abort(void);
+void arch_enable_smp_coherency(void);
 void arch_wait_for_interrupt(void);
 void arch_disable_branch_predictor(void);
 uint32_t arch_timer_frequency(void);

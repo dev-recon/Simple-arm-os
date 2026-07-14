@@ -169,9 +169,9 @@ void kernel_main(void)
     uart_attach_tty_backend();
 
     /* Phase 0: etats du processeur */
-    enable_async_abort();
+    arch_enable_async_abort();
 
-    arm_enable_smp_coherency();
+    arch_enable_smp_coherency();
     smp_init_boot_cpu();
 
     timer_freq = boot_timer_frequency();
@@ -198,7 +198,8 @@ void kernel_main(void)
     total_mb = kernel_memory_size / (1024 * 1024);
     available_mb = (get_free_page_count() * PAGE_SIZE) / (1024 * 1024);
     KBOOT_OKF("Memory: %uMB total, %uMB available", total_mb, available_mb);
-    KBOOT_OKF("Kernel: 0x%08X-0x%08X", KERNEL_START, KERNEL_END);
+    KBOOT_OKF("Kernel: %p-%p", (void *)(uintptr_t)KERNEL_START,
+              (void *)(uintptr_t)KERNEL_END);
     KBOOT_OKF("MMU: split TTBR enabled, ASID pool %u", ASID_MAX);
    
     setup_svc_stack();

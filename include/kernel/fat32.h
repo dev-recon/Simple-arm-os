@@ -25,7 +25,7 @@
 #define FAT32_SECTOR_SIZE   512
 #define FAT32_MAX_FILENAME  255
 
-/* FAT32 Boot Sector - VERSION ALIGNeE POUR ARM32 */
+/* FAT32 BIOS parameter block in its on-disk packed representation. */
 typedef struct __attribute__((packed)) {
     uint8_t data[512];
 } fat32_raw_sector_t;

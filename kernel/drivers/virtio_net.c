@@ -1616,8 +1616,8 @@ bool virtio_net_init(void)
 
     net_send_arp_request(VIRTIO_NET_GW_IP);
 
-    KINFO("VirtIO net initialized: phys=0x%08X irq=%u %s rxq=%u txq=%u mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
-          net.phys, net.irq,
+    KINFO("VirtIO net initialized: phys=0x%lX irq=%u %s rxq=%u txq=%u mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
+          (unsigned long)net.phys, net.irq,
           net.irq_edge_triggered ? "edge" : "level",
           net.rx_vq.qsize,
           net.tx_vq.qsize,

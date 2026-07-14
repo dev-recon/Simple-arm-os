@@ -9,23 +9,26 @@
  * Layer: ARM64 / task switching
  *
  * Responsibilities:
- * - Save and restore AAPCS64 kernel callee-saved registers and stack state.
- * - Preserve all FP/SIMD registers plus FPCR and FPSR between tasks.
- * - Provide deterministic context, dispatcher, and preemption peer probes.
+ * - Save and restore AAPCS64 kernel callee-saved state and stack position.
+ * - Preserve the complete FP/SIMD register file between common kernel tasks.
+ * - Enter new kernel and EL0 tasks through architecture trampolines.
  *
  * Notes:
- * - Address-space activation is performed by task_context.c before entry.
- * - Scheduling policy remains deliberately separate from this mechanism.
- * - Offsets come from arm64_task_context_t through asm-offsets.c.
+ * - Scheduling policy and task state transitions belong to kernel/task.
+ * - A null previous context is valid when the scheduler leaves boot context.
  */
 
 .include "asm-offsets.h"
 
 .section .text
 .align 4
+.extern task_context_save_complete
 .global arm64_task_context_switch
 .type arm64_task_context_switch, %function
 arm64_task_context_switch:
+    msr daifset, #2
+    isb
+    cbz x0, .Lrestore
     stp q0,  q1,  [x0, #ARM64_TASK_SIMD_Q0 + 0]
     stp q2,  q3,  [x0, #ARM64_TASK_SIMD_Q0 + 32]
     stp q4,  q5,  [x0, #ARM64_TASK_SIMD_Q0 + 64]
@@ -46,7 +49,6 @@ arm64_task_context_switch:
     str x2, [x0, #ARM64_TASK_SIMD_FPCR]
     mrs x2, fpsr
     str x2, [x0, #ARM64_TASK_SIMD_FPSR]
-
     stp x19, x20, [x0, #ARM64_TASK_X19]
     stp x21, x22, [x0, #ARM64_TASK_X21]
     stp x23, x24, [x0, #ARM64_TASK_X23]
@@ -58,7 +60,20 @@ arm64_task_context_switch:
     adr x2, .Lcontext_resume
     str x2, [x0, #ARM64_TASK_PC]
 
-    ldr x3, [x1, #ARM64_TASK_SP]
+.Lrestore:
+    /*
+     * Release the previous task only after this CPU runs on the selected
+     * task's kernel stack. A READY task still marked as owned by this CPU is
+     * intentionally not schedulable, so omitting this handoff strands it.
+     */
+    mov x19, x0
+    mov x20, x1
+    ldr x3, [x20, #ARM64_TASK_SP]
+    mov sp, x3
+    mov x0, x19
+    bl task_context_save_complete
+    mov x1, x20
+
     ldp x19, x20, [x1, #ARM64_TASK_X19]
     ldp x21, x22, [x1, #ARM64_TASK_X21]
     ldp x23, x24, [x1, #ARM64_TASK_X23]
@@ -86,7 +101,6 @@ arm64_task_context_switch:
     ldr x2, [x1, #ARM64_TASK_SIMD_FPSR]
     msr fpsr, x2
     ldr x2, [x1, #ARM64_TASK_PC]
-    mov sp, x3
     br x2
 
 .Lcontext_resume:
@@ -97,6 +111,8 @@ arm64_task_context_switch:
 .global arm64_task_kernel_entry_trampoline
 .type arm64_task_kernel_entry_trampoline, %function
 arm64_task_kernel_entry_trampoline:
+    msr daifclr, #2
+    isb
     mov x0, x20
     blr x19
 1:
@@ -138,204 +154,3 @@ arm64_simd_context_capture:
     str x1, [x0, #520]
     ret
 .size arm64_simd_context_capture, . - arm64_simd_context_capture
-
-/*
- * Initial probe state:
- *   x19 = probe task, x20 = bootstrap task, x21 = phase address
- *   x22/x23 = preservation sentinels, x24 = observed TTBR0 address
- */
-.align 4
-.global arm64_task_context_probe_entry
-.type arm64_task_context_probe_entry, %function
-arm64_task_context_probe_entry:
-    umov x9, v0.d[0]
-    ldr x10, =0x0123456789abcdef
-    cmp x9, x10
-    b.ne .Lprobe_failed
-    umov x9, v31.d[1]
-    ldr x10, =0xfedcba9876543210
-    cmp x9, x10
-    b.ne .Lprobe_failed
-    mrs x9, fpcr
-    mov x10, #0x400000
-    cmp x9, x10
-    b.ne .Lprobe_failed
-    mrs x9, fpsr
-    cmp x9, #1
-    b.ne .Lprobe_failed
-
-    mrs x9, ttbr0_el1
-    str x9, [x24]
-    mov x9, #1
-    str x9, [x21]
-    mov x0, x19
-    mov x1, x20
-    bl arm64_task_switch
-
-    mrs x9, ttbr0_el1
-    str x9, [x24]
-    ldr x9, =0x2222222222222222
-    cmp x22, x9
-    b.ne .Lprobe_failed
-    ldr x9, =0x2323232323232323
-    cmp x23, x9
-    b.ne .Lprobe_failed
-    umov x9, v0.d[0]
-    ldr x10, =0x0123456789abcdef
-    cmp x9, x10
-    b.ne .Lprobe_failed
-    umov x9, v31.d[1]
-    ldr x10, =0xfedcba9876543210
-    cmp x9, x10
-    b.ne .Lprobe_failed
-    mrs x9, fpcr
-    mov x10, #0x400000
-    cmp x9, x10
-    b.ne .Lprobe_failed
-    mrs x9, fpsr
-    cmp x9, #1
-    b.ne .Lprobe_failed
-
-    mov x9, #3
-    str x9, [x21]
-    mov x0, x19
-    mov x1, x20
-    bl arm64_task_switch
-    b .Lprobe_halt
-
-.Lprobe_failed:
-    mov x9, #0xff
-    str x9, [x21]
-    mov x0, x19
-    mov x1, x20
-    bl arm64_task_switch
-
-.Lprobe_halt:
-    wfe
-    b .Lprobe_halt
-.size arm64_task_context_probe_entry, . - arm64_task_context_probe_entry
-
-/*
- * Dispatcher probe state:
- *   x21 = phase address, x22/x23 = preservation sentinels
- *   x25 = task_dispatcher_t pointer
- */
-.align 4
-.global arm64_task_dispatcher_probe_entry
-.type arm64_task_dispatcher_probe_entry, %function
-arm64_task_dispatcher_probe_entry:
-    mov x9, #1
-    str x9, [x21]
-    mov x0, x25
-    bl task_dispatcher_yield
-
-    ldr x9, =0x2222222222222222
-    cmp x22, x9
-    b.ne .Ldispatcher_probe_failed
-    ldr x9, =0x2323232323232323
-    cmp x23, x9
-    b.ne .Ldispatcher_probe_failed
-
-    mov x9, #3
-    str x9, [x21]
-    mov x0, x25
-    bl task_dispatcher_block
-    b .Ldispatcher_probe_halt
-
-.Ldispatcher_probe_failed:
-    mov x9, #0xff
-    str x9, [x21]
-    mov x0, x25
-    bl task_dispatcher_block
-
-.Ldispatcher_probe_halt:
-    wfe
-    b .Ldispatcher_probe_halt
-.size arm64_task_dispatcher_probe_entry, . - arm64_task_dispatcher_probe_entry
-
-/*
- * EL0 preemption peer state:
- *   x21 = phase address, x22/x23 = preservation sentinels
- *   x25 = task_dispatcher_t pointer, x26 = user-visible completion flag
- */
-.align 4
-.global arm64_task_preempt_peer_entry
-.type arm64_task_preempt_peer_entry, %function
-arm64_task_preempt_peer_entry:
-    mov x9, #1
-    str x9, [x21]
-    str x9, [x26]
-    dmb ish
-    mov x0, x25
-    bl task_dispatcher_yield
-
-    ldr x9, =0x2222222222222222
-    cmp x22, x9
-    b.ne .Lpreempt_peer_failed
-    ldr x9, =0x2323232323232323
-    cmp x23, x9
-    b.ne .Lpreempt_peer_failed
-
-    mov x9, #3
-    str x9, [x21]
-    mov x0, x25
-    bl task_dispatcher_block
-    b .Lpreempt_peer_halt
-
-.Lpreempt_peer_failed:
-    mov x9, #0xff
-    str x9, [x21]
-    mov x0, x25
-    bl task_dispatcher_block
-
-.Lpreempt_peer_halt:
-    wfe
-    b .Lpreempt_peer_halt
-.size arm64_task_preempt_peer_entry, . - arm64_task_preempt_peer_entry
-
-/*
- * Bounded periodic peer state:
- *   x21 = phase address, x22/x23 = preservation sentinels
- *   x25 = task_dispatcher_t pointer, x26 = user handshake flag
- */
-.align 4
-.global arm64_task_periodic_peer_entry
-.type arm64_task_periodic_peer_entry, %function
-arm64_task_periodic_peer_entry:
-    mov x9, #1
-    str x9, [x21]
-    str x9, [x26]
-    dmb ish
-    msr daifclr, #2
-    isb
-
-.Lperiodic_peer_wait:
-    ldr x9, [x26]
-    cmp x9, #2
-    b.lo .Lperiodic_peer_wait
-    msr daifset, #2
-    isb
-
-    ldr x9, =0x2222222222222222
-    cmp x22, x9
-    b.ne .Lperiodic_peer_failed
-    ldr x9, =0x2323232323232323
-    cmp x23, x9
-    b.ne .Lperiodic_peer_failed
-
-    mov x9, #3
-    str x9, [x21]
-    mov x0, x25
-    bl task_dispatcher_block
-    b .Lperiodic_peer_halt
-
-.Lperiodic_peer_failed:
-    mov x9, #0xff
-    str x9, [x21]
-    mov x0, x25
-    bl task_dispatcher_block
-
-.Lperiodic_peer_halt:
-    wfe
-    b .Lperiodic_peer_halt
-.size arm64_task_periodic_peer_entry, . - arm64_task_periodic_peer_entry

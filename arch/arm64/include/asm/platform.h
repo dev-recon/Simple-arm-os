@@ -22,6 +22,8 @@
 
 #if defined(ARMOS_PLATFORM_QEMU_VIRT)
 #include <asm/platform/qemu_virt.h>
+#elif defined(ARMOS_PLATFORM_RASPI3)
+#include <asm/platform/raspi3.h>
 #else
 #error "No ARM64 platform selected"
 #endif

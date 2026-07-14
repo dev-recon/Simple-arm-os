@@ -10,12 +10,11 @@
  *
  * Responsibilities:
  * - Describe an architecture-neutral six-argument syscall request.
- * - Own the complete ArmOS syscall-number table independently of VFS policy.
  * - Preserve native register width for ARM32 and ARM64 callers.
  *
  * Notes:
- * - Subsystems register handlers as they become available on a target.
- * - An unregistered valid syscall number returns ENOSYS.
+ * - Architecture exception entry only decodes registers into this request.
+ * - The common syscall layer owns all dispatch and subsystem policy.
  */
 
 #ifndef _KERNEL_SYSCALL_DISPATCH_H
@@ -33,33 +32,5 @@ typedef struct syscall_request {
     uint32_t number;
     syscall_word_t arguments[ARMOS_SYSCALL_ARGUMENT_COUNT];
 } syscall_request_t;
-
-typedef syscall_result_t (*syscall_dispatch_handler_t)(
-    void *owner, const syscall_request_t *request);
-
-typedef struct syscall_dispatcher {
-    syscall_dispatch_handler_t handlers[ARMOS_SYSCALL_MAX];
-    void *owners[ARMOS_SYSCALL_MAX];
-    syscall_dispatch_handler_t fallback;
-    void *fallback_owner;
-    uint64_t calls;
-    uint64_t rejected;
-} syscall_dispatcher_t;
-
-void syscall_dispatcher_init(syscall_dispatcher_t *dispatcher);
-int syscall_dispatcher_register(syscall_dispatcher_t *dispatcher,
-                                uint32_t number,
-                                syscall_dispatch_handler_t handler,
-                                void *owner);
-int syscall_dispatcher_bind(syscall_dispatcher_t *dispatcher,
-                            uint32_t number,
-                            syscall_dispatch_handler_t handler,
-                            void *owner);
-int syscall_dispatcher_set_fallback(syscall_dispatcher_t *dispatcher,
-                                    syscall_dispatch_handler_t handler,
-                                    void *owner);
-syscall_result_t syscall_dispatcher_dispatch(
-    syscall_dispatcher_t *dispatcher,
-    const syscall_request_t *request);
 
 #endif /* _KERNEL_SYSCALL_DISPATCH_H */

@@ -15,21 +15,28 @@ PATCHED_SRC="$WORK_DIR/src"
 BUILD_DIR="$WORK_DIR/build"
 BUNDLE_DIR="$WORK_DIR/bundle/opt/tcc"
 ARCH="${ARCH:-arm-none-eabi-}"
+# shellcheck source=tools/cross_target_env.sh
+source "$ROOT_DIR/tools/cross_target_env.sh"
 CC="${ARCH}gcc"
 AR="${ARCH}ar"
 HOST_CC="${HOST_CC:-cc}"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-ARM_FLAGS="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft"
-NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$ROOT_DIR/build/newlib-sysroot/arm-none-eabi}"
-NEWLIB_LIBC="${NEWLIB_LIBC:-$NEWLIB_SYSROOT/lib/libc.a}"
-NEWLIB_LIBM="${NEWLIB_LIBM:-$NEWLIB_SYSROOT/lib/libm.a}"
-
 # TinyCC crashes when linking ArmOS/newlib binaries with GCC's Thumb multilib
 # libgcc.  The root ARM/EABI archive is the compatible runtime for this port.
 TCC_LIBGCC="${TCC_LIBGCC:-$("$CC" -print-libgcc-file-name)}"
 NATIVE_LIBGCC="${NATIVE_LIBGCC:-$("$CC" $ARM_FLAGS -print-libgcc-file-name)}"
+
+if [ "$TARGET_ARCH" = "arm64" ]; then
+    TCC_CPU=arm64
+    TCC_MAKE_TARGET=arm64-tcc
+    TCC_OUTPUT=arm64-tcc
+else
+    TCC_CPU=arm
+    TCC_MAKE_TARGET=arm-eabi-tcc
+    TCC_OUTPUT=arm-eabi-tcc
+fi
 
 if [ ! -f "$SRC_DIR/configure" ]; then
     echo "error: TinyCC sources not found in $SRC_DIR" >&2
@@ -81,6 +88,21 @@ int mprotect(void *addr, size_t length, int prot);
 #endif
 EOF
 
+cat > "$BUILD_DIR/armos_tcc_compat.c" <<'EOF'
+#include <unistd.h>
+
+long sysconf(int name)
+{
+    (void)name;
+    return 4096;
+}
+EOF
+
+"$CC" $ARM_FLAGS -std=gnu99 -Os -ffreestanding -fno-builtin \
+    -fno-stack-protector -I"$NEWLIB_SYSROOT/include" \
+    -c "$BUILD_DIR/armos_tcc_compat.c" \
+    -o "$BUILD_DIR/armos_tcc_compat.o"
+
 cd "$BUILD_DIR"
 
 "$PATCHED_SRC/configure" \
@@ -89,9 +111,9 @@ cd "$BUILD_DIR"
     --cross-prefix="$ARCH" \
     --cc="gcc $ARM_FLAGS -ffreestanding -fno-builtin -fno-stack-protector -DARM_OS_NEWLIB -I$NEWLIB_SYSROOT/include" \
     --ar=ar \
-    --cpu=arm \
+    --cpu="$TCC_CPU" \
     --targetos=Linux \
-    --triplet=arm-none-eabi \
+    --triplet="$TARGET_TRIPLET" \
     --enable-static \
     --disable-rpath \
     --sysincludepaths=/opt/tcc/lib/tcc/include:/opt/tcc/include/armos:/opt/tcc/include \
@@ -107,14 +129,13 @@ TCC_CFLAGS="$TCC_CFLAGS -DCONFIG_TCC_STATIC -DCONFIG_TCC_SEMLOCK=0 -DCONFIG_TCC_
 TCC_CFLAGS="$TCC_CFLAGS -I$BUILD_DIR/armos-include"
 
 NATIVE_LDFLAGS="-nostdlib -nostartfiles -static"
-NATIVE_LDFLAGS="$NATIVE_LDFLAGS -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections"
+NATIVE_LDFLAGS="$NATIVE_LDFLAGS -Wl,-Ttext=$TARGET_TEXT_ADDRESS -Wl,-e,_start -Wl,--gc-sections"
 NATIVE_LDFLAGS="$NATIVE_LDFLAGS -Wl,--allow-multiple-definition"
-NATIVE_LDFLAGS="$NATIVE_LDFLAGS $ROOT_DIR/newlib-port/build/crt0_newlib.o"
-NATIVE_LDFLAGS="$NATIVE_LDFLAGS $ROOT_DIR/newlib-port/build/syscall_raw.o"
-NATIVE_LDFLAGS="$NATIVE_LDFLAGS $ROOT_DIR/newlib-port/build/syscalls.o"
+NATIVE_LDFLAGS="$NATIVE_LDFLAGS $RUNTIME_OBJECTS"
+NATIVE_LDFLAGS="$NATIVE_LDFLAGS $BUILD_DIR/armos_tcc_compat.o"
 NATIVE_LDFLAGS="$NATIVE_LDFLAGS $NEWLIB_LIBM $NEWLIB_LIBC $NATIVE_LIBGCC"
 
-make arm-eabi-tcc LIBS='' CFLAGS="$TCC_CFLAGS" LDFLAGS="$NATIVE_LDFLAGS"
+make "$TCC_MAKE_TARGET" LIBS='' CFLAGS="$TCC_CFLAGS" LDFLAGS="$NATIVE_LDFLAGS"
 
 "$CC" $ARM_FLAGS -std=gnu99 -ffreestanding -nostdlib -fno-builtin \
     -fno-stack-protector -ffunction-sections -fdata-sections -Os \
@@ -123,9 +144,9 @@ make arm-eabi-tcc LIBS='' CFLAGS="$TCC_CFLAGS" LDFLAGS="$NATIVE_LDFLAGS"
     -c "$ROOT_DIR/newlib-port/tcc/syscalls_min.c" \
     -o "$BUNDLE_DIR/lib/syscalls_min.o"
 
-cp "$BUILD_DIR/arm-eabi-tcc" "$BUNDLE_DIR/bin/tcc"
-cp "$ROOT_DIR/newlib-port/build/crt0_newlib.o" "$BUNDLE_DIR/lib/crt0_newlib.o"
-cp "$ROOT_DIR/newlib-port/build/syscall_raw.o" "$BUNDLE_DIR/lib/syscall_raw.o"
+cp "$BUILD_DIR/$TCC_OUTPUT" "$BUNDLE_DIR/bin/tcc"
+cp "$NEWLIB_RUNTIME_DIR/crt0_newlib.o" "$BUNDLE_DIR/lib/crt0_newlib.o"
+cp "$NEWLIB_RUNTIME_DIR/syscall_raw.o" "$BUNDLE_DIR/lib/syscall_raw.o"
 cp "$NEWLIB_LIBC" "$BUNDLE_DIR/lib/libc.a"
 cp "$NEWLIB_LIBM" "$BUNDLE_DIR/lib/libm.a"
 cp "$TCC_LIBGCC" "$BUNDLE_DIR/lib/libgcc.a"

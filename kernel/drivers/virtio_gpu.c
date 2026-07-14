@@ -749,8 +749,8 @@ bool virtio_gpu_init(void)
     gpu.mmio = arch_platform_virtio_mmio_base(phys);
     gpu.framebuffer_size = FB_WIDTH * FB_HEIGHT * (FB_BPP / 8);
 
-    KINFO("VirtIO GPU found: phys=0x%08X mmio=%p irq=%u\n",
-          gpu.phys, gpu.mmio, gpu.irq);
+    KINFO("VirtIO GPU found: phys=0x%lX mmio=%p irq=%u\n",
+          (unsigned long)gpu.phys, gpu.mmio, gpu.irq);
 
     uint32_t magic = mmio_read32(gpu.mmio, VIRTIO_MMIO_MAGIC);
     uint32_t version = mmio_read32(gpu.mmio, VIRTIO_MMIO_VERSION);

@@ -219,48 +219,11 @@ static int32_t smp_platform_cpu_on(uint32_t target_cpu,
 static uint32_t smp_detect_possible_cpus_from_dtb(void)
 {
     void* dtb_ptr = (void*)dtb_address;
-    uint32_t count = 0;
+    uint32_t count;
     uint32_t fallback = arch_platform_default_cpu_count();
 
-    if (!dtb_ptr)
-        return fallback ? fallback : 1;
-
-    if (!fdt_check_header(dtb_ptr))
-        return fallback ? fallback : 1;
-
-    struct fdt_header* fdt = (struct fdt_header*)dtb_ptr;
-    uint8_t* struct_block = (uint8_t*)dtb_ptr + fdt32_to_cpu(fdt->off_dt_struct);
-    uint32_t* token = (uint32_t*)struct_block;
-
-    while (1) {
-        uint32_t tag = fdt32_to_cpu(*token++);
-
-        switch (tag) {
-            case FDT_BEGIN_NODE: {
-                const char* name = (const char*)token;
-                size_t len = strlen(name);
-
-                if (fdt_node_matches(name, "cpu") && count < ARMOS_MAX_CPUS)
-                    count++;
-
-                token += (len + 4) / 4;
-                break;
-            }
-            case FDT_PROP: {
-                uint32_t len = fdt32_to_cpu(*token++);
-                token++;
-                token += (len + 3) / 4;
-                break;
-            }
-            case FDT_END_NODE:
-            case FDT_NOP:
-                break;
-            case FDT_END:
-                return count ? count : (fallback ? fallback : 1);
-            default:
-                return count ? count : (fallback ? fallback : 1);
-        }
-    }
+    count = fdt_count_cpus(dtb_ptr, ARMOS_MAX_CPUS);
+    return count ? count : (fallback ? fallback : 1);
 }
 
 static int32_t smp_psci_cpu_on(uint32_t target_cpu, uint32_t entry_point, uint32_t context_id)

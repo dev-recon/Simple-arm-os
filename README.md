@@ -142,15 +142,16 @@ Reference platform:
 - UART console
 - Optional VirtIO-GPU display and VirtIO input keyboard
 
-Hardware development platform:
+Hardware reference platform:
 
-- Raspberry Pi 3 Model B/B+ in AArch32 mode (`TARGET_PLATFORM=pi3`)
+- Raspberry Pi 3 Model B/B+ in AArch64 mode
+  (`TARGET_ARCH=arm64 TARGET_PLATFORM=raspi3`)
 - four Cortex-A53 CPUs participating in the scheduler
 - PL011 UART rescue console on `tty0`
-- SD/eMMC block device with hidden FAT32 firmware partition and ext2 root
+- SD/eMMC block device with a dedicated FAT32 firmware partition and ext2 root
 - BCM2836 local interrupt controller and ARM generic timer
 
-See [Raspberry Pi 3 AArch32](docs/RASPBERRY_PI3.md) for the build, SD-card,
+See [Raspberry Pi 3](docs/RASPBERRY_PI3.md) for the build, SD-card,
 UART, validation, and current limitation contracts.
 
 See [ARM64 Port](docs/ARM64_PORT.md) for the AArch64 bootstrap contract,
@@ -295,7 +296,18 @@ Common scripts:
 ./run.sh
 ```
 
-Rebuilds the project, recreates disk images, and starts QEMU.
+On a fresh checkout, rebuilds and starts the stable reference target:
+
+```text
+arm32/qemu-virt
+```
+
+Other architecture/platform pairs are explicit opt-ins through the same
+pipeline. For example:
+
+```sh
+TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./run.sh
+```
 
 ```sh
 ./boot.sh

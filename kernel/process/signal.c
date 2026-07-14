@@ -217,6 +217,7 @@ static vaddr_t allocate_signal_stack_address(size_t size)
 void init_process_signals(task_t* proc)
 {
     signal_state_t* sig;
+    vma_t *signal_vma;
     int i;
     
     if (!proc || proc->type != TASK_TYPE_PROCESS || !proc->process) {
@@ -230,7 +231,7 @@ void init_process_signals(task_t* proc)
         KERROR("[SIGNAL] No VM space\n");
         return;
     }
-    
+
     sig = &proc->process->signals;
     
     /* Initialiser les handlers par defaut */
@@ -255,6 +256,18 @@ void init_process_signals(task_t* proc)
         proc->process->signal_stack_size = 0;
         return;
     }
+
+    signal_vma = create_vma(proc->process->vm,
+                            proc->process->signal_stack_base,
+                            proc->process->signal_stack_size,
+                            VMA_READ | VMA_WRITE | VMA_DONTFORK);
+    if (!signal_vma) {
+        KERROR("[SIGNAL] Failed to reserve signal stack VMA for process %u\n",
+               proc->process->pid);
+        proc->process->signal_stack_base = 0;
+        proc->process->signal_stack_size = 0;
+        return;
+    }
     
     /* Allouer et mapper les pages physiques */
     size_t pages_needed = (proc->process->signal_stack_size + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -265,6 +278,21 @@ void init_process_signals(task_t* proc)
         void* stack_page = allocate_page();
         if (!stack_page) {
             KERROR("[SIGNAL] Failed to allocate physical page %u\n", (uint32_t)i);
+            for (size_t j = 0; j < i; j++) {
+                vaddr_t mapped = proc->process->signal_stack_base +
+                                 j * PAGE_SIZE;
+                paddr_t physical = get_physical_address(
+                    proc->process->vm->pgdir, mapped);
+
+                if (physical && unmap_user_page(proc->process->vm->pgdir,
+                                                mapped,
+                                                proc->process->vm->asid) == 0)
+                    free_page((void *)(uintptr_t)(physical & PAGE_MASK));
+            }
+            remove_vma(proc->process->vm,
+                       proc->process->signal_stack_base,
+                       proc->process->signal_stack_base +
+                       proc->process->signal_stack_size);
             proc->process->signal_stack_base = 0;
             proc->process->signal_stack_size = 0;
             return;
@@ -285,12 +313,30 @@ void init_process_signals(task_t* proc)
 
         if (map_user_page(proc->process->vm->pgdir, vaddr, (paddr_t)stack_page,
                           flags, proc->process->vm->asid) < 0) {
+            KERROR("[SIGNAL] Failed to map stack page %u for process %u\n",
+                   (uint32_t)i, proc->process->pid);
             free_page(stack_page);
+            for (size_t j = 0; j < i; j++) {
+                vaddr_t mapped = proc->process->signal_stack_base +
+                                 j * PAGE_SIZE;
+                paddr_t physical = get_physical_address(
+                    proc->process->vm->pgdir, mapped);
+
+                if (physical && unmap_user_page(proc->process->vm->pgdir,
+                                                mapped,
+                                                proc->process->vm->asid) == 0)
+                    free_page((void *)(uintptr_t)(physical & PAGE_MASK));
+            }
+            remove_vma(proc->process->vm,
+                       proc->process->signal_stack_base,
+                       proc->process->signal_stack_base +
+                       proc->process->signal_stack_size);
             proc->process->signal_stack_base = 0;
             proc->process->signal_stack_size = 0;
             return;
         }
     }
+
     
     /* ACCeS CORRECT */
     //KINFO("[SIGNAL] Process %u signal stack: 0x%08X - 0x%08X (%u KB)\n",
@@ -314,18 +360,22 @@ void cleanup_process_signals(task_t* proc)
     
     /* ACCeS CORRECT */
     if (proc->process->signal_stack_base == 0) return;
-    
+
     size_t pages_to_free = (proc->process->signal_stack_size + PAGE_SIZE - 1) / PAGE_SIZE;
     
     for (size_t i = 0; i < pages_to_free; i++) {
         vaddr_t vaddr = proc->process->signal_stack_base + (i * PAGE_SIZE);
         
         paddr_t phys_addr = get_physical_address(proc->process->vm->pgdir, vaddr);
-        if (phys_addr != 0) {
-            //map_user_page(proc->process->vm->pgdir, vaddr, 0,proc->process->vm->vma_list->flags,proc->process->vm->asid);
-            free_page((void*)phys_addr);
-        }
+        if (phys_addr != 0 &&
+            unmap_user_page(proc->process->vm->pgdir, vaddr,
+                            proc->process->vm->asid) == 0)
+            free_page((void *)(uintptr_t)(phys_addr & PAGE_MASK));
     }
+
+    remove_vma(proc->process->vm, proc->process->signal_stack_base,
+               proc->process->signal_stack_base +
+               proc->process->signal_stack_size);
     
     /* ACCeS CORRECT */
     //KDEBUG("[SIGNAL] Freed signal stack for process %u\n", proc->process->pid);
@@ -618,7 +668,11 @@ static bool setup_signal_frame(task_t* proc, int sig, sigaction_t* action,
                                 (uint32_t)sig);
 
     if (copy_to_user((void *)final_sp, &frame, sizeof(frame)) < 0) {
-        KERROR("[SIGNAL] Failed to copy signal frame to user stack\n");
+        KERROR("[SIGNAL] Failed to copy frame pid=%d base=%p size=%lu sp=%p\n",
+               proc->process->pid,
+               (void *)(uintptr_t)proc->process->signal_stack_base,
+               (unsigned long)proc->process->signal_stack_size,
+               (void *)(uintptr_t)final_sp);
         return false;
     }
 

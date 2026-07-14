@@ -23,32 +23,77 @@
 #include <kernel/util.h>
 #include <kernel/task.h>
 #include <kernel/process.h>
-#include <kernel/userspace.h>
-#include <kernel/shm.h>
 #include <asm/arm.h>
 #include <asm/mmu.h>
 
-/* Forward declarations de toutes les fonctions statiques */
-static int cow_copy_vma(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma);
 static pgdir_t allocate_pgdir(void);
 static bool vm_l1_entry_is_coarse(uint32_t entry);
 static paddr_t vm_l1_coarse_base(uint32_t entry);
 static bool vm_phys_page_is_freeable(paddr_t phys_addr, const char* owner);
 
-/* Fonctions ASID externes */
-extern uint32_t vm_allocate_asid(void);
-extern void vm_free_asid(uint32_t asid);
-extern uint32_t vm_get_current_asid(void);
-extern void switch_address_space_with_asid(pgdir_t pgdir, uint32_t asid);
+static inline pgdir_cpu_t vm_pgdir_handle_cpu_view(pgdir_t pgdir)
+{
+    vaddr_t address = (vaddr_t)(uintptr_t)pgdir;
+
+    if (virt_in_direct_map(address))
+        return (pgdir_cpu_t)pgdir;
+    if (phys_in_direct_map((paddr_t)address))
+        return (pgdir_cpu_t)phys_to_virt((paddr_t)address);
+    return (pgdir_cpu_t)pgdir;
+}
 
 static inline pgdir_cpu_t vm_pgdir_cpu_view(vm_space_t *vm)
 {
     if (!vm || !vm->pgdir)
         return NULL;
-    return (pgdir_cpu_t)phys_to_virt((paddr_t)vm->pgdir);
+    return vm_pgdir_handle_cpu_view(vm->pgdir);
 }
 
-extern bool asid_map[]; /* Déclaré dans mmu.c */
+static inline void vm_flush_page_table_entry(const void *entry)
+{
+    dc_clean_mva((void *)entry);
+    data_sync_barrier_inner_shareable_write();
+}
+
+int unmap_user_page(pgdir_t pgdir, vaddr_t address, uint32_t asid)
+{
+    uint32_t l1_index;
+    uint32_t l2_index;
+    l1_entry_t *l1_entry;
+    l2_table_t l2_table;
+    paddr_t l2_phys;
+    uint32_t index;
+
+    if (!pgdir || address >= get_split_boundary() ||
+        (address & PAGE_OFFSET_MASK))
+        return -EINVAL;
+
+    l1_index = get_L1_index(address);
+    l2_index = L2_INDEX(address);
+    l1_entry = &vm_pgdir_handle_cpu_view(pgdir)[l1_index];
+    if ((*l1_entry & 0x3u) != 0x1u)
+        return -EINVAL;
+
+    l2_phys = *l1_entry & 0xFFFFFC00u;
+    l2_table = (l2_table_t)phys_to_virt(l2_phys);
+    if ((l2_table[l2_index] & 0x3u) == 0)
+        return 0;
+
+    l2_table[l2_index] = 0;
+    vm_flush_page_table_entry(&l2_table[l2_index]);
+    invalidate_tlb_page_asid(address, asid);
+
+    for (index = 0; index < 256u; index++) {
+        if ((l2_table[index] & 0x3u) != 0)
+            return 0;
+    }
+
+    *l1_entry = 0;
+    vm_flush_page_table_entry(l1_entry);
+    invalidate_tlb_page_asid(address, asid);
+    free_page((void *)(uintptr_t)l2_phys);
+    return 0;
+}
 
 #define PGDIR_SIZE 7
 
@@ -155,12 +200,8 @@ vm_space_t *create_vm_space(void)
 
     install_low_kernel_aliases(vm);
 
-    vm->vma_list = NULL;
     vm->arch_private = NULL;
-    vm->heap_start = USER_HEAP_START;
-    vm->brk = USER_HEAP_START;
-    vm->heap_end = USER_HEAP_END;
-    vm->stack_start = USER_STACK_TOP;   // FIX IT
+    vm_initialize_user_layout(vm);
     vm->asid = asid; /* Nouveau champ ASID */
 
     // KDEBUG("create_vm_space: Created VM space with ASID %u\n", asid);
@@ -196,18 +237,6 @@ static uint32_t vm_user_l1_entries(void)
     if (split == 0)
         return 0;
     return get_L1_index(split - 1) + 1;
-}
-
-uint32_t vm_virtual_kb(vm_space_t *vm)
-{
-    uint32_t bytes = 0;
-
-    for (vma_t *vma = vm ? vm->vma_list : NULL; vma; vma = vma->next) {
-        if (vma->end > vma->start)
-            bytes += vma->end - vma->start;
-    }
-
-    return bytes / 1024;
 }
 
 uint32_t vm_resident_kb(vm_space_t *vm)
@@ -279,7 +308,6 @@ static bool vm_phys_page_is_freeable(paddr_t phys_addr, const char* owner)
 void destroy_vm_space(vm_space_t *vm)
 {
     vma_t *vma;
-    vma_t *next;
     vaddr_t vaddr;
     paddr_t phys_addr;
 
@@ -290,10 +318,7 @@ void destroy_vm_space(vm_space_t *vm)
 
     /* Free all VMAs */
     vma = vm->vma_list;
-    while (vma)
-    {
-        next = vma->next;
-
+    while (vma) {
         /* Free pages in this VMA.
          *
          * VMAs may describe byte ranges, but the page tables map whole pages.
@@ -313,10 +338,7 @@ void destroy_vm_space(vm_space_t *vm)
             }
         }
 
-        if (vma->flags & VMA_SHARED)
-            shm_release_mapping(vma->shm_id);
-        kfree(vma);
-        vma = next;
+        vma = vma->next;
     }
 
     /* Les tables L2 sont des pages physiques distinctes des pages utilisateur. */
@@ -340,373 +362,8 @@ void destroy_vm_space(vm_space_t *vm)
 
     /* Free user page directory from the original allocation base. */
     free_pages(vm->pgdir_alloc ? vm->pgdir_alloc : vm->pgdir, PGDIR_SIZE);
+    vm_release_vmas(vm);
     kfree(vm);
-}
-
-vma_t *create_vma(vm_space_t *vm, vaddr_t start, uint32_t size, uint32_t flags)
-{
-    vma_t *vma;
-    vma_t *current;
-    vaddr_t end;
-
-    if (!vm || size == 0)
-        return NULL;
-
-    end = start + size;
-    if (end < start || start >= get_split_boundary() || end > get_split_boundary())
-    {
-        KERROR("create_vma: Invalid range 0x%08X + 0x%08X\n", start, size);
-        return NULL;
-    }
-
-    for (current = vm->vma_list; current; current = current->next)
-    {
-        if (start < current->end && end > current->start)
-        {
-            KERROR("create_vma: Range 0x%08X-0x%08X overlaps 0x%08X-0x%08X\n",
-                   start, end, current->start, current->end);
-            return NULL;
-        }
-    }
-
-    vma = kmalloc(sizeof(vma_t));
-    if (!vma)
-        return NULL;
-
-    vma->start = start;
-    vma->end = end;
-    vma->flags = flags;
-    vma->shm_id = 0;
-    vma->next = NULL;
-
-    // KDEBUG("create_vma: Creating VMA 0x%08X-0x%08X (size=%u) in ASID %u\n",
-    //        start, start + size, size, vm->asid);
-
-    // debug_mmu_state();
-
-    /* Insert into sorted list */
-    if (!vm->vma_list || vma->start < vm->vma_list->start)
-    {
-        vma->next = vm->vma_list;
-        vm->vma_list = vma;
-    }
-    else
-    {
-        current = vm->vma_list;
-        while (current->next && current->next->start < vma->start)
-        {
-            current = current->next;
-        }
-        vma->next = current->next;
-        current->next = vma;
-    }
-
-    // KDEBUG("create_vma: returning from VMA \n");
-
-    return vma;
-}
-
-int remove_vma(vm_space_t *vm, vaddr_t start, vaddr_t end)
-{
-    vma_t *prev = NULL;
-    vma_t *current;
-
-    if (!vm)
-        return -EINVAL;
-
-    current = vm->vma_list;
-    while (current) {
-        if (current->start == start && current->end == end) {
-            if (prev)
-                prev->next = current->next;
-            else
-                vm->vma_list = current->next;
-            kfree(current);
-            return 0;
-        }
-        prev = current;
-        current = current->next;
-    }
-
-    return -ENOENT;
-}
-
-static bool vm_range_overlaps(vma_t *vma, vaddr_t start, vaddr_t end)
-{
-    return vma && start < vma->end && end > vma->start;
-}
-
-vaddr_t vm_find_free_range(vm_space_t *vm, vaddr_t hint, uint32_t size,
-                           vaddr_t base, vaddr_t limit)
-{
-    vaddr_t addr;
-    vaddr_t end;
-    vma_t *vma;
-
-    if (!vm || size == 0 || (size & (PAGE_SIZE - 1)) ||
-        (base & (PAGE_SIZE - 1)) || (limit & (PAGE_SIZE - 1)) ||
-        base >= limit || size > limit - base) {
-        return 0;
-    }
-
-    if (hint >= base && hint < limit && IS_PAGE_ALIGNED(hint) &&
-        size <= limit - hint) {
-        bool overlaps = false;
-        end = hint + size;
-        for (vma = vm->vma_list; vma; vma = vma->next) {
-            if (vm_range_overlaps(vma, hint, end)) {
-                overlaps = true;
-                break;
-            }
-        }
-        if (!overlaps)
-            return hint;
-    }
-
-    addr = base;
-    for (vma = vm->vma_list; vma; vma = vma->next) {
-        if (vma->end <= addr || vma->end <= base)
-            continue;
-        if (vma->start >= limit)
-            break;
-        if (addr + size <= vma->start)
-            return addr;
-        if (vma->end > addr)
-            addr = ALIGN_UP(vma->end, PAGE_SIZE);
-        if (addr < base)
-            addr = base;
-        if (addr >= limit || size > limit - addr)
-            return 0;
-    }
-
-    if (addr < limit && size <= limit - addr)
-        return addr;
-    return 0;
-}
-
-int vm_unmap_range(vm_space_t *vm, vaddr_t start, uint32_t size)
-{
-    vaddr_t end;
-    vma_t *vma;
-    vma_t *prev;
-
-    if (!vm || size == 0 || !IS_PAGE_ALIGNED(start))
-        return -EINVAL;
-
-    size = ALIGN_UP(size, PAGE_SIZE);
-    end = start + size;
-    if (end <= start || end > get_split_boundary())
-        return -EINVAL;
-
-    /*
-     * SHM mappings carry one mapping reference per VMA. Until the SHM layer
-     * grows split-aware accounting, only allow munmap() to remove such VMAs
-     * exactly. Anonymous mmap VMAs can be split freely below.
-     */
-    for (vma = vm->vma_list; vma; vma = vma->next) {
-        vaddr_t cut_start;
-        vaddr_t cut_end;
-
-        if (!vm_range_overlaps(vma, start, end))
-            continue;
-        if (!(vma->flags & VMA_SHARED))
-            continue;
-
-        cut_start = (start > vma->start) ? start : vma->start;
-        cut_end = (end < vma->end) ? end : vma->end;
-        if (cut_start != vma->start || cut_end != vma->end)
-            return -EINVAL;
-    }
-
-    prev = NULL;
-    vma = vm->vma_list;
-    while (vma) {
-        vma_t *next = vma->next;
-        vaddr_t cut_start;
-        vaddr_t cut_end;
-
-        if (vma->end <= start) {
-            prev = vma;
-            vma = next;
-            continue;
-        }
-        if (vma->start >= end)
-            break;
-
-        cut_start = (start > vma->start) ? start : vma->start;
-        cut_end = (end < vma->end) ? end : vma->end;
-        if (cut_start >= cut_end) {
-            prev = vma;
-            vma = next;
-            continue;
-        }
-
-        if (cut_start > vma->start && cut_end < vma->end) {
-            vma_t *right = kmalloc(sizeof(vma_t));
-            if (!right)
-                return -ENOMEM;
-            *right = *vma;
-            right->start = cut_end;
-            right->next = vma->next;
-
-            for (vaddr_t addr = cut_start; addr < cut_end; addr += PAGE_SIZE) {
-                paddr_t phys = get_physical_address(vm->pgdir, addr);
-                if (phys && unmap_user_page(vm->pgdir, addr, vm->asid) == 0)
-                    free_page((void *)phys);
-            }
-
-            vma->end = cut_start;
-            vma->next = right;
-            prev = right;
-            vma = right->next;
-            continue;
-        }
-
-        for (vaddr_t addr = cut_start; addr < cut_end; addr += PAGE_SIZE) {
-            paddr_t phys = get_physical_address(vm->pgdir, addr);
-            if (phys && unmap_user_page(vm->pgdir, addr, vm->asid) == 0)
-                free_page((void *)phys);
-        }
-
-        if (cut_start == vma->start && cut_end == vma->end) {
-            if (prev)
-                prev->next = next;
-            else
-                vm->vma_list = next;
-            if (vma->flags & VMA_SHARED)
-                shm_release_mapping(vma->shm_id);
-            kfree(vma);
-            vma = next;
-        } else if (cut_start == vma->start) {
-            vma->start = cut_end;
-            prev = vma;
-            vma = next;
-        } else {
-            vma->end = cut_start;
-            prev = vma;
-            vma = next;
-        }
-    }
-
-    return 0;
-}
-
-vm_space_t *fork_vm_space(vm_space_t *parent_vm)
-{
-    vm_space_t *child_vm = create_vm_space();
-    vma_t *parent_vma;
-    vma_t *child_vma;
-
-    if (!child_vm)
-        return NULL;
-
-    // KDEBUG("fork_vm_space: Forking from ASID %u to ASID %u\n",
-    //        parent_vm->asid, child_vm->asid);
-
-    /* Copy all VMAs */
-    // KDEBUG("fork_vm_space: About to copy all VMAs\n");
-    parent_vma = parent_vm->vma_list;
-    while (parent_vma)
-    {
-        if (parent_vma->end <= parent_vma->start) {
-            parent_vma = parent_vma->next;
-            continue;
-        }
-
-        child_vma = create_vma(child_vm,
-                               parent_vma->start,
-                               parent_vma->end - parent_vma->start,
-                               parent_vma->flags);
-        if (!child_vma)
-        {
-            destroy_vm_space(child_vm);
-            return NULL;
-        }
-        child_vma->shm_id = parent_vma->shm_id;
-
-        /* Copy pages with COW if writable */
-        if (parent_vma->flags & VMA_WRITE)
-        {
-            // KDEBUG("fork_vm_space: COW VMA 0x%08X-0x%08X \n",
-            //        parent_vma->start, parent_vma->end);
-            if (cow_copy_vma(parent_vm, child_vm, parent_vma) < 0)
-            {
-                destroy_vm_space(child_vm);
-                return NULL;
-            }
-            // KDEBUG(" DONE\n");
-        }
-        else
-        {
-            // KDEBUG("fork_vm_space: SHARE VMA 0x%08X-0x%08X \n",
-            //        parent_vma->start, parent_vma->end);
-            if (cow_copy_vma(parent_vm, child_vm, parent_vma) < 0)
-            {
-                destroy_vm_space(child_vm);
-                return NULL;
-            }
-            // KDEBUG(" DONE\n");
-        }
-
-        parent_vma = parent_vma->next;
-    }
-
-    child_vm->heap_start = parent_vm->heap_start;
-    child_vm->heap_end = parent_vm->heap_end;
-    child_vm->stack_start = parent_vm->stack_start;
-    child_vm->brk = parent_vm->brk;
-
-     //KDEBUG("fork_vm_space: Fork completed - Child Heap Start 0x%08X, Child Heap End 0x%08X, Child Stack Start 0x%08X\n",
-     //       child_vm->heap_start, child_vm->heap_end, child_vm->stack_start);
-
-    return child_vm;
-}
-
-static int cow_copy_vma(vm_space_t *parent_vm, vm_space_t *child_vm, vma_t *vma)
-{
-    vaddr_t vaddr;
-
-    for (vaddr = vma->start; vaddr < vma->end; vaddr += PAGE_SIZE)
-    {
-        paddr_t phys_addr = get_physical_address(parent_vm->pgdir, vaddr);
-        if (!phys_addr) {
-            continue;
-        }
-
-        if (page_ref_inc((void*)phys_addr) < 0) {
-            KERROR("cow_copy_vma: failed to ref page 0x%08X\n", phys_addr);
-            return -ENOMEM;
-        }
-
-        if ((vma->flags & VMA_WRITE) && !(vma->flags & VMA_SHARED)) {
-            if (set_user_page_readonly(parent_vm->pgdir, vaddr, parent_vm->asid) < 0) {
-                free_page((void*)phys_addr);
-                return -EFAULT;
-            }
-        }
-
-        int map_ret;
-        if (vma->flags & VMA_SHARED) {
-            map_ret = map_user_page(child_vm->pgdir, vaddr, phys_addr,
-                                    vma->flags, child_vm->asid);
-        } else {
-            map_ret = map_user_page_readonly(child_vm->pgdir, vaddr, phys_addr,
-                                             vma->flags, child_vm->asid);
-        }
-
-        if (map_ret < 0) {
-            free_page((void*)phys_addr);
-            if ((vma->flags & VMA_WRITE) && page_ref_count((void*)phys_addr) == 1) {
-                set_user_page_writable(parent_vm->pgdir, vaddr, parent_vm->asid);
-            }
-            return -ENOMEM;
-        }
-    }
-
-    if (vma->flags & VMA_SHARED)
-        shm_retain_mapping(vma->shm_id);
-
-    return 0;
 }
 
 int handle_cow_fault(vaddr_t fault_addr)
@@ -764,92 +421,6 @@ int handle_cow_fault(vaddr_t fault_addr)
     return 0;
 }
 
-int handle_user_stack_fault(vaddr_t fault_addr)
-{
-    task_t *task = task_current_local();
-
-    if (!task || task->type != TASK_TYPE_PROCESS ||
-        !task->process || !task->process->vm) {
-        return -EINVAL;
-    }
-
-    if (fault_addr < USER_STACK_BOTTOM || fault_addr >= USER_STACK_TOP) {
-        return -EINVAL;
-    }
-
-    vm_space_t* vm = task->process->vm;
-    vaddr_t vaddr = fault_addr & ~(PAGE_SIZE - 1);
-    vma_t* vma = find_vma(vm, fault_addr);
-    if (!vma || !(vma->flags & VMA_WRITE)) {
-        return -EACCES;
-    }
-
-    if (get_physical_address(vm->pgdir, vaddr) != 0) {
-        return -EEXIST;
-    }
-
-    void* page = allocate_page();
-    if (!page) {
-        return -ENOMEM;
-    }
-
-    if (map_user_page(vm->pgdir, vaddr, (paddr_t)page, vma->flags, vm->asid) < 0) {
-        free_page(page);
-        return -ENOMEM;
-    }
-
-    return 0;
-}
-
-int handle_lazy_anon_fault(vaddr_t fault_addr, bool is_write)
-{
-    task_t *task = task_current_local();
-    vm_space_t *vm;
-    vma_t *vma;
-    vaddr_t vaddr;
-    void *page;
-
-    if (!task || task->type != TASK_TYPE_PROCESS ||
-        !task->process || !task->process->vm) {
-        return -EINVAL;
-    }
-
-    vm = task->process->vm;
-    vma = find_vma(vm, fault_addr);
-    if (!vma || !(vma->flags & VMA_LAZY)) {
-        return -EINVAL;
-    }
-    if (is_write && !(vma->flags & VMA_WRITE)) {
-        return -EACCES;
-    }
-    if (!is_write && !(vma->flags & VMA_READ)) {
-        return -EACCES;
-    }
-
-    /*
-     * Today one process has one schedulable user task, so this cannot race
-     * with another CPU faulting the same address space. clone()/threads will
-     * need a per-vm fault lock around the present-check + map sequence.
-     */
-    vaddr = fault_addr & PAGE_MASK;
-    if (get_physical_address(vm->pgdir, vaddr) != 0) {
-        return -EEXIST;
-    }
-
-    page = allocate_page();
-    if (!page) {
-        return -ENOMEM;
-    }
-
-    if (map_user_page(vm->pgdir, vaddr, (paddr_t)page, vma->flags, vm->asid) < 0) {
-        free_page(page);
-        return -ENOMEM;
-    }
-
-    return 0;
-}
-
-/* Nouvelle fonction: Switch vers un espace d'adressage avec ASID */
 void switch_to_vm_space(vm_space_t *vm)
 {
     if (!vm)
@@ -858,128 +429,5 @@ void switch_to_vm_space(vm_space_t *vm)
         return;
     }
 
-    // KDEBUG("switch_to_vm_space: Switching from TTBR0=0x%08X to ASID %u, pgdir 0x%08X\n", get_ttbr0(),
-    //        vm->asid, (uint32_t)vm->pgdir);
-    /* Lire l'instruction à l'adresse virtuelle 0x8000 */
-
-    /* Utiliser la nouvelle fonction avec ASID */
     switch_address_space_with_asid(vm->pgdir, vm->asid);
-
-    extern void check_instruction(vaddr_t test_vaddr, paddr_t phys_addr, uint32_t instruction);
-    // check_instruction(0x00008000, 0x41235000, 0xEB000006);
-
-    // KDEBUG("switch_to_vm_space: Switch completed to ASID %u TTBR0=0x%08X\n", vm->asid, get_ttbr0());
-}
-
-/* Nouvelle fonction: Obtenir l'ASID d'un VM space */
-uint32_t get_vm_asid(vm_space_t *vm)
-{
-    if (!vm)
-    {
-        return 0; /* ASID 0 = noyau */
-    }
-    return vm->asid;
-}
-
-/* Helper functions */
-vma_t *find_vma(vm_space_t *vm, vaddr_t addr)
-{
-    vma_t *vma = vm->vma_list;
-
-    /* Vérifier que l'adresse est dans l'espace utilisateur */
-    if (addr >= 0x40000000)
-    {
-        KERROR("find_vma: Address 0x%08X is in kernel space\n", addr);
-        return NULL;
-    }
-
-    while (vma)
-    {
-        if (addr >= vma->start && addr < vma->end)
-        {
-             //KDEBUG("find_vma: Found VMA for addr 0x%08X in ASID %u\n", addr, vm->asid);
-            return vma;
-        }
-        vma = vma->next;
-    }
-
-     //KDEBUG("find_vma: No VMA found for addr 0x%08X in ASID %u\n", addr, vm->asid);
-    return NULL;
-}
-
-/* Nouvelle fonction: Statistiques ASID */
-void debug_asid_usage(void)
-{
-    extern bool asid_map[]; /* Déclaré dans mmu.c */
-    uint32_t used_count = 0;
-    uint32_t current_asid = vm_get_current_asid();
-
-    KDEBUG("=== ASID USAGE DEBUG ===\n");
-    KDEBUG("Current ASID: cookie=%u hw=%u gen=%u\n",
-           current_asid, current_asid & ASID_MAX, current_asid >> 8);
-
-    for (uint32_t i = 0; i <= 255; i++)
-    {
-        if (asid_map[i])
-        {
-            used_count++;
-            if (i < 16)
-            { /* Afficher seulement les premiers pour éviter le spam */
-                KDEBUG("ASID %u: USED\n", i);
-            }
-        }
-    }
-
-    /* Calcul du pourcentage en arithmétique entière */
-    uint32_t percentage = (used_count * 100) / 256;
-    uint32_t remainder = ((used_count * 100) % 256) * 10 / 256; /* Une décimale */
-
-    KDEBUG("Total ASIDs used: %u/256 (%u.%u%%)\n",
-           used_count, percentage, remainder);
-    KDEBUG("========================\n");
-}
-
-/* Nouvelle fonction: Validation d'un VM space */
-bool validate_vm_space(vm_space_t *vm)
-{
-    if (!vm)
-    {
-        KERROR("validate_vm_space: NULL vm\n");
-        return false;
-    }
-
-    if (!vm->pgdir)
-    {
-        KERROR("validate_vm_space: NULL pgdir\n");
-        return false;
-    }
-
-    if (((uint32_t)vm->pgdir & 0x3FFF) != 0)
-    {
-        KERROR("validate_vm_space: pgdir not 16KB aligned: 0x%08X\n", (uint32_t)vm->pgdir);
-        return false;
-    }
-
-    uint32_t hw_asid = vm->asid & ASID_MAX;
-    if (hw_asid == 0 || hw_asid == ASID_KERNEL)
-    {
-        KERROR("validate_vm_space: Invalid ASID: %u\n", vm->asid);
-        return false;
-    }
-
-    /* Vérifier que les VMAs sont dans l'espace utilisateur */
-    vma_t *vma = vm->vma_list;
-    while (vma)
-    {
-        if (vma->start >= 0x40000000 || vma->end > 0x40000000)
-        {
-            KERROR("validate_vm_space: VMA 0x%08X-0x%08X extends into kernel space\n",
-                   vma->start, vma->end);
-            return false;
-        }
-        vma = vma->next;
-    }
-
-    // KDEBUG("validate_vm_space: VM space ASID %u validation passed\n", vm->asid);
-    return true;
 }

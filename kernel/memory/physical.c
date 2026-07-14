@@ -607,7 +607,7 @@ static void reserve_dtb_pages(void)
     KINFO("[MEM] Reserving dtb pages...\n");
     
     /* Utiliser les symboles du linker script */
-    extern uint32_t dtb_address;
+    extern uintptr_t dtb_address;
     
     paddr_t dtb_start = dtb_address;
     uint32_t dtb_size = (uint32_t)0x100000;

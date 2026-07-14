@@ -47,13 +47,12 @@ static inline paddr_t physical_ram_end(void)
 
 static inline bool phys_in_direct_map(paddr_t paddr)
 {
-    return paddr >= physical_ram_start() &&
-           paddr < (physical_ram_start() + KERNEL_DIRECT_MAP_SIZE);
+    return (paddr - physical_ram_start()) < KERNEL_DIRECT_MAP_SIZE;
 }
 
 static inline bool virt_in_direct_map(vaddr_t vaddr)
 {
-    return vaddr >= KERNEL_DIRECT_MAP_BASE && vaddr < KERNEL_DIRECT_MAP_END;
+    return (vaddr - KERNEL_DIRECT_MAP_BASE) < KERNEL_DIRECT_MAP_SIZE;
 }
 
 static inline vaddr_t phys_to_virt(paddr_t paddr)

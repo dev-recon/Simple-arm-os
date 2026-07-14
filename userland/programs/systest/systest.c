@@ -778,7 +778,9 @@ static void test_posix_compat_syscalls(void)
 
     if (expect(uname(&uts) == 0, "uname syscall", errno) == 0) {
         expect(strcmp(uts.sysname, "ArmOS") == 0, "uname sysname", uts.sysname[0]);
-        expect(strcmp(uts.machine, "armv7l") == 0, "uname machine", uts.machine[0]);
+        expect(strcmp(uts.machine, "armv7l") == 0 ||
+               strcmp(uts.machine, "aarch64") == 0,
+               "uname machine", uts.machine[0]);
     }
 
     if (expect(sigemptyset(&mask) == 0, "sigemptyset", errno) == 0 &&

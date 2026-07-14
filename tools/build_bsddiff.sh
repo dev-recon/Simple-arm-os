@@ -13,13 +13,11 @@ BUNDLE_PREFIX="$BUNDLE_ROOT/opt/bsddiff"
 BUNDLE_BIN="$BUNDLE_PREFIX/bin"
 
 ARCH="${ARCH:-arm-none-eabi-}"
+# shellcheck source=tools/cross_target_env.sh
+source "$ROOT_DIR/tools/cross_target_env.sh"
 CC="${ARCH}gcc"
 STRIP="${ARCH}strip"
 
-ARM_FLAGS="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft"
-NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$ROOT_DIR/build/newlib-sysroot/arm-none-eabi}"
-NEWLIB_LIBC="${NEWLIB_LIBC:-$NEWLIB_SYSROOT/lib/libc.a}"
-NEWLIB_LIBM="${NEWLIB_LIBM:-$NEWLIB_SYSROOT/lib/libm.a}"
 LIBGCC="${LIBGCC:-$("$CC" $ARM_FLAGS -print-libgcc-file-name)}"
 
 if [ ! -f "$SRC_DIR/diff.c" ] || [ ! -f "$SRC_DIR/diffreg.c" ]; then
@@ -33,9 +31,9 @@ if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_LIBC" ] || [ ! 
     exit 1
 fi
 
-if [ ! -f "$ROOT_DIR/newlib-port/build/crt0_newlib.o" ] ||
-   [ ! -f "$ROOT_DIR/newlib-port/build/syscall_raw.o" ] ||
-   [ ! -f "$ROOT_DIR/newlib-port/build/syscalls.o" ]; then
+if [ ! -f "$NEWLIB_RUNTIME_DIR/crt0_newlib.o" ] ||
+   [ ! -f "$NEWLIB_RUNTIME_DIR/syscall_raw.o" ] ||
+   [ ! -f "$NEWLIB_RUNTIME_DIR/syscalls.o" ]; then
     echo "error: newlib-port runtime objects are missing" >&2
     echo "hint: make -C newlib-port NEWLIB_SYSROOT=$NEWLIB_SYSROOT" >&2
     exit 1
@@ -53,8 +51,7 @@ rm -rf "$BUILD_DIR" "$BUNDLE_ROOT"
 mkdir -p "$BUILD_DIR" "$BUNDLE_BIN"
 
 CFLAGS="$ARM_FLAGS -std=gnu99 -Os -ffreestanding -fno-builtin -fno-stack-protector -DARM_OS_NEWLIB -I$COMPAT_DIR -I$SRC_DIR -I$ROOT_DIR/userland/include -I$NEWLIB_SYSROOT/include -include $COMPAT_DIR/armos_compat.h"
-LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition"
-RUNTIME_OBJECTS="$ROOT_DIR/newlib-port/build/crt0_newlib.o $ROOT_DIR/newlib-port/build/syscall_raw.o $ROOT_DIR/newlib-port/build/syscalls.o"
+LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=$TARGET_TEXT_ADDRESS -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition"
 
 objects=()
 for src in diff.c diffdir.c diffreg.c xmalloc.c pr.c; do

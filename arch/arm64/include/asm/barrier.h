@@ -53,6 +53,11 @@ static inline void asm_instruction_sync_barrier(void)
     __asm__ volatile("isb" ::: "memory");
 }
 
+static inline void asm_send_event(void)
+{
+    __asm__ volatile("sev" ::: "memory");
+}
+
 static inline void asm_cache_range(const void *address, size_t size,
                                    unsigned int operation)
 {

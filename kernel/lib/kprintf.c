@@ -275,7 +275,7 @@ int kvprintf(const char *format, va_list args) {
                     fmt++;
                 }
             } else if (*fmt == 'z') {
-                is_long = 1; /* size_t = unsigned long sur ARM64 */
+                is_long = 1; /* size_t follows the compiler's unsigned long. */
                 fmt++;
             }
             

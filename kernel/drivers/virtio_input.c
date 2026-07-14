@@ -553,8 +553,8 @@ bool virtio_input_init(int tty_id)
         irq_enable_level(input.irq);
     input_post_all();
 
-    KINFO("VirtIO keyboard initialized: phys=0x%08X irq=%u %s tty%d\n",
-          input.phys, input.irq,
+    KINFO("VirtIO keyboard initialized: phys=0x%lX irq=%u %s tty%d\n",
+          (unsigned long)input.phys, input.irq,
           input.irq_edge_triggered ? "edge" : "level",
           tty_id);
     return true;

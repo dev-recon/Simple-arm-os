@@ -2072,6 +2072,9 @@ void switch_to_idle(void){
     scheduler_mark_running_locked(next_task);
     spin_unlock_irqrestore(&task_lock, flags);
 
+    if (task_current_publish(cpu, next_task) != 0)
+        panic("Failed to publish initial scheduler task");
+
     /*
      * Ne pas sauvegarder une tache morte et ne jamais modifier manuellement
      * le SP d'une tache suspendue.
@@ -2093,6 +2096,9 @@ void task_start_secondary_scheduler(uint32_t cpu_id)
     spin_lock_irqsave(&task_lock, &flags);
     scheduler_mark_running_locked(local_idle);
     spin_unlock_irqrestore(&task_lock, flags);
+
+    if (task_current_publish(cpu_id, local_idle) != 0)
+        panic("Failed to publish secondary idle task");
 
     __task_switch(NULL, &local_idle->context);
     __builtin_unreachable();
@@ -2416,8 +2422,13 @@ static void scheduler_switch_to(task_t* next_task,
                                 bool save_current_context,
                                 task_t* current)
 {
+    uint32_t cpu = smp_processor_id();
+
     scheduler_prepare_next_for_switch(next_task);
     unset_critical_section();
+
+    if (task_current_publish(cpu, next_task) != 0)
+        panic("Failed to publish scheduler task");
 
     __task_switch(save_current_context ? &current->context : NULL,
                   &next_task->context);

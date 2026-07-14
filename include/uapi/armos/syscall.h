@@ -10,7 +10,7 @@
  *
  * Responsibilities:
  * - Define syscall numbers shared by kernel and architecture entry paths.
- * - Preserve the Linux ARM32-compatible number space used by ArmOS userland.
+ * - Preserve the architecture-neutral ArmOS number space used by userland.
  *
  * Notes:
  * - Each architecture defines its own register calling convention.
@@ -41,8 +41,19 @@
 #define ARMOS_NR_SCHED_YIELD 158
 #define ARMOS_NR_NANOSLEEP  162
 #define ARMOS_NR_GETCWD     183
+#define ARMOS_NR_SHUTDOWN   194
 #define ARMOS_NR_MMAP       195
 #define ARMOS_NR_MUNMAP     196
+#define ARMOS_NR_SYSCONF    197
 #define ARMOS_SYSCALL_MAX 512
+
+/* Values shared with the newlib _SC_* namespace used by ArmOS. */
+#define ARMOS_SC_ARG_MAX          0
+#define ARMOS_SC_CHILD_MAX        1
+#define ARMOS_SC_CLK_TCK          2
+#define ARMOS_SC_OPEN_MAX         4
+#define ARMOS_SC_PAGESIZE         8
+#define ARMOS_SC_NPROCESSORS_CONF 9
+#define ARMOS_SC_NPROCESSORS_ONLN 10
 
 #endif

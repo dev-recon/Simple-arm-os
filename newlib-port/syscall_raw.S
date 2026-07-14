@@ -127,6 +127,7 @@ RAW_SYSCALL sys_shm_unmap, 193
 RAW_SYSCALL sys_shutdown, 194
 RAW_SYSCALL5 sys_mmap, 195
 RAW_SYSCALL sys_munmap, 196
+RAW_SYSCALL sys_sysconf, 197
 RAW_SYSCALL sys_socket, 281
 RAW_SYSCALL sys_bind, 282
 RAW_SYSCALL sys_connect, 283

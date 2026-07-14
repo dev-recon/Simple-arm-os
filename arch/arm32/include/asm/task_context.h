@@ -190,6 +190,16 @@ static inline void arch_task_context_set_returns_to_user(task_context_t *ctx,
     ctx->returns_to_user = returns_to_user ? 1u : 0u;
 }
 
+static inline bool arch_task_context_returns_to_user(const task_context_t *ctx)
+{
+    return ctx->returns_to_user != 0;
+}
+
+static inline uint32_t arch_task_context_user_status(const task_context_t *ctx)
+{
+    return ctx->usr_cpsr;
+}
+
 static inline void arch_task_context_mark_first_run(task_context_t *ctx)
 {
     ctx->is_first_run = 1u;

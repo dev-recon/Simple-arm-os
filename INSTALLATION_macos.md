@@ -18,8 +18,9 @@ platform-specific artifacts under `build/images/`:
 
 - `kernel-qemu-virt.bin` and `disk-qemu-virt.img`: QEMU development images;
   ext2 root is partition 1 and FAT32 compatibility storage is partition 2
-- `kernel-pi3.bin` and `disk-pi3.img`: PI3 hardware images; hidden FAT32 boot
-  is partition 1 and ext2 root is partition 2
+- `kernel-arm64-raspi3.bin` and `disk-arm64-raspi3.img`: Raspberry Pi 3
+  hardware images; standard FAT32 boot is partition 1 and ext2 root is
+  partition 2
 
 Generated images are build artifacts and should not be committed.
 
@@ -162,9 +163,16 @@ chmod +x run.sh boot.sh tools/build_newlib.sh tools/build_qemu_10_0_2.sh
 `run.sh` performs a full local rebuild:
 
 1. rebuilds libc/userland pieces
-2. rebuilds `build/images/kernel-qemu-virt.bin`
-3. recreates `build/images/disk-qemu-virt.img`
+2. rebuilds `build/images/kernel-arm32-qemu-virt.bin`
+3. recreates `build/images/disk-arm32-qemu-virt.img`
 4. boots QEMU
+
+With no environment overrides, `run.sh` deliberately selects the stable
+`TARGET_ARCH=arm32 TARGET_PLATFORM=qemu-virt` route. Select ARM64 explicitly:
+
+```sh
+TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./run.sh
+```
 
 At the `mash$>` prompt, a quick smoke test is:
 
@@ -187,14 +195,14 @@ Ctrl+A, then X
 Build kernel only:
 
 ```sh
-TARGET_PLATFORM=qemu-virt make platform-kernel
+TARGET_ARCH=arm32 TARGET_PLATFORM=qemu-virt make platform-kernel
 ```
 
 Rebuild disk images only:
 
 ```sh
-rm -f disk.img ext2.img fat32.img build/images/disk-qemu-virt.img
-TARGET_PLATFORM=qemu-virt make platform-disk
+rm -f disk.img ext2.img fat32.img build/images/disk-arm32-qemu-virt.img
+TARGET_ARCH=arm32 TARGET_PLATFORM=qemu-virt make platform-disk
 ```
 
 Inspect generated filesystems:

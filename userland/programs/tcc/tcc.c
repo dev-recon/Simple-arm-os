@@ -21,6 +21,15 @@ extern char **environ;
 #define REAL_TCC "/opt/tcc/bin/tcc"
 #define TCC_MAX_ARGS 128
 
+#ifndef ARMOS_USER_TEXT_ADDRESS
+#define ARMOS_USER_TEXT_ADDRESS 0x8000
+#endif
+
+#define STRINGIFY_VALUE(value) #value
+#define STRINGIFY(value) STRINGIFY_VALUE(value)
+#define ARMOS_TCC_TEXT_OPTION \
+    "-Wl,-Ttext=" STRINGIFY(ARMOS_USER_TEXT_ADDRESS)
+
 static int arg_is(const char *arg, const char *name)
 {
     return arg && strcmp(arg, name) == 0;
@@ -102,7 +111,7 @@ static int exec_armos_link(int argc, char **argv)
     real_argv[n++] = (char *)REAL_TCC;
     real_argv[n++] = "-static";
     real_argv[n++] = "-nostdlib";
-    real_argv[n++] = "-Wl,-Ttext=0x8000";
+    real_argv[n++] = ARMOS_TCC_TEXT_OPTION;
     real_argv[n++] = "-Wl,-e,_start";
     real_argv[n++] = "-I/opt/tcc/lib/tcc/include";
     real_argv[n++] = "-I/opt/tcc/include/armos";

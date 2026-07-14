@@ -257,21 +257,27 @@ struct inode_operations {
     int (*readlink)(inode_t* inode, char* buf, size_t bufsiz);
 };
 
-/* Stat structure */
+/*
+ * Stable ArmOS stat syscall payload.
+ *
+ * Newlib translates this fixed-width kernel ABI into its native struct stat.
+ * Do not use architecture-sized kernel aliases here: changing off_t or time_t
+ * width must not move fields in an existing user ABI.
+ */
 struct stat {
-    dev_t st_dev;
-    ino_t st_ino;
-    mode_t st_mode;
-    nlink_t st_nlink;
-    uid_t st_uid;
-    gid_t st_gid;
-    dev_t st_rdev;
-    off_t st_size;
-    blksize_t st_blksize;
-    blkcnt_t st_blocks;
-    time_t st_atime;
-    time_t st_mtime;
-    time_t st_ctime;
+    uint32_t st_dev;
+    uint32_t st_ino;
+    uint32_t st_mode;
+    uint32_t st_nlink;
+    uint32_t st_uid;
+    uint32_t st_gid;
+    uint32_t st_rdev;
+    int32_t st_size;
+    uint32_t st_blksize;
+    uint32_t st_blocks;
+    uint32_t st_atime;
+    uint32_t st_mtime;
+    uint32_t st_ctime;
 };
 
 /* etats des taches */

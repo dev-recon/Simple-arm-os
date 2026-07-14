@@ -168,6 +168,31 @@ void invalidate_tlb_asid(uint32_t asid);
 uint32_t get_ttbr0(void);
 void set_ttbr0(uint32_t ttbr0);
 
+typedef struct kernel_context_save {
+    uint32_t saved_ttbr0;
+    uint32_t saved_asid;
+    bool context_switched;
+} kernel_context_save_t;
+
+#define MAX_TEMP_MAPPINGS 8
+
+kernel_context_save_t switch_to_kernel_context(void);
+void restore_from_kernel_context(kernel_context_save_t save);
+void switch_address_space(pgdir_t pgdir);
+void switch_address_space_with_asid(pgdir_t pgdir, uint32_t asid);
+uint32_t vm_allocate_asid(void);
+void vm_free_asid(uint32_t asid);
+uint32_t vm_get_current_asid(void);
+void set_current_asid(uint32_t asid);
+void unmap_temp_pages_contiguous(vaddr_t base_vaddr, int num_pages);
+vaddr_t map_temp_pages_contiguous(paddr_t phys_addr, int num_pages);
+vaddr_t map_temp_user_page(paddr_t phys_addr);
+void unmap_temp_user_page(void);
+paddr_t get_phys_from_temp_mapping(vaddr_t temp_ptr);
+vaddr_t map_temp_page_large(paddr_t phys_addr, uint32_t size);
+void setup_temp_mapping_slots(void);
+void init_temp_mapping_system(void);
+
 /* Page directory size helpers pour split TTBR */
 static inline uint32_t get_user_pgdir_size(uint32_t ttbcr_n)
 {

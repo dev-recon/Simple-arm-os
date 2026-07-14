@@ -69,6 +69,7 @@ bool fdt_device_present(void *dtb_ptr, const char *partial_name);
 void *fdt_get_property(void *dtb_ptr, void *node_ptr,
                        const char *property_name, uint32_t *out_len);
 bool fdt_for_each_node(void *dtb_ptr, fdt_node_cb_t cb, void *ctx);
+uint32_t fdt_count_cpus(void *dtb_ptr, uint32_t maximum);
 
 bool fdt_decode_reg_addr(const uint32_t *reg, uint32_t len, paddr_t *out_phys);
 bool fdt_decode_gic_interrupt(const uint32_t *intr, uint32_t len,

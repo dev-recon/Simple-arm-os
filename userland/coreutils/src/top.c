@@ -640,6 +640,7 @@ static void render_top(unsigned delay_sec, int iteration)
     unsigned used_kb;
     unsigned pct_x10;
     unsigned cpu_total_x10 = 0;
+    unsigned cpu_average_x100;
     int count;
 
     read_mem(&mem);
@@ -647,14 +648,13 @@ static void render_top(unsigned delay_sec, int iteration)
     memset(top_cpu_load_x10, 0, sizeof(top_cpu_load_x10));
     count = load_tasks(top_tasks, TOP_MAX_TASKS);
     update_cpu_percent(top_tasks, count, delay_sec);
-    for (int i = 0; i < count; i++)
-        cpu_total_x10 += top_tasks[i].cpu_pct_x10;
-    if (cpu_total_x10 > 1000u)
-        cpu_total_x10 = 1000u;
     for (unsigned cpu = 0; cpu < top_cpu_count; cpu++) {
         if (top_cpu_load_x10[cpu] > 1000u)
             top_cpu_load_x10[cpu] = 1000u;
+        cpu_total_x10 += top_cpu_load_x10[cpu];
     }
+    cpu_average_x100 = (cpu_total_x10 * 10u + top_cpu_count / 2u) /
+                       top_cpu_count;
     qsort(top_tasks, (size_t)count, sizeof(top_tasks[0]), compare_tasks);
 
     used_kb = mem.total_kb >= mem.free_kb ? mem.total_kb - mem.free_kb : 0;
@@ -665,9 +665,9 @@ static void render_top(unsigned delay_sec, int iteration)
     if (iteration >= 0)
         top_buf_printf(&frame, " - iteration %d", iteration + 1);
     top_buf_printf(&frame,
-                   " - CPU " C_GREEN "%u.%u%%" C_RESET " - " C_DIM "q quit, +/- delay" C_RESET "\033[0K\r\n",
-                   cpu_total_x10 / 10u,
-                   cpu_total_x10 % 10u);
+                   " - CPU " C_GREEN "%u.%02u%%" C_RESET " - " C_DIM "q quit, +/- delay" C_RESET "\033[0K\r\n",
+                   cpu_average_x100 / 100u,
+                   cpu_average_x100 % 100u);
     top_buf_printf(&frame, C_BOLD "CPU:" C_RESET " total " C_GREEN "%u.%u%%" C_RESET,
                    cpu_total_x10 / 10u,
                    cpu_total_x10 % 10u);

@@ -29,7 +29,7 @@
 /* Forward declarations */
 struct process;
 
-/* Syscall numbers (Linux ARM32 compatible) */
+/* Stable ArmOS syscall number space, historically based on Linux ARM EABI. */
 #define __NR_restart_syscall      0
 #define __NR_exit                 ARMOS_NR_EXIT
 #define __NR_fork                 2
@@ -127,6 +127,7 @@ struct process;
 #define __NR_shutdown           194
 #define __NR_mmap               195
 #define __NR_munmap             196
+#define __NR_sysconf            ARMOS_NR_SYSCONF
 #define __NR_socket             281
 #define __NR_bind               282
 #define __NR_connect            283
@@ -242,8 +243,6 @@ syscall_result_t syscall_dispatch_common_request(
     const syscall_request_t *request);
 syscall_result_t syscall_dispatch_common_handler(
     void *owner, const syscall_request_t *request);
-syscall_result_t syscall_dispatch_vfs_handler(
-    void *owner, const syscall_request_t *request);
 
 /* File syscalls */
 int sys_read(int fd, void* buf, size_t count);
@@ -340,7 +339,7 @@ void sys_sigreturn(void);
 int sys_nanosleep(const timespec_t *req, timespec_t *rem);
 
 /* Memory syscalls */
-int sys_brk(void* addr);
+long sys_brk(void* addr);
 int sys_shm_open(const char *name, size_t size, int flags);
 int sys_shm_unlink(const char *name);
 void *sys_shm_map(int id, void *addr, int flags);
@@ -359,6 +358,7 @@ int sys_pipe(int pipefd[2]);
 int sys_chdir(const char* path);
 int sys_getcwd(char* buf, size_t size);
 int sys_sysinfo(struct sysinfo_response *resp);
+int sys_sysconf(int name);
 int sys_uname(struct utsname_kernel *name);
 
 #endif

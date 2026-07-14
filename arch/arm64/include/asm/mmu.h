@@ -32,22 +32,9 @@ typedef unsigned long long arm64_mmu_u64;
 #define ARCH_ASID_KERNEL   0u
 
 int arm64_mmu_enable_identity_map(void);
-int arm64_mmu_prepare_identity_tables(arm64_mmu_u64 l1_address,
-                                      arm64_mmu_u64 l2_address,
-                                      arm64_mmu_u64 l3_address);
+int arm64_mmu_enable_secondary(void);
 int arm64_mmu_switch_ttbr0(arm64_mmu_u64 table_address);
-int arm64_mmu_update_identity_page(arm64_mmu_u64 l3_address,
-                                   arm64_mmu_u64 address,
-                                   int present);
-int arm64_mmu_protect_kernel_image(arm64_mmu_u64 l3_address,
-                                   arm64_mmu_u64 text_start,
-                                   arm64_mmu_u64 text_end,
-                                   arm64_mmu_u64 rodata_start,
-                                   arm64_mmu_u64 rodata_end);
-int arm64_mmu_install_ttbr1(arm64_mmu_u64 l1_address,
-                            arm64_mmu_u64 shared_l2_address);
-int arm64_mmu_retire_low_map(arm64_mmu_u64 ttbr0_l1_address);
-int arm64_mmu_prepare_empty_ttbr0(arm64_mmu_u64 l1_address);
+int arm64_mmu_prepare_user_ttbr0(arm64_mmu_u64 l1_address);
 int arm64_mmu_prepare_user_page(arm64_mmu_u64 l1_address,
                                 arm64_mmu_u64 l2_address,
                                 arm64_mmu_u64 l3_address,

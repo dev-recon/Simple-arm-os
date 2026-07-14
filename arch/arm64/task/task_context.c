@@ -10,11 +10,11 @@
  *
  * Responsibilities:
  * - Validate the address-space identity carried by a task context.
- * - Resolve generic vm_space_t references through the ARM64 backend.
+ * - Resolve user TTBR0/ASID identities through the ARM64 VM backend.
  * - Activate TTBR0 and its ASID before switching kernel register state.
  *
  * Notes:
- * - A zero TTBR0/ASID pair denotes a bootstrap kernel-only context.
+ * - A zero TTBR0/ASID pair denotes a kernel-only context.
  * - Residency decisions are delegated to the owned user-VM object.
  */
 
@@ -28,25 +28,28 @@ int arm64_task_context_switch_address_space(
 {
     int result;
 
-    if (!previous || !next)
+    if (!next)
         return -1;
 
-    if (next->vm_space) {
-        if (next->ttbr0 !=
-                (paddr_t)(uintptr_t)next->vm_space->pgdir ||
-            next->asid != next->vm_space->asid)
+    if (next->ttbr0 != 0 || next->asid != 0) {
+        if (next->ttbr0 == 0)
             return -2;
-        result = arm64_user_vm_activate_space(next->vm_space);
+        result = next->asid == 0 ?
+            arm64_mmu_switch_ttbr0(next->ttbr0) :
+            arm64_user_vm_activate_identity(next->ttbr0, next->asid);
         if (result != 0)
             return -3;
-    } else if (next->ttbr0 != 0 || next->asid != 0) {
-        if (next->ttbr0 == 0 || next->asid == 0)
-            return -4;
-        result = arm64_mmu_switch_user_ttbr0(next->ttbr0, next->asid);
-        if (result != 0)
-            return -5;
     }
 
     arm64_task_context_switch(previous, next);
     return 0;
+}
+
+void __task_switch(arm64_task_context_t *previous,
+                   arm64_task_context_t *next)
+{
+    if (arm64_task_context_switch_address_space(previous, next) != 0) {
+        for (;;)
+            __asm__ volatile("wfe");
+    }
 }

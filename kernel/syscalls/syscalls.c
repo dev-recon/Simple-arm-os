@@ -132,6 +132,7 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_shutdown]  = (syscall_func_t)sys_shutdown,
     [__NR_mmap]      = (syscall_func_t)sys_mmap,
     [__NR_munmap]    = (syscall_func_t)sys_munmap,
+    [__NR_sysconf]   = (syscall_func_t)sys_sysconf,
     [__NR_mprotect]  = (syscall_func_t)sys_mprotect,
     [__NR_wait4]     = (syscall_func_t)sys_wait4,
     [__NR_socket]    = (syscall_func_t)sys_socket,
@@ -144,13 +145,7 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
 
 #pragma GCC diagnostic pop
 
-/* Forward declarations de toutes les fonctions statiques */
-extern void cleanup_exec_args(char* filename, char** argv, char** envp);
-extern int setup_user_stack(vm_space_t* vm, char** argv, char** envp);
-extern int count_strings(char** strings);
-extern char** setup_stack_strings(char** strings, char** stack_ptr, int count,
-                                  vaddr_t temp_stack, vaddr_t user_stack_page);
-extern void copy_string_array(char** src, char** dest, int count);
+/* Forward declarations for low-level task-switch helpers. */
 extern void orphan_children(task_t* proc);
 extern void switch_to_idle_stack(void);
 
@@ -423,8 +418,12 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[])
         return -EINVAL;
     }
 
-    uint32_t caller_mode = arch_saved_mode();
-    bool from_user = arch_mode_is_user(caller_mode);  // tu n’utilises pas SYS ici
+    /*
+     * The task context is the canonical syscall-origin record. On AArch64,
+     * SPSR_EL1 is not banked across a nested EL1 IRQ, so reading it here can
+     * misclassify an EL0 syscall as a kernel call after timer preemption.
+     */
+    bool from_user = arch_task_context_returns_to_user(&proc->context);
 
     result = count_exec_vector(argv, from_user, &argc);
     if (result < 0)
@@ -576,16 +575,19 @@ int sys_fork(void)
 {
     task_t* parent = task_current_local();
     task_t* child;
-
-    uint32_t return_address = arch_current_link_register();
-    uint32_t caller_mode = arch_saved_mode();
-    bool from_user = arch_mode_is_user(caller_mode);  // tu n’utilises pas SYS ici
+    uint32_t return_address;
+    uint32_t saved_status;
+    bool from_user;
     
     if (!parent || parent->type != TASK_TYPE_PROCESS) {
         KERROR("sys_fork: Current task is not a process\n");
         KERROR("sys_fork: NULL Parent\n");
         return -EINVAL;
     }
+
+    return_address = arch_current_link_register();
+    saved_status = arch_task_context_user_status(&parent->context);
+    from_user = arch_task_context_returns_to_user(&parent->context);
     
     /* Creer le processus enfant en copiant le parent */
     child = task_create_copy(parent, from_user);
@@ -631,7 +633,7 @@ int sys_fork(void)
                                             (uintptr_t)child->process->vm->pgdir,
                                             child->process->vm->asid,
                                             return_address,
-                                            arch_saved_svc_status());
+                                            saved_status);
     }
     else{
         arch_task_context_prepare_kernel_fork(&child->context,
@@ -639,7 +641,7 @@ int sys_fork(void)
                                               (uintptr_t)child->process->vm->pgdir,
                                               child->process->vm->asid,
                                               return_address,
-                                              arch_saved_svc_status());
+                                              saved_status);
     }
 
     add_to_ready_queue(child);
@@ -999,6 +1001,7 @@ static syscall_result_t normalize_syscall_result(uint32_t syscall_num,
                                                  syscall_word_t raw_result)
 {
     switch (syscall_num) {
+    case __NR_brk:
     case __NR_mmap:
     case __NR_shm_map:
     case __NR_lseek:

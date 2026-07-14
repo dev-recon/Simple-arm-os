@@ -37,16 +37,16 @@ typedef signed long long   int64_t;
 /* === TYPES SYSTeME === */
 
 #ifndef ARMOS_ARCH_BITS
-#define ARMOS_ARCH_BITS 32
+#error "ARMOS_ARCH_BITS must be defined by the active architecture build"
 #endif
 
 #if ARMOS_ARCH_BITS == 32
-typedef uint32_t           size_t;
-typedef int32_t            ssize_t;
+typedef __SIZE_TYPE__      size_t;
+typedef __PTRDIFF_TYPE__   ssize_t;
 typedef int32_t            off_t;
 #elif ARMOS_ARCH_BITS == 64
-typedef uint64_t           size_t;
-typedef int64_t            ssize_t;
+typedef __SIZE_TYPE__      size_t;
+typedef __PTRDIFF_TYPE__   ssize_t;
 typedef int64_t            off_t;
 #else
 #error "Unsupported ARMOS_ARCH_BITS value"
@@ -155,7 +155,7 @@ typedef enum {
 
 /* === TYPES DE SYNCHRONISATION === */
 
-/* Spinlock optimise pour Cortex-A15 */
+/* Legacy cache-line-sized lock storage. */
 typedef struct {
     volatile uint32_t locked;            /* 4 bytes - etat du lock */
     uint32_t owner;                      /* 4 bytes - CPU proprietaire */

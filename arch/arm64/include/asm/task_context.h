@@ -11,12 +11,11 @@
  * Responsibilities:
  * - Group kernel callee-saved state, EL0 state and address-space identity.
  * - Preserve the complete FP/SIMD register file across task switches.
- * - Reference user address spaces through the generic vm_space_t contract.
- * - Define the bootstrap contract consumed by the task-switch boundary.
+ * - Define the architectural contract consumed by the task-switch boundary.
  *
  * Notes:
  * - task_context_t is the generic-kernel alias for this concrete layout.
- * - SMP residency remains future work.
+ * - Address-space residency is owned by the ARM64 VM backend per CPU.
  */
 
 #ifndef ASM_ARM64_TASK_CONTEXT_H
@@ -45,7 +44,6 @@ typedef struct arm64_task_context {
     arm64_kernel_context_t kernel;
     arm64_user_context_t user;
     arm64_simd_context_t simd;
-    const vm_space_t *vm_space;
     paddr_t ttbr0;
     uint32_t asid;
     uint32_t flags;
@@ -68,7 +66,7 @@ _Static_assert(sizeof(arm64_kernel_context_t) == 112,
                "AArch64 kernel context ABI size changed");
 _Static_assert(sizeof(arm64_simd_context_t) == 528,
                "AArch64 SIMD context ABI size changed");
-_Static_assert(sizeof(arm64_task_context_t) == 944,
+_Static_assert(sizeof(arm64_task_context_t) == 928,
                "AArch64 task context ABI size changed");
 
 void arm64_task_context_switch(arm64_task_context_t *previous,
@@ -77,11 +75,6 @@ void arm64_simd_context_capture(arm64_simd_context_t *context);
 int arm64_task_context_switch_address_space(
     arm64_task_context_t *previous,
     const arm64_task_context_t *next);
-void arm64_task_context_probe_entry(void) __attribute__((noreturn));
-void arm64_task_dispatcher_probe_entry(void) __attribute__((noreturn));
-void arm64_task_preempt_peer_entry(void) __attribute__((noreturn));
-void arm64_task_periodic_peer_entry(void) __attribute__((noreturn));
-void arm64_user_task_probe_entry(void) __attribute__((noreturn));
 void arm64_task_kernel_entry_trampoline(void) __attribute__((noreturn));
 void arm64_task_user_entry_trampoline(void) __attribute__((noreturn));
 
@@ -195,6 +188,16 @@ static inline void arch_task_context_set_returns_to_user(task_context_t *ctx,
         ctx->flags &= ~ARM64_TASK_FLAG_RETURNS_TO_USER;
 }
 
+static inline bool arch_task_context_returns_to_user(const task_context_t *ctx)
+{
+    return (ctx->flags & ARM64_TASK_FLAG_RETURNS_TO_USER) != 0;
+}
+
+static inline uint32_t arch_task_context_user_status(const task_context_t *ctx)
+{
+    return (uint32_t)ctx->user.pstate;
+}
+
 static inline void arch_task_context_mark_first_run(task_context_t *ctx)
 {
     ctx->flags |= ARM64_TASK_FLAG_FIRST_RUN;
@@ -204,7 +207,6 @@ static inline void arch_task_context_set_address_space(task_context_t *ctx,
                                                        uintptr_t address_space,
                                                        uint32_t asid)
 {
-    ctx->vm_space = NULL;
     ctx->ttbr0 = (paddr_t)address_space;
     ctx->asid = asid;
 }

@@ -14,17 +14,14 @@ ZLIB_PREFIX="${ZLIB_PREFIX:-$ROOT_DIR/build/zlib/bundle/opt/zlib}"
 JPEG_PREFIX="${JPEG_PREFIX:-$ROOT_DIR/build/libjpeg/bundle/opt/libjpeg}"
 
 ARCH="${ARCH:-arm-none-eabi-}"
+# shellcheck source=tools/cross_target_env.sh
+source "$ROOT_DIR/tools/cross_target_env.sh"
 CC="${ARCH}gcc"
 AR="${ARCH}ar"
 RANLIB="${ARCH}ranlib"
 STRIP="${ARCH}strip"
 
-ARM_FLAGS="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft"
-NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$ROOT_DIR/build/newlib-sysroot/arm-none-eabi}"
-NEWLIB_LIBC="${NEWLIB_LIBC:-$NEWLIB_SYSROOT/lib/libc.a}"
-NEWLIB_LIBM="${NEWLIB_LIBM:-$NEWLIB_SYSROOT/lib/libm.a}"
 LIBGCC="${LIBGCC:-$("$CC" $ARM_FLAGS -print-libgcc-file-name)}"
-RUNTIME_OBJECTS="$ROOT_DIR/newlib-port/build/crt0_newlib.o $ROOT_DIR/newlib-port/build/syscall_raw.o $ROOT_DIR/newlib-port/build/syscalls.o"
 TIFFTEST_SRC="$ROOT_DIR/third_party/libtiff/tifftest.c"
 
 LIBTIFF_SRCS=(
@@ -89,9 +86,9 @@ if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] ||
     exit 1
 fi
 
-if [ ! -f "$ROOT_DIR/newlib-port/build/crt0_newlib.o" ] ||
-   [ ! -f "$ROOT_DIR/newlib-port/build/syscall_raw.o" ] ||
-   [ ! -f "$ROOT_DIR/newlib-port/build/syscalls.o" ]; then
+if [ ! -f "$NEWLIB_RUNTIME_DIR/crt0_newlib.o" ] ||
+   [ ! -f "$NEWLIB_RUNTIME_DIR/syscall_raw.o" ] ||
+   [ ! -f "$NEWLIB_RUNTIME_DIR/syscalls.o" ]; then
     echo "error: newlib-port runtime objects are missing" >&2
     echo "hint: make -C newlib-port NEWLIB_SYSROOT=$NEWLIB_SYSROOT" >&2
     exit 1
@@ -101,7 +98,7 @@ rm -rf "$BUILD_DIR" "$BUNDLE_ROOT"
 mkdir -p "$BUILD_DIR" "$BUNDLE_PREFIX/include" "$BUNDLE_PREFIX/lib" "$BUNDLE_USR_BIN"
 
 CFLAGS="$ARM_FLAGS -std=gnu99 -Os -ffreestanding -fno-builtin -fno-stack-protector -DARM_OS_NEWLIB -I$SRC_DIR -I$JPEG_PREFIX/include -I$ZLIB_PREFIX/include -I$ROOT_DIR/userland/include -I$NEWLIB_SYSROOT/include"
-LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition"
+LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=$TARGET_TEXT_ADDRESS -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition"
 
 OBJECTS=()
 for src in "${LIBTIFF_SRCS[@]}"; do

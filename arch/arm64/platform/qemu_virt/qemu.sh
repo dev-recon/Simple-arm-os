@@ -4,7 +4,7 @@
 QEMU_MACHINE_DEFAULT="virt,gic-version=2"
 QEMU_CPU_DEFAULT="cortex-a72"
 QEMU_MEMORY_DEFAULT="1G"
-QEMU_SMP_DEFAULT="1"
+QEMU_SMP_DEFAULT="4"
 QEMU_BLOCK_ENABLED_DEFAULT="1"
 QEMU_KERNEL_IMAGE_DEFAULT="$ROOT_DIR/build/images/kernel-arm64-qemu-virt.bin"
 QEMU_DISK_IMAGE_DEFAULT="$ROOT_DIR/build/images/disk-arm64-qemu-virt.img"
