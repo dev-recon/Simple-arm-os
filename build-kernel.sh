@@ -4,9 +4,18 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ARCH="${ARCH:-arm-none-eabi-}"
+
+# shellcheck source=tools/armos_config.sh
+source "$ROOT_DIR/tools/armos_config.sh"
+
 TARGET_ARCH="${TARGET_ARCH:-arm32}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
+if [ "$TARGET_ARCH" = arm64 ]; then
+    ARCH="${ARCH:-${CROSS_COMPILE:-aarch64-elf-}}"
+else
+    ARCH="${ARCH:-${CROSS_COMPILE:-arm-none-eabi-}}"
+fi
+armos_config_validate "$ROOT_DIR"
 
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 

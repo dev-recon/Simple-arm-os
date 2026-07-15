@@ -8,8 +8,14 @@ if [ -z "${ROOT_DIR:-}" ]; then
     exit 1
 fi
 
+# shellcheck source=tools/armos_config.sh
+. "$ROOT_DIR/tools/armos_config.sh"
+
 TARGET_ARCH="${TARGET_ARCH:-arm32}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
+ENABLE_NET="${ENABLE_NET:-0}"
+ENABLE_GPU="${ENABLE_GPU:-0}"
+armos_config_validate "$ROOT_DIR"
 TARGET_PLATFORM_DIR="${TARGET_PLATFORM//-/_}"
 QEMU_PLATFORM_ENV="$ROOT_DIR/arch/${TARGET_ARCH}/platform/${TARGET_PLATFORM_DIR}/qemu.sh"
 

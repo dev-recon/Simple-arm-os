@@ -1,0 +1,26 @@
+# Local ArmOS build and launch configuration.
+# Copy this file to armos.conf; the local file is intentionally not tracked.
+
+TARGET_ARCH=arm32
+TARGET_PLATFORM=qemu-virt
+SMP_CPUS=1
+
+# QEMU launch features. Both may be enabled together.
+ENABLE_NET=no
+ENABLE_GPU=no
+
+# Userland build content.
+BUILD_NEWLIB=yes
+BUILD_ALL_USERLAND=no
+BUILD_TCC=yes
+BUILD_BSD=no
+BUILD_NCURSES=no
+BUILD_NANO=no
+BUILD_XV_DEPS=no
+BUILD_FBVIEW=no
+
+# Optional QEMU and network overrides.
+# QEMU_MEMORY=2G
+# NET_HOST_PORT=2323
+# GPU_XRES=1024
+# GPU_YRES=768

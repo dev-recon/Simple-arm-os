@@ -11,6 +11,7 @@ export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
+ENABLE_NET=1
 . "$ROOT_DIR/tools/qemu_helpers.sh"
 . "$ROOT_DIR/tools/qemu_platform_env.sh"
 QEMU="$(select_arm_qemu "${1:-}" "$ROOT_DIR" "$TARGET_ARCH")"

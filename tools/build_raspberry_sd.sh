@@ -5,6 +5,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+# shellcheck source=tools/armos_config.sh
+source "$ROOT_DIR/tools/armos_config.sh"
+
 ARCH="${ARCH:-}"
 TARGET_ARCH="${TARGET_ARCH:-arm64}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-raspi3}"
@@ -348,6 +351,10 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
+
+ENABLE_NET="${ENABLE_NET:-0}"
+ENABLE_GPU="${ENABLE_GPU:-0}"
+armos_config_validate "$ROOT_DIR"
 
 case "$PUSH_MODE" in
     boot|image|raw|none) ;;

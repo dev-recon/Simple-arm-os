@@ -13,6 +13,7 @@ export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
+ENABLE_GPU=1
 . "$ROOT_DIR/tools/qemu_helpers.sh"
 
 select_display() {
@@ -52,6 +53,17 @@ if [ -n "${GPU_XRES:-}" ] || [ -n "${GPU_YRES:-}" ]; then
     GPU_DEVICE="${GPU_DEVICE},xres=${GPU_XRES},yres=${GPU_YRES}"
 fi
 
+NET_ARGS=()
+if [ "$ENABLE_NET" = 1 ]; then
+    NET_HOST_ADDR="${NET_HOST_ADDR:-127.0.0.1}"
+    NET_HOST_PORT="${NET_HOST_PORT:-2323}"
+    NET_GUEST_PORT="${NET_GUEST_PORT:-2323}"
+    NET_MAC="${NET_MAC:-52:54:00:12:34:56}"
+    NETDEV="user,id=net0,hostfwd=tcp:${NET_HOST_ADDR}:${NET_HOST_PORT}-:${NET_GUEST_PORT}"
+    NET_DEVICE="${QEMU_NET_DEVICE_MODEL},netdev=net0,mac=${NET_MAC}"
+    NET_ARGS=(-netdev "$NETDEV" -device "$NET_DEVICE")
+fi
+
 if [ ! -f "${QEMU_KERNEL_IMAGE}" ]; then
     echo "Error: kernel image not found: ${QEMU_KERNEL_IMAGE}"
     echo "Run ./run.sh or ./build.sh for TARGET_PLATFORM=${TARGET_PLATFORM} first."
@@ -80,6 +92,11 @@ if [ -z "${QEMU_INPUT_DEVICE}" ]; then
     exit 1
 fi
 
+if [ "$ENABLE_NET" = 1 ] && [ -z "${QEMU_NET_DEVICE_MODEL}" ]; then
+    echo "Error: platform '${TARGET_ARCH}/${TARGET_PLATFORM}' does not define a QEMU network device"
+    exit 1
+fi
+
 echo "=== Booting existing ${QEMU_KERNEL_IMAGE} with virtio-gpu ==="
 echo "UART console stays on this terminal; graphics output opens in a QEMU window."
 echo "QEMU: $("$QEMU" --version | head -n 1)"
@@ -88,6 +105,10 @@ echo "Machine: ${QEMU_MACHINE}, CPU: ${QEMU_CPU}"
 echo "Memory: ${QEMU_MEMORY}"
 echo "Kernel: ${QEMU_KERNEL_IMAGE}"
 echo "GPU: ${GPU_DEVICE}, display=${QEMU_DISPLAY}"
+if [ "$ENABLE_NET" = 1 ]; then
+    echo "NET: ${NET_DEVICE}"
+    echo "FWD: ${NET_HOST_ADDR}:${NET_HOST_PORT} -> guest :${NET_GUEST_PORT}"
+fi
 if [ "${QEMU_BLOCK_ENABLED}" != "0" ]; then
     echo "Disk: ${QEMU_DISK_IMAGE}"
     if [ -n "${QEMU_BLOCK_DEVICE}" ]; then
@@ -124,6 +145,7 @@ if [ "${QEMU_BLOCK_ENABLED}" != "0" ]; then
     esac
 fi
 QEMU_ARGS+=(
+    "${NET_ARGS[@]}"
     -device "${GPU_DEVICE}"
     -device "${QEMU_INPUT_DEVICE}"
     -chardev stdio,id=uart0,signal=off

@@ -4,12 +4,17 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGET_ARCH="${TARGET_ARCH:-arm64}"
-TARGET_PLATFORM="${TARGET_PLATFORM:-raspi3}"
+
+# shellcheck source=tools/armos_config.sh
+source "$ROOT_DIR/tools/armos_config.sh"
+armos_config_normalize
+
+TARGET_ARCH="${TARGET_ARCH:-arm32}"
+TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
 if [ "$TARGET_ARCH" = "arm64" ]; then
-    ARCH="${ARCH:-aarch64-elf-}"
+    ARCH="${ARCH:-${CROSS_COMPILE:-aarch64-elf-}}"
 else
-    ARCH="${ARCH:-arm-none-eabi-}"
+    ARCH="${ARCH:-${CROSS_COMPILE:-arm-none-eabi-}}"
 fi
 BUILD_XV_DEPS="${BUILD_XV_DEPS:-0}"
 BUILD_ALL_USERLAND="${BUILD_ALL_USERLAND:-0}"
@@ -44,6 +49,9 @@ else
 fi
 BUILD_NCURSES="${BUILD_NCURSES:-0}"
 BUILD_NANO="${BUILD_NANO:-0}"
+ENABLE_NET="${ENABLE_NET:-0}"
+ENABLE_GPU="${ENABLE_GPU:-0}"
+armos_config_validate "$ROOT_DIR"
 
 # shellcheck source=tools/cross_target_env.sh
 source "$ROOT_DIR/tools/cross_target_env.sh"

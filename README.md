@@ -295,6 +295,7 @@ Installation guides:
 
 - macOS: [`INSTALLATION_macos.md`](INSTALLATION_macos.md)
 - Linux: [`INSTALLATION_linux.md`](INSTALLATION_linux.md)
+- build configuration: [`docs/BUILD_CONFIGURATION.md`](docs/BUILD_CONFIGURATION.md)
 
 Common scripts:
 
@@ -307,6 +308,17 @@ On a fresh checkout, rebuilds and starts the stable reference target:
 ```text
 arm32/qemu-virt
 ```
+
+For a persistent local selection, copy `armos.conf.example` to `armos.conf` or
+select one of the tracked profiles:
+
+```sh
+ARMOS_CONFIG=configs/qemu-virt-arm64.conf ./run.sh
+```
+
+Inspect the resolved settings before building with
+`./tools/armos_config.sh --show` or `make config`. The local `armos.conf` is not
+tracked by Git.
 
 Other architecture/platform pairs are explicit opt-ins through the same
 pipeline. For example:

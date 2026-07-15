@@ -2,8 +2,40 @@
 
 ARMOS_VERSION := 0.7
 
-TARGET_ARCH ?= arm64
-TARGET_PLATFORM ?= raspi3
+# Local configuration is optional. Command-line assignments retain GNU make's
+# highest priority; environment values are restored after the include so the
+# repository-wide precedence matches the shell entry points.
+ARMOS_CONFIG ?= armos.conf
+_ARMOS_ENV_TARGET_ARCH := $(if $(filter environment environment\ override,$(origin TARGET_ARCH)),$(TARGET_ARCH))
+_ARMOS_ENV_TARGET_PLATFORM := $(if $(filter environment environment\ override,$(origin TARGET_PLATFORM)),$(TARGET_PLATFORM))
+_ARMOS_ENV_CROSS_COMPILE := $(if $(filter environment environment\ override,$(origin CROSS_COMPILE)),$(CROSS_COMPILE))
+_ARMOS_ENV_SMP_CPUS := $(if $(filter environment environment\ override,$(origin SMP_CPUS)),$(SMP_CPUS))
+-include $(ARMOS_CONFIG)
+ifneq ($(_ARMOS_ENV_TARGET_ARCH),)
+TARGET_ARCH := $(_ARMOS_ENV_TARGET_ARCH)
+endif
+ifneq ($(_ARMOS_ENV_TARGET_PLATFORM),)
+TARGET_PLATFORM := $(_ARMOS_ENV_TARGET_PLATFORM)
+endif
+ifneq ($(_ARMOS_ENV_CROSS_COMPILE),)
+CROSS_COMPILE := $(_ARMOS_ENV_CROSS_COMPILE)
+endif
+ifneq ($(_ARMOS_ENV_SMP_CPUS),)
+SMP_CPUS := $(_ARMOS_ENV_SMP_CPUS)
+endif
+
+TARGET_ARCH ?= arm32
+TARGET_PLATFORM ?= qemu-virt
+
+ifneq ($(wildcard $(ARMOS_CONFIG)),)
+_ARMOS_CONFIG_STATUS := $(shell ARMOS_CONFIG_LOADED=0 \
+	TARGET_ARCH='$(TARGET_ARCH)' TARGET_PLATFORM='$(TARGET_PLATFORM)' \
+	ARMOS_CONFIG='$(ARMOS_CONFIG)' bash tools/armos_config.sh --show \
+	>/dev/null 2>&1; echo $$?)
+ifneq ($(_ARMOS_CONFIG_STATUS),0)
+$(error Invalid ArmOS configuration; run ARMOS_CONFIG=$(ARMOS_CONFIG) ./tools/armos_config.sh --show)
+endif
+endif
 
 ifeq ($(TARGET_ARCH),arm64)
 CROSS_COMPILE ?= aarch64-elf-
@@ -218,9 +250,19 @@ TARGET = kernel
 KERNEL_ELF = $(TARGET).elf
 KERNEL_BIN = $(TARGET).bin
 
-.PHONY: FORCE platform-kernel platform-disk
+.PHONY: FORCE config platform-kernel platform-disk
 
 all: platform-kernel platform-disk
+
+config:
+	@echo "ArmOS make configuration"
+	@echo "  file:            $(if $(wildcard $(ARMOS_CONFIG)),$(ARMOS_CONFIG),defaults and environment)"
+	@echo "  TARGET_ARCH:     $(TARGET_ARCH)"
+	@echo "  TARGET_PLATFORM: $(TARGET_PLATFORM)"
+	@echo "  CROSS_COMPILE:   $(CROSS_COMPILE)"
+	@echo "  SMP_CPUS:        $(SMP_CPUS)"
+	@echo "  ENABLE_NET:      $(if $(ENABLE_NET),$(ENABLE_NET),no)"
+	@echo "  ENABLE_GPU:      $(if $(ENABLE_GPU),$(ENABLE_GPU),no)"
 
 # Linkage
 $(KERNEL_ELF): $(ALL_OBJS) $(LINKER_SCRIPT)

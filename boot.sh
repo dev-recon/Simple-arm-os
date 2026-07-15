@@ -10,6 +10,14 @@ cd "$ROOT_DIR"
 
 . "$ROOT_DIR/tools/qemu_helpers.sh"
 . "$ROOT_DIR/tools/qemu_platform_env.sh"
+
+if [ "$ENABLE_GPU" = 1 ]; then
+    exec "$ROOT_DIR/boot-graphics.sh" "$@"
+fi
+if [ "$ENABLE_NET" = 1 ]; then
+    exec "$ROOT_DIR/boot-net.sh" "$@"
+fi
+
 QEMU="$(select_arm_qemu "${1:-}" "$ROOT_DIR" "$TARGET_ARCH")"
 SMP_CPUS="${SMP_CPUS:-${QEMU_SMP}}"
 

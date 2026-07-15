@@ -142,6 +142,19 @@ With no environment overrides, `run.sh` deliberately selects the stable
 TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./run.sh
 ```
 
+For a persistent local target, create the ignored `armos.conf` file:
+
+```sh
+cp armos.conf.example armos.conf
+./tools/armos_config.sh --show
+./run.sh
+```
+
+Tracked profiles can be selected with `ARMOS_CONFIG`, for example
+`ARMOS_CONFIG=configs/qemu-virt-arm64.conf ./run.sh`. See
+[`docs/BUILD_CONFIGURATION.md`](docs/BUILD_CONFIGURATION.md) for precedence,
+QEMU network/graphics options, and userland package switches.
+
 At the `mash$>` prompt, a quick smoke test is:
 
 ```sh

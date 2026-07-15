@@ -61,6 +61,7 @@ output/
 .idea/
 .vscode/
 CONTEXT_REPRISE*.md
+armos.conf
 
 # Third-party archives
 *.tar.gz
