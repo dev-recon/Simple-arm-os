@@ -120,6 +120,8 @@ RAW_SYSCALL sys_getsid, 147
 RAW_SYSCALL sys_sched_yield, 158
 RAW_SYSCALL sys_nanosleep, 162
 RAW_SYSCALL sys_poll, 168
+RAW_SYSCALL sys_pread, 180
+RAW_SYSCALL sys_pwrite, 181
 RAW_SYSCALL sys_getcwd, 183
 RAW_SYSCALL sys_shm_open, 190
 RAW_SYSCALL sys_shm_unlink, 191

@@ -39,6 +39,8 @@
 extern int clock_gettime(clockid_t clock_id, struct timespec *tp);
 extern int clock_getres(clockid_t clock_id, struct timespec *res);
 extern int sched_yield(void);
+extern ssize_t pread(int fd, void *buf, size_t count, off_t offset);
+extern ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset);
 
 extern char *realpath(const char *path, char *resolved_path);
 
@@ -310,6 +312,75 @@ static void test_file_io(void)
 
     n = read_file(path, buf, sizeof(buf));
     expect(n == 4 && strcmp(buf, "tiny") == 0, "ftruncate removed old tail", n);
+}
+
+static void test_positioned_io(void)
+{
+    const char *path = tmp_path("positioned-io.txt");
+    char buf[32];
+    int pipefd[2];
+    int fd;
+    int n;
+
+    unlink(path);
+    fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
+    if (expect(fd >= 0, "positioned I/O create file", fd) < 0)
+        return;
+
+    expect(write(fd, "abcdefghij", 10) == 10,
+           "positioned I/O seed file", errno);
+    expect(lseek(fd, 2, SEEK_SET) == 2,
+           "positioned I/O set shared offset", errno);
+
+    memset(buf, 0, sizeof(buf));
+    expect(pread(fd, buf, 3, 5) == 3 && memcmp(buf, "fgh", 3) == 0,
+           "pread reads explicit offset", errno);
+    expect(lseek(fd, 0, SEEK_CUR) == 2,
+           "pread preserves shared offset", errno);
+
+    expect(pwrite(fd, "XYZ", 3, 4) == 3,
+           "pwrite writes explicit offset", errno);
+    expect(lseek(fd, 0, SEEK_CUR) == 2,
+           "pwrite preserves shared offset", errno);
+
+    memset(buf, 0, sizeof(buf));
+    expect(read(fd, buf, 2) == 2 && memcmp(buf, "cd", 2) == 0,
+           "ordinary read resumes at shared offset", errno);
+    close(fd);
+
+    n = read_file(path, buf, sizeof(buf));
+    expect(n == 10 && memcmp(buf, "abcdXYZhij", 10) == 0,
+           "pwrite changed only requested bytes", n);
+
+    fd = open(path, O_WRONLY | O_APPEND, 0);
+    if (expect(fd >= 0, "positioned I/O open append handle", fd) >= 0) {
+        expect(pwrite(fd, "Q", 1, 1) == 1,
+               "pwrite ignores append position", errno);
+        expect(lseek(fd, 0, SEEK_CUR) == 10,
+               "pwrite preserves append handle offset", errno);
+        close(fd);
+    }
+
+    n = read_file(path, buf, sizeof(buf));
+    expect(n == 10 && memcmp(buf, "aQcdXYZhij", 10) == 0,
+           "pwrite on append handle uses explicit offset", n);
+
+    errno = 0;
+    expect(pread(-1, buf, 1, 0) < 0 && errno == EBADF,
+           "pread rejects invalid descriptor", errno);
+    errno = 0;
+    expect(pwrite(-1, "x", 1, -1) < 0 && errno == EINVAL,
+           "pwrite rejects negative offset", errno);
+
+    if (expect(pipe(pipefd) == 0, "positioned I/O create pipe", errno) == 0) {
+        errno = 0;
+        expect(pread(pipefd[0], buf, 1, 0) < 0 && errno == ESPIPE,
+               "pread rejects non-seekable pipe", errno);
+        close(pipefd[0]);
+        close(pipefd[1]);
+    }
+
+    unlink(path);
 }
 
 static void test_access_umask(void)
@@ -2253,6 +2324,7 @@ int main(int argc, char **argv)
     test_process_session_info();
     test_scheduler_priority_syscalls();
     test_file_io();
+    test_positioned_io();
     test_access_umask();
     test_open_permission_enforcement();
     test_pipe_dup2();

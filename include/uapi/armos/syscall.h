@@ -40,6 +40,8 @@
 #define ARMOS_NR_GETPPID    119
 #define ARMOS_NR_SCHED_YIELD 158
 #define ARMOS_NR_NANOSLEEP  162
+#define ARMOS_NR_PREAD      180
+#define ARMOS_NR_PWRITE     181
 #define ARMOS_NR_GETCWD     183
 #define ARMOS_NR_SHUTDOWN   194
 #define ARMOS_NR_MMAP       195

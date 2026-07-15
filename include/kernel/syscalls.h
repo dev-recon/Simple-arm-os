@@ -24,6 +24,7 @@
 #include <kernel/vfs.h>
 #include <kernel/signal.h>  /* Pour sig_handler_t et sigaction_t */
 #include <kernel/dirent.h>
+#include <uapi/armos/file.h>
 #include <uapi/armos/syscall.h>
 #include <uapi/armos/time.h>
 
@@ -120,6 +121,8 @@ struct process;
 #define __NR_sched_yield        ARMOS_NR_SCHED_YIELD
 #define __NR_nanosleep          162
 #define __NR_poll               168
+#define __NR_pread              ARMOS_NR_PREAD
+#define __NR_pwrite             ARMOS_NR_PWRITE
 #define __NR_rt_sigreturn       173
 #define __NR_getcwd             183     /* getcwd */
 #define __NR_shm_open           190
@@ -251,6 +254,10 @@ syscall_result_t syscall_dispatch_common_handler(
 /* File syscalls */
 int sys_read(int fd, void* buf, size_t count);
 int sys_write(int fd, const void* buf, size_t count);
+int sys_pread(int fd, void* buf, size_t count,
+              const armos_offset_t* offset);
+int sys_pwrite(int fd, const void* buf, size_t count,
+               const armos_offset_t* offset);
 int sys_open(const char* pathname, int flags, mode_t mode);
 int sys_open_vfs(const char* pathname, int flags, mode_t mode);
 int sys_creat(const char* pathname, mode_t mode);

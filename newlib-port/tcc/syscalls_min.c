@@ -34,6 +34,7 @@
 #include <string.h>
 #include <termios.h>
 #include <time.h>
+#include <uapi/armos/file.h>
 #include <uapi/armos/time.h>
 #include <sys/mman.h>
 #include <poll.h>
@@ -52,6 +53,10 @@
 
 extern long sys_read(int fd, void *buf, unsigned long count);
 extern long sys_write(int fd, const void *buf, unsigned long count);
+extern long sys_pread(int fd, void *buf, unsigned long count,
+                      const armos_offset_t *offset);
+extern long sys_pwrite(int fd, const void *buf, unsigned long count,
+                       const armos_offset_t *offset);
 extern long sys_open(const char *pathname, int flags, int mode);
 extern long sys_creat(const char *pathname, int mode);
 extern long sys_close(int fd);
@@ -591,6 +596,40 @@ int _read(int fd, void *buf, size_t count)
 int _write(int fd, const void *buf, size_t count)
 {
     return ret_errno(sys_write(fd, buf, count));
+}
+
+ssize_t pread(int fd, void *buf, size_t count, off_t offset)
+{
+    armos_offset_t positioned;
+
+    if (offset < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if ((unsigned long long)offset > ARMOS_FILE_OFFSET_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    positioned.value = (signed long long)offset;
+    return ret_errno(sys_pread(fd, buf, count, &positioned));
+}
+
+ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset)
+{
+    armos_offset_t positioned;
+
+    if (offset < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if ((unsigned long long)offset > ARMOS_FILE_OFFSET_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    positioned.value = (signed long long)offset;
+    return ret_errno(sys_pwrite(fd, buf, count, &positioned));
 }
 
 int _open(const char *pathname, int flags, int mode)

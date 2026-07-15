@@ -79,23 +79,16 @@ bool inode_permission(inode_t* inode, int mask) {
     return true;
 }
 
-int sys_read(int fd, void* buf, size_t count)
+static int file_read_buffer(file_t* file, void* buf, size_t count)
 {
-    task_t* task = task_current_local();
-    file_t* file;
     ssize_t result;
     void *kbuf = NULL;
     size_t read_count;
-    
+
     if (count == 0) return 0;
     if (!buf) return -EFAULT;
-    if (fd < 0 || fd >= MAX_FILES) return -EBADF;
-    if (!task || !task->process) return -EBADF;
-    
-    file = task->process->files[fd];
     if (!file) return -EBADF;
     if (!can_read(file)) return -EBADF;
-    
     if (!file->f_op || !file->f_op->read) return -ENOSYS;
 
     /*
@@ -126,10 +119,8 @@ int sys_read(int fd, void* buf, size_t count)
     return (int)result;
 }
 
-int sys_write(int fd, const void* buf, size_t count)
+static int file_write_buffer(file_t* file, const void* buf, size_t count)
 {
-    task_t* task = task_current_local();
-    file_t* file;
     ssize_t result = 0;
     void *kbuf = NULL;
     size_t chunk_cap;
@@ -137,11 +128,6 @@ int sys_write(int fd, const void* buf, size_t count)
 
     if (count == 0) return 0;
     if (!buf) return -EFAULT;
-
-    if (fd < 0 || fd >= MAX_FILES) return -EBADF;
-    if (!task || !task->process) return -EBADF;
-
-    file = task->process->files[fd];
     if (!file) return -EBADF;
     if (!can_write(file)) return -EBADF;
     if (!file->f_op || !file->f_op->write) return -ENOSYS;
@@ -198,6 +184,76 @@ int sys_write(int fd, const void* buf, size_t count)
 
     kfree(kbuf);
     return (int)done;
+}
+
+int sys_read(int fd, void* buf, size_t count)
+{
+    task_t* task = task_current_local();
+
+    if (count == 0) return 0;
+    if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
+    return file_read_buffer(task->process->files[fd], buf, count);
+}
+
+int sys_write(int fd, const void* buf, size_t count)
+{
+    task_t* task = task_current_local();
+
+    if (count == 0) return 0;
+    if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
+    return file_write_buffer(task->process->files[fd], buf, count);
+}
+
+static int positioned_file(int fd, const armos_offset_t* user_offset,
+                           file_t* positioned)
+{
+    task_t* task = task_current_local();
+    armos_offset_t offset;
+    file_t* file;
+
+    if (!user_offset || !positioned) return -EFAULT;
+    if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
+
+    file = task->process->files[fd];
+    if (!file) return -EBADF;
+    if (!file->f_op || !file->f_op->lseek) return -ESPIPE;
+    if (copy_from_user(&offset, user_offset, sizeof(offset)) < 0)
+        return -EFAULT;
+    if (offset.value < 0 ||
+        (unsigned long long)offset.value > ARMOS_FILE_OFFSET_MAX)
+        return -EINVAL;
+
+    *positioned = *file;
+    positioned->offset = (uint32_t)offset.value;
+    return 0;
+}
+
+int sys_pread(int fd, void* buf, size_t count,
+              const armos_offset_t* offset)
+{
+    file_t positioned;
+    int ret;
+
+    ret = positioned_file(fd, offset, &positioned);
+    if (ret < 0) return ret;
+    return file_read_buffer(&positioned, buf, count);
+}
+
+int sys_pwrite(int fd, const void* buf, size_t count,
+               const armos_offset_t* offset)
+{
+    file_t positioned;
+    int ret;
+
+    ret = positioned_file(fd, offset, &positioned);
+    if (ret < 0) return ret;
+
+    /* POSIX pwrite() uses its explicit offset even on an O_APPEND handle. */
+    positioned.flags &= ~O_APPEND;
+    return file_write_buffer(&positioned, buf, count);
 }
 
 static int truncate_file_inode(inode_t *inode, const char *name)

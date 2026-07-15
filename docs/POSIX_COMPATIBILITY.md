@@ -6,7 +6,7 @@ syscall ABI. POSIX specifies application-visible behavior; ArmOS remains free
 to implement that behavior with a smaller architecture-neutral kernel ABI and
 newlib wrappers.
 
-The current common dispatcher exposes 98 syscall entries. It already covers
+The current common dispatcher exposes 100 syscall entries. It already covers
 the central Unix process, VFS, descriptor, signal, virtual-memory, TTY, polling
 and identity contracts. The next stage is therefore semantic completion and a
 small number of missing primitives, not one syscall for every function listed
@@ -53,7 +53,7 @@ needed by a broad range of otherwise simple Unix programs.
 | `sched_yield` | Implemented | Common scheduler handler and symmetric ARM32/ARM64 wrappers |
 | `clock_gettime`, `clock_getres` | Realtime and monotonic clocks implemented | Preserve the common UAPI and improve realtime resolution when hardware RTC support grows |
 | `clock_nanosleep` | Missing | Build absolute and relative sleep on the scheduler deadline mechanism |
-| `pread`, `pwrite` | Missing | Perform position-based I/O without changing the shared open-file offset |
+| `pread`, `pwrite` | Implemented for seekable files | Preserve the shared open-file offset and reject non-seekable descriptors with `ESPIPE` |
 | `openat` and `*at` path operations | Missing | Add dirfd-aware VFS path resolution, then expose `fstatat`, `unlinkat`, `renameat` and `mkdirat` |
 | `fchmod`, `fchown` | Missing | Apply ownership and mode changes through an open descriptor |
 | `fdatasync` | Missing | Reuse filesystem flush machinery while excluding unrelated metadata where possible |
@@ -92,6 +92,14 @@ optional capability, and a known but unsupported capability. The latter
 returns `-1` without changing `errno`, as POSIX requires. In particular,
 ArmOS does not yet claim `_SC_VERSION`, `_SC_TIMERS`, `_SC_MAPPED_FILES`,
 `_SC_MEMORY_PROTECTION`, `_SC_SHARED_MEMORY_OBJECTS`, or saved-ID support.
+
+Positioned I/O uses a fixed signed 64-bit offset in the ArmOS UAPI. The common
+kernel creates a private view of the open file for each `pread()` or `pwrite()`
+operation, so backend reads and writes can advance that private cursor without
+changing the offset shared by `dup()` or `fork()`. `pwrite()` also honors its
+explicit offset on an `O_APPEND` descriptor. Current ext2 and FAT32 inode sizes
+remain 32-bit; newlib reports `EOVERFLOW` before entering the kernel when an
+application requests an offset outside that filesystem range.
 
 ### P1 - Complete Existing Contracts
 

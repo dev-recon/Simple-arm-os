@@ -984,6 +984,8 @@ static const char* proc_syscall_name(uint32_t nr)
         case __NR_poll: return "poll";
         case __NR_readv: return "readv";
         case __NR_writev: return "writev";
+        case __NR_pread: return "pread";
+        case __NR_pwrite: return "pwrite";
         case __NR_wait4: return "wait4";
         case __NR_getrusage: return "getrusage";
         case __NR_mprotect: return "mprotect";
