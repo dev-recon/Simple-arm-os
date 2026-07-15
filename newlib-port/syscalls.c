@@ -31,6 +31,8 @@
 #include <time.h>
 #include <utime.h>
 #include <unistd.h>
+#include <uapi/armos/syscall.h>
+#include <uapi/armos/time.h>
 
 #ifndef O_RDONLY
 #define O_RDONLY 0
@@ -44,6 +46,10 @@
 
 #ifndef PATH_MAX
 #define PATH_MAX 1024
+#endif
+
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC ((clockid_t)4)
 #endif
 
 extern long sys_read(int fd, void *buf, unsigned long count);
@@ -113,7 +119,11 @@ extern long sys_pipe(int pipefd[2]);
 extern long sys_dup(int oldfd);
 extern long sys_dup2(int oldfd, int newfd);
 extern long sys_getdents(int fd, void *dirp, unsigned long count);
-extern long sys_nanosleep(const struct timespec *req, struct timespec *rem);
+extern long sys_sched_yield(void);
+extern long sys_nanosleep(const armos_timespec32_t *req,
+                          armos_timespec32_t *rem);
+extern long sys_clock_gettime(int clock_id, armos_timespec_t *tp);
+extern long sys_clock_getres(int clock_id, armos_timespec_t *res);
 extern long sys_mknod(const char *pathname, int mode, unsigned long dev);
 extern long sys_mmap(void *addr, unsigned long length, int prot, int flags, int fd);
 extern long sys_munmap(void *addr, unsigned long length);
@@ -285,8 +295,13 @@ int getdtablesize(void)
 
 long sysconf(int name)
 {
+    int saved_errno = errno;
     long ret = sys_sysconf(name);
 
+    if (ret == ARMOS_SYSCONF_UNSUPPORTED) {
+        errno = saved_errno;
+        return -1;
+    }
     if (ret < 0) {
         errno = (int)-ret;
         return -1;
@@ -1481,9 +1496,96 @@ int getsysinfo(void *resp)
     return ret_errno(sys_sysinfo(resp));
 }
 
+int sched_yield(void)
+{
+    return ret_errno(sys_sched_yield());
+}
+
+static int clock_id_to_armos(clockid_t clock_id)
+{
+    if (clock_id == CLOCK_REALTIME)
+        return ARMOS_CLOCK_REALTIME;
+    if (clock_id == CLOCK_MONOTONIC)
+        return ARMOS_CLOCK_MONOTONIC;
+    return -1;
+}
+
+int clock_gettime(clockid_t clock_id, struct timespec *tp)
+{
+    armos_timespec_t value;
+    int armos_clock;
+    long ret;
+
+    if (!tp) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    armos_clock = clock_id_to_armos(clock_id);
+    if (armos_clock < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    ret = sys_clock_gettime(armos_clock, &value);
+    if (ret < 0)
+        return ret_errno(ret);
+
+    tp->tv_sec = (time_t)value.sec;
+    tp->tv_nsec = (long)value.nsec;
+    return 0;
+}
+
+int clock_getres(clockid_t clock_id, struct timespec *res)
+{
+    armos_timespec_t value;
+    int armos_clock;
+    long ret;
+
+    armos_clock = clock_id_to_armos(clock_id);
+    if (armos_clock < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    ret = sys_clock_getres(armos_clock, res ? &value : NULL);
+    if (ret < 0)
+        return ret_errno(ret);
+    if (res) {
+        res->tv_sec = (time_t)value.sec;
+        res->tv_nsec = (long)value.nsec;
+    }
+    return 0;
+}
+
 int nanosleep(const struct timespec *req, struct timespec *rem)
 {
-    return ret_errno(sys_nanosleep(req, rem));
+    armos_timespec32_t request;
+    armos_timespec32_t remaining;
+    long ret;
+
+    if (!req) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (req->tv_sec < 0 || req->tv_nsec < 0 ||
+        req->tv_nsec >= 1000000000L ||
+        (unsigned long long)req->tv_sec > 0xffffffffULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    request.sec = (unsigned int)req->tv_sec;
+    request.nsec = (unsigned int)req->tv_nsec;
+    ret = sys_nanosleep(&request, rem ? &remaining : NULL);
+    if (ret < 0) {
+        if (ret == -EINTR && rem) {
+            rem->tv_sec = (time_t)remaining.sec;
+            rem->tv_nsec = (long)remaining.nsec;
+        }
+        return ret_errno(ret);
+    }
+    return 0;
 }
 
 int usleep(useconds_t usec)

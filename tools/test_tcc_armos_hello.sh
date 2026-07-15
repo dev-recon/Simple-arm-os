@@ -88,6 +88,7 @@ echo "== TinyCC + newlib link with root ARM/EABI libgcc =="
     -mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft \
     -std=gnu99 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
     -ffunction-sections -fdata-sections -Os \
+    -I"$ROOT_DIR/include" \
     -I"$ROOT_DIR/build/newlib-sysroot/arm-none-eabi/include" \
     -c "$ROOT_DIR/newlib-port/tcc/syscalls_min.c" \
     -o "$MIN_SYSCALLS"

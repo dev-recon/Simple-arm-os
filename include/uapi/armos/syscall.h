@@ -45,6 +45,8 @@
 #define ARMOS_NR_MMAP       195
 #define ARMOS_NR_MUNMAP     196
 #define ARMOS_NR_SYSCONF    197
+#define ARMOS_NR_CLOCK_GETTIME 263
+#define ARMOS_NR_CLOCK_GETRES  264
 #define ARMOS_SYSCALL_MAX 512
 
 /* Values shared with the newlib _SC_* namespace used by ArmOS. */
@@ -52,8 +54,25 @@
 #define ARMOS_SC_CHILD_MAX        1
 #define ARMOS_SC_CLK_TCK          2
 #define ARMOS_SC_OPEN_MAX         4
+#define ARMOS_SC_JOB_CONTROL      5
+#define ARMOS_SC_SAVED_IDS        6
+#define ARMOS_SC_VERSION          7
 #define ARMOS_SC_PAGESIZE         8
 #define ARMOS_SC_NPROCESSORS_CONF 9
 #define ARMOS_SC_NPROCESSORS_ONLN 10
+#define ARMOS_SC_PHYS_PAGES       11
+#define ARMOS_SC_AVPHYS_PAGES     12
+#define ARMOS_SC_FSYNC            22
+#define ARMOS_SC_MAPPED_FILES     23
+#define ARMOS_SC_MEMORY_PROTECTION 26
+#define ARMOS_SC_SHARED_MEMORY_OBJECTS 31
+#define ARMOS_SC_TIMERS           33
+#define ARMOS_SC_IOV_MAX          66
+#define ARMOS_SC_MONOTONIC_CLOCK  69
+
+#define ARMOS_POSIX_VERSION 200809
+
+/* Raw kernel result used for a known but unsupported sysconf selector. */
+#define ARMOS_SYSCONF_UNSUPPORTED (-38)
 
 #endif

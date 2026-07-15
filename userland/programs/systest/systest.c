@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <poll.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +31,14 @@
 #include <termios.h>
 #include <unistd.h>
 #include <arm_os_abi.h>
+
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC ((clockid_t)4)
+#endif
+
+extern int clock_gettime(clockid_t clock_id, struct timespec *tp);
+extern int clock_getres(clockid_t clock_id, struct timespec *res);
+extern int sched_yield(void);
 
 extern char *realpath(const char *path, char *resolved_path);
 
@@ -1332,6 +1341,85 @@ static void systest_sleep_signal_handler(int sig)
     sleep_signal_seen = 1;
 }
 
+static int timespec_after(const struct timespec *after,
+                          const struct timespec *before)
+{
+    return after->tv_sec > before->tv_sec ||
+        (after->tv_sec == before->tv_sec &&
+         after->tv_nsec > before->tv_nsec);
+}
+
+static int timespec_is_valid(const struct timespec *value)
+{
+    return value->tv_sec >= 0 && value->tv_nsec >= 0 &&
+        value->tv_nsec < 1000000000L;
+}
+
+static void test_posix_clocks_and_capabilities(void)
+{
+    struct timespec before;
+    struct timespec after;
+    struct timespec resolution;
+    struct timespec delay;
+    long value;
+
+    expect(sched_yield() == 0, "sched_yield yields successfully", errno);
+
+    if (expect(clock_getres(CLOCK_MONOTONIC, &resolution) == 0 &&
+               timespec_is_valid(&resolution) &&
+               (resolution.tv_sec > 0 || resolution.tv_nsec > 0),
+               "clock_getres monotonic reports resolution", errno) == 0) {
+        expect(resolution.tv_sec == 0,
+               "monotonic clock has subsecond resolution",
+               (int)resolution.tv_sec);
+    }
+
+    if (expect(clock_gettime(CLOCK_MONOTONIC, &before) == 0 &&
+               timespec_is_valid(&before),
+               "clock_gettime monotonic", errno) == 0) {
+        delay.tv_sec = 0;
+        delay.tv_nsec = 20000000L;
+        expect(nanosleep(&delay, NULL) == 0,
+               "nanosleep accepts a subsecond duration", errno);
+        expect(clock_gettime(CLOCK_MONOTONIC, &after) == 0 &&
+               timespec_after(&after, &before),
+               "monotonic clock advances", errno);
+    }
+
+    expect(clock_gettime(CLOCK_REALTIME, &after) == 0 &&
+           timespec_is_valid(&after), "clock_gettime realtime", errno);
+
+    errno = 0;
+    expect(clock_gettime((clockid_t)999, &after) < 0 && errno == EINVAL,
+           "clock_gettime rejects unknown clock", errno);
+    errno = 0;
+    expect(clock_gettime(CLOCK_MONOTONIC, NULL) < 0 && errno == EFAULT,
+           "clock_gettime rejects null result", errno);
+
+    expect(sysconf(_SC_CLK_TCK) > 0, "sysconf clock ticks", errno);
+    expect(sysconf(_SC_PAGESIZE) == 4096, "sysconf page size", errno);
+    expect(sysconf(_SC_NPROCESSORS_CONF) >= 1,
+           "sysconf configured CPUs", errno);
+    expect(sysconf(_SC_NPROCESSORS_ONLN) >= 1,
+           "sysconf online CPUs", errno);
+    expect(sysconf(_SC_MONOTONIC_CLOCK) > 0,
+           "sysconf reports monotonic clock", errno);
+    expect(sysconf(_SC_IOV_MAX) == 64, "sysconf IOV_MAX", errno);
+
+    errno = EBUSY;
+    value = sysconf(_SC_TIMERS);
+    expect(value == -1 && errno == EBUSY,
+           "sysconf does not claim POSIX timers", errno);
+    errno = ENOTTY;
+    value = sysconf(_SC_SHARED_MEMORY_OBJECTS);
+    expect(value == -1 && errno == ENOTTY,
+           "sysconf does not claim shared memory objects", errno);
+    errno = 0;
+    value = sysconf(9999);
+    expect(value == -1 && errno == EINVAL,
+           "sysconf rejects unknown selector", errno);
+}
+
 static void test_nanosleep_signal_interrupt(void)
 {
     struct timespec req;
@@ -2184,6 +2272,7 @@ int main(int argc, char **argv)
     test_waitpid_wuntraced_continue();
     test_waitpid_group_stop_reports_all();
     test_sleep_survives_stop_continue();
+    test_posix_clocks_and_capabilities();
     test_nanosleep_signal_interrupt();
     test_malloc_free_stress();
     test_cow_memory();

@@ -6,7 +6,7 @@ syscall ABI. POSIX specifies application-visible behavior; ArmOS remains free
 to implement that behavior with a smaller architecture-neutral kernel ABI and
 newlib wrappers.
 
-The current common dispatcher exposes 95 syscall entries. It already covers
+The current common dispatcher exposes 98 syscall entries. It already covers
 the central Unix process, VFS, descriptor, signal, virtual-memory, TTY, polling
 and identity contracts. The next stage is therefore semantic completion and a
 small number of missing primitives, not one syscall for every function listed
@@ -38,7 +38,7 @@ The following families are already connected to the common kernel:
 | Signals | `kill`, `sigaction`, `sigprocmask`, `sigpending`, `sigsuspend` and signal return |
 | Memory | `brk`, private `mmap`, `munmap`, partial `mprotect` and ArmOS shared-memory calls |
 | Waiting | `select`, `poll`, `nanosleep`, pipes and blocking TTY I/O |
-| Time and accounting | `time`, `gettimeofday`, `times`, `getrusage`, priorities and a small `sysconf` set |
+| Time and accounting | `time`, `gettimeofday`, `clock_gettime`, `clock_getres`, `times`, `getrusage`, priorities and capability-aware `sysconf` |
 | Networking | Minimal passive IPv4/TCP socket, `bind`, `listen` and `accept` path |
 
 ## Priority Axes
@@ -50,14 +50,14 @@ needed by a broad range of otherwise simple Unix programs.
 
 | Interface or family | Current state | Required work |
 | --- | --- | --- |
-| `sched_yield` | Number reserved, no dispatcher entry or raw wrapper | Add one common kernel handler and ARM32/ARM64 raw wrappers |
-| `clock_gettime`, `clock_getres` | Missing | Expose realtime and monotonic clocks from the generic timer/timekeeping layer |
+| `sched_yield` | Implemented | Common scheduler handler and symmetric ARM32/ARM64 wrappers |
+| `clock_gettime`, `clock_getres` | Realtime and monotonic clocks implemented | Preserve the common UAPI and improve realtime resolution when hardware RTC support grows |
 | `clock_nanosleep` | Missing | Build absolute and relative sleep on the scheduler deadline mechanism |
 | `pread`, `pwrite` | Missing | Perform position-based I/O without changing the shared open-file offset |
 | `openat` and `*at` path operations | Missing | Add dirfd-aware VFS path resolution, then expose `fstatat`, `unlinkat`, `renameat` and `mkdirat` |
 | `fchmod`, `fchown` | Missing | Apply ownership and mode changes through an open descriptor |
 | `fdatasync` | Missing | Reuse filesystem flush machinery while excluding unrelated metadata where possible |
-| `sysconf` | Seven selectors only | Report version, limits, clocks, CPUs and unsupported options without false positives |
+| `sysconf` | Limits, memory, CPUs, I/O vectors and selected capabilities implemented | Keep partial facilities explicitly unsupported and add selectors only with their complete contracts |
 
 Acceptance criteria:
 
@@ -67,6 +67,31 @@ Acceptance criteria:
 - dirfd-relative operations remain correct if the process working directory
   changes concurrently;
 - `systest` contains ABI and behavioral tests for every added primitive.
+
+### Delivered P0 Foundation
+
+The first P0 increment establishes three contracts shared by every
+architecture:
+
+- `sched_yield()` enters the common scheduler and never carries
+  architecture-specific scheduling policy;
+- `clock_gettime()` and `clock_getres()` expose `CLOCK_MONOTONIC` from the ARM
+  generic counter and `CLOCK_REALTIME` from the current ArmOS wall-clock
+  source;
+- a fixed UAPI time structure isolates the kernel from newlib's different
+  ARM32 and ARM64 `struct timespec` layouts. The released 32-bit `nanosleep`
+  wire layout remains stable and newlib translates it explicitly.
+
+Realtime resolution is currently one second because ArmOS only has a
+second-resolution wall-clock source. The monotonic clock uses the effective
+platform counter frequency and reports its corresponding nanosecond
+resolution. Neither result is derived from a CPU delay-loop calibration.
+
+`sysconf()` now distinguishes three outcomes: a numeric limit, a supported
+optional capability, and a known but unsupported capability. The latter
+returns `-1` without changing `errno`, as POSIX requires. In particular,
+ArmOS does not yet claim `_SC_VERSION`, `_SC_TIMERS`, `_SC_MAPPED_FILES`,
+`_SC_MEMORY_PROTECTION`, `_SC_SHARED_MEMORY_OBJECTS`, or saved-ID support.
 
 ### P1 - Complete Existing Contracts
 

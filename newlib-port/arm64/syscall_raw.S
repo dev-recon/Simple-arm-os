@@ -105,6 +105,7 @@ RAW_SYSCALL sys_select, 142
 RAW_SYSCALL sys_readv, 145
 RAW_SYSCALL sys_writev, 146
 RAW_SYSCALL sys_getsid, 147
+RAW_SYSCALL sys_sched_yield, 158
 RAW_SYSCALL sys_nanosleep, 162
 RAW_SYSCALL sys_poll, 168
 RAW_SYSCALL sys_getcwd, 183
@@ -116,6 +117,8 @@ RAW_SYSCALL sys_shutdown, 194
 RAW_SYSCALL sys_mmap, 195
 RAW_SYSCALL sys_munmap, 196
 RAW_SYSCALL sys_sysconf, 197
+RAW_SYSCALL sys_clock_gettime, 263
+RAW_SYSCALL sys_clock_getres, 264
 RAW_SYSCALL sys_socket, 281
 RAW_SYSCALL sys_bind, 282
 RAW_SYSCALL sys_connect, 283

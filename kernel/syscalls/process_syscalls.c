@@ -1036,12 +1036,30 @@ int sys_sysconf(int name)
         return TIMER_FREQ;
     case ARMOS_SC_OPEN_MAX:
         return MAX_FILES;
+    case ARMOS_SC_JOB_CONTROL:
+        return ARMOS_POSIX_VERSION;
+    case ARMOS_SC_SAVED_IDS:
+    case ARMOS_SC_VERSION:
+    case ARMOS_SC_MAPPED_FILES:
+    case ARMOS_SC_MEMORY_PROTECTION:
+    case ARMOS_SC_SHARED_MEMORY_OBJECTS:
+    case ARMOS_SC_TIMERS:
+        return -ENOSYS;
     case ARMOS_SC_PAGESIZE:
         return PAGE_SIZE;
     case ARMOS_SC_NPROCESSORS_CONF:
         return (int)smp_possible_cpu_count();
     case ARMOS_SC_NPROCESSORS_ONLN:
         return (int)smp_online_cpu_count();
+    case ARMOS_SC_PHYS_PAGES:
+        return (int)get_total_page_count();
+    case ARMOS_SC_AVPHYS_PAGES:
+        return (int)get_free_page_count();
+    case ARMOS_SC_FSYNC:
+    case ARMOS_SC_MONOTONIC_CLOCK:
+        return ARMOS_POSIX_VERSION;
+    case ARMOS_SC_IOV_MAX:
+        return ARMOS_IOV_MAX;
     default:
         return -EINVAL;
     }
@@ -2392,8 +2410,98 @@ int sys_mkdir(const char* pathname, mode_t mode)
 }
 
 
-int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
+static uint64_t divide_u64_u32(uint64_t dividend, uint32_t divisor,
+                               uint32_t *remainder)
+{
+    uint64_t quotient = 0;
+    uint64_t rem = 0;
+    int bit;
+
+    if (divisor == 0) {
+        if (remainder)
+            *remainder = 0;
+        return 0;
+    }
+
+    for (bit = 63; bit >= 0; bit--) {
+        rem = (rem << 1) | ((dividend >> bit) & 1u);
+        if (rem >= divisor) {
+            rem -= divisor;
+            quotient |= 1ULL << bit;
+        }
+    }
+
+    if (remainder)
+        *remainder = (uint32_t)rem;
+    return quotient;
+}
+
+int sys_sched_yield(void)
+{
+    yield();
+    return 0;
+}
+
+int sys_clock_gettime(int clock_id, armos_timespec_t *tp)
+{
+    armos_timespec_t value;
+
+    if (!tp)
+        return -EFAULT;
+
+    if (clock_id == ARMOS_CLOCK_REALTIME) {
+        value.sec = (int64_t)get_current_time();
+        value.nsec = 0;
+    } else if (clock_id == ARMOS_CLOCK_MONOTONIC) {
+        uint32_t frequency = get_timer_frequency();
+        uint32_t remainder;
+        uint64_t count;
+
+        if (frequency == 0)
+            return -ENOSYS;
+
+        count = get_timer_count();
+        value.sec = (int64_t)divide_u64_u32(count, frequency, &remainder);
+        value.nsec = (int64_t)divide_u64_u32(
+            (uint64_t)remainder * 1000000000ULL, frequency, NULL);
+    } else {
+        return -EINVAL;
+    }
+
+    return copy_to_user(tp, &value, sizeof(value)) < 0 ? -EFAULT : 0;
+}
+
+int sys_clock_getres(int clock_id, armos_timespec_t *res)
+{
+    armos_timespec_t value;
+
+    if (clock_id == ARMOS_CLOCK_REALTIME) {
+        value.sec = 1;
+        value.nsec = 0;
+    } else if (clock_id == ARMOS_CLOCK_MONOTONIC) {
+        uint32_t frequency = get_timer_frequency();
+
+        if (frequency == 0)
+            return -ENOSYS;
+
+        value.sec = 0;
+        value.nsec = (int64_t)divide_u64_u32(
+            1000000000ULL + frequency - 1u, frequency, NULL);
+        if (value.nsec == 0)
+            value.nsec = 1;
+    } else {
+        return -EINVAL;
+    }
+
+    if (!res)
+        return 0;
+    return copy_to_user(res, &value, sizeof(value)) < 0 ? -EFAULT : 0;
+}
+
+int sys_nanosleep(const armos_timespec32_t *req,
+                  armos_timespec32_t *rem) {
     task_t *task = task_current_local();
+    armos_timespec32_t request;
     uint32_t sleep_ticks;
     uint32_t start_time, elapsed_time;
     uint32_t now;
@@ -2401,18 +2509,20 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     
     if (!task) return -EINVAL;
     if (!req) return -EFAULT;
-    if (req->nsec >= 1000000000u) return -EINVAL;
+    if (copy_from_user(&request, req, sizeof(request)) < 0)
+        return -EFAULT;
+    if (request.nsec >= 1000000000u) return -EINVAL;
 
     //KDEBUG("sys_nanosleep: req->sec=%u, req->nsec=%u\n", req->sec, req->nsec);
     
     /* Convertir la duree demandee en ticks kernel.
      * TIMER_FREQ vaut 1000: un tick == une milliseconde. Garder ce calcul en
      * 32-bit evite de tirer __aeabi_uldivmod dans le kernel freestanding. */
-    if (req->sec > 0xFFFFFFFFu / TIMER_FREQ) {
+    if (request.sec > 0xFFFFFFFFu / TIMER_FREQ) {
         sleep_ticks = 0xFFFFFFFFu;
     } else {
-        uint32_t nsec_ticks = (req->nsec + 999999u) / 1000000u;
-        sleep_ticks = req->sec * TIMER_FREQ;
+        uint32_t nsec_ticks = (request.nsec + 999999u) / 1000000u;
+        sleep_ticks = request.sec * TIMER_FREQ;
         if (sleep_ticks > 0xFFFFFFFFu - nsec_ticks)
             sleep_ticks = 0xFFFFFFFFu;
         else
@@ -2447,6 +2557,8 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
     if (interrupted) {
         /* Réveillé prématurément par un signal */
         if (rem) {
+            armos_timespec32_t remaining;
+
             elapsed_time = now - start_time;
             uint32_t remaining_ticks = (elapsed_time >= sleep_ticks) ? 0 : sleep_ticks - elapsed_time;
             /*
@@ -2457,8 +2569,11 @@ int sys_nanosleep(const timespec_t *req, timespec_t *rem) {
              */
             if (remaining_ticks == 0)
                 remaining_ticks = 1;
-            rem->sec = remaining_ticks / TIMER_FREQ;
-            rem->nsec = (remaining_ticks % TIMER_FREQ) * (1000000000u / TIMER_FREQ);
+            remaining.sec = remaining_ticks / TIMER_FREQ;
+            remaining.nsec = (remaining_ticks % TIMER_FREQ) *
+                (1000000000u / TIMER_FREQ);
+            if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0)
+                return -EFAULT;
         }
         return -EINTR;
     }

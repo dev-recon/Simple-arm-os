@@ -999,6 +999,9 @@ static const char* proc_syscall_name(uint32_t nr)
         case __NR_fstat: return "fstat";
         case __NR_getdents: return "getdents";
         case __NR_nanosleep: return "nanosleep";
+        case __NR_sched_yield: return "sched_yield";
+        case __NR_clock_gettime: return "clock_gettime";
+        case __NR_clock_getres: return "clock_getres";
         case __NR_mmap: return "mmap";
         case __NR_munmap: return "munmap";
         case __NR_connect: return "connect";

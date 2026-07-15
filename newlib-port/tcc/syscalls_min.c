@@ -34,6 +34,7 @@
 #include <string.h>
 #include <termios.h>
 #include <time.h>
+#include <uapi/armos/time.h>
 #include <sys/mman.h>
 #include <poll.h>
 #include <sys/resource.h>
@@ -110,7 +111,8 @@ extern long sys_poll(void *fds, unsigned long nfds, int timeout);
 extern long sys_sigaction(int sig, const void *act, void *oldact);
 extern long sys_sigprocmask(int how, const void *set, void *oldset);
 extern long sys_sigpending(void *set);
-extern long sys_nanosleep(const struct timespec *req, struct timespec *rem);
+extern long sys_nanosleep(const armos_timespec32_t *req,
+                          armos_timespec32_t *rem);
 extern long sys_getcwd(char *buf, unsigned long size);
 extern long sys_shm_open(const char *name, unsigned long size, int flags);
 extern long sys_shm_unlink(const char *name);
@@ -1426,7 +1428,32 @@ int getsysinfo(struct sysinfo_response *resp)
 
 int nanosleep(const struct timespec *req, struct timespec *rem)
 {
-    return ret_errno(sys_nanosleep(req, rem));
+    armos_timespec32_t request;
+    armos_timespec32_t remaining;
+    long ret;
+
+    if (!req) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (req->tv_sec < 0 || req->tv_nsec < 0 ||
+        req->tv_nsec >= 1000000000L ||
+        (unsigned long long)req->tv_sec > 0xffffffffULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    request.sec = (unsigned int)req->tv_sec;
+    request.nsec = (unsigned int)req->tv_nsec;
+    ret = sys_nanosleep(&request, rem ? &remaining : NULL);
+    if (ret < 0) {
+        if (ret == -EINTR && rem) {
+            rem->tv_sec = (time_t)remaining.sec;
+            rem->tv_nsec = (long)remaining.nsec;
+        }
+        return ret_errno(ret);
+    }
+    return 0;
 }
 
 int tcflush(int fd, int queue_selector)

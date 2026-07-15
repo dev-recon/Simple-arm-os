@@ -140,6 +140,7 @@ make "$TCC_MAKE_TARGET" LIBS='' CFLAGS="$TCC_CFLAGS" LDFLAGS="$NATIVE_LDFLAGS"
 "$CC" $ARM_FLAGS -std=gnu99 -ffreestanding -nostdlib -fno-builtin \
     -fno-stack-protector -ffunction-sections -fdata-sections -Os \
     -I"$ROOT_DIR/userland/include" \
+    -I"$ROOT_DIR/include" \
     -I"$NEWLIB_SYSROOT/include" \
     -c "$ROOT_DIR/newlib-port/tcc/syscalls_min.c" \
     -o "$BUNDLE_DIR/lib/syscalls_min.o"

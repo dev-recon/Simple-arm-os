@@ -25,6 +25,7 @@
 #include <kernel/signal.h>  /* Pour sig_handler_t et sigaction_t */
 #include <kernel/dirent.h>
 #include <uapi/armos/syscall.h>
+#include <uapi/armos/time.h>
 
 /* Forward declarations */
 struct process;
@@ -116,6 +117,7 @@ struct process;
 #define __NR_readv              145
 #define __NR_writev             146
 #define __NR_getsid             147
+#define __NR_sched_yield        ARMOS_NR_SCHED_YIELD
 #define __NR_nanosleep          162
 #define __NR_poll               168
 #define __NR_rt_sigreturn       173
@@ -128,6 +130,8 @@ struct process;
 #define __NR_mmap               195
 #define __NR_munmap             196
 #define __NR_sysconf            ARMOS_NR_SYSCONF
+#define __NR_clock_gettime      ARMOS_NR_CLOCK_GETTIME
+#define __NR_clock_getres       ARMOS_NR_CLOCK_GETRES
 #define __NR_socket             281
 #define __NR_bind               282
 #define __NR_connect            283
@@ -336,7 +340,10 @@ int sys_sigprocmask(int how, const sigset_t* set, sigset_t* oldset);
 int sys_sigpending(sigset_t* set);
 int sys_sigsuspend(const sigset_t* mask);
 void sys_sigreturn(void);
-int sys_nanosleep(const timespec_t *req, timespec_t *rem);
+int sys_sched_yield(void);
+int sys_nanosleep(const armos_timespec32_t *req, armos_timespec32_t *rem);
+int sys_clock_gettime(int clock_id, armos_timespec_t *tp);
+int sys_clock_getres(int clock_id, armos_timespec_t *res);
 
 /* Memory syscalls */
 long sys_brk(void* addr);
