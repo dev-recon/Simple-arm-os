@@ -33,15 +33,6 @@
 #include <unistd.h>
 #include <arm_os_abi.h>
 
-#ifndef CLOCK_MONOTONIC
-#define CLOCK_MONOTONIC ((clockid_t)4)
-#endif
-
-extern int clock_gettime(clockid_t clock_id, struct timespec *tp);
-extern int clock_getres(clockid_t clock_id, struct timespec *res);
-extern int clock_nanosleep(clockid_t clock_id, int flags,
-                           const struct timespec *req,
-                           struct timespec *rem);
 extern int sched_yield(void);
 extern ssize_t pread(int fd, void *buf, size_t count, off_t offset);
 extern ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset);
