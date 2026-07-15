@@ -26,6 +26,38 @@ shared.
 
 ## See It Run
 
+### Raspberry Pi 3 B+
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/armos-raspi3-boot.png" alt="ArmOS AArch64 booting on a Raspberry Pi 3 B+ over UART"></td>
+    <td width="50%"><img src="docs/images/armos-raspi3-top-smp.png" alt="ArmOS top showing four active Raspberry Pi 3 CPU cores"></td>
+  </tr>
+  <tr>
+    <td align="center">AArch64 boot, MMU, SD/eMMC, ext2, FAT32 and SMP bring-up</td>
+    <td align="center"><code>top</code> under <code>fork</code>, memory and CPU load on four cores</td>
+  </tr>
+</table>
+
+These are direct UART captures from the current `arm64/raspi3` image running
+on a Raspberry Pi 3 B+. They show the same common scheduler, VM, VFS and
+userland used by the QEMU targets.
+
+### Native development
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/armos-raspi3-nano.png" alt="GNU nano with C syntax highlighting running inside ArmOS"></td>
+    <td width="50%"><img src="docs/images/armos-raspi3-native-c.png" alt="A C fork and wait program compiled and executed natively inside ArmOS"></td>
+  </tr>
+  <tr>
+    <td align="center">GNU nano 8.7 with syntax highlighting</td>
+    <td align="center">TinyCC compiling and running a <code>fork</code>/<code>waitpid</code> program</td>
+  </tr>
+</table>
+
+### Graphical console
+
 <table>
   <tr>
     <td width="50%"><img src="docs/images/armos-qemu-top.png" alt="ArmOS top running on the graphical tty1 console"></td>
@@ -37,9 +69,8 @@ shared.
   </tr>
 </table>
 
-These are direct framebuffer captures from the current
-`arm64/qemu-virt` image. The UART rescue console remains available as `tty0`
-while the graphical console runs on `tty1`.
+The graphical captures come from `arm64/qemu-virt`. The UART rescue console
+remains available as `tty0` while the framebuffer console runs on `tty1`.
 
 ## Quick Start
 
