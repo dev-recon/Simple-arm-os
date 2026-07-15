@@ -23,6 +23,7 @@
 #include <kernel/process.h>
 #include <kernel/interrupt.h>
 #include <kernel/timer.h>
+#include <kernel/version.h>
 #include <kernel/display.h>
 #include <kernel/platform_devices.h>
 #include <kernel/vfs.h>
@@ -179,7 +180,7 @@ void kernel_main(void)
     arch_get_cpuinfo(&boot_cpuinfo);
 
     KBOOT("\n");
-    KBOOT(KBOOT_COLOR_INFO "ArmOS 0.6 %s" KBOOT_COLOR_RESET "\n",
+    KBOOT(KBOOT_COLOR_INFO ARMOS_VERSION_BANNER " %s" KBOOT_COLOR_RESET "\n",
           arch_machine_name());
     KBOOT_OKF("CPU: %s", boot_cpuinfo.model_name ? boot_cpuinfo.model_name : "unknown");
     KBOOT_OKF("Calibrating delay loop... %u.%02u BogoMIPS",

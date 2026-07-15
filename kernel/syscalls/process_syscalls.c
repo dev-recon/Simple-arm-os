@@ -31,6 +31,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/file.h>
 #include <kernel/timer.h>
+#include <kernel/version.h>
 #include <kernel/ext2.h>
 #include <kernel/fat32.h>
 #include <kernel/tty.h>
@@ -997,10 +998,10 @@ int sys_uname(struct utsname_kernel *name)
 
     memset(&local, 0, sizeof(local));
     machine = arch_machine_name();
-    strcpy(local.sysname, "ArmOS");
+    strcpy(local.sysname, ARMOS_NAME);
     strcpy(local.nodename, "armos");
-    strcpy(local.release, "0.6");
-    strcpy(local.version, "ArmOS 0.6 ");
+    strcpy(local.release, ARMOS_VERSION);
+    strcpy(local.version, ARMOS_VERSION_BANNER " ");
     strcat(local.version, machine);
     strcpy(local.machine, machine);
 

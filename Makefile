@@ -1,5 +1,7 @@
 # ArmOS kernel Makefile
 
+ARMOS_VERSION := 0.7
+
 TARGET_ARCH ?= arm64
 TARGET_PLATFORM ?= raspi3
 
@@ -58,6 +60,7 @@ LINKER_SCRIPT ?= linker.ld
 ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated $(PLATFORM_ASFLAGS)
 
 CFLAGS = -std=gnu99 $(ARCH_CFLAGS) $(PLATFORM_CFLAGS) $(MATH_FLAGS) \
+         -DARMOS_VERSION=\"$(ARMOS_VERSION)\" \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
          -Wall -Wextra -Werror -g -O0 -fno-omit-frame-pointer -Wformat -Wformat-security \
          -fno-builtin $(STACK_PROTECTOR_FLAG) -Wno-unused-function \
@@ -200,6 +203,7 @@ PLATFORM_DISK_LAYOUT ?= ext2-first
 PLATFORM_DISK_HIDDEN_BOOT ?= 0
 HIDDEN_FAT32_FLAG = $(if $(filter 1 yes true,$(PLATFORM_DISK_HIDDEN_BOOT)),--hidden-fat32,)
 USERFS_DIR   = userfs
+USERFS_OS_CONF = $(USERFS_DIR)/etc/os.conf
 USERLAND_DIR = userland
 EXT2_STAGING = /tmp/ext2_staging
 PYTHON ?= python3
@@ -293,7 +297,7 @@ E2FSPROGS_PREFIX ?= $(shell \
 MKE2FS  := $(E2FSPROGS_PREFIX)/sbin/mke2fs
 DEBUGFS := $(E2FSPROGS_PREFIX)/sbin/debugfs
 
-$(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
+$(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	@echo "=== Creating ext2 image ($(EXT2_SIZE_MB) MB) ==="
 	@if [ ! -x "$(MKE2FS)" ] || [ ! -x "$(DEBUGFS)" ]; then \
 		echo "Error: e2fsprogs not found — run: brew install e2fsprogs"; \
@@ -444,11 +448,6 @@ $(USERFS_DIR):
 	chmod +x $(USERFS_DIR)/bin/test.sh
 	echo "Binary placeholder" > $(USERFS_DIR)/usr/bin/hello
 	
-	mkdir -p $(USERFS_DIR)/etc
-	echo "# ArmOS Configuration" > $(USERFS_DIR)/etc/os.conf
-	echo "version=1.0" >> $(USERFS_DIR)/etc/os.conf
-	echo "architecture=$(TARGET_ARCH)" >> $(USERFS_DIR)/etc/os.conf
-	
 	mkdir -p $(USERFS_DIR)/tmp
 	echo "Temporary files directory" > $(USERFS_DIR)/tmp/README
 	
@@ -456,6 +455,11 @@ $(USERFS_DIR):
 	touch $(USERFS_DIR)/dev/tty0 $(USERFS_DIR)/dev/tty1 $(USERFS_DIR)/dev/console $(USERFS_DIR)/dev/fb0
 	
 	@echo "$(USERFS_DIR) directory created with test files"
+
+$(USERFS_OS_CONF): $(BUILD_CONFIG_STAMP) | $(USERFS_DIR)
+	mkdir -p $(dir $@)
+	@printf '# ArmOS Configuration\nversion=%s\narchitecture=%s\n' \
+		'$(ARMOS_VERSION)' '$(TARGET_ARCH)' > $@
 
 # Generer les donnees userfs
 userfs-data: userfs.bin
