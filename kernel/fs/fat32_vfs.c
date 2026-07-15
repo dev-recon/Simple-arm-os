@@ -1798,7 +1798,8 @@ ssize_t fat32_file_write2(file_t* file, const void* buffer, size_t count) {
     uint32_t cluster = inode->first_cluster;
     uint32_t cluster_size = get_fat32_bytes_per_cluster();
     
-    KDEBUG("fat32_file_write: current_offset=%u, cluster=%u, buffer=%s, count=%u\n", current_offset, cluster, buf, count);
+    KDEBUG("fat32_file_write: current_offset=%u, cluster=%u, buffer=%s, count=%zu\n",
+           current_offset, cluster, buf, count);
 
     if( is_dirty_inodes() ){
         sync_dirty_inodes();

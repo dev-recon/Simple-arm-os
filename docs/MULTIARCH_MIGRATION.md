@@ -163,28 +163,37 @@ Kernel code that should remain architecture-neutral:
 - signal policy above signal-frame layout;
 - userland build and root filesystem layout.
 
+This separation is an invariant. An architecture port must join the existing
+kernel process, syscall, scheduler and VFS implementations; it must not grow an
+architecture-local replacement for them. Temporary bootstrap models may prove
+CPU, MMU and exception mechanisms, but they are not substitutes for common
+kernel integration and must not become the production userspace path.
+
 ## Phase C - Second ARM32 Platform
 
 Status: implemented.
 
-The second ARM32 family now has two explicit profiles:
+The ARM32 Raspberry Pi family now has two explicit profiles:
 
-- `TARGET_PLATFORM=raspi2` for QEMU `raspi2b` / Cortex-A7;
-- `TARGET_PLATFORM=pi3` for Raspberry Pi 3 hardware / Cortex-A53 in AArch32.
+- `TARGET_PLATFORM=raspi2` for Raspberry Pi 2 Model B v1.1 and QEMU
+  `raspi2b` / Cortex-A7;
+- `TARGET_PLATFORM=raspi3` for Raspberry Pi 3 hardware / Cortex-A53 in AArch32.
 
-They share the BCM283x UART, local interrupt controller, timer, SD/eMMC, and
-power backend under `arch/arm32/platform/raspi2/`, while target-specific build
-flags and quirks remain separate. This phase validated the platform interfaces
-without changing pointer width, exception level, or page-table format.
+They select the common BCM283x UART, local interrupt controller, timer,
+SD/eMMC, and power backends under `kernel/platform/raspberrypi/`, while
+architecture and target-specific build flags and quirks remain separate. This
+phase validated the platform interfaces without changing pointer width,
+exception level, or page-table format.
 
 Landed milestones:
 
 - PL011 `tty0` recovery console;
 - Raspberry Pi interrupt-controller backend implementing the generic IRQ/IPI
   contract;
-- SD/eMMC block device, MBR partitions, hidden FAT32 boot, and ext2 root;
+- SD/eMMC block device, MBR partitions, dedicated FAT32 boot, and ext2 root;
 - four-CPU scheduler participation and shutdown parking;
-- PI3-specific CPU identity, timer, firmware handoff, and AArch32 build profile;
+- raspi3-specific CPU identity, timer, firmware handoff, and AArch32 build
+  profile;
 - no fake VirtIO, PL050, or legacy IDE capabilities on Raspberry Pi targets.
 
 The hardware build and validation contract is documented in
@@ -192,36 +201,45 @@ The hardware build and validation contract is documented in
 
 ## Phase D - AArch64
 
-AArch64 should start only after ARM32/QEMU `virt` and the second ARM32 target
-share the same platform seams.
+Status: implemented on `arm64/qemu-virt` and `arm64/raspi3`; both targets now
+enter the common kernel and run the shared ELF64 userland.
 
-Expected new AArch64 pieces:
+The production AArch64 path now provides:
 
-- EL1 boot path;
-- AArch64 exception vectors;
-- long-descriptor MMU;
-- AArch64 syscall ABI;
-- AArch64 context switch;
-- AArch64 signal frame;
-- AArch64 toolchain/userland target.
+- EL2-to-EL1 entry, exception vectors, EL0 transition and complete task
+  context switching;
+- the common preemptive scheduler on four CPUs;
+- dynamic physical memory, generic VMAs, lazy anonymous pages, fork/COW,
+  ASIDs and SMP TLB shootdown;
+- the common syscall dispatcher, VFS, ext2, FAT32, pipes, TTY and procfs;
+- ELF64 `execve`, process lifecycle, signals and core dumps;
+- a newlib AArch64 sysroot and the same installed userland paths as ARM32;
+- QEMU VirtIO block storage and Raspberry Pi SD/eMMC through common drivers;
+- QEMU VirtIO network, GPU and keyboard through the same common drivers as
+  ARM32;
+- common init, mash, kernel tasks, timer accounting and shutdown;
+- artifacts isolated by architecture and platform.
 
-Expected reusable pieces:
+Architecture code owns CPU registers, translation tables, TLB operations,
+exception frames and context-switch assembly. Process, VM, scheduling, VFS and
+device policy remain in the common kernel. The temporary ARM64 bootstrap task,
+runtime, VFS and block implementations have been removed.
 
-- FDT parser;
-- VirtIO MMIO drivers, after DMA/address cleanup;
-- VFS;
-- procfs;
-- scheduler policy;
-- TTY core;
-- newlib-oriented userland organization.
+See [`docs/ARM64_PORT.md`](ARM64_PORT.md) for build and validation commands.
+
+Remaining work is hardening rather than a parallel bring-up runtime: complete
+high-half kernel execution, repeated mixed hardware stress, better ASID/TLB
+residency tracking, and Raspberry Pi graphics, USB and networking.
 
 ## Validation Policy
 
-For this branch, the minimum validation after each mechanical extraction is:
+Common-kernel changes must compile and boot on both QEMU reference ABIs:
 
-```text
-make kernel.bin ARCH=arm-none-eabi- CROSS_COMPILE=arm-none-eabi-
+```sh
+make TARGET_ARCH=arm32 TARGET_PLATFORM=qemu-virt platform-kernel
+make TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt platform-kernel
 ```
 
-Do not run QEMU automatically from this branch unless explicitly requested. The
-interactive stress matrix remains user-driven while the code is being reshaped.
+Hardware-facing changes must additionally build `arm64/raspi3` and run the
+validation sequence in `docs/RASPBERRY_PI3.md`. QEMU success does not replace
+Pi 3 testing for timer, SD/eMMC, cache, TLB or firmware-entry behavior.

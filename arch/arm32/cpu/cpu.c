@@ -53,9 +53,24 @@ void arch_enable_interrupts(void)
     enable_interrupts();
 }
 
+void arch_enable_async_abort(void)
+{
+    enable_async_abort();
+}
+
+void arch_enable_smp_coherency(void)
+{
+    arm_enable_smp_coherency();
+}
+
 void arch_wait_for_interrupt(void)
 {
     wait_for_interrupt();
+}
+
+void arch_wait_for_event(void)
+{
+    wait_for_event();
 }
 
 void arch_disable_branch_predictor(void)

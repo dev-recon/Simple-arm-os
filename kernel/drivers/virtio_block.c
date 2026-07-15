@@ -33,10 +33,14 @@
 
 
 void vq_debug_print(vq_legacy_t *vq) {
-    kprintf("VQ debug: pa_base=0x%08x va_base=0x%08X\n", vq->pa_base, (uintptr_t)vq->va_base);
-    kprintf("pa_desc=0x%08x pa_avail=0x%08x pa_used=0x%08x\n", vq->pa_desc, vq->pa_avail, vq->pa_used);
-    kprintf("va_desc=0x%08X va_avail=0x%08X va_used=0x%08X\n",
-            (uintptr_t)vq->va_desc, (uintptr_t)vq->va_avail, (uintptr_t)vq->va_used);
+    kprintf("VQ debug: pa_base=0x%lx va_base=0x%lX\n",
+            (unsigned long)vq->pa_base, (unsigned long)vq->va_base);
+    kprintf("pa_desc=0x%lx pa_avail=0x%lx pa_used=0x%lx\n",
+            (unsigned long)vq->pa_desc, (unsigned long)vq->pa_avail,
+            (unsigned long)vq->pa_used);
+    kprintf("va_desc=0x%lX va_avail=0x%lX va_used=0x%lX\n",
+            (unsigned long)vq->va_desc, (unsigned long)vq->va_avail,
+            (unsigned long)vq->va_used);
     kprintf("sizes: desc=0x%x avail=0x%x used=0x%x qsize=%u last_used_idx=%u\n",
             vq->desc_size, vq->avail_size, vq->used_size, vq->qsize, vq->last_used_idx);
 }
@@ -163,8 +167,8 @@ static vaddr_t virtio_blk_resolve_mmio_base(vaddr_t requested_base)
     if (virtio_blk_probe_from_dtb(&phys, &irq)) {
         virtio_mmio_base = arch_platform_virtio_mmio_base(phys);
         virtio_blk_irq = irq;
-        KINFO("VirtIO block from DTB: phys=0x%08X mmio=%p irq=%u\n",
-              phys, virtio_mmio_base, virtio_blk_irq);
+        KINFO("VirtIO block from DTB: phys=0x%lX mmio=%p irq=%u\n",
+              (unsigned long)phys, virtio_mmio_base, virtio_blk_irq);
         return (vaddr_t)virtio_mmio_base;
     }
 
@@ -316,10 +320,12 @@ bool virtio_blk_init_legacy(vaddr_t base_addr)
     uint32_t version = mmio_read32(base, VIRTIO_MMIO_VERSION);
     uint32_t devid   = mmio_read32(base, VIRTIO_MMIO_DEVICE_ID);
 
-    KDEBUG("virtio-mmio magic 0x%08X @0x%08X\n", magic, base_addr);
+    KDEBUG("virtio-mmio magic 0x%08X @0x%lX\n",
+           magic, (unsigned long)base_addr);
 
     if (magic != 0x74726976) {
-        KERROR("virtio-mmio bad magic 0x%08X @0x%08X\n", magic, base_addr);
+        KERROR("virtio-mmio bad magic 0x%08X @0x%lX\n",
+               magic, (unsigned long)base_addr);
         virtio_mmio_dump32(base_addr);
         return false;
     }

@@ -63,7 +63,7 @@ void fat32_parse_boot_sector(fat32_boot_sector_t* dst, const fat32_raw_sector_t*
     memcpy(dst->oem_name,     src + 0x03, 8);
     KDEBUG("dst->oem_name = %p\n", dst->oem_name);
 
-    KDEBUG("Adresse bytes_per_sector = 0x%08X\n", (uint32_t)(src + 0x0B));
+    KDEBUG("Adresse bytes_per_sector = %p\n", (const void *)(src + 0x0B));
     dst->bytes_per_sector     = read_le16(src + 0x0B);
 
     dst->sectors_per_cluster  = src[0x0D];

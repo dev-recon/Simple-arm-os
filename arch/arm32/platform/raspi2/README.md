@@ -1,15 +1,17 @@
 # Raspberry Pi ARM32 Shared Backend
 
 This directory contains the low-level ARM32 Raspberry Pi device backend shared
-by two deliberately separate build profiles:
+by the supported Raspberry Pi 2 hardware target and related compatibility
+profiles:
 
-- `TARGET_PLATFORM=raspi2`: QEMU `raspi2b`, Cortex-A7;
-- `TARGET_PLATFORM=pi3`: Raspberry Pi 3 hardware, Cortex-A53 in AArch32.
+- `TARGET_PLATFORM=raspi2`: Raspberry Pi 2 Model B v1.1 and QEMU `raspi2b`,
+  Cortex-A7;
+- `TARGET_PLATFORM=raspi3`: Raspberry Pi 3 hardware, Cortex-A53 in AArch32.
 
-The target distinction matters. QEMU and hardware expose different timer,
-firmware handoff, poweroff, and SMP behavior even when they share BCM283x MMIO
-blocks. Keep platform quirks selected by the build target instead of inferring
-them from a generic `raspi2` directory name.
+The QEMU launcher and Raspberry Pi firmware/SD staging remain separate even
+when they consume the same `arm32/raspi2` kernel image. Hardware-only behavior
+must stay in the Raspberry Pi platform boundary instead of leaking into the
+common kernel.
 
 Implemented shared facilities:
 
@@ -21,10 +23,11 @@ Implemented shared facilities:
 - MBR, FAT32, and ext2 root discovery;
 - Raspberry Pi firmware powerdown/halt path.
 
-The PI3 target-specific build contract lives in:
+The hardware build contracts live in:
 
-- `arch/arm32/platform/pi3/platform.mk`;
-- `arch/arm32/include/asm/platform/pi3.h`;
+- `docs/RASPBERRY_PI2.md`;
+- `arch/arm32/platform/raspi3/platform.mk`;
+- `arch/arm32/include/asm/platform/raspi3.h`;
 - `docs/RASPBERRY_PI3.md`.
 
 Graphics, USB input, and networking are not part of the current Raspberry Pi

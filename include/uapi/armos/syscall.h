@@ -1,0 +1,59 @@
+/*
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: include/uapi/armos/syscall.h
+ * Layer: UAPI / syscall ABI
+ *
+ * Responsibilities:
+ * - Define syscall numbers shared by kernel and architecture entry paths.
+ * - Preserve the architecture-neutral ArmOS number space used by userland.
+ *
+ * Notes:
+ * - Each architecture defines its own register calling convention.
+ * - sched_yield uses the established Linux-compatible syscall slot 158.
+ */
+
+#ifndef _UAPI_ARMOS_SYSCALL_H
+#define _UAPI_ARMOS_SYSCALL_H
+
+#define ARMOS_NR_EXIT       1
+#define ARMOS_NR_FORK       2
+#define ARMOS_NR_READ       3
+#define ARMOS_NR_WRITE      4
+#define ARMOS_NR_OPEN       5
+#define ARMOS_NR_CLOSE      6
+#define ARMOS_NR_WAITPID    7
+#define ARMOS_NR_EXECVE     11
+#define ARMOS_NR_CHDIR      12
+#define ARMOS_NR_GETPID     20
+#define ARMOS_NR_KILL       37
+#define ARMOS_NR_PIPE       42
+#define ARMOS_NR_BRK        45
+#define ARMOS_NR_SETPGID    57
+#define ARMOS_NR_DUP2       63
+#define ARMOS_NR_GETPGRP    65
+#define ARMOS_NR_SIGACTION  67
+#define ARMOS_NR_GETPPID    119
+#define ARMOS_NR_SCHED_YIELD 158
+#define ARMOS_NR_NANOSLEEP  162
+#define ARMOS_NR_GETCWD     183
+#define ARMOS_NR_SHUTDOWN   194
+#define ARMOS_NR_MMAP       195
+#define ARMOS_NR_MUNMAP     196
+#define ARMOS_NR_SYSCONF    197
+#define ARMOS_SYSCALL_MAX 512
+
+/* Values shared with the newlib _SC_* namespace used by ArmOS. */
+#define ARMOS_SC_ARG_MAX          0
+#define ARMOS_SC_CHILD_MAX        1
+#define ARMOS_SC_CLK_TCK          2
+#define ARMOS_SC_OPEN_MAX         4
+#define ARMOS_SC_PAGESIZE         8
+#define ARMOS_SC_NPROCESSORS_CONF 9
+#define ARMOS_SC_NPROCESSORS_ONLN 10
+
+#endif

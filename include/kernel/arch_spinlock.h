@@ -14,8 +14,8 @@
  *   directly.
  *
  * Notes:
- * - ARM32 currently provides the implementation through LDREX/STREX, WFE/SEV,
- *   and CPSR interrupt-mask helpers.
+ * - Implementations must provide atomic acquire/release, wait/wake, and local
+ *   interrupt-mask operations with the same generic contract.
  */
 
 #ifndef _KERNEL_ARCH_SPINLOCK_H

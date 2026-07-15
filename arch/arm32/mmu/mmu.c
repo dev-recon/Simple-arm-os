@@ -27,6 +27,7 @@
 #include <kernel/tlb.h>
 #include <kernel/spinlock.h>
 #include <kernel/arch_memory.h>
+#include <kernel/arch_mmu_debug.h>
 #include <kernel/uart.h>
 #include <asm/mmu.h>
 #include <asm/arm.h>
@@ -65,6 +66,19 @@ static inline uint32_t ttbcr_split_value(uint32_t n)
 #define TTBCR_N_SPLIT_2GB   1  /* N=1: split à 2GB (0-2GB=TTBR0, 2-4GB=TTBR1) */
 #define TTBCR_PD0           (1 << 4)  /* Disable table walk for TTBR0 on TLB miss */
 #define TTBCR_PD1           (1 << 5)  /* Disable table walk for TTBR1 on TLB miss */
+
+void arch_mmu_debug_snapshot(arch_mmu_debug_state_t *state)
+{
+    if (!state)
+        return;
+
+    state->control = get_sctlr();
+    state->auxiliary = get_actlr();
+    state->root0 = get_ttbr0();
+    state->root1 = get_ttbr1();
+    state->translation_control = get_ttbcr();
+    state->access_control = get_dacr();
+}
 
 /* Page directories séparés avec adresses fixes alignées 16KB */
 static l1_entry_t kernel_page_dir[4096] __attribute__((section(".data"), aligned(16384)));  /* TTBR1 */

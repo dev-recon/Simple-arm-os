@@ -1,71 +1,81 @@
-# Raspberry Pi 3 AArch32
+# Raspberry Pi 3
 
-ArmOS has a dedicated 32-bit hardware profile for Raspberry Pi 3 Model B/B+.
-It boots through the Raspberry Pi firmware as `kernel7.img`, runs the Cortex-A53
-cores in AArch32, and keeps the PL011 UART as the mandatory recovery console.
+Raspberry Pi 3 Model B+ is the ArmOS AArch64 hardware reference platform. The
+production hardware target is:
 
-This profile is a hardware-development milestone. The ArmOS v0.6 public release
-baseline remains QEMU `virt` with one CPU.
+```text
+TARGET_ARCH=arm64 TARGET_PLATFORM=raspi3
+```
+
+It boots through the Raspberry Pi firmware as `kernel8.img`, runs all four
+Cortex-A53 cores in the common scheduler, and keeps PL011 `tty0` as the
+mandatory recovery console. QEMU `virt` remains the reference environment for
+kernel feature development and regression testing.
 
 ## Platform Contract
 
-- Target: `TARGET_ARCH=arm32 TARGET_PLATFORM=pi3`
-- CPU: Cortex-A53, AArch32, four scheduler CPUs
+- CPU: Cortex-A53 in AArch64 mode, four scheduler CPUs
 - Kernel load address: `0x02010000`
+- Firmware image: `kernel8.img` with `arm_64bit=1`
 - Firmware DTB: `bcm2710-rpi-3-b-plus.dtb`
 - UART: PL011 `uart0`, 115200 baud
-- Bluetooth overlay: `disable-bt`, keeping PL011 on the GPIO UART header
-- Storage: SD/eMMC block device
+- Bluetooth overlay: `disable-bt`, preserving PL011 on GPIO14/GPIO15
+- Storage: BCM2835/BCM2837 SD/eMMC controller
 - Root: ext2 partition
-- Boot: hidden FAT32 firmware partition
-- Graphics, input, and networking: not yet provided by this hardware profile
+- Boot: dedicated FAT32 LBA firmware partition
+- Graphics, USB input, and networking: not yet provided by this profile
 
-The `raspi2` target remains the QEMU `raspi2b` profile. In project discussions,
-`pi2` therefore means QEMU and `pi3` means real Raspberry Pi 3 hardware.
+The compatibility target `arm32/raspi3` remains useful for architecture
+comparison. The separate `arm32/raspi2` target supports Raspberry Pi 2 Model B
+v1.1 hardware and is also exercised with QEMU's `raspi2b` machine.
 
 ## Build
 
-Build the kernel and disk image without rebuilding newlib or TinyCC:
+Build the AArch64 kernel and disk image:
 
 ```sh
-TARGET_PLATFORM=pi3 make platform-kernel platform-disk
+make TARGET_ARCH=arm64 TARGET_PLATFORM=raspi3 platform-kernel platform-disk
 ```
 
-The resulting artifacts are:
+The generated artifacts are isolated by architecture and platform:
 
 ```text
-build/images/kernel-pi3.bin
-build/images/disk-pi3.img
+build/images/kernel-arm64-raspi3.bin
+build/images/disk-arm64-raspi3.img
 ```
 
-The convenience wrapper selects the correct target, DTB, and Bluetooth
-overlay:
+For hardware iteration, the generic script accepts an explicit pair:
 
 ```sh
-tools/build_pi3_sd.sh --mode none
+tools/build_raspberry_sd.sh --arch arm64 --platform raspi3 --mode none
 ```
+
+`tools/build_pi3_sd.sh` is a compatibility wrapper selecting that same target.
+Both scripts reuse newlib and TCC by default; set their build variables only
+when the corresponding toolchain or sysroot changed.
 
 ## Write An SD Card
 
-The firmware files are expected under `../PI2/firmware/boot`. To write the full
-MBR image on macOS, first identify the raw disk carefully:
+Firmware files are expected under `../PI2/firmware/boot`. On macOS, identify
+the whole removable disk carefully before using raw mode:
 
 ```sh
 diskutil list
-tools/build_pi3_sd.sh --skip-build --mode raw \
-  --raw-device /dev/rdiskN --yes
+tools/build_raspberry_sd.sh --arch arm64 --platform raspi3 \
+  --mode raw --raw-device /dev/rdiskN --yes
 ```
 
-Raw mode stages the firmware, DTB, overlay, kernel, and `config.txt` into the
-FAT32 partition before writing only the sectors used by the two MBR partitions.
-The large QEMU padding at the end of the image is skipped.
+Raw mode builds a complete MBR image, stages firmware and ArmOS files in its
+FAT32 partition, then writes through the end of the last real partition. The
+unused QEMU padding is not copied to the card. A target marker prevents a later
+boot-only update from mixing an ARM32 root filesystem with an ARM64 kernel.
 
 The generated firmware configuration is equivalent to:
 
 ```ini
-kernel=kernel7.img
+kernel=kernel8.img
 kernel_address=0x02010000
-arm_64bit=0
+arm_64bit=1
 enable_uart=1
 uart_2ndstage=1
 device_tree=bcm2710-rpi-3-b-plus.dtb
@@ -73,29 +83,76 @@ init_uart_baud=115200
 dtoverlay=disable-bt
 ```
 
+After the complete card has been initialized, a mounted boot partition can be
+updated without rewriting ext2:
+
+```sh
+tools/build_pi3_sd.sh --skip-build --mode boot \
+  --boot-volume /Volumes/RASPI3
+```
+
 ## UART Console On macOS
 
-Connect only adapter GND, RX, and TX; do not connect the adapter power pin.
-GPIO14 is TX and GPIO15 is RX, so adapter RX connects to Pi TX and vice versa.
-
-List serial devices and open the console:
+Connect adapter GND, RX, and TX only; do not connect its power pin. GPIO14 is
+Pi TX and GPIO15 is Pi RX, so each signal crosses to the opposite adapter pin.
 
 ```sh
 tools/pi2_uart_screen.sh --list
-tools/pi2_uart_screen.sh --device /dev/cu.usbserial-XXXX --baud 115200
+tools/pi2_uart_screen.sh \
+  --device /dev/cu.usbserial-XXXX --baud 115200
 ```
 
-Despite its historical name, the UART helper is suitable for PI3. Quit macOS
-`screen` with `Ctrl-A`, then `K`, then `y`.
+Despite its historical filename, the helper supports Pi 3. Quit `screen` with
+`Ctrl-A`, then `K`, then `y`.
 
-## SMP Validation
+## A53 Boot Invariant
 
-The minimum post-build hardware check is:
+The Pi 3 firmware path validated by ArmOS enters the kernel through EL2. The
+Cortex-A53 `CPUECTLR_EL1.SMPEN` bit is enabled in the EL2 drop paths before
+`eret`:
+
+- boot CPU: `.Ldrop_from_el2`;
+- secondary CPUs: `.Lsecondary_drop_from_el2`.
+
+Do not move access to implementation-defined register `S3_1_C15_C2_1` into
+`.Lenter_el1`, `.Lsecondary_enter_el1`, or the C
+`arch_enable_smp_coherency()` hook. On the tested hardware that change stops
+boot immediately after the firmware message `arm_loader: Starting ARM`, before
+the first ArmOS line. A future direct-EL1 firmware path must be diagnosed and
+implemented independently instead of reusing the validated EL2 sequence.
+
+## Timer Contract
+
+The architectural counter must be configured per architecture, not merely per
+board:
+
+- AArch32 Pi 3 uses the validated 1 MHz effective-counter quirk even when
+  `CNTFRQ` reports 19.2 MHz.
+- AArch64 Pi 3 uses the 19.2 MHz rate reported by `CNTFRQ_EL0`; the AArch32
+  quirk must not be inherited.
+
+Using 1 MHz in AArch64 makes the 19.2 MHz counter expire 19.2 times too soon.
+The visible results are shortened sleeps, excessive timer preemption and
+context switches, and SD/eMMC command timeouts that are also 19.2 times too
+short. `BogoMIPS` in the boot banner is only a timer-derived diagnostic label;
+it is not scheduler calibration and must not drive timer policy.
+
+The expected AArch64 boot line is:
+
+```text
+Timer: ARM generic timer @ 19200000 Hz, tick 1000 us
+```
+
+## Hardware Validation
+
+Run the basic parity and stress sequence after every kernel or disk update:
 
 ```sh
 sleep 1
 cat /proc/smp
 mmaptest
+vfstest
+systest
 kload -s 120 -m 2048 -c 4 -u 25 -p 8 -f 1 &
 top -s 1
 lps
@@ -105,43 +162,22 @@ cat /proc/smp
 
 Expected properties:
 
+- `sleep 1` takes approximately one wall-clock second;
 - `online`, `seen_mask`, and `sched_mask` report all four CPUs;
 - worker tasks migrate across CPUs without spinlock diagnostics;
+- idle and `top` context-switch counts grow at the scheduler rate, not by tens
+  of thousands per second;
 - `forkfail`, `sched-refuse`, and `ready-refuse` remain zero;
 - zombies and live physical/kernel-stack allocations return to baseline;
-- `top` continues refreshing during and after `kload`;
+- SD reads and writes complete without EMMC timeout diagnostics;
 - shutdown parks secondary CPUs, syncs ext2, stops the block device, and enters
-  Raspberry Pi firmware powerdown without a data abort.
-
-## MMU And ASID Constraint
-
-The PI3 hardware result is stricter than QEMU:
-
-- user mappings are non-global and tagged with an 8-bit ASID;
-- ASID pool operations are protected by a spinlock;
-- TTBR page-table walks use shareable WBWA attributes;
-- the context switch performs a full local `TLBIALL` after selecting TTBR0 and
-  CONTEXTIDR.
-
-Do not replace the full local flush with `TLBIASID` or `TLBIASIDIS` solely
-because QEMU passes. Both variants survived QEMU stress but later produced
-stale user instruction mappings and undefined-instruction faults on PI3.
-A future optimization needs explicit per-CPU ASID residency/generation state,
-cross-CPU invalidation rules, and repeated hardware stress.
-
-Read-only page-table inspection uses the permanent kernel direct map instead
-of temporary global mappings. This removes avoidable map/unmap maintenance
-without weakening the context-switch safety rule.
+  firmware powerdown without an exception.
 
 ## Current Limitations
 
-- The boot banner and shared low-level driver directory still contain some
-  historical `raspi2` naming; the target selection and CPU detection are PI3
-  specific.
-- The timer uses the validated 1 MHz platform timebase rather than trusting the
-  firmware-provided `CNTFRQ` value.
-- Only UART and SD-backed console/root workflows are supported; HDMI graphics,
-  USB input, and networking are later milestones.
-- The firmware FAT32 partition is intentionally hidden from normal desktop
-  browsing. ArmOS mounts ext2 as `/`; FAT32 remains available for explicit
-  compatibility work.
+- Only UART and SD-backed console/root workflows are supported.
+- The FAT32 firmware partition is separate from the ext2 root and is mounted
+  only when explicitly requested.
+- ARM64 still uses a conservative local TLB invalidation strategy during
+  address-space switches; any optimization requires repeated Pi 3 stress, not
+  only QEMU validation.

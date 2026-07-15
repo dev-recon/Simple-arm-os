@@ -263,4 +263,13 @@ static inline uint32_t mmio_read32(volatile uint32_t *base, uint32_t off){
     return v;
 }
 
+static inline uint8_t mmio_read8(volatile uint32_t *base, uint32_t off)
+{
+    volatile uint8_t *p = (volatile uint8_t *)((uintptr_t)base + off);
+    uint8_t value = *p;
+
+    arch_data_memory_barrier_inner_shareable();
+    return value;
+}
+
 #endif /* _KERNEL_VIRTIO_BLOCK_H */

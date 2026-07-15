@@ -28,6 +28,8 @@ extern uint32_t __end;
 extern uint32_t __kernel_start;
 extern uint32_t __kernel_end;
 extern uint32_t __kernel_size;
+extern uint32_t __kernel_phys_start;
+extern uint32_t __kernel_phys_end;
 
 /* Kernel sections. */
 extern uint32_t __text_start;
@@ -58,6 +60,13 @@ extern uint32_t __stack_svc_top;
 #define KERNEL_END              ((vaddr_t)(uintptr_t)&__end)
 #define KERNEL_SIZE             ((size_t)(uintptr_t)&__kernel_size)
 #define KERNEL_BASE             KERNEL_START
+
+#define KERNEL_PHYSICAL_START   \
+    ((paddr_t)(uintptr_t)&__kernel_phys_start)
+#define KERNEL_PHYSICAL_END     \
+    ((paddr_t)(uintptr_t)&__kernel_phys_end)
+#define KERNEL_PHYSICAL_SIZE    \
+    ((size_t)(KERNEL_PHYSICAL_END - KERNEL_PHYSICAL_START))
 
 #define KERNEL_TEXT_START       ((vaddr_t)(uintptr_t)&__text_start)
 #define KERNEL_TEXT_END         ((vaddr_t)(uintptr_t)&__text_end)

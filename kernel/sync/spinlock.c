@@ -20,7 +20,6 @@
 #include <kernel/arch_spinlock.h>
 #include <kernel/smp.h>
 #include <kernel/kprintf.h>
-#include <kernel/string.h>
 
 static inline int spin_atomic_try_acquire(volatile uint32_t* locked)
 {
@@ -196,44 +195,3 @@ void spin_debug_check_recursive(spinlock_t* lock)
     }
 }
 #endif
-
-/**
- * Test des spinlocks
- */
-void test_spinlocks(void)
-{
-    DEFINE_SPINLOCK(test_lock);
-    unsigned long flags;
-    
-    KINFO("=== Test des Spinlocks ===\n");
-    
-    /* Test basic */
-    KINFO("Test 1: Acquisition/liberation basique\n");
-    spin_dump_info(&test_lock);
-    
-    spin_lock(&test_lock);
-    KINFO("Lock acquis\n");
-    spin_dump_info(&test_lock);
-    
-    spin_unlock(&test_lock);
-    KINFO("Lock libere\n");
-    spin_dump_info(&test_lock);
-    
-    /* Test trylock */
-    KINFO("Test 2: Try lock\n");
-    if (spin_trylock(&test_lock)) {
-        KINFO("Trylock reussi\n");
-        spin_unlock(&test_lock);
-    } else {
-        KINFO("Trylock echoue\n");
-    }
-    
-    /* Test avec interruptions */
-    KINFO("Test 3: Lock avec interruptions\n");
-    spin_lock_irqsave(&test_lock, &flags);
-    KINFO("Lock avec IRQ save acquis\n");
-    spin_unlock_irqrestore(&test_lock, flags);
-    KINFO("Lock avec IRQ restore libere\n");
-    
-    KINFO("=== Tests termines ===\n");
-}

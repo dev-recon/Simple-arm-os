@@ -337,7 +337,6 @@ static uint32_t coredump_head;
 static uint32_t coredump_tail;
 static uint32_t coredump_count;
 static uint32_t coredump_seq;
-static task_t* coredumpd_task;
 
 static bool user_va_to_phys(task_t* task, vaddr_t va, paddr_t* phys_out)
 {
@@ -511,8 +510,6 @@ static bool coredump_enqueue(uint32_t spsr_abt,
         out_path[out_path_size - 1] = '\0';
     }
 
-    if (coredumpd_task)
-        task_wake(coredumpd_task);
     return true;
 }
 
@@ -709,63 +706,14 @@ static void coredump_write_event_to_file(const coredump_event_t* event)
     sys_close(fd);
 }
 
-static void coredumpd_main(void* arg)
+void arch_coredump_process_pending(void)
 {
     coredump_event_t event;
 
-    (void)arg;
-
-    while (1) {
-        while (coredump_dequeue(&event)) {
-            if (event.valid) {
-                coredump_write_event_to_file(&event);
-            }
-        }
-
-        task_sleep_ms(100);
+    while (coredump_dequeue(&event)) {
+        if (event.valid)
+            coredump_write_event_to_file(&event);
     }
-}
-
-int coredumpd_start(void)
-{
-    process_t* vfs_context;
-
-    if (coredumpd_task) {
-        return 0;
-    }
-
-    coredumpd_task = task_create_process("coredumpd", coredumpd_main, NULL,
-                                         20, TASK_TYPE_KERNEL);
-    if (!coredumpd_task) {
-        return -ENOMEM;
-    }
-
-    /*
-     * coredumpd is a kernel thread, but the current VFS helpers use
-     * current_task->process for FD tables, permissions and umask. Give the
-     * worker a tiny daemon-owned VFS context scoped by code to /tmp dumps
-     * instead of making it a privileged user process.
-     */
-    vfs_context = (process_t*)kmalloc(sizeof(process_t));
-    if (!vfs_context) {
-        task_destroy(coredumpd_task);
-        coredumpd_task = NULL;
-        return -ENOMEM;
-    }
-    memset(vfs_context, 0, sizeof(*vfs_context));
-    vfs_context->uid = 2; /* daemon */
-    vfs_context->gid = 2; /* daemon */
-    vfs_context->umask = 0;
-    vfs_context->state = (proc_state_t)PROC_READY;
-    strcpy(vfs_context->cwd, "/tmp");
-
-    coredumpd_task->process = vfs_context;
-    coredumpd_task->context.is_first_run = 1;
-    coredumpd_task->context.ttbr0 = arch_kernel_address_space_context();
-    coredumpd_task->context.asid = ASID_KERNEL;
-    coredumpd_task->context.returns_to_user = 0;
-    add_to_ready_queue(coredumpd_task);
-    return 0;
 }
 
 static user_fault_snapshot_t* user_fault_build_snapshot_on_svc_stack(task_t* task,

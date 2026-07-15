@@ -3,11 +3,16 @@
 # Newlib is the supported userspace ABI. Legacy home-grown libc sources are
 # kept under userland/legacy for reference only.
 
+TARGET_ARCH ?= arm32
+ifeq ($(TARGET_ARCH),arm64)
+ARCH ?= aarch64-elf-
+else
 ARCH ?= arm-none-eabi-
+endif
 CC := $(ARCH)gcc
 STRIP := $(ARCH)strip
 
-BUILD_DIR := ../build/userland
+BUILD_DIR := ../build/userland-$(TARGET_ARCH)
 OUT_DIR := $(BUILD_DIR)/out
 OUT_BIN := $(OUT_DIR)/bin
 OUT_SBIN := $(OUT_DIR)/sbin
@@ -20,7 +25,15 @@ USERFS_SBIN := $(USERFS_ROOT)/sbin
 USERFS_USR_BIN := $(USERFS_ROOT)/usr/bin
 USERFS_OPT := $(USERFS_ROOT)/opt
 
+ifeq ($(TARGET_ARCH),arm64)
+ARCH_FLAGS := -mcpu=cortex-a53
+USER_TEXT_ADDRESS := 0x100000000
+PORT_BUILD_DIR := build/arm64
+else
 ARCH_FLAGS := -mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft
+USER_TEXT_ADDRESS := 0x8000
+PORT_BUILD_DIR := build
+endif
 NEWLIB_SYSROOT ?= $(shell $(CC) -print-sysroot 2>/dev/null)
 NEWLIB_LIBC ?= $(NEWLIB_SYSROOT)/lib/libc.a
 LIBGCC := $(shell $(CC) $(ARCH_FLAGS) -print-libgcc-file-name 2>/dev/null)
@@ -28,14 +41,15 @@ LIBGCC := $(shell $(CC) $(ARCH_FLAGS) -print-libgcc-file-name 2>/dev/null)
 CFLAGS := $(ARCH_FLAGS) -std=gnu99 -Os -ffreestanding -fno-builtin \
           -ffunction-sections -fdata-sections \
           -fno-stack-protector -DARM_OS_NEWLIB \
+          -DARMOS_USER_TEXT_ADDRESS=$(USER_TEXT_ADDRESS) \
           -Iinclude -I$(NEWLIB_SYSROOT)/include
 LDFLAGS := $(ARCH_FLAGS) -nostdlib -nostartfiles -static \
-           -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections \
+           -Wl,-Ttext=$(USER_TEXT_ADDRESS) -Wl,-e,_start -Wl,--gc-sections \
            -Wl,--allow-multiple-definition
 
-PORT_OBJECTS := $(NEWLIB_PORT)/build/crt0_newlib.o \
-                $(NEWLIB_PORT)/build/syscall_raw.o \
-                $(NEWLIB_PORT)/build/syscalls.o
+PORT_OBJECTS := $(NEWLIB_PORT)/$(PORT_BUILD_DIR)/crt0_newlib.o \
+                $(NEWLIB_PORT)/$(PORT_BUILD_DIR)/syscall_raw.o \
+                $(NEWLIB_PORT)/$(PORT_BUILD_DIR)/syscalls.o
 
 COREUTIL_SRCS := $(wildcard coreutils/src/*.c)
 COREUTILS := $(sort $(patsubst coreutils/src/%.c,%,$(COREUTIL_SRCS)))
@@ -47,6 +61,11 @@ SYSTEM_TOOL_TARGETS := $(SYSTEM_TOOLS:%=$(OUT_SBIN)/%)
 
 PROGRAM_DIRS := $(sort $(dir $(wildcard programs/*/*.c)))
 PROGRAMS := $(patsubst programs/%/,%,$(PROGRAM_DIRS))
+
+# hello64 is a focused ARM64 bootstrap probe, not an installed system command.
+# Keep it available as an explicit target without changing the common ARM32 /
+# ARM64 userfs path set.
+PROGRAMS := $(filter-out hello64,$(PROGRAMS))
 
 EXTERNAL_DIRS := $(sort $(dir $(wildcard opt/*/src/*.c)))
 EXTERNALS := $(patsubst opt/%/src/,%,$(EXTERNAL_DIRS))
@@ -74,8 +93,10 @@ MASH_SRCS := $(wildcard system/mash/src/*.c)
 MASH_OBJECTS := $(patsubst system/mash/src/%.c,$(BUILD_DIR)/system/mash/%.o,$(MASH_SRCS))
 INIT_SRCS := $(wildcard system/init/*.c)
 INIT_OBJECTS := $(patsubst system/init/%.c,$(BUILD_DIR)/system/init/%.o,$(INIT_SRCS))
+HELLO64_SRCS := $(wildcard programs/hello64/*.c)
+HELLO64_OBJECTS := $(patsubst programs/hello64/%.c,$(BUILD_DIR)/programs/hello64/%.o,$(HELLO64_SRCS))
 
-.PHONY: all clean install check-newlib newlib-port list init mash
+.PHONY: all clean install check-newlib newlib-port list init mash hello64
 .PHONY: $(COREUTILS) $(SYSTEM_TOOLS) $(PROGRAMS) $(EXTERNALS)
 
 all: check-newlib $(TARGETS)
@@ -90,13 +111,14 @@ check-newlib:
 	fi
 
 newlib-port:
-	$(MAKE) -C $(NEWLIB_PORT) ARCH="$(ARCH)" NEWLIB_SYSROOT="$(NEWLIB_SYSROOT)" NEWLIB_LIBC="$(NEWLIB_LIBC)"
+	$(MAKE) -C $(NEWLIB_PORT) TARGET_ARCH="$(TARGET_ARCH)" ARCH="$(ARCH)" NEWLIB_SYSROOT="$(NEWLIB_SYSROOT)" NEWLIB_LIBC="$(NEWLIB_LIBC)"
 
 list:
 	@printf '%s\n' $(TARGETS)
 
 init: $(OUT_SBIN)/init
 mash: $(OUT_SBIN)/mash
+hello64: $(OUT_USR_BIN)/hello64
 $(SYSTEM_TOOLS): %: $(OUT_SBIN)/%
 $(COREUTILS): %: $(OUT_BIN)/%
 $(PROGRAMS): %: $(OUT_USR_BIN)/%
@@ -139,6 +161,10 @@ endef
 
 $(foreach prog,$(PROGRAMS),$(eval $(call PROGRAM_RULE,$(prog))))
 
+$(OUT_USR_BIN)/hello64: newlib-port $(HELLO64_OBJECTS)
+	mkdir -p $(@D)
+	$(CC) $(LDFLAGS) -o $@ $(PORT_OBJECTS) $(HELLO64_OBJECTS) "$(NEWLIB_LIBC)" "$(LIBGCC)"
+
 define EXTERNAL_RULE
 $(1)_EXTERNAL_SRCS := $$(wildcard opt/$(1)/src/*.c)
 $(1)_EXTERNAL_OBJECTS := $$(patsubst opt/%.c,$$(BUILD_DIR)/opt/%.o,$$($(1)_EXTERNAL_SRCS))
@@ -171,6 +197,9 @@ $(OUT_BIN)/%: newlib-port $(BUILD_DIR)/coreutils/%.o
 install: $(TARGETS)
 	mkdir -p $(USERFS_BIN) $(USERFS_SBIN) $(USERFS_USR_BIN) $(USERFS_OPT)
 	rm -rf $(USERFS_ROOT)/opt/newlib
+	rm -f $(USERFS_USR_BIN)/hello64
+	# xvprobe is an optional local-only binary; never retain one from another target.
+	rm -f $(USERFS_USR_BIN)/xvprobe
 	@for name in init mash; do \
 		rm -f $(USERFS_SBIN)/$$name; \
 		cp $(OUT_SBIN)/$$name $(USERFS_SBIN)/$$name; \

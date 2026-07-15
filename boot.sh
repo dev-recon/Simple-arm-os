@@ -9,8 +9,8 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
 . "$ROOT_DIR/tools/qemu_helpers.sh"
-QEMU="$(select_arm_qemu "${1:-}" "$ROOT_DIR")"
 . "$ROOT_DIR/tools/qemu_platform_env.sh"
+QEMU="$(select_arm_qemu "${1:-}" "$ROOT_DIR" "$TARGET_ARCH")"
 SMP_CPUS="${SMP_CPUS:-${QEMU_SMP}}"
 
 if [ ! -f "${QEMU_KERNEL_IMAGE}" ]; then

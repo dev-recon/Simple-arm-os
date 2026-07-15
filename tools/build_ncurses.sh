@@ -5,6 +5,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ARCH="${ARCH:-arm-none-eabi-}"
+# shellcheck source=tools/cross_target_env.sh
+source "$ROOT_DIR/tools/cross_target_env.sh"
 CC="${ARCH}gcc"
 AR="${ARCH}ar"
 RANLIB="${ARCH}ranlib"
@@ -22,9 +24,6 @@ BUNDLE_ROOT="$WORK_DIR/bundle"
 BUNDLE_PREFIX="$BUNDLE_ROOT/opt/ncurses"
 BUNDLE_USR_BIN="$BUNDLE_ROOT/usr/bin"
 
-ARM_FLAGS="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft"
-NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$ROOT_DIR/build/newlib-sysroot/arm-none-eabi}"
-NEWLIB_LIBC="${NEWLIB_LIBC:-$NEWLIB_SYSROOT/lib/libc.a}"
 LIBGCC="${LIBGCC:-$("$CC" $ARM_FLAGS -print-libgcc-file-name)}"
 TERMINFO_SRC="$ROOT_DIR/third_party/ncurses/armos.ti"
 CURSESTEST_SRC="$ROOT_DIR/third_party/ncurses/cursestest.c"
@@ -66,12 +65,12 @@ RANLIB="$RANLIB" \
 BUILD_CC="$HOST_CC" \
 CFLAGS="$ARM_FLAGS -Os -ffreestanding -fno-builtin -fno-stack-protector -DARM_OS_NEWLIB -I$ROOT_DIR/userland/include -I$NEWLIB_SYSROOT/include" \
 CPPFLAGS="-I$ROOT_DIR/userland/include -I$NEWLIB_SYSROOT/include" \
-LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition $ROOT_DIR/newlib-port/build/crt0_newlib.o $ROOT_DIR/newlib-port/build/syscall_raw.o $ROOT_DIR/newlib-port/build/syscalls.o" \
+LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=$TARGET_TEXT_ADDRESS -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition $RUNTIME_OBJECTS" \
 LIBS="$NEWLIB_LIBC $LIBGCC" \
 "$SRC_DIR/configure" \
     --build="$BUILD_TRIPLET" \
-    --host=arm-none-eabi \
-    --target=arm-none-eabi \
+    --host="$TARGET_TRIPLET" \
+    --target="$TARGET_TRIPLET" \
     --prefix=/opt/ncurses \
     --with-build-cc="$HOST_CC" \
     --with-normal \
@@ -114,12 +113,12 @@ cp "$TERMINFO_SRC" "$BUNDLE_PREFIX/share/terminfo/armos.ti"
     -o "$WORK_DIR/cursestest.o"
 
 "$CC" $ARM_FLAGS -nostdlib -nostartfiles -static \
-    -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections \
+    -Wl,-Ttext="$TARGET_TEXT_ADDRESS" -Wl,-e,_start -Wl,--gc-sections \
     -Wl,--allow-multiple-definition \
     -o "$BUNDLE_USR_BIN/cursestest" \
-    "$ROOT_DIR/newlib-port/build/crt0_newlib.o" \
-    "$ROOT_DIR/newlib-port/build/syscall_raw.o" \
-    "$ROOT_DIR/newlib-port/build/syscalls.o" \
+    "$NEWLIB_RUNTIME_DIR/crt0_newlib.o" \
+    "$NEWLIB_RUNTIME_DIR/syscall_raw.o" \
+    "$NEWLIB_RUNTIME_DIR/syscalls.o" \
     "$WORK_DIR/cursestest.o" \
     "$BUNDLE_PREFIX/lib/libncurses.a" \
     "$NEWLIB_LIBC" \

@@ -27,6 +27,7 @@
 #include <kernel/kprintf.h>
 #include <kernel/arch_barrier.h>
 #include <kernel/arch_cpu.h>
+#include <kernel/interrupt.h>
 
 /*
  * Avant l'activation de la MMU, l'UART doit etre accedee par son adresse
@@ -332,6 +333,8 @@ void uart_enable_rx_interrupts(void)
     UART_RSR = 0;
     UART_IMSC |= UART_INT_RX | UART_INT_RT | UART_INT_ERR;
     spin_unlock_irqrestore(&uart_lock, flags);
+
+    irq_enable_level(arch_platform_uart_irq());
 }
 
 /*

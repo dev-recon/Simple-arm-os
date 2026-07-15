@@ -9,7 +9,7 @@ PLATFORM_CPU_CFLAGS = -mcpu=cortex-a15
 PLATFORM_CFLAGS = $(PLATFORM_CPU_CFLAGS) -DARMOS_PLATFORM_QEMU_VIRT
 
 PLATFORM_OBJS = \
-	$(PLATFORM_DIR)/devices.o \
+	kernel/platform/qemu_virt/devices.o \
 	kernel/drivers/keyboard.o \
 	kernel/drivers/display.o \
 	kernel/drivers/virtio_gpu.o \

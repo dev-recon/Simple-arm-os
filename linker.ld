@@ -21,6 +21,7 @@ SECTIONS
     /* Symboles de debut */
     __start = .;
     __kernel_start = .;
+    __kernel_phys_start = .;
     
     /* Code */
     .text.boot : {
@@ -144,6 +145,7 @@ SECTIONS
     . = ALIGN(4096);
     __end = .;
     __kernel_end = .;
+    __kernel_phys_end = .;
     
     /* Heap commence apres le kernel */
     __heap_start = .;

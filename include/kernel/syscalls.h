@@ -20,19 +20,21 @@
 #define _KERNEL_SYSCALLS_H
 
 #include <kernel/types.h>
+#include <kernel/syscall_dispatch.h>
 #include <kernel/vfs.h>
 #include <kernel/signal.h>  /* Pour sig_handler_t et sigaction_t */
 #include <kernel/dirent.h>
+#include <uapi/armos/syscall.h>
 
 /* Forward declarations */
 struct process;
 
-/* Syscall numbers (Linux ARM32 compatible) */
+/* Stable ArmOS syscall number space, historically based on Linux ARM EABI. */
 #define __NR_restart_syscall      0
-#define __NR_exit                 1
+#define __NR_exit                 ARMOS_NR_EXIT
 #define __NR_fork                 2
 #define __NR_read                 3
-#define __NR_write                4
+#define __NR_write                ARMOS_NR_WRITE
 #define __NR_open                 5
 #define __NR_close                6
 #define __NR_waitpid              7
@@ -125,6 +127,7 @@ struct process;
 #define __NR_shutdown           194
 #define __NR_mmap               195
 #define __NR_munmap             196
+#define __NR_sysconf            ARMOS_NR_SYSCONF
 #define __NR_socket             281
 #define __NR_bind               282
 #define __NR_connect            283
@@ -132,7 +135,7 @@ struct process;
 #define __NR_accept             285
 #define __NR_sysinfo            116     /* reused for getprocs — remplacer par /proc plus tard */
 
-#define MAX_SYSCALLS            512
+#define MAX_SYSCALLS            ARMOS_SYSCALL_MAX
 
 /* Informations sur un processus */
 struct proc_info {
@@ -236,18 +239,25 @@ struct utsname_kernel {
 /* Syscall handler */
 int syscall_handler(uint32_t syscall_num, uint32_t arg1, uint32_t arg2, 
                    uint32_t arg3, uint32_t arg4, uint32_t arg5);
+syscall_result_t syscall_dispatch_common_request(
+    const syscall_request_t *request);
+syscall_result_t syscall_dispatch_common_handler(
+    void *owner, const syscall_request_t *request);
 
 /* File syscalls */
 int sys_read(int fd, void* buf, size_t count);
 int sys_write(int fd, const void* buf, size_t count);
 int sys_open(const char* pathname, int flags, mode_t mode);
+int sys_open_vfs(const char* pathname, int flags, mode_t mode);
 int sys_creat(const char* pathname, mode_t mode);
 int sys_close(int fd);
-int sys_fcntl(int fd, int cmd, uint32_t arg);
-int sys_ioctl(int fd, uint32_t request, uint32_t arg);
+int sys_fcntl(int fd, int cmd, uintptr_t arg);
+int sys_ioctl(int fd, uint32_t request, uintptr_t arg);
 off_t sys_lseek(int fd, off_t offset, int whence);
 int sys_stat(const char* pathname, struct stat* statbuf);
 int sys_lstat(const char* pathname, struct stat* statbuf);
+int sys_stat_vfs(const char* pathname, struct stat* statbuf);
+int sys_lstat_vfs(const char* pathname, struct stat* statbuf);
 int sys_fstat(int fd, struct stat* statbuf);
 int sys_ftruncate(int fd, off_t length);
 int sys_truncate(const char* pathname, off_t length);
@@ -290,6 +300,7 @@ int sys_waitpid(pid_t pid, int* status, int options);
 int sys_wait4(pid_t pid, int* status, int options, struct rusage_kernel* rusage);
 int kernel_waitpid(pid_t pid, int* status, int options, task_t* parent);
 int kernel_open(char* kernel_path, int flags, mode_t mode);
+int kernel_open_existing(char* kernel_path, int flags);
 int sys_stty(int cmd, uint32_t arg, uint32_t arg2);
 int sys_gtty(int cmd, uint32_t arg);
 
@@ -328,7 +339,7 @@ void sys_sigreturn(void);
 int sys_nanosleep(const timespec_t *req, timespec_t *rem);
 
 /* Memory syscalls */
-int sys_brk(void* addr);
+long sys_brk(void* addr);
 int sys_shm_open(const char *name, size_t size, int flags);
 int sys_shm_unlink(const char *name);
 void *sys_shm_map(int id, void *addr, int flags);
@@ -347,6 +358,7 @@ int sys_pipe(int pipefd[2]);
 int sys_chdir(const char* path);
 int sys_getcwd(char* buf, size_t size);
 int sys_sysinfo(struct sysinfo_response *resp);
+int sys_sysconf(int name);
 int sys_uname(struct utsname_kernel *name);
 
 #endif

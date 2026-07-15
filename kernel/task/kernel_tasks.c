@@ -43,14 +43,17 @@ void print_memory_stats(void)
     uint32_t free_pages = get_free_page_count();
     uint32_t total_pages = get_total_page_count();
     uint32_t used_pages = total_pages - free_pages;
+    uint32_t total_mb = (uint32_t)
+        (((uint64_t)total_pages * PAGE_SIZE) / (1024u * 1024u));
+    uint32_t used_mb = (uint32_t)
+        (((uint64_t)used_pages * PAGE_SIZE) / (1024u * 1024u));
+    uint32_t free_mb = (uint32_t)
+        (((uint64_t)free_pages * PAGE_SIZE) / (1024u * 1024u));
     
     KINFO("Memory status:\n");
-    KINFO("  Total pages: %u (%u MB)\n", 
-          total_pages, (total_pages * PAGE_SIZE) / (1024 * 1024));
-    KINFO("  Used pages:  %u (%u MB)\n", 
-          used_pages, (used_pages * PAGE_SIZE) / (1024 * 1024));
-    KINFO("  Free pages:  %u (%u MB)\n", 
-          free_pages, (free_pages * PAGE_SIZE) / (1024 * 1024));
+    KINFO("  Total pages: %u (%u MB)\n", total_pages, total_mb);
+    KINFO("  Used pages:  %u (%u MB)\n", used_pages, used_mb);
+    KINFO("  Free pages:  %u (%u MB)\n", free_pages, free_mb);
     KINFO("  Usage:       %u%%\n", 
           total_pages > 0 ? (used_pages * 100) / total_pages : 0);
     

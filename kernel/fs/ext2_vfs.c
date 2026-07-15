@@ -380,10 +380,23 @@ static void ext2_cache_release(void)
 
 static bool ext2_valid_disk_inode_ptr(const ext2_inode_t* di)
 {
-    uint32_t start = (uint32_t)di;
-    uint32_t end = start + sizeof(*di) - 1;
+    uintptr_t virtual_start;
+    uintptr_t virtual_end;
+    paddr_t physical_start;
+    paddr_t physical_end;
 
-    return di && end >= start && IS_VALID_RAM(start) && IS_VALID_RAM(end);
+    if (!di)
+        return false;
+    virtual_start = (uintptr_t)di;
+    virtual_end = virtual_start + sizeof(*di) - 1u;
+    if (virtual_end < virtual_start)
+        return false;
+    physical_start = virt_in_direct_map((vaddr_t)virtual_start) ?
+        virt_to_phys((vaddr_t)virtual_start) : (paddr_t)virtual_start;
+    physical_end = virt_in_direct_map((vaddr_t)virtual_end) ?
+        virt_to_phys((vaddr_t)virtual_end) : (paddr_t)virtual_end;
+    return physical_end >= physical_start &&
+           IS_VALID_RAM(physical_start) && IS_VALID_RAM(physical_end);
 }
 
 /* ---------- block I/O ---------- */

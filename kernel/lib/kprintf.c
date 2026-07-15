@@ -25,9 +25,25 @@
 #include <kernel/arch_cpu.h>
 
 
-/* Fonctions externes supposees existantes */
+/* Console transport supplied by the active platform. */
 extern void putchar_kernel(char c);
-//extern int kprintf(const char *format, ...);
+
+/*
+ * Logging is available before the TTY subsystem and on architecture ports
+ * that have not connected a persistent TTY yet.  A linked TTY driver provides
+ * strong versions of these hooks once console serialization is available.
+ */
+__attribute__((weak)) bool tty_console_output_lock(unsigned long *flags)
+{
+    if (flags)
+        *flags = 0;
+    return false;
+}
+
+__attribute__((weak)) void tty_console_output_unlock(unsigned long flags)
+{
+    (void)flags;
+}
 
 /* Variable globale de debug */
 int DEBUG = 0;
@@ -259,7 +275,7 @@ int kvprintf(const char *format, va_list args) {
                     fmt++;
                 }
             } else if (*fmt == 'z') {
-                is_long = 1; /* size_t = unsigned long sur ARM64 */
+                is_long = 1; /* size_t follows the compiler's unsigned long. */
                 fmt++;
             }
             

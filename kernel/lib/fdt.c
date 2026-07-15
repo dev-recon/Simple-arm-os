@@ -22,7 +22,7 @@
 #include <kernel/virtio_block.h>
 #include <kernel/arch_platform.h>
 
-extern uint32_t dtb_address;
+extern uintptr_t dtb_address;
 
 uint32_t fdt32_to_cpu(uint32_t x)
 {
@@ -89,6 +89,36 @@ bool fdt_for_each_node(void *dtb_ptr, fdt_node_cb_t cb, void *ctx)
             return false;
         }
     }
+}
+
+typedef struct {
+    uint32_t count;
+    uint32_t maximum;
+} fdt_cpu_count_ctx_t;
+
+static bool fdt_count_cpu_cb(void *dtb_ptr, void *node_ptr,
+                             const char *name, void *opaque)
+{
+    fdt_cpu_count_ctx_t *ctx = opaque;
+
+    (void)dtb_ptr;
+    (void)node_ptr;
+    if (fdt_node_matches(name, "cpu") && ctx->count < ctx->maximum)
+        ctx->count++;
+    return ctx->count == ctx->maximum;
+}
+
+uint32_t fdt_count_cpus(void *dtb_ptr, uint32_t maximum)
+{
+    fdt_cpu_count_ctx_t ctx = {
+        .count = 0,
+        .maximum = maximum,
+    };
+
+    if (maximum == 0 || !fdt_check_header(dtb_ptr))
+        return 0;
+    (void)fdt_for_each_node(dtb_ptr, fdt_count_cpu_cb, &ctx);
+    return ctx.count;
 }
 
 typedef struct {

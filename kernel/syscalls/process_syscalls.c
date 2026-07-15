@@ -17,6 +17,7 @@
  */
 
 #include <kernel/syscalls.h>
+#include <kernel/arch_cpu.h>
 #include <kernel/process.h>
 #include <kernel/memory.h>
 #include <kernel/address_space.h>
@@ -24,6 +25,7 @@
 #include <kernel/fd.h>
 #include <kernel/string.h>
 #include <kernel/task.h>
+#include <kernel/smp.h>
 #include <kernel/util.h>
 #include <kernel/userspace.h>
 #include <kernel/kprintf.h>
@@ -279,19 +281,7 @@ int sys_statfs(const char* path, struct statfs* buf)
 
 static int pipe_wait_interruptible(void)
 {
-    task_t *task = task_current_local();
-
-    if (!task)
-        return -EINTR;
-
-    task_set_interruptible_until(task, get_system_ticks() + 1);
-    yield();
-    task_set_wakeup_time(task, 0);
-
-    if (has_pending_signals(task))
-        return -EINTR;
-
-    return 0;
+    return task_poll_wait_once() == 0 ? 0 : -EINTR;
 }
 
 bool can_read(file_t* file) {
@@ -448,7 +438,7 @@ int sys_pipe(int pipefd[2])
     if (!pipefd || !task || !task->process) {
         return -EFAULT;
     }
-    
+
     /* Allouer deux descripteurs de fichiers */
     fd_read = allocate_fd(task);
     if (fd_read < 0) return fd_read;
@@ -591,7 +581,7 @@ static void rollback_brk_growth(vm_space_t *vm, vaddr_t start, vaddr_t end)
     }
 }
 
-int sys_brk(void* addr)
+long sys_brk(void* addr)
 {
     task_t* task = task_current_local();
 
@@ -615,14 +605,10 @@ int sys_brk(void* addr)
 
     /* If addr is NULL, return current brk */
     if (!addr) {
-        return (int)old_brk;
+        return (long)old_brk;
     }
 
     if (new_brk < proc->vm->heap_start || new_brk > proc->vm->heap_end) {
-        return -ENOMEM;
-    }
-
-    if (new_brk > 0xFFFFFFFFu - (PAGE_SIZE - 1)) {
         return -ENOMEM;
     }
 
@@ -686,7 +672,7 @@ int sys_brk(void* addr)
     //KDEBUG("sys_brk: New BRK is at 0x%08X\n", new_brk);
 
     proc->vm->brk = new_brk;
-    return (int)new_brk;
+    return (long)new_brk;
 }
 
 
@@ -748,7 +734,8 @@ int sys_dup2(int oldfd, int newfd)
     task->process->fd_flags[newfd] = 0;
 
     if (newfd == STDIN_FILENO && file_is_tty(new_file))
-        task->process->controlling_tty = tty_id_from_file(new_file);
+        task->process->controlling_tty =
+            (int)(uintptr_t)new_file->private_data;
     
     return newfd;
 }
@@ -790,7 +777,7 @@ static bool fd_write_ready(file_t *file)
     return file->f_op && file->f_op->write;
 }
 
-int sys_fcntl(int fd, int cmd, uint32_t arg)
+int sys_fcntl(int fd, int cmd, uintptr_t arg)
 {
     task_t *task = task_current_local();
     file_t* file;
@@ -863,7 +850,7 @@ int sys_fcntl(int fd, int cmd, uint32_t arg)
     }
 }
 
-int sys_ioctl(int fd, uint32_t request, uint32_t arg)
+int sys_ioctl(int fd, uint32_t request, uintptr_t arg)
 {
     task_t *task = task_current_local();
     file_t* file;
@@ -1003,16 +990,19 @@ int sys_gettimeofday(struct timeval* tv, struct timezone* tz)
 int sys_uname(struct utsname_kernel *name)
 {
     struct utsname_kernel local;
+    const char *machine;
 
     if (!name)
         return -EFAULT;
 
     memset(&local, 0, sizeof(local));
+    machine = arch_machine_name();
     strcpy(local.sysname, "ArmOS");
     strcpy(local.nodename, "armos");
     strcpy(local.release, "0.6");
-    strcpy(local.version, "ArmOS 0.6 armv7l");
-    strcpy(local.machine, "armv7l");
+    strcpy(local.version, "ArmOS 0.6 ");
+    strcat(local.version, machine);
+    strcpy(local.machine, machine);
 
     return copy_to_user(name, &local, sizeof(local)) < 0 ? -EFAULT : 0;
 }
@@ -1032,6 +1022,28 @@ int sys_times(void* buf)
     }
 
     return (int)ticks;
+}
+
+int sys_sysconf(int name)
+{
+    switch (name) {
+    case ARMOS_SC_ARG_MAX:
+        return 65536;
+    case ARMOS_SC_CHILD_MAX:
+        return MAX_PROCESSES;
+    case ARMOS_SC_CLK_TCK:
+        return TIMER_FREQ;
+    case ARMOS_SC_OPEN_MAX:
+        return MAX_FILES;
+    case ARMOS_SC_PAGESIZE:
+        return PAGE_SIZE;
+    case ARMOS_SC_NPROCESSORS_CONF:
+        return (int)smp_possible_cpu_count();
+    case ARMOS_SC_NPROCESSORS_ONLN:
+        return (int)smp_online_cpu_count();
+    default:
+        return -EINVAL;
+    }
 }
 
 static void fill_rusage_for_task(task_t *task, struct rusage_kernel *usage)
@@ -2585,7 +2597,7 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
 {
     task_t *task = task_current_local();
     vm_space_t *vm;
-    uint32_t size;
+    size_t size;
     vaddr_t hint = (vaddr_t)addr;
     vaddr_t vaddr;
     uint32_t vma_flags = 0;
@@ -2612,7 +2624,7 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
     if (prot == 0)
         return (void *)-EINVAL;
 
-    size = ALIGN_UP((uint32_t)length, PAGE_SIZE);
+    size = ALIGN_UP(length, PAGE_SIZE);
     if (size == 0 || size > USER_MMAP_END - USER_MMAP_START)
         return (void *)-ENOMEM;
 
@@ -2653,7 +2665,7 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
     if (!is_anon) {
         file_t *file = task->process->files[fd];
         uint32_t saved_offset;
-        uint32_t copied = 0;
+        size_t copied = 0;
 
         if (!file || !can_read(file) || !file->f_op || !file->f_op->read) {
             vm_unmap_range(vm, vaddr, size);
@@ -2665,8 +2677,8 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
         while (copied < length) {
             vaddr_t page = vaddr + ALIGN_DOWN(copied, PAGE_SIZE);
             paddr_t phys = get_physical_address(vm->pgdir, page);
-            uint32_t page_off = copied % PAGE_SIZE;
-            uint32_t chunk = PAGE_SIZE - page_off;
+            size_t page_off = copied % PAGE_SIZE;
+            size_t chunk = PAGE_SIZE - page_off;
             int ret;
 
             if (!phys) {
@@ -2681,12 +2693,12 @@ void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd)
             if (ret < 0) {
                 file->offset = saved_offset;
                 vm_unmap_range(vm, vaddr, size);
-                return (void *)ret;
+                return (void *)(intptr_t)ret;
             }
             if (ret == 0)
                 break;
-            copied += (uint32_t)ret;
-            if ((uint32_t)ret < chunk)
+            copied += (size_t)ret;
+            if ((size_t)ret < chunk)
                 break;
         }
         file->offset = saved_offset;
@@ -2699,14 +2711,14 @@ int sys_munmap(void* addr, size_t length)
 {
     task_t *task = task_current_local();
     vaddr_t start = (vaddr_t)addr;
-    uint32_t size;
+    size_t size;
 
     if (!task || task->type != TASK_TYPE_PROCESS || !task->process || !task->process->vm)
         return -EINVAL;
     if (!addr || !IS_PAGE_ALIGNED(start) || length == 0)
         return -EINVAL;
 
-    size = ALIGN_UP((uint32_t)length, PAGE_SIZE);
+    size = ALIGN_UP(length, PAGE_SIZE);
     if (size == 0 || start + size <= start || start + size > get_split_boundary())
         return -EINVAL;
 
@@ -2719,7 +2731,7 @@ int sys_mprotect(void* addr, size_t length, int prot)
     vm_space_t *vm;
     vma_t *vma;
     vaddr_t start = (vaddr_t)addr;
-    uint32_t size;
+    size_t size;
     uint32_t flags = 0;
 
     if (!task || task->type != TASK_TYPE_PROCESS || !task->process || !task->process->vm)
@@ -2729,7 +2741,7 @@ int sys_mprotect(void* addr, size_t length, int prot)
     if (prot == 0 || (prot & ~(ARMOS_PROT_READ | ARMOS_PROT_WRITE | ARMOS_PROT_EXEC)))
         return -EINVAL;
 
-    size = ALIGN_UP((uint32_t)length, PAGE_SIZE);
+    size = ALIGN_UP(length, PAGE_SIZE);
     if (size == 0 || start + size <= start || start + size > get_split_boundary())
         return -EINVAL;
 

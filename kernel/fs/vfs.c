@@ -51,6 +51,26 @@ typedef struct {
 static mount_entry_t mount_table[MAX_MOUNTS];
 static int mount_count = 0;
 
+bool vfs_install_root(inode_t* root)
+{
+    uint32_t hash;
+
+    if (!root || root_inode)
+        return false;
+    init_spinlock(&vfs_lock);
+    memset(inode_table, 0, sizeof(inode_table));
+    memset(mount_table, 0, sizeof(mount_table));
+    mount_count = 0;
+    next_inode_number = root->ino + 1u;
+    root_inode = root;
+    if (root_inode->ref_count == 0)
+        root_inode->ref_count = 1;
+    hash = root_inode->ino % MAX_INODES;
+    root_inode->next = inode_table[hash];
+    inode_table[hash] = root_inode;
+    return true;
+}
+
 static const char* vfs_partition_name(disk_partition_id_t id, const char* fallback)
 {
     const disk_partition_t* part = disk_partition_get(id);
@@ -588,6 +608,8 @@ void put_inode(inode_t* inode)
         }
         
         spin_unlock_irqrestore(&vfs_lock, flags);
+        if (inode->release_private)
+            inode->release_private(inode);
         kfree(inode);
     } else {
         spin_unlock_irqrestore(&vfs_lock, flags);

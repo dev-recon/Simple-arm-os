@@ -399,7 +399,7 @@ static bool net_probe_fallback(paddr_t *out_phys, uint32_t *out_irq, bool *out_e
 static void net_read_mac(volatile uint32_t *mmio, uint8_t mac[6])
 {
     for (uint32_t i = 0; i < 6; i++)
-        mac[i] = (uint8_t)mmio_read32(mmio, VNET_CFG_MAC + i);
+        mac[i] = mmio_read8(mmio, VNET_CFG_MAC + i);
 }
 
 static void net_rx_post_desc(uint16_t id)
@@ -1616,8 +1616,8 @@ bool virtio_net_init(void)
 
     net_send_arp_request(VIRTIO_NET_GW_IP);
 
-    KINFO("VirtIO net initialized: phys=0x%08X irq=%u %s rxq=%u txq=%u mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
-          net.phys, net.irq,
+    KINFO("VirtIO net initialized: phys=0x%lX irq=%u %s rxq=%u txq=%u mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
+          (unsigned long)net.phys, net.irq,
           net.irq_edge_triggered ? "edge" : "level",
           net.rx_vq.qsize,
           net.tx_vq.qsize,

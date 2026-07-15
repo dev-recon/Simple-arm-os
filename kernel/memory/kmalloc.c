@@ -17,7 +17,6 @@
  */
 
 #include <kernel/memory.h>
-#include <kernel/panic.h>
 #include <kernel/string.h>
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
@@ -54,24 +53,38 @@ free_block_t* free_list = NULL;
  */
 static DEFINE_SPINLOCK(kmalloc_lock);
 
-void init_kernel_heap(void)
+bool init_kernel_heap(void)
 {
     extern uint32_t __heap_start, __heap_size;
-    
-    /* Obtenir les infos du linker */
-    heap_base = (uint8_t*)ALIGN_UP((uintptr_t)&__heap_start, 8);
-    heap_size = (size_t)&__heap_size;
-    
+
+    return init_kernel_heap_region((void *)(uintptr_t)&__heap_start,
+                                   (size_t)(uintptr_t)&__heap_size);
+}
+
+bool init_kernel_heap_region(void* base, size_t size)
+{
+    uintptr_t aligned_base = ALIGN_UP((uintptr_t)base, 8);
+    size_t alignment_loss;
+
+    if (!base || aligned_base < (uintptr_t)base)
+        return false;
+    alignment_loss = aligned_base - (uintptr_t)base;
+    if (size <= alignment_loss)
+        return false;
+
+    heap_base = (uint8_t *)aligned_base;
+    heap_size = size - alignment_loss;
+
     KINFO("=== HEAP INITIALIZATION WITH GLOBALS ===\n");
     KINFO("Heap configuration:\n");
     KINFO("  Base address: %p\n", heap_base);
-    KINFO("  Size:         %u MB (%u bytes)\n", 
-            heap_size / (1024*1024), heap_size);
+    KINFO("  Size:         %lu MB (%lu bytes)\n",
+            (unsigned long)(heap_size / (1024 * 1024)),
+            (unsigned long)heap_size);
     
     /* Verifications */
-    if (!heap_base || heap_size < (64 * 1024)) {
-        panic("Invalid heap configuration");
-    }
+    if (heap_size < (64 * 1024))
+        return false;
     
     /* Effacer la zone */
     memset(heap_base, 0, heap_size);
@@ -85,7 +98,10 @@ void init_kernel_heap(void)
     free_list = initial_block;
     heap_initialized = true;
     
-    KINFO("Heap ready: %u bytes available\n", initial_block->size);
+    KINFO("Heap ready: %lu bytes available\n",
+          (unsigned long)initial_block->size);
+
+    return true;
 }
 
 

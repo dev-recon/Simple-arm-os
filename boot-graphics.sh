@@ -40,8 +40,8 @@ select_display() {
     esac
 }
 
-QEMU="$(select_arm_qemu "${1:-}" "$ROOT_DIR")"
 . "$ROOT_DIR/tools/qemu_platform_env.sh"
+QEMU="$(select_arm_qemu "${1:-}" "$ROOT_DIR" "$TARGET_ARCH")"
 QEMU_DISPLAY="$(select_display)"
 SMP_CPUS="${SMP_CPUS:-${QEMU_SMP}}"
 

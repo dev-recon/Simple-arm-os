@@ -4,8 +4,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ARCH="${ARCH:-arm-none-eabi-}"
 TARGET="${TARGET:-arm-none-eabi}"
+ARCH="${ARCH:-${TARGET}-}"
 NEWLIB_VERSION="${NEWLIB_VERSION:-4.4.0.20231231}"
 ARCHIVE="${NEWLIB_ARCHIVE:-$ROOT_DIR/newlib-$NEWLIB_VERSION.tar.gz}"
 NEWLIB_URL="${NEWLIB_URL:-https://sourceware.org/pub/newlib/newlib-$NEWLIB_VERSION.tar.gz}"
@@ -13,12 +13,25 @@ BUILD_ROOT="${NEWLIB_BUILD_ROOT:-$ROOT_DIR/build/newlib-build}"
 INSTALL_ROOT="${NEWLIB_INSTALL_ROOT:-$ROOT_DIR/build/newlib-sysroot}"
 SYSROOT="$INSTALL_ROOT/$TARGET"
 SRC_DIR="$BUILD_ROOT/src/newlib-$NEWLIB_VERSION"
-OBJ_DIR="$BUILD_ROOT/obj"
+OBJ_DIR="$BUILD_ROOT/obj-$TARGET"
 PATCH_DIR="${NEWLIB_PATCH_DIR:-$ROOT_DIR/patches/newlib-$NEWLIB_VERSION}"
 PATCH_SERIES="$PATCH_DIR/series"
 PATCH_STAMP="$SRC_DIR/.arm-os-patches-applied"
 
 export PATH="/opt/homebrew/Cellar/arm-none-eabi-gcc/15.1.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
+
+case "$TARGET" in
+    arm-none-eabi)
+        TARGET_CFLAGS="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft -Os"
+        ;;
+    aarch64-elf)
+        TARGET_CFLAGS="-mcpu=cortex-a53 -Os"
+        ;;
+    *)
+        echo "Error: unsupported newlib target: $TARGET" >&2
+        exit 1
+        ;;
+esac
 
 if ! command -v "${ARCH}gcc" >/dev/null 2>&1; then
     echo "Error: ${ARCH}gcc not found in PATH" >&2
@@ -65,7 +78,8 @@ if [ -n "$EXPECTED_PATCH_STATE" ] &&
    [ -d "$SRC_DIR" ] &&
    { [ ! -f "$PATCH_STAMP" ] || [ "$(cat "$PATCH_STAMP")" != "$EXPECTED_PATCH_STATE" ]; }; then
     echo "=== Newlib patch series changed; re-extracting clean sources ==="
-    rm -rf "$SRC_DIR" "$OBJ_DIR"
+    rm -rf "$SRC_DIR"
+    rm -rf "$BUILD_ROOT"/obj-*
     mkdir -p "$OBJ_DIR"
 fi
 
@@ -106,7 +120,7 @@ echo "=== Configuring newlib for $TARGET ==="
         --disable-multilib \
         --disable-newlib-supplied-syscalls \
         --enable-newlib-reent-small \
-        CFLAGS_FOR_TARGET="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft -Os"
+        CFLAGS_FOR_TARGET="$TARGET_CFLAGS"
 )
 
 echo "=== Building newlib ==="

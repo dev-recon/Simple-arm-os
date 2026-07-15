@@ -128,6 +128,7 @@ extern long sys_stty(int request, int value, int value2);
 extern long sys_gtty(int request, int value);
 extern long sys_sigaction(int sig, const void *act, void *oldact);
 extern long sys_sysinfo(void *resp);
+extern long sys_sysconf(int name);
 extern long sys_shm_open(const char *name, unsigned long size, int flags);
 extern long sys_shm_unlink(const char *name);
 extern long sys_shm_map(int id, void *addr, int flags);
@@ -280,6 +281,17 @@ const char *getprogname(void)
 int getdtablesize(void)
 {
     return ARMOS_OPEN_MAX;
+}
+
+long sysconf(int name)
+{
+    long ret = sys_sysconf(name);
+
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return ret;
 }
 
 char *dirname(char *path)
@@ -1334,7 +1346,8 @@ int tcsetattr(int fd, int optional_actions, const void *termios_p)
 
 int tcflush(int fd, int queue_selector)
 {
-    return ret_errno(sys_ioctl(fd, TCFLSH, (void *)queue_selector));
+    return ret_errno(sys_ioctl(fd, TCFLSH,
+                               (void *)(intptr_t)queue_selector));
 }
 
 int tcdrain(int fd)

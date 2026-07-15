@@ -3,12 +3,13 @@
 This guide sets up ArmOS on Linux. Debian and Ubuntu are the primary reference
 distributions for now.
 
-ArmOS currently targets ARM32. `qemu-virt` is the reference platform for kernel
-features and day-to-day development. Raspberry Pi 3 running AArch32 is the
-reference hardware platform; see [docs/RASPBERRY_PI3.md](docs/RASPBERRY_PI3.md)
-for SD-card and UART setup.
+ArmOS supports ARM32 and ARM64. `arm32/qemu-virt` is the fresh-checkout default,
+and `arm64/qemu-virt` is the 64-bit feature reference. Supported hardware is
+Raspberry Pi 3 Model B+ in AArch64 mode and Raspberry Pi 2 Model B v1.1 in
+ARMv7-A mode; see [docs/RASPBERRY_PI3.md](docs/RASPBERRY_PI3.md) and
+[docs/RASPBERRY_PI2.md](docs/RASPBERRY_PI2.md).
 
-The reproducible v0.6 emulator baseline is QEMU 10.0.2. Newer releases can be
+The reproducible v0.7 emulator baseline is QEMU 10.0.2. Newer releases can be
 used for compatibility testing, but should not silently replace the baseline.
 
 ## Disk Layout
@@ -18,8 +19,11 @@ platform-specific artifacts under `build/images/`:
 
 - `kernel-qemu-virt.bin` and `disk-qemu-virt.img`: QEMU development images;
   ext2 root is partition 1 and FAT32 compatibility storage is partition 2
-- `kernel-pi3.bin` and `disk-pi3.img`: PI3 hardware images; hidden FAT32 boot
-  is partition 1 and ext2 root is partition 2
+- `kernel-arm64-raspi3.bin` and `disk-arm64-raspi3.img`: Raspberry Pi 3
+  hardware images; standard FAT32 boot is partition 1 and ext2 root is
+  partition 2
+- `kernel-arm32-raspi2.bin` and `disk-arm32-raspi2.img`: Raspberry Pi 2
+  hardware images with the same boot/root partition order
 
 Generated images are build artifacts and should not be committed.
 
@@ -72,10 +76,12 @@ build:
 ```
 
 The script downloads the [official QEMU 10.0.2 source archive](https://download.qemu.org/qemu-10.0.2.tar.xz),
-checks its pinned SHA-256, builds only `arm-softmmu`, and installs it under:
+checks its pinned SHA-256, builds `arm-softmmu` and `aarch64-softmmu`, and
+installs the binaries under:
 
 ```text
 build/qemu-10.0.2/install/bin/qemu-system-arm
+build/qemu-10.0.2/install/bin/qemu-system-aarch64
 ```
 
 ArmOS boot scripts automatically prefer that binary. APT can install an exact
@@ -125,9 +131,16 @@ chmod +x run.sh boot.sh tools/build_newlib.sh tools/build_qemu_10_0_2.sh
 `run.sh` performs a full local rebuild:
 
 1. rebuilds libc/userland pieces
-2. rebuilds `build/images/kernel-qemu-virt.bin`
-3. recreates `build/images/disk-qemu-virt.img`
+2. rebuilds `build/images/kernel-arm32-qemu-virt.bin`
+3. recreates `build/images/disk-arm32-qemu-virt.img`
 4. boots QEMU
+
+With no environment overrides, `run.sh` deliberately selects the stable
+`TARGET_ARCH=arm32 TARGET_PLATFORM=qemu-virt` route. Select ARM64 explicitly:
+
+```sh
+TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./run.sh
+```
 
 At the `mash$>` prompt, a quick smoke test is:
 
@@ -150,14 +163,14 @@ Ctrl+A, then X
 Build kernel only:
 
 ```sh
-TARGET_PLATFORM=qemu-virt make platform-kernel
+TARGET_ARCH=arm32 TARGET_PLATFORM=qemu-virt make platform-kernel
 ```
 
 Rebuild disk images only:
 
 ```sh
-rm -f disk.img ext2.img fat32.img build/images/disk-qemu-virt.img
-TARGET_PLATFORM=qemu-virt make platform-disk
+rm -f disk.img ext2.img fat32.img build/images/disk-arm32-qemu-virt.img
+TARGET_ARCH=arm32 TARGET_PLATFORM=qemu-virt make platform-disk
 ```
 
 Inspect generated filesystems:

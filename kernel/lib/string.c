@@ -217,24 +217,6 @@ char* strtok_r(char* str, const char* delim, char** saveptr)
     return token_start;
 }
 
-void init_spinlock2(spinlock_t* lock)
-{
-    lock->locked = 0;
-}
-
-void spin_lock2(spinlock_t* lock)
-{
-    while (__sync_lock_test_and_set(&lock->locked, 1)) {
-        /* Spin */
-    }
-}
-
-void spin_unlock2(spinlock_t* lock)
-{
-    __sync_lock_release(&lock->locked);
-}
-
-
 char tolower(char c)
 {
     if (c >= 'A' && c <= 'Z') {
@@ -346,12 +328,12 @@ static int itoa_helper(int value, char* str, int base)
     return len;
 }
 
-static int utoa_helper(unsigned int value, char* str, int base)
+static int utoa_helper(unsigned long value, char* str, int base)
 {
     char* ptr = str;
     char* ptr1 = str;
     char tmp_char;
-    unsigned int tmp_value;
+    unsigned long tmp_value;
     int len = 0;
     
     /* Handle 0 explicitly */
@@ -545,7 +527,7 @@ int vsnprintf(char* str, size_t size, const char* format, va_list args)
                 
             case 'u': {
                 unsigned long val = is_long ? va_arg(args, unsigned long) : va_arg(args, unsigned int);
-                temp_len = utoa_helper((unsigned int)val, temp_buf, 10);
+                temp_len = utoa_helper(val, temp_buf, 10);
                 if (!left_align && width > temp_len) {
                     for (i = 0; i < width - temp_len; i++) {
                         if (out < out_end) *out++ = pad_char;
@@ -566,7 +548,8 @@ int vsnprintf(char* str, size_t size, const char* format, va_list args)
             }
                 
             case 'p': {
-                unsigned int val = (unsigned int)va_arg(args, void*);
+                unsigned long val =
+                    (unsigned long)(uintptr_t)va_arg(args, void*);
                 temp_buf[0] = '0';
                 temp_buf[1] = 'x';
                 temp_len = utoa_helper(val, temp_buf + 2, 16) + 2;
@@ -593,7 +576,7 @@ int vsnprintf(char* str, size_t size, const char* format, va_list args)
             case 'X':
                 {
                     unsigned long val = is_long ? va_arg(args, unsigned long) : va_arg(args, unsigned int);
-                    temp_len = utoa_helper((unsigned int)val, temp_buf, 16);
+                    temp_len = utoa_helper(val, temp_buf, 16);
                     if (spec == 'X') {
                         for (i = 0; i < temp_len; i++) {
                             if (temp_buf[i] >= 'a' && temp_buf[i] <= 'f')

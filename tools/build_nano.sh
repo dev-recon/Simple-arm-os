@@ -5,6 +5,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ARCH="${ARCH:-arm-none-eabi-}"
+# shellcheck source=tools/cross_target_env.sh
+source "$ROOT_DIR/tools/cross_target_env.sh"
 CC="${ARCH}gcc"
 STRIP="${ARCH}strip"
 HOST_CC="${HOST_CC:-cc}"
@@ -22,9 +24,6 @@ BUNDLE_BIN="$BUNDLE_PREFIX/bin"
 BUNDLE_ETC="$BUNDLE_PREFIX/etc"
 BUNDLE_SYNTAX="$BUNDLE_PREFIX/share/nano"
 
-ARM_FLAGS="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft"
-NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$ROOT_DIR/build/newlib-sysroot/arm-none-eabi}"
-NEWLIB_LIBC="${NEWLIB_LIBC:-$NEWLIB_SYSROOT/lib/libc.a}"
 LIBGCC="${LIBGCC:-$("$CC" $ARM_FLAGS -print-libgcc-file-name)}"
 NCURSES_PREFIX="${NCURSES_PREFIX:-$ROOT_DIR/userfs/opt/ncurses}"
 
@@ -142,12 +141,12 @@ CFLAGS="$NANO_CFLAGS" \
 CPPFLAGS="$NANO_CPPFLAGS" \
 NCURSES_CFLAGS="-I$NCURSES_PREFIX/include -I$NCURSES_PREFIX/include/ncurses" \
 NCURSES_LIBS="$NCURSES_PREFIX/lib/libncurses.a" \
-LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition $ROOT_DIR/newlib-port/build/crt0_newlib.o $ROOT_DIR/newlib-port/build/syscall_raw.o $ROOT_DIR/newlib-port/build/syscalls.o" \
+LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=$TARGET_TEXT_ADDRESS -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition $RUNTIME_OBJECTS" \
 LIBS="$BUILD_DIR/armos_nano_compat.o $NCURSES_PREFIX/lib/libncurses.a $NEWLIB_LIBC $LIBGCC" \
 "$SRC_DIR/configure" \
     --cache-file="$BUILD_DIR/config.cache" \
     --build="$BUILD_TRIPLET" \
-    --host=arm-none-eabi \
+    --host="$TARGET_TRIPLET" \
     --prefix=/opt/nano \
     --enable-tiny \
     --disable-nls \

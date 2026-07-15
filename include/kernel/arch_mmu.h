@@ -9,12 +9,11 @@
  * Layer: Kernel / architecture boundary
  *
  * Responsibilities:
- * - Expose architecture MMU constants and low-level MMU helper types while
- *   generic memory code is being separated from ARM32 short descriptors.
+ * - Expose architecture MMU constants and opaque page-table helper types.
+ * - Keep generic VM policy independent from concrete translation formats.
  *
  * Notes:
- * - This remains a compatibility bridge. The long-term shape is for generic
- *   memory.h to use opaque page-table and address-space operations only.
+ * - Generic code includes this boundary instead of architecture headers.
  */
 
 #ifndef _KERNEL_ARCH_MMU_H

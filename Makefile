@@ -1,6 +1,14 @@
 # ArmOS kernel Makefile
 
-CROSS_COMPILE = arm-none-eabi-
+TARGET_ARCH ?= arm64
+TARGET_PLATFORM ?= raspi3
+
+ifeq ($(TARGET_ARCH),arm64)
+CROSS_COMPILE ?= aarch64-elf-
+else
+CROSS_COMPILE ?= arm-none-eabi-
+endif
+
 CC = $(CROSS_COMPILE)gcc
 AS = $(CROSS_COMPILE)as
 LD = $(CROSS_COMPILE)ld
@@ -9,8 +17,6 @@ OBJDUMP = $(CROSS_COMPILE)objdump
 QEMU ?= qemu-system-arm
 SMP_CPUS ?= 1
 BUILD_DIR = build
-TARGET_ARCH ?= arm32
-TARGET_PLATFORM ?= qemu-virt
 IMAGE_DIR ?= $(BUILD_DIR)/images
 ARCH_DIR = arch/$(TARGET_ARCH)
 ARCH_INCLUDE = $(ARCH_DIR)/include
@@ -26,6 +32,14 @@ PLATFORM_MK = $(PLATFORM_DIR)/platform.mk
 ifeq ($(TARGET_ARCH),arm32)
 ARCH_CFLAGS = -marm -mfpu=neon-vfpv4 -mfloat-abi=soft \
               -mno-unaligned-access -DARMV7A_KERNEL -DARMOS_ARCH_BITS=32
+ASM_OFFSETS_DEPS = include/kernel/task.h \
+                   $(ARCH_INCLUDE)/asm/task_context.h
+else ifeq ($(TARGET_ARCH),arm64)
+ARCH_CFLAGS = -march=armv8-a -mgeneral-regs-only \
+              -DARMV8A_KERNEL -DARMOS_ARCH_BITS=64
+ASM_OFFSETS_DEPS = $(ARCH_INCLUDE)/asm/user_context.h \
+                   $(ARCH_INCLUDE)/asm/exception_frame.h \
+                   $(ARCH_INCLUDE)/asm/task_context.h
 else
 $(error Unsupported TARGET_ARCH '$(TARGET_ARCH)')
 endif
@@ -37,6 +51,8 @@ include $(PLATFORM_MK)
 
 # CORRECTION 2: Flags specifiques pour corriger les operations mathematiques
 MATH_FLAGS = -fno-builtin-div -fno-builtin-mod
+STACK_PROTECTOR_FLAG ?= -fstack-protector
+LINKER_SCRIPT ?= linker.ld
 
 # Flags de compilation
 ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated $(PLATFORM_ASFLAGS)
@@ -44,43 +60,50 @@ ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated $(PLATFORM_ASF
 CFLAGS = -std=gnu99 $(ARCH_CFLAGS) $(PLATFORM_CFLAGS) $(MATH_FLAGS) \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
          -Wall -Wextra -Werror -g -O0 -fno-omit-frame-pointer -Wformat -Wformat-security \
-         -fno-builtin -fstack-protector -Wno-unused-function \
+         -fno-builtin $(STACK_PROTECTOR_FLAG) -Wno-unused-function \
          -MMD -MP \
          -fno-pic -fno-pie \
          -I$(ARCH_INCLUDE) \
          -Iinclude
 # Flags du linker. Platform --defsym values must precede -T so linker.ld sees
 # them while evaluating parametric addresses.
-LDFLAGS = $(PLATFORM_LDFLAGS) -T linker.ld -nostdlib -Map=kernel.map
+LDFLAGS = $(PLATFORM_LDFLAGS) -T $(LINKER_SCRIPT) -nostdlib -Map=kernel.map
 
-TASK_OBJS = kernel/task/task.o \
-            $(ARCH_DIR)/task/task_switch.o \
-            $(ARCH_DIR)/task/context_debug.o \
-			kernel/task/kernel_tasks.o \
-            $(ARCH_DIR)/smp/smp.o \
-            kernel/sync/spinlock.o
+COMMON_TASK_OBJS = \
+	kernel/task/current.o \
+	kernel/task/task.o \
+	kernel/task/kernel_tasks.o \
+	kernel/sync/spinlock.o
 
-# Objets de la bibliotheque
-LIB_OBJ = kernel/lib/kprintf.o kernel/lib/string.o kernel/lib/fdt.o kernel/lib/font_meslo_12x24.o kernel/lib/font_meslo_10x20.o kernel/lib/font_meslo_8x16.o kernel/lib/font_spleen_8x16.o kernel/lib/font_spleen_12x24.o kernel/lib/font_vga_8x16.o kernel/lib/divmod.o kernel/lib/debug_print.o kernel/lib/math.o
+COMMON_LIB_OBJS = \
+	kernel/lib/kprintf.o \
+	kernel/lib/string.o \
+	kernel/lib/fdt.o \
+	kernel/lib/fdt_memory.o \
+	kernel/lib/font_meslo_12x24.o \
+	kernel/lib/font_meslo_10x20.o \
+	kernel/lib/font_meslo_8x16.o \
+	kernel/lib/font_spleen_8x16.o \
+	kernel/lib/font_spleen_12x24.o \
+	kernel/lib/font_vga_8x16.o \
+	kernel/lib/divmod.o \
+	kernel/lib/debug_print.o \
+	kernel/lib/math.o
 
-# Objets du noyau
-KERNEL_OBJS = \
-	$(ARCH_DIR)/boot/boot.o \
+# Architecture-neutral kernel. Every target links this exact subsystem set.
+COMMON_KERNEL_OBJS = \
 	kernel/main.o \
-	$(ARCH_DIR)/cpu/cpu.o \
-	$(ARCH_DIR)/mmu/helpers.o \
 	kernel/memory/physical.o \
-	$(ARCH_DIR)/mmu/virtual.o \
-	$(ARCH_DIR)/mmu/mmu.o \
-	$(ARCH_DIR)/mmu/debug.o \
-	$(ARCH_DIR)/mmu/tlb.o \
 	kernel/memory/kmalloc.o \
-	$(ARCH_DIR)/memory/memory_detect.o \
+	kernel/memory/detect.o \
+	kernel/memory/virtual.o \
+	kernel/memory/usercopy.o \
 	kernel/process/process.o \
 	kernel/process/fork.o \
 	kernel/process/exec.o \
+	kernel/process/exec_stack.o \
 	kernel/process/signal.o \
-	$(ARCH_DIR)/process/exec.o \
+	kernel/core/coredump.o \
 	kernel/fs/vfs.o \
 	kernel/fs/mount.o \
 	kernel/fs/fat32.o \
@@ -94,19 +117,55 @@ KERNEL_OBJS = \
 	kernel/drivers/tty.o \
 	kernel/drivers/null.o \
 	kernel/drivers/power.o \
-	$(PLATFORM_OBJS) \
-	$(ARCH_DIR)/interrupt/exception.o \
-	$(ARCH_DIR)/interrupt/interrupt.o \
-	$(ARCH_DIR)/interrupt/irq_return.o \
-	$(ARCH_DIR)/timer/timer.o \
-	$(ARCH_DIR)/syscall/syscall.o \
+	kernel/timer/timer.o \
 	kernel/syscalls/syscalls.o \
 	kernel/syscalls/file.o \
 	kernel/syscalls/shm.o \
-	kernel/syscalls/process_syscalls.o \
-	$(ARCH_DIR)/user/userspace.o
+	kernel/syscalls/process_syscalls.o
 
-# Tous les objets
+ifeq ($(TARGET_ARCH),arm32)
+ARCH_TASK_OBJS = \
+	$(ARCH_DIR)/task/task_switch.o \
+	$(ARCH_DIR)/task/context_debug.o \
+	$(ARCH_DIR)/smp/smp.o
+ARCH_KERNEL_OBJS = \
+	$(ARCH_DIR)/boot/boot.o \
+	$(ARCH_DIR)/cpu/cpu.o \
+	$(ARCH_DIR)/mmu/helpers.o \
+	$(ARCH_DIR)/mmu/virtual.o \
+	$(ARCH_DIR)/mmu/mmu.o \
+	$(ARCH_DIR)/mmu/debug.o \
+	$(ARCH_DIR)/mmu/tlb.o \
+	$(ARCH_DIR)/process/exec.o \
+	$(ARCH_DIR)/interrupt/exception.o \
+	$(ARCH_DIR)/interrupt/interrupt.o \
+	$(ARCH_DIR)/interrupt/irq_return.o \
+	$(ARCH_DIR)/syscall/syscall.o
+else ifeq ($(TARGET_ARCH),arm64)
+CFLAGS += -ffunction-sections -fdata-sections
+LDFLAGS += --gc-sections
+ARCH_TASK_OBJS = \
+	$(ARCH_DIR)/task/task_context.o \
+	$(ARCH_DIR)/task/context_switch.o \
+	$(ARCH_DIR)/smp/smp.o
+ARCH_KERNEL_OBJS = \
+	$(ARCH_DIR)/boot/boot.o \
+	$(ARCH_DIR)/interrupt/vectors.o \
+	$(ARCH_DIR)/interrupt/exception.o \
+	$(ARCH_DIR)/cpu/cpu.o \
+	$(ARCH_DIR)/mmu/mmu.o \
+	$(ARCH_DIR)/mmu/user_vm.o \
+	$(ARCH_DIR)/mmu/virtual.o \
+	$(ARCH_DIR)/mmu/tlb.o \
+	$(ARCH_DIR)/timer/timer.o \
+	$(ARCH_DIR)/process/exec.o \
+	$(ARCH_DIR)/user/el0.o
+endif
+
+# The platform contributes devices; the architecture contributes mechanisms.
+KERNEL_OBJS = $(COMMON_KERNEL_OBJS) $(ARCH_KERNEL_OBJS) $(PLATFORM_OBJS)
+TASK_OBJS = $(COMMON_TASK_OBJS) $(ARCH_TASK_OBJS)
+LIB_OBJ = $(COMMON_LIB_OBJS)
 ALL_OBJS = $(KERNEL_OBJS) $(LIB_OBJ) $(TASK_OBJS)
 DEPFILES = $(ALL_OBJS:.o=.d)
 
@@ -114,7 +173,7 @@ DEPFILES = $(ALL_OBJS:.o=.d)
 DISK_IMG     = disk.img
 FAT32_IMG    = fat32.img
 EXT2_IMG     = ext2.img
-IMAGE_SUFFIX ?= $(TARGET_PLATFORM)
+IMAGE_SUFFIX ?= $(TARGET_ARCH)-$(TARGET_PLATFORM)
 PLATFORM_KERNEL_ELF = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).elf
 PLATFORM_KERNEL_BIN = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).bin
 PLATFORM_KERNEL_MAP = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).map
@@ -160,7 +219,7 @@ KERNEL_BIN = $(TARGET).bin
 all: platform-kernel platform-disk
 
 # Linkage
-$(KERNEL_ELF): $(ALL_OBJS) linker.ld
+$(KERNEL_ELF): $(ALL_OBJS) $(LINKER_SCRIPT)
 	$(LD) $(LDFLAGS) $(ALL_OBJS) -o $@
 
 # Conversion en binaire
@@ -194,7 +253,7 @@ $(BUILD_CONFIG_STAMP): FORCE
 		rm -f "$$tmp"; \
 	fi
 
-$(ASM_OFFSETS_H): $(ASM_OFFSETS_SRC) include/kernel/task.h $(BUILD_CONFIG_STAMP)
+$(ASM_OFFSETS_H): $(ASM_OFFSETS_SRC) $(ASM_OFFSETS_DEPS) $(BUILD_CONFIG_STAMP)
 	@mkdir -p $(BUILD_DIR) $(dir $@)
 	$(CC) $(CFLAGS) -S $(ASM_OFFSETS_SRC) -o $(ASM_OFFSETS_S)
 	@awk '/->/ { \
@@ -244,7 +303,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	fi
 	dd if=/dev/zero of=$(EXT2_IMG) bs=1048576 count=$(EXT2_SIZE_MB) 2>/dev/null
 	$(MKE2FS) -q -t ext2 -F -L OS_EXT2 $(EXT2_IMG)
-	@( find $(USERFS_DIR) -type d | sort | while read dir; do \
+	@( find $(USERFS_DIR) -path "$(USERFS_DIR)/legacy" -prune -o -type d -print | sort | while read dir; do \
 	       if [ "$$dir" != "$(USERFS_DIR)" ]; then \
 	           relpath=$$(echo "$$dir" | sed 's|$(USERFS_DIR)/||'); \
 	           printf 'mkdir /%s\n' "$$relpath"; \
@@ -260,14 +319,14 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	           printf 'set_inode_field /%s gid %s\n' "$$relpath" "$$gid"; \
 	       fi; \
 	   done; \
-	   find $(USERFS_DIR) -type f | sort | while read f; do \
+	   find $(USERFS_DIR) -path "$(USERFS_DIR)/legacy" -prune -o -type f -print | sort | while read f; do \
 	       relpath=$$(echo "$$f" | sed 's|$(USERFS_DIR)/||'); \
 	       case "$$relpath" in dev/tty0|dev/tty1|dev/console|dev/fb0) continue ;; esac; \
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
 	       case "$$relpath" in \
 	           sbin/init) mode=0100700 ;; \
 	           bin/su) mode=0104755 ;; \
-	           bin/*|sbin/*|usr/bin/*|opt/*/bin/*|legacy/bin-libc/*|init.sh) mode=0100755 ;; \
+	           bin/*|sbin/*|usr/bin/*|opt/*/bin/*|init.sh) mode=0100755 ;; \
 	           home/user/copy_renamed) mode=0100755 ;; \
 	           *) mode=0100644 ;; \
 	       esac; \
@@ -279,7 +338,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	       printf 'set_inode_field /%s uid %s\n' "$$relpath" "$$uid"; \
 	       printf 'set_inode_field /%s gid %s\n' "$$relpath" "$$gid"; \
 	   done; \
-	   find $(USERFS_DIR) -type l | sort | while read l; do \
+	   find $(USERFS_DIR) -path "$(USERFS_DIR)/legacy" -prune -o -type l -print | sort | while read l; do \
 	       relpath=$$(echo "$$l" | sed 's|$(USERFS_DIR)/||'); \
 	       target=$$(readlink "$$l"); \
 	       printf 'symlink /%s %s\n' "$$relpath" "$$target"; \
@@ -322,7 +381,15 @@ $(DISK_IMG): $(FAT32_IMG) $(EXT2_IMG) $(MBR_TOOL)
 	dd if=$(FAT32_IMG) of=$(DISK_IMG) bs=1048576 seek=$(DISK_FAT32_START_MB) conv=notrunc 2>/dev/null
 	@echo "Disk image $(DISK_IMG) created ($(DISK_SIZE_MB) MB)"
 
-ifeq ($(PLATFORM_DISK_LAYOUT),fat32-first)
+ifeq ($(TARGET_ARCH),arm64)
+$(PLATFORM_DISK_IMG): FORCE tools/build_arm64_disk.sh \
+		tools/build_arm64_userland.sh userland/Makefile Makefile
+	TARGET_PLATFORM="$(TARGET_PLATFORM)" \
+	PLATFORM_DISK_LAYOUT="$(PLATFORM_DISK_LAYOUT)" \
+	PLATFORM_DISK_HIDDEN_BOOT="$(PLATFORM_DISK_HIDDEN_BOOT)" \
+	PLATFORM_DISK_SIZE_MB="$(PLATFORM_DISK_SIZE_MB)" \
+	./tools/build_arm64_disk.sh --output $@
+else ifeq ($(PLATFORM_DISK_LAYOUT),fat32-first)
 $(PLATFORM_DISK_IMG): $(FAT32_IMG) $(EXT2_IMG) $(MBR_TOOL) Makefile $(PLATFORM_MK)
 	@mkdir -p $(IMAGE_DIR)
 	@echo "=== Assembling $(PLATFORM_DISK_IMG) (MBR + FAT32 boot + ext2 root) ==="

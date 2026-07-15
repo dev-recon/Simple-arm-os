@@ -41,6 +41,23 @@ struct fdt_header {
 #define FDT_NOP           0x00000004u
 #define FDT_END           0x00000009u
 
+#define FDT_MEMORY_MAX_RANGES   8u
+#define FDT_RESERVED_MAX_RANGES 16u
+
+typedef struct {
+    paddr_t start;
+    paddr_t size;
+} fdt_memory_range_t;
+
+typedef struct {
+    fdt_memory_range_t memory[FDT_MEMORY_MAX_RANGES];
+    fdt_memory_range_t reserved[FDT_RESERVED_MAX_RANGES];
+    uint32_t memory_count;
+    uint32_t reserved_count;
+    paddr_t dtb_start;
+    paddr_t dtb_size;
+} fdt_memory_layout_t;
+
 typedef bool (*fdt_node_cb_t)(void *dtb_ptr, void *node_ptr,
                               const char *name, void *ctx);
 
@@ -52,6 +69,7 @@ bool fdt_device_present(void *dtb_ptr, const char *partial_name);
 void *fdt_get_property(void *dtb_ptr, void *node_ptr,
                        const char *property_name, uint32_t *out_len);
 bool fdt_for_each_node(void *dtb_ptr, fdt_node_cb_t cb, void *ctx);
+uint32_t fdt_count_cpus(void *dtb_ptr, uint32_t maximum);
 
 bool fdt_decode_reg_addr(const uint32_t *reg, uint32_t len, paddr_t *out_phys);
 bool fdt_decode_gic_interrupt(const uint32_t *intr, uint32_t len,
@@ -59,5 +77,8 @@ bool fdt_decode_gic_interrupt(const uint32_t *intr, uint32_t len,
                               bool *out_edge);
 bool fdt_find_virtio_mmio_device(uint32_t virtio_id, paddr_t *out_phys,
                                  uint32_t *out_irq, bool *out_edge);
+
+/* Dependency-free early-boot memory topology reader. */
+bool fdt_read_memory_layout(void *dtb_ptr, fdt_memory_layout_t *layout);
 
 #endif /* _KERNEL_FDT_H */

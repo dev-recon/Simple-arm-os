@@ -13,12 +13,11 @@ BUNDLE_PREFIX="$BUNDLE_ROOT/opt/bsdmtree"
 BUNDLE_BIN="$BUNDLE_PREFIX/bin"
 
 ARCH="${ARCH:-arm-none-eabi-}"
+# shellcheck source=tools/cross_target_env.sh
+source "$ROOT_DIR/tools/cross_target_env.sh"
 CC="${ARCH}gcc"
 STRIP="${ARCH}strip"
 
-ARM_FLAGS="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft"
-NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$ROOT_DIR/build/newlib-sysroot/arm-none-eabi}"
-NEWLIB_LIBC="${NEWLIB_LIBC:-$NEWLIB_SYSROOT/lib/libc.a}"
 LIBGCC="${LIBGCC:-$("$CC" $ARM_FLAGS -print-libgcc-file-name)}"
 
 if [ ! -f "$SRC_DIR/mtree.c" ] || [ ! -f "$SRC_DIR/pack_dev.c" ]; then
@@ -32,9 +31,9 @@ if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_LIBC" ]; then
     exit 1
 fi
 
-if [ ! -f "$ROOT_DIR/newlib-port/build/crt0_newlib.o" ] ||
-   [ ! -f "$ROOT_DIR/newlib-port/build/syscall_raw.o" ] ||
-   [ ! -f "$ROOT_DIR/newlib-port/build/syscalls.o" ]; then
+if [ ! -f "$NEWLIB_RUNTIME_DIR/crt0_newlib.o" ] ||
+   [ ! -f "$NEWLIB_RUNTIME_DIR/syscall_raw.o" ] ||
+   [ ! -f "$NEWLIB_RUNTIME_DIR/syscalls.o" ]; then
     echo "error: newlib-port runtime objects are missing" >&2
     echo "hint: make -C newlib-port NEWLIB_SYSROOT=$NEWLIB_SYSROOT" >&2
     exit 1
@@ -44,8 +43,7 @@ rm -rf "$BUILD_DIR" "$BUNDLE_ROOT"
 mkdir -p "$BUILD_DIR" "$BUNDLE_BIN"
 
 CFLAGS="$ARM_FLAGS -std=gnu99 -Os -ffreestanding -fno-builtin -fno-stack-protector -Wno-unused-function -DARM_OS_NEWLIB -DHAVE_NBTOOL_CONFIG_H=1 -DMTREE -DNO_MD5 -DNO_RMD160 -DNO_SHA1 -DNO_SHA2 -I$COMPAT_DIR -I$SRC_DIR -I$ROOT_DIR/userland/include -I$NEWLIB_SYSROOT/include -include $COMPAT_DIR/armos_compat.h"
-LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=0x8000 -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition"
-RUNTIME_OBJECTS="$ROOT_DIR/newlib-port/build/crt0_newlib.o $ROOT_DIR/newlib-port/build/syscall_raw.o $ROOT_DIR/newlib-port/build/syscalls.o"
+LDFLAGS="$ARM_FLAGS -nostdlib -nostartfiles -static -Wl,-Ttext=$TARGET_TEXT_ADDRESS -Wl,-e,_start -Wl,--gc-sections -Wl,--allow-multiple-definition"
 
 objects=()
 for src in compare.c crc.c create.c excludes.c misc.c mtree.c only.c pack_dev.c spec.c specspec.c verify.c; do

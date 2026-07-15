@@ -6,6 +6,8 @@
 
 QEMU_MACHINE_DEFAULT="virt"
 QEMU_CPU_DEFAULT="cortex-a15"
+QEMU_KERNEL_IMAGE_DEFAULT="$ROOT_DIR/build/images/kernel-arm32-qemu-virt.bin"
+QEMU_DISK_IMAGE_DEFAULT="$ROOT_DIR/build/images/disk-arm32-qemu-virt.img"
 QEMU_BLOCK_DEVICE_DEFAULT="virtio-blk-device,drive=hd0"
 QEMU_GPU_DEVICE_DEFAULT="virtio-gpu-device"
 QEMU_INPUT_DEVICE_DEFAULT="virtio-keyboard-device,event_idx=off,indirect_desc=off"
