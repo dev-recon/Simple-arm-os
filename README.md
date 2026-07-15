@@ -1,435 +1,151 @@
 # ArmOS
 
-ArmOS is a small ARM Unix-like kernel for QEMU and Raspberry Pi experiments.
-Version 0.7 marks the complete AArch64 common-kernel milestone: QEMU `virt`
-and Raspberry Pi 3 B+ run the same process, VM, VFS, syscall, scheduler and
-userland contracts as ARM32. ARM32 QEMU `virt` remains the default development
-boot on a fresh checkout, while ARM64 QEMU `virt` is the reference for extending
-the 64-bit port.
+<p align="center">
+  <img src="docs/images/armos-project-overview.png" alt="ArmOS project overview" width="100%">
+</p>
 
-It started as a learning experiment: can a Linux-like ARM kernel be built from
-scratch, with modern tooling and AI-assisted development? It is now a usable
-educational and research operating system with user processes, virtual memory,
-filesystems, syscalls, signals, `/proc`, a shell, and a newlib-based userland
-path.
+<p align="center">
+  A compact Unix-like operating system written from scratch for ARM.<br>
+  Small enough to study, complete enough to run real processes, filesystems,
+  SMP workloads, and a native C toolchain.
+</p>
 
-ArmOS is not Linux, and it is not production-ready. The goal is to keep the
-system small enough to understand while still implementing real operating
-system mechanisms.
+<p align="center">
+  <a href="https://github.com/dev-recon/ArmOS/releases/tag/v0.7"><img src="https://img.shields.io/badge/release-v0.7-2878d7" alt="ArmOS v0.7"></a>
+  <img src="https://img.shields.io/badge/architectures-ARMv7%20%7C%20AArch64-22a06b" alt="ARMv7 and AArch64">
+  <img src="https://img.shields.io/badge/SMP-4%20cores-7557d3" alt="SMP on four cores">
+  <img src="https://img.shields.io/badge/QEMU-10.0.2-e65d19" alt="QEMU 10.0.2">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-3d8fc5" alt="Apache License 2.0"></a>
+</p>
 
-## ArmOS v0.7 ARM64 Milestone
+ArmOS is an educational and research operating system, not a Linux
+distribution. Version 0.7 brought ARM64 onto the same common kernel used by
+ARM32: the architecture layer handles CPU and MMU details while processes,
+syscalls, scheduling, VFS, filesystems, drivers, and userland contracts remain
+shared.
 
-ArmOS v0.7 promotes AArch64 from an isolated bootstrap to a complete runtime.
-ELF64 init and mash use the common kernel, all four CPUs participate in the
-scheduler, and QEMU VirtIO block, network, GPU and keyboard drivers are shared
-with ARM32. The v0.6 native-userland milestone remains intact.
+## See It Run
 
-The development workflow for the operating system itself remains deliberately
-conservative: kernel, filesystem, drivers, release images, and stabilization
-work are still built from macOS or Linux with the host ARM cross toolchain
-(`arm-none-eabi-gcc`, newlib, Makefiles, and the project scripts). This is the
-supported path for contributors.
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/armos-qemu-top.png" alt="ArmOS top running on the graphical tty1 console"></td>
+    <td width="50%"><img src="docs/images/armos-qemu-framebuffer.png" alt="ArmOS framebuffer test pattern"></td>
+  </tr>
+  <tr>
+    <td align="center"><code>top</code> on the VirtIO-GPU <code>tty1</code> console</td>
+    <td align="center"><code>fbtest</code> writing directly to <code>/dev/fb0</code></td>
+  </tr>
+</table>
 
-What changed since the early native-userland milestone is the amount of real
-Unix surface available once ArmOS is already running. The generated root
-filesystem now ships:
+These are direct framebuffer captures from the current
+`arm64/qemu-virt` image. The UART rescue console remains available as `tty0`
+while the graphical console runs on `tty1`.
 
-- a native TinyCC toolchain exposed through `/usr/bin/tcc`
-- the TinyCC runtime bundle under `/opt/tcc`
-- a source snapshot under `/usr/src/armos/userland`
-- enough newlib syscall glue to compile and run small C user programs directly
-  from inside `mash`
-- optional static ncurses support with a custom `TERM=armos` terminfo entry
-- optional GNU nano support, cross-built as a small static ArmOS user program
-- optional BSD-style tool bundle with `bmake`, `sed`, `awk`, `install`,
-  `mtree`, `xargs`, `diff`, `patch`, `pax`/`tar`, and `m4`
-- a 512 MB ext2 root filesystem inside an MBR-partitioned `disk.img`
-- a more disciplined kernel portability foundation: generated assembly offsets,
-  `paddr_t` / `vaddr_t` address types, and a shared FDT parser
-- active SMP hardening that is useful for development stress, while keeping the
-  public runtime contract conservative
+## Quick Start
 
-That means an ArmOS user can boot the system, edit C code with `kilo` or
-`nano`, compile it with `tcc`, and run the resulting binary without returning
-to the host machine. It is not yet a replacement for the project build system,
-but it is now a credible end-user programming environment.
-
-## Current Status
-
-ArmOS currently provides:
-
-- ARMv7-A kernel running on QEMU `virt` / Cortex-A15
-- ARMv7-A hardware target for Raspberry Pi 2 Model B v1.1 / Cortex-A7
-- AArch64 hardware target for Raspberry Pi 3 Model B+ / Cortex-A53
-- AArch64 QEMU `virt` runtime reaching EL1 with PL011 diagnostics,
-  a complete exception-vector table, a recoverable BRK/ERET smoke test, and a
-  4 KiB long-descriptor identity MMU with Device/normal memory attributes,
-  plus GICv2 physical-timer IRQ delivery through the EL1h vector and a shared
-  early physical-page allocator driven by FDT RAM and reservation discovery;
-  TTBR0 then migrates from the static boot table to allocated L1/L2/L3 tables
-  with a tested 4 KiB unmap/remap path, while TTBR1 provides a canonical
-  permission-checked kernel alias used by the live PC, stack, vectors, and
-  MMIO; all low kernel mappings are then removed and isolated user-only TTBR0
-  tables are exercised with distinct ASIDs; a copied EL0t payload now runs on
-  separate RX code and RW/NX data/stack pages, returns through the lower-EL SVC
-  vector, and leaves the physical timer operational; its TTBR0 tables, mapped
-  pages, and ASID now have an explicit bootstrap user-VM owner with a balanced
-  lifecycle test; `svc #0` now follows an AArch64 register ABI and validates
-  successful `write`, `-EFAULT`, `-ENOSYS`, and `exit(42)` paths; EL0 entry
-  and exception capture now share an explicit register context whose generated
-  assembly offsets and nonvolatile-register preservation are checked at boot;
-  a bootstrap task context now performs a validated two-stack cooperative
-  switch while carrying the EL0 image and TTBR0/ASID identity; the switch
-  boundary activates that identity and validates mapped/empty TTBR0 isolation;
-  mapping generations now preserve resident single-CPU ASIDs without a TLBI
-  on each context switch; user page tables now grow L2/L3 levels on demand
-  across multiple virtual regions after low-map retirement, and page unmap
-  performs targeted `(ASID, VA)` invalidation with exact physical-page and
-  table-lifecycle accounting; eager anonymous ranges prevalidate overlap,
-  roll back partial allocation, cross L3 boundaries, and reclaim empty L3/L2
-  tables; a native-width generic syscall dispatcher, process-state model, and
-  AArch64 ELF64 loader are now exercised at boot; lower-EL translation faults
-  back lazy `brk` and private anonymous `mmap` reservations with zeroed pages,
-  and the EL0 probe validates `munmap` and process exit through that path
-- MMU enabled with split TTBR0/TTBR1 address spaces
-- ASID support and ASID rollover handling
-- typed physical/virtual address groundwork (`paddr_t`, `vaddr_t`, `pfn_t`)
-- generated assembly offsets for fragile C/ASM context structures
-- small in-kernel FDT parser used by platform/device discovery paths
-- Kernel tasks and user processes
-- Per-task kernel stacks
-- Context switching across user and kernel execution paths
-- Timer-driven scheduling
-- experimental SMP bring-up with per-CPU state and diagnostics
-- `fork`, `execve`, `waitpid`, `exit`
-- Copy-on-write process memory
-- anonymous `mmap` / `munmap` groundwork for user mappings
-- Signals and basic job control
-- Pipes, file descriptors, `dup`, `dup2`
-- Ext2 root filesystem with read/write support
-- MBR-partitioned disk image with a 512 MB ext2 root partition
-- FAT32 compatibility mount
-- VirtIO block device support
-- VirtIO net diagnostic/echo bring-up
-- `/proc` virtual filesystem
-- UART-backed rescue console/TTY on `tty0`
-- Optional VirtIO-GPU graphical console/TTY on `tty1`
-- VirtIO input keyboard support for the graphical console
-- Shell: `mash`
-- Newlib-based userland
-- Native TinyCC bring-up for end users: users can compile simple C programs
-  directly inside ArmOS through the `/usr/bin/tcc` wrapper
-- Userland source snapshot installed under `/usr/src/armos`, so ArmOS users can
-  inspect, edit, and rebuild small programs from inside the running system
-- Optional ncurses and nano bundles for terminal UI experiments
-- Optional BSD-style tools for Makefile, text-processing, archive, patch, and
-  macro-processing workflows
-- Core utilities such as `cat`, `echo`, `pwd`, `ls`, `cp`, `mv`, `rm`,
-  `mkdir`, `rmdir`, `touch`, `sleep`, `kill`, `ps`, `stat`, `head`,
-  `grep`, `sed`, `sort`, `uniq`, `wc`, and `which`
-- System tools such as `mount`, `umount`, `shutdown`, and `fsck-lite`
-- Runtime smoke and stress tests through `systest`, `ttytest`, and `memstress`
-
-## Platform
-
-Reference platform:
-
-- QEMU `virt`
-- QEMU 10.0.2 is the supported v0.7 reference emulator
-- QEMU 11.0.1 has been smoke-tested, but its macOS/Cocoa graphical window
-  scaling differs from 10.0.2
-- ARM Cortex-A15
-- ARMv7-A, 32-bit
-- GICv2
-- ARM generic timer
-- VirtIO block device
-- UART console
-- Optional VirtIO-GPU display and VirtIO input keyboard
-
-Supported hardware platforms:
-
-- Raspberry Pi 3 Model B+ in AArch64 mode
-  (`TARGET_ARCH=arm64 TARGET_PLATFORM=raspi3`)
-- four Cortex-A53 CPUs participating in the scheduler
-- PL011 UART rescue console on `tty0`
-- SD/eMMC block device with a dedicated FAT32 firmware partition and ext2 root
-- BCM2836 local interrupt controller and ARM generic timer
-- Raspberry Pi 2 Model B v1.1 in ARMv7-A mode
-  (`TARGET_ARCH=arm32 TARGET_PLATFORM=raspi2`)
-- four Cortex-A7 CPUs, PL011 UART, SD/eMMC and the same partitioned root layout
-
-See [Raspberry Pi 3](docs/RASPBERRY_PI3.md) for the build, SD-card,
-UART, validation, and current limitation contracts.
-
-See [Raspberry Pi 2](docs/RASPBERRY_PI2.md) for the ARM32 hardware image,
-firmware, SD-card and UART contract.
-
-See [ARM64 Port](docs/ARM64_PORT.md) for the AArch64 bootstrap contract,
-toolchain, validation marker, and staged migration plan.
-
-### CPU Support Contract
-
-The fresh-checkout default remains the conservative ARM32 QEMU `virt` profile:
+Install the host dependencies for [macOS](INSTALLATION_macos.md) or
+[Linux](INSTALLATION_linux.md), then:
 
 ```sh
-./boot.sh
-```
-
-or explicitly:
-
-```sh
-SMP_CPUS=1 ./boot.sh
-```
-
-Version 0.7 additionally validates four-CPU scheduling on ARM64 QEMU `virt` and
-Raspberry Pi 3 B+. Per-CPU scheduling, timer preemption, TLB shootdown and
-shutdown parking are part of that ARM64 milestone. Raspberry Pi 2 Model B v1.1
-remains the supported ARM32 hardware target.
-
-## Filesystems
-
-ArmOS currently uses ext2 as its richer root filesystem.
-
-Typical layout:
-
-- `/` mounted as ext2
-- `/mnt` used for FAT32 compatibility/testing
-- `/proc` mounted as a virtual procfs
-- `/dev` for device nodes
-- `/home/user` as the default user home directory
-- `/tmp` for temporary files
-- `/usr/src/armos` for the shipped userland source snapshot used by native TCC
-  experiments
-- `/bin` for core utilities, `/sbin` for system programs, `/usr/bin` for
-  ArmOS user programs, and `/opt/<program>/bin` for imported external tools
-- `/opt/tcc`, `/opt/ncurses`, `/opt/nano`, and `/opt/bsd*` for optional
-  generated/imported tool bundles when those build flags are enabled
-
-Ext2 supports normal files, directories, links, permissions, and writable
-operations used by the current userland. FAT32 remains useful as a compatibility
-filesystem, but it is no longer expected to mirror the full root filesystem.
-
-## Userland
-
-Newlib is the supported userland C library.
-
-The older in-tree libc and older programs are archived under
-`userland/legacy/` for reference and bring-up archaeology, but new userland
-work should use the newlib path.
-
-The shell, `mash`, supports interactive commands, external programs, pipes,
-redirections, background jobs, scripts, and basic job control.
-
-ArmOS ships a userland source snapshot in the root filesystem:
-
-```text
-/usr/src/armos/userland
-```
-
-This is intentional, but it does not replace the project development toolchain.
-Kernel work, stabilization, release builds, and normal contributor workflows
-still use the host cross toolchain on macOS or Linux (`arm-none-eabi-gcc`,
-newlib, Makefiles, and scripts). Native TinyCC is aimed at ArmOS users who want
-to open a source file with `kilo`, compile a small program, and run it without
-leaving ArmOS.
-
-Example inside `mash`:
-
-```sh
-tcc /usr/src/armos/userland/coreutils/src/ls.c -o /tmp/ls-tcc
-/tmp/ls-tcc /proc
-```
-
-Optional terminal UI packages can be staged during a build:
-
-```sh
-BUILD_NCURSES=1 BUILD_NANO=1 ./build.sh
-```
-
-This installs ncurses under `/opt/ncurses`, a small `cursestest` program under
-`/usr/bin`, and nano under `/opt/nano/bin`. The generated bundles are build
-artifacts and are not tracked in Git.
-
-Optional BSD-style tools can be staged with:
-
-```sh
-BUILD_BSD=1 ./build.sh
-```
-
-This adds ports such as `bmake`, BSD `sed`/`awk`, `install`, `mtree`, `xargs`,
-`diff`, `patch`, `pax`/`tar`, and `m4`. See
-[`docs/BSD_USERLAND.md`](docs/BSD_USERLAND.md).
-
-## Stability
-
-ArmOS has passed repeated stress runs such as:
-
-```sh
-systest &; systest &; systest &; systest &; systest &
-```
-
-The stability notes track task lifetime, zombie cleanup, kernel stack page
-balance, physical page allocation/free balance, ASID rollover, scheduler
-refusals, TTY counters, and known long-idle issues.
-
-See:
-
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- [`docs/GET_STARTED_KERNEL_DEV.md`](docs/GET_STARTED_KERNEL_DEV.md)
-- [`docs/GET_STARTED_USERLAND_DEV.md`](docs/GET_STARTED_USERLAND_DEV.md)
-- [`docs/POSIX_COMPATIBILITY.md`](docs/POSIX_COMPATIBILITY.md)
-- [`docs/STORAGE_PERFORMANCE.md`](docs/STORAGE_PERFORMANCE.md)
-- [`docs/BSD_USERLAND.md`](docs/BSD_USERLAND.md)
-- [`STABILITY.md`](STABILITY.md)
-- [`ROADMAP.md`](ROADMAP.md)
-
-Known areas still under investigation include:
-
-- graphical console polish such as resize, richer scrollback, and copy/paste
-- procfs transient entries during fork/exit storms
-- SMP promotion from developer mode to release-stable mode
-- cleanup of old debug code and unused kernel paths
-
-## Building And Running
-
-Installation guides:
-
-- macOS: [`INSTALLATION_macos.md`](INSTALLATION_macos.md)
-- Linux: [`INSTALLATION_linux.md`](INSTALLATION_linux.md)
-- build configuration: [`docs/BUILD_CONFIGURATION.md`](docs/BUILD_CONFIGURATION.md)
-
-Common scripts:
-
-```sh
+git clone https://github.com/dev-recon/ArmOS.git
+cd ArmOS
 ./run.sh
 ```
 
-On a fresh checkout, rebuilds and starts the stable reference target:
-
-```text
-arm32/qemu-virt
-```
-
-For a persistent local selection, copy `armos.conf.example` to `armos.conf` or
-select one of the tracked profiles:
-
-```sh
-ARMOS_CONFIG=configs/qemu-virt-arm64.conf ./run.sh
-```
-
-Inspect the resolved settings before building with
-`./tools/armos_config.sh --show` or `make config`. The local `armos.conf` is not
-tracked by Git.
-
-Other architecture/platform pairs are explicit opt-ins through the same
-pipeline. For example:
+The default route builds and boots the conservative `arm32/qemu-virt` target.
+Try the ARM64 reference kernel explicitly with:
 
 ```sh
 TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./run.sh
 ```
 
-```sh
-./boot.sh
-```
-
-Boots an existing `kernel.bin` and `disk.img` without rebuilding.
-
-```sh
-./boot-graphics.sh
-```
-
-Boots the same kernel and disk with VirtIO-GPU enabled. The UART terminal stays
-available as `tty0`; the graphical QEMU window exposes `tty1`.
-
-Select another architecture explicitly when booting an existing image:
+Open the graphical console with:
 
 ```sh
 TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./boot-graphics.sh
 ```
 
-The network diagnostic profile keeps the UART console and adds VirtIO-net with
-a host TCP forward to the guest echo service:
+ArmOS also supports a local [`armos.conf`](docs/BUILD_CONFIGURATION.md) and
+tracked configuration profiles, so architecture, platform, networking, GPU,
+memory, and optional userland bundles do not have to be repeated on every
+command line.
+
+## What Is Inside
+
+| Area | Current implementation |
+| --- | --- |
+| Processes | Preemptive scheduling, SMP, `fork`, ELF `execve`, `waitpid`, signals, job control |
+| Virtual memory | Split user/kernel address spaces, MMU, ASIDs, copy-on-write, anonymous `mmap` |
+| Files and IPC | VFS, descriptors, pipes, `dup`, ext2 root, FAT32, `/proc` |
+| Devices | PL011 UART, TTYs, VirtIO block/net/GPU/input, Raspberry Pi SD/eMMC |
+| Userland | newlib, `mash`, core Unix tools, editors, tests, optional BSD utilities |
+| Native development | TinyCC can compile and run small C programs from inside ArmOS |
+
+The normal contributor workflow still uses the host cross toolchain. Native
+TinyCC is the next step toward self-hosting, not yet a replacement for the
+release build system.
+
+## Supported Targets
+
+| Target | Role | CPU mode | Main devices |
+| --- | --- | --- | --- |
+| `arm32/qemu-virt` | Fresh-checkout default | ARMv7-A | GICv2, PL011, VirtIO |
+| `arm64/qemu-virt` | Kernel feature reference | AArch64 | GICv2, PL011, VirtIO, 4-core SMP |
+| `arm64/raspi3` | Hardware reference | AArch64 | Raspberry Pi 3 B+, PL011, SD/eMMC, 4-core SMP |
+| `arm32/raspi2` | Supported hardware | ARMv7-A | Raspberry Pi 2 B v1.1, PL011, SD/eMMC |
+
+QEMU 10.0.2 is the reference emulator for the v0.7 line. Hardware images use a
+dedicated FAT32 firmware partition and an ext2 root filesystem.
+
+## Try ArmOS
+
+Once `mash` starts, a useful first tour is:
 
 ```sh
-TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./boot-net.sh
-```
-
-Exit QEMU with:
-
-```text
-Ctrl+A, then X
-```
-
-At the `mash$>` prompt, useful smoke tests are:
-
-```sh
-systest
+uname -a
 ps
 ls -la /
 ls -la /proc
-hello
+systest
 ```
 
-## Development Notes
+A small native compilation looks like this:
 
-This is a learning-oriented kernel. Some code is still intentionally verbose or
-instrumented because it helped bring up difficult subsystems such as MMU,
-context switching, signals, filesystems, VirtIO, and process lifecycle code.
+```sh
+printf '#include <stdio.h>\nint main(void){puts("hello from ArmOS");}\n' > hello.c
+tcc hello.c -o hello
+./hello
+```
 
-Planned cleanup work includes:
+Optional packages include ncurses, GNU nano, BSD `bmake`, `sed`, `awk`,
+`install`, `mtree`, `xargs`, `diff`, `patch`, `pax`, `tar`, `m4`, and ELF
+inspection tools. They can be included through `armos.conf` or the existing
+build flags.
 
-- removing dead code
-- reducing old debug logs
-- lowering warning noise
-- shrinking kernel size
-- isolating architecture-specific ARM32 code more cleanly
-- advancing the ARM64 port from its EL1 serial bootstrap
+## Documentation
 
-## Roadmap
+- [Architecture](docs/ARCHITECTURE.md) - kernel structure, MMU, scheduler, VFS, TTYs, and drivers
+- [Build configuration](docs/BUILD_CONFIGURATION.md) - targets, profiles, and `armos.conf`
+- [Kernel development](docs/GET_STARTED_KERNEL_DEV.md) - source map and contributor workflow
+- [Userland development](docs/GET_STARTED_USERLAND_DEV.md) - newlib programs and native experiments
+- [ARM64 port](docs/ARM64_PORT.md) - AArch64 contracts and current implementation
+- [POSIX compatibility](docs/POSIX_COMPATIBILITY.md) - implemented surface and priorities
+- [Storage performance](docs/STORAGE_PERFORMANCE.md) - ext2, FAT32, and SD/eMMC measurements
+- [Raspberry Pi 3](docs/RASPBERRY_PI3.md) and [Raspberry Pi 2](docs/RASPBERRY_PI2.md) - hardware guides
+- [Roadmap](ROADMAP.md) and [stability notes](STABILITY.md)
 
-Near-term work:
+## Project Status
 
-- continue graphical console polish while preserving UART `tty0`
-- improve shell/userland polish
-- continue procfs cleanup
-- reduce dead code and warnings
-- stabilize the optional ncurses/nano path
-- automate the mixed SMP stress matrix
+ArmOS is experimental software. It is built to expose real operating-system
+mechanisms clearly and to support serious testing, but it is not production
+ready and does not promise a stable ABI yet. Current work focuses on POSIX
+surface growth, storage performance, networking, graphical I/O, hardware
+drivers, and the road to a self-hosted toolchain.
 
-Medium-term ideas:
-
-- improve POSIX compatibility for larger userland packages
-- extend the locally IRQ-safe ARM64 dispatcher with SMP runqueue locking and
-  per-CPU ownership, replace the bounded generic ARM64 VMA/table inventories
-  with dynamic range nodes, make ASID residency SMP-safe, move early allocation
-  into the synchronized physical allocator, and connect VFS-backed ELF64
-  `execve`, runnable fork children, file descriptors, pipes, and TTYs before
-  building the AArch64 newlib userland
-
-See [`ROADMAP.md`](ROADMAP.md) for more detail.
-
-## Project Goals
-
-ArmOS is intended to be:
-
-- small enough to understand
-- real enough to exercise serious kernel mechanisms
-- useful for learning ARM bare-metal development
-- useful for teaching operating system concepts
-- a base for experiments around schedulers, virtual memory, filesystems,
-  syscalls, userland, and hypervisor guests
-
-It is not intended to replace Linux.
-
-## Contributing
-
-Contributions, experiments, bug reports, tests, and documentation improvements
-are welcome.
-
-Please read [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Contributions, experiments, bug reports, and documentation improvements are
+welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-ArmOS is licensed under the Apache License, Version 2.0.
-
-See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+ArmOS is licensed under the Apache License, Version 2.0. See
+[LICENSE](LICENSE) and [NOTICE](NOTICE).

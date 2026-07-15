@@ -25,6 +25,7 @@
 #include <asm/user_vm.h>
 #include <kernel/string.h>
 #include <kernel/smp.h>
+#include <kernel/spinlock.h>
 #include <kernel/task.h>
 #include <kernel/tlb.h>
 
@@ -61,6 +62,7 @@ static uint32_t arm64_asid_generation = 1;
 static uint32_t next_tlb_generation = 1;
 static uint64_t tlb_flush_count;
 static uint64_t tlb_preserve_count;
+static spinlock_t arm64_asid_lock = SPINLOCK_INIT("arm64_asid_pool");
 
 typedef struct {
     paddr_t table;
@@ -95,13 +97,18 @@ _Static_assert(ARM64_USER_PAGE_EXEC == VMA_EXEC,
 
 static uint32_t allocate_tlb_generation(void)
 {
-    uint32_t generation = next_tlb_generation++;
+    unsigned long flags;
+    uint32_t generation;
+
+    spin_lock_irqsave(&arm64_asid_lock, &flags);
+    generation = next_tlb_generation++;
 
     if (generation == 0) {
         generation = next_tlb_generation++;
         if (generation == 0)
             generation = 1;
     }
+    spin_unlock_irqrestore(&arm64_asid_lock, flags);
     return generation;
 }
 
@@ -130,7 +137,7 @@ static unsigned int arm64_asid_make(unsigned int generation,
     return (generation << 8) | arm64_asid_hw(hardware_asid);
 }
 
-static unsigned int allocate_asid(void)
+static unsigned int allocate_asid_locked(void)
 {
     unsigned int asid;
 
@@ -158,7 +165,18 @@ static unsigned int allocate_asid(void)
     return arm64_asid_make(arm64_asid_generation, asid);
 }
 
-static void release_asid(unsigned int asid)
+static unsigned int allocate_asid(void)
+{
+    unsigned long flags;
+    unsigned int asid;
+
+    spin_lock_irqsave(&arm64_asid_lock, &flags);
+    asid = allocate_asid_locked();
+    spin_unlock_irqrestore(&arm64_asid_lock, flags);
+    return asid;
+}
+
+static void release_asid_locked(unsigned int asid)
 {
     unsigned int hardware_asid = arm64_asid_hw(asid);
     unsigned int generation = asid >> 8;
@@ -166,6 +184,12 @@ static void release_asid(unsigned int asid)
 
     if (hardware_asid > 0 &&
         arm64_asid_slot_generation[hardware_asid] == generation) {
+        /*
+         * The software generation is not encoded in TTBR0_EL1.  Flush the
+         * hardware ASID on every PE before making its slot reusable, or a
+         * later process can execute translations left by its predecessor.
+         */
+        tlb_shootdown_asid(hardware_asid);
         arm64_asid_bitmap[hardware_asid >> 3] &=
             (uint8_t)~(1u << (hardware_asid & 7u));
         arm64_asid_slot_generation[hardware_asid] = 0;
@@ -174,6 +198,15 @@ static void release_asid(unsigned int asid)
                         sizeof(arm64_asid_residency[cpu][hardware_asid]));
         }
     }
+}
+
+static void release_asid(unsigned int asid)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&arm64_asid_lock, &flags);
+    release_asid_locked(asid);
+    spin_unlock_irqrestore(&arm64_asid_lock, flags);
 }
 
 static arm64_user_vm_l2_table_t *arm64_user_vm_find_l2(
