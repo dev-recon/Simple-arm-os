@@ -132,6 +132,7 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_nanosleep] = (syscall_func_t)sys_nanosleep,
     [__NR_clock_gettime] = (syscall_func_t)sys_clock_gettime,
     [__NR_clock_getres] = (syscall_func_t)sys_clock_getres,
+    [__NR_clock_nanosleep] = (syscall_func_t)sys_clock_nanosleep,
     [__NR_openat] = (syscall_func_t)sys_openat,
     [__NR_mkdirat] = (syscall_func_t)sys_mkdirat,
     [__NR_fstatat] = (syscall_func_t)sys_fstatat,

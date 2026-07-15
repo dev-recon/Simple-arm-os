@@ -38,6 +38,9 @@
 
 extern int clock_gettime(clockid_t clock_id, struct timespec *tp);
 extern int clock_getres(clockid_t clock_id, struct timespec *res);
+extern int clock_nanosleep(clockid_t clock_id, int flags,
+                           const struct timespec *req,
+                           struct timespec *rem);
 extern int sched_yield(void);
 extern ssize_t pread(int fd, void *buf, size_t count, off_t offset);
 extern ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset);
@@ -1567,7 +1570,9 @@ static void test_posix_clocks_and_capabilities(void)
     struct timespec after;
     struct timespec resolution;
     struct timespec delay;
+    struct timespec deadline;
     long value;
+    int rc;
 
     expect(sched_yield() == 0, "sched_yield yields successfully", errno);
 
@@ -1590,6 +1595,29 @@ static void test_posix_clocks_and_capabilities(void)
         expect(clock_gettime(CLOCK_MONOTONIC, &after) == 0 &&
                timespec_after(&after, &before),
                "monotonic clock advances", errno);
+
+        delay.tv_sec = 0;
+        delay.tv_nsec = 10000000L;
+        expect(clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL) == 0,
+               "clock_nanosleep relative monotonic", 0);
+
+        expect(clock_gettime(CLOCK_MONOTONIC, &deadline) == 0,
+               "clock_nanosleep reads absolute deadline", errno);
+        deadline.tv_nsec += 20000000L;
+        if (deadline.tv_nsec >= 1000000000L) {
+            deadline.tv_sec++;
+            deadline.tv_nsec -= 1000000000L;
+        }
+        expect(clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME,
+                               &deadline, NULL) == 0,
+               "clock_nanosleep absolute monotonic", 0);
+        expect(clock_gettime(CLOCK_MONOTONIC, &after) == 0 &&
+               !timespec_after(&deadline, &after),
+               "clock_nanosleep reaches absolute deadline", errno);
+
+        expect(clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME,
+                               &before, NULL) == 0,
+               "clock_nanosleep accepts past deadline", 0);
     }
 
     expect(clock_gettime(CLOCK_REALTIME, &after) == 0 &&
@@ -1601,6 +1629,20 @@ static void test_posix_clocks_and_capabilities(void)
     errno = 0;
     expect(clock_gettime(CLOCK_MONOTONIC, NULL) < 0 && errno == EFAULT,
            "clock_gettime rejects null result", errno);
+
+    delay.tv_sec = 0;
+    delay.tv_nsec = 1000000L;
+    errno = EBUSY;
+    rc = clock_nanosleep((clockid_t)999, 0, &delay, NULL);
+    expect(rc == EINVAL && errno == EBUSY,
+           "clock_nanosleep returns errors without errno", rc);
+    rc = clock_nanosleep(CLOCK_MONOTONIC, 2, &delay, NULL);
+    expect(rc == EINVAL, "clock_nanosleep rejects unknown flags", rc);
+    rc = clock_nanosleep(CLOCK_MONOTONIC, 0, NULL, NULL);
+    expect(rc == EFAULT, "clock_nanosleep rejects null request", rc);
+    delay.tv_nsec = -1;
+    rc = clock_nanosleep(CLOCK_MONOTONIC, 0, &delay, NULL);
+    expect(rc == EINVAL, "clock_nanosleep rejects invalid request", rc);
 
     expect(sysconf(_SC_CLK_TCK) > 0, "sysconf clock ticks", errno);
     expect(sysconf(_SC_PAGESIZE) == 4096, "sysconf page size", errno);

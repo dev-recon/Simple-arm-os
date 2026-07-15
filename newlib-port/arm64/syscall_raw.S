@@ -124,6 +124,7 @@ RAW_SYSCALL sys_munmap, 196
 RAW_SYSCALL sys_sysconf, 197
 RAW_SYSCALL sys_clock_gettime, 263
 RAW_SYSCALL sys_clock_getres, 264
+RAW_SYSCALL sys_clock_nanosleep, 265
 RAW_SYSCALL sys_socket, 281
 RAW_SYSCALL sys_bind, 282
 RAW_SYSCALL sys_connect, 283

@@ -51,6 +51,13 @@
 
 #include "arm_os_abi.h"
 
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC ((clockid_t)4)
+#endif
+#ifndef TIMER_ABSTIME
+#define TIMER_ABSTIME 4
+#endif
+
 extern long sys_read(int fd, void *buf, unsigned long count);
 extern long sys_write(int fd, const void *buf, unsigned long count);
 extern long sys_pread(int fd, void *buf, unsigned long count,
@@ -118,6 +125,11 @@ extern long sys_sigprocmask(int how, const void *set, void *oldset);
 extern long sys_sigpending(void *set);
 extern long sys_nanosleep(const armos_timespec32_t *req,
                           armos_timespec32_t *rem);
+extern long sys_clock_gettime(int clock_id, armos_timespec_t *tp);
+extern long sys_clock_getres(int clock_id, armos_timespec_t *res);
+extern long sys_clock_nanosleep(int clock_id, int flags,
+                                const armos_timespec_t *req,
+                                armos_timespec_t *rem);
 extern long sys_getcwd(char *buf, unsigned long size);
 extern long sys_shm_open(const char *name, unsigned long size, int flags);
 extern long sys_shm_unlink(const char *name);
@@ -1463,6 +1475,93 @@ ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
 int getsysinfo(struct sysinfo_response *resp)
 {
     return ret_errno(sys_sysinfo(resp));
+}
+
+static int clock_id_to_armos(clockid_t clock_id)
+{
+    if (clock_id == CLOCK_REALTIME)
+        return ARMOS_CLOCK_REALTIME;
+    if (clock_id == CLOCK_MONOTONIC)
+        return ARMOS_CLOCK_MONOTONIC;
+    return -1;
+}
+
+int clock_gettime(clockid_t clock_id, struct timespec *tp)
+{
+    armos_timespec_t value;
+    int armos_clock = clock_id_to_armos(clock_id);
+    long ret;
+
+    if (!tp) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (armos_clock < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    ret = sys_clock_gettime(armos_clock, &value);
+    if (ret < 0)
+        return ret_errno(ret);
+    tp->tv_sec = (time_t)value.sec;
+    tp->tv_nsec = (long)value.nsec;
+    return 0;
+}
+
+int clock_getres(clockid_t clock_id, struct timespec *res)
+{
+    armos_timespec_t value;
+    int armos_clock = clock_id_to_armos(clock_id);
+    long ret;
+
+    if (armos_clock < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    ret = sys_clock_getres(armos_clock, res ? &value : NULL);
+    if (ret < 0)
+        return ret_errno(ret);
+    if (res) {
+        res->tv_sec = (time_t)value.sec;
+        res->tv_nsec = (long)value.nsec;
+    }
+    return 0;
+}
+
+int clock_nanosleep(clockid_t clock_id, int flags,
+                    const struct timespec *req, struct timespec *rem)
+{
+    armos_timespec_t request;
+    armos_timespec_t remaining;
+    int armos_clock = clock_id_to_armos(clock_id);
+    int armos_flags;
+    long ret;
+
+    if (armos_clock < 0)
+        return EINVAL;
+    if (flags != 0 && flags != TIMER_ABSTIME)
+        return EINVAL;
+    if (!req)
+        return EFAULT;
+    if (req->tv_sec < 0 || req->tv_nsec < 0 ||
+        req->tv_nsec >= 1000000000L)
+        return EINVAL;
+
+    request.sec = (signed long long)req->tv_sec;
+    request.nsec = (signed long long)req->tv_nsec;
+    armos_flags = flags == TIMER_ABSTIME ? ARMOS_TIMER_ABSTIME : 0;
+    ret = sys_clock_nanosleep(armos_clock, armos_flags, &request,
+                              rem ? &remaining : NULL);
+    if (ret < 0) {
+        if (ret == -EINTR && rem && armos_flags == 0) {
+            rem->tv_sec = (time_t)remaining.sec;
+            rem->tv_nsec = (long)remaining.nsec;
+        }
+        return (int)-ret;
+    }
+    return 0;
 }
 
 int nanosleep(const struct timespec *req, struct timespec *rem)

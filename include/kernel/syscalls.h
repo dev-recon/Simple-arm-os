@@ -138,6 +138,7 @@ struct process;
 #define __NR_sysconf            ARMOS_NR_SYSCONF
 #define __NR_clock_gettime      ARMOS_NR_CLOCK_GETTIME
 #define __NR_clock_getres       ARMOS_NR_CLOCK_GETRES
+#define __NR_clock_nanosleep    ARMOS_NR_CLOCK_NANOSLEEP
 #define __NR_openat             ARMOS_NR_OPENAT
 #define __NR_mkdirat            ARMOS_NR_MKDIRAT
 #define __NR_fstatat            ARMOS_NR_FSTATAT
@@ -369,6 +370,9 @@ int sys_sched_yield(void);
 int sys_nanosleep(const armos_timespec32_t *req, armos_timespec32_t *rem);
 int sys_clock_gettime(int clock_id, armos_timespec_t *tp);
 int sys_clock_getres(int clock_id, armos_timespec_t *res);
+int sys_clock_nanosleep(int clock_id, int flags,
+                        const armos_timespec_t *req,
+                        armos_timespec_t *rem);
 
 /* Memory syscalls */
 long sys_brk(void* addr);

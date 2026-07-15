@@ -33,4 +33,6 @@ typedef struct {
 #define ARMOS_CLOCK_REALTIME  0
 #define ARMOS_CLOCK_MONOTONIC 1
 
+#define ARMOS_TIMER_ABSTIME 1
+
 #endif

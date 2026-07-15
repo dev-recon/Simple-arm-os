@@ -2557,16 +2557,11 @@ int sys_sched_yield(void)
     return 0;
 }
 
-int sys_clock_gettime(int clock_id, armos_timespec_t *tp)
+static int clock_gettime_value(int clock_id, armos_timespec_t *value)
 {
-    armos_timespec_t value;
-
-    if (!tp)
-        return -EFAULT;
-
     if (clock_id == ARMOS_CLOCK_REALTIME) {
-        value.sec = (int64_t)get_current_time();
-        value.nsec = 0;
+        value->sec = (int64_t)get_current_time();
+        value->nsec = 0;
     } else if (clock_id == ARMOS_CLOCK_MONOTONIC) {
         uint32_t frequency = get_timer_frequency();
         uint32_t remainder;
@@ -2576,12 +2571,27 @@ int sys_clock_gettime(int clock_id, armos_timespec_t *tp)
             return -ENOSYS;
 
         count = get_timer_count();
-        value.sec = (int64_t)divide_u64_u32(count, frequency, &remainder);
-        value.nsec = (int64_t)divide_u64_u32(
+        value->sec = (int64_t)divide_u64_u32(count, frequency, &remainder);
+        value->nsec = (int64_t)divide_u64_u32(
             (uint64_t)remainder * 1000000000ULL, frequency, NULL);
     } else {
         return -EINVAL;
     }
+
+    return 0;
+}
+
+int sys_clock_gettime(int clock_id, armos_timespec_t *tp)
+{
+    armos_timespec_t value;
+    int ret;
+
+    if (!tp)
+        return -EFAULT;
+
+    ret = clock_gettime_value(clock_id, &value);
+    if (ret < 0)
+        return ret;
 
     return copy_to_user(tp, &value, sizeof(value)) < 0 ? -EFAULT : 0;
 }
@@ -2613,54 +2623,24 @@ int sys_clock_getres(int clock_id, armos_timespec_t *res)
     return copy_to_user(res, &value, sizeof(value)) < 0 ? -EFAULT : 0;
 }
 
-int sys_nanosleep(const armos_timespec32_t *req,
-                  armos_timespec32_t *rem) {
-    task_t *task = task_current_local();
-    armos_timespec32_t request;
-    uint32_t sleep_ticks;
+static int sleep_interruptible_ticks(task_t *task, uint32_t sleep_ticks,
+                                     uint32_t *remaining_ticks)
+{
     uint32_t start_time, elapsed_time;
     uint32_t now;
     bool interrupted;
-    
-    if (!task) return -EINVAL;
-    if (!req) return -EFAULT;
-    if (copy_from_user(&request, req, sizeof(request)) < 0)
-        return -EFAULT;
-    if (request.nsec >= 1000000000u) return -EINVAL;
 
-    //KDEBUG("sys_nanosleep: req->sec=%u, req->nsec=%u\n", req->sec, req->nsec);
-    
-    /* Convertir la duree demandee en ticks kernel.
-     * TIMER_FREQ vaut 1000: un tick == une milliseconde. Garder ce calcul en
-     * 32-bit evite de tirer __aeabi_uldivmod dans le kernel freestanding. */
-    if (request.sec > 0xFFFFFFFFu / TIMER_FREQ) {
-        sleep_ticks = 0xFFFFFFFFu;
-    } else {
-        uint32_t nsec_ticks = (request.nsec + 999999u) / 1000000u;
-        sleep_ticks = request.sec * TIMER_FREQ;
-        if (sleep_ticks > 0xFFFFFFFFu - nsec_ticks)
-            sleep_ticks = 0xFFFFFFFFu;
-        else
-            sleep_ticks += nsec_ticks;
-    }
-
-    //KDEBUG("sys_nanosleep: sleep_ticks=%u\n", sleep_ticks);
-    
     if (sleep_ticks == 0) {
-        yield();  /* Juste céder le CPU */
+        if (remaining_ticks)
+            *remaining_ticks = 0;
+        yield();
         return 0;
     }
-    
-    start_time = get_system_ticks();
-    //KDEBUG("sys_nanosleep: start_time=%u\n", start_time);
-    
-    task_set_interruptible_until(task, start_time + sleep_ticks);
-    
-    yield();
-    
-    //KDEBUG("sys_nanosleep: woke up\n");
 
-    /* Vérifier si réveillé par signal */
+    start_time = get_system_ticks();
+    task_set_interruptible_until(task, start_time + sleep_ticks);
+    yield();
+
     now = get_system_ticks();
     interrupted = has_pending_signals(task) ||
         (task->state == TASK_RUNNING &&
@@ -2670,30 +2650,115 @@ int sys_nanosleep(const armos_timespec32_t *req,
     task_set_wakeup_time(task, 0);
 
     if (interrupted) {
-        /* Réveillé prématurément par un signal */
-        if (rem) {
-            armos_timespec32_t remaining;
-
+        if (remaining_ticks) {
             elapsed_time = now - start_time;
-            uint32_t remaining_ticks = (elapsed_time >= sleep_ticks) ? 0 : sleep_ticks - elapsed_time;
-            /*
-             * Si le signal est observe sur la meme tick que l'echeance, le
-             * calcul discret peut tomber a zero tout en retournant EINTR.
-             * Garder un tick rend rem exploitable pour l'appelant et evite
-             * de confondre interruption et expiration complete.
-             */
-            if (remaining_ticks == 0)
-                remaining_ticks = 1;
-            remaining.sec = remaining_ticks / TIMER_FREQ;
-            remaining.nsec = (remaining_ticks % TIMER_FREQ) *
-                (1000000000u / TIMER_FREQ);
-            if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0)
-                return -EFAULT;
+            *remaining_ticks = elapsed_time >= sleep_ticks ?
+                0 : sleep_ticks - elapsed_time;
+            if (*remaining_ticks == 0)
+                *remaining_ticks = 1;
         }
         return -EINTR;
     }
 
+    if (remaining_ticks)
+        *remaining_ticks = 0;
     return 0;
+}
+
+static uint32_t duration_to_ticks(int64_t sec, int64_t nsec)
+{
+    uint32_t nsec_ticks = (uint32_t)(nsec + 999999LL) / 1000000u;
+    uint32_t sec_ticks;
+
+    if (sec > (int64_t)(0xFFFFFFFFu / TIMER_FREQ))
+        return 0xFFFFFFFFu;
+
+    sec_ticks = (uint32_t)sec * TIMER_FREQ;
+    if (sec_ticks > 0xFFFFFFFFu - nsec_ticks)
+        return 0xFFFFFFFFu;
+    return sec_ticks + nsec_ticks;
+}
+
+int sys_nanosleep(const armos_timespec32_t *req,
+                  armos_timespec32_t *rem)
+{
+    task_t *task = task_current_local();
+    armos_timespec32_t request;
+    armos_timespec32_t remaining;
+    uint32_t remaining_ticks = 0;
+    int ret;
+
+    if (!task) return -EINVAL;
+    if (!req) return -EFAULT;
+    if (copy_from_user(&request, req, sizeof(request)) < 0)
+        return -EFAULT;
+    if (request.nsec >= 1000000000u) return -EINVAL;
+
+    ret = sleep_interruptible_ticks(
+        task, duration_to_ticks(request.sec, request.nsec), &remaining_ticks);
+    if (ret == -EINTR && rem) {
+        remaining.sec = remaining_ticks / TIMER_FREQ;
+        remaining.nsec = (remaining_ticks % TIMER_FREQ) *
+            (1000000000u / TIMER_FREQ);
+        if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0)
+            return -EFAULT;
+    }
+    return ret;
+}
+
+int sys_clock_nanosleep(int clock_id, int flags,
+                        const armos_timespec_t *req,
+                        armos_timespec_t *rem)
+{
+    task_t *task = task_current_local();
+    armos_timespec_t request;
+    armos_timespec_t duration;
+    armos_timespec_t now;
+    armos_timespec_t remaining;
+    uint32_t remaining_ticks = 0;
+    int ret;
+
+    if (!task)
+        return -EINVAL;
+    if (!req)
+        return -EFAULT;
+    if (flags != 0 && flags != ARMOS_TIMER_ABSTIME)
+        return -EINVAL;
+    if (copy_from_user(&request, req, sizeof(request)) < 0)
+        return -EFAULT;
+    if (request.sec < 0 || request.nsec < 0 ||
+        request.nsec >= 1000000000LL)
+        return -EINVAL;
+
+    ret = clock_gettime_value(clock_id, &now);
+    if (ret < 0)
+        return ret;
+
+    duration = request;
+    if (flags == ARMOS_TIMER_ABSTIME) {
+        if (request.sec < now.sec ||
+            (request.sec == now.sec && request.nsec <= now.nsec))
+            return 0;
+
+        duration.sec = request.sec - now.sec;
+        duration.nsec = request.nsec - now.nsec;
+        if (duration.nsec < 0) {
+            duration.sec--;
+            duration.nsec += 1000000000LL;
+        }
+    }
+
+    ret = sleep_interruptible_ticks(
+        task, duration_to_ticks(duration.sec, duration.nsec),
+        &remaining_ticks);
+    if (ret == -EINTR && rem && flags == 0) {
+        remaining.sec = remaining_ticks / TIMER_FREQ;
+        remaining.nsec = (remaining_ticks % TIMER_FREQ) *
+            (1000000000u / TIMER_FREQ);
+        if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0)
+            return -EFAULT;
+    }
+    return ret;
 }
 
 static process_t *task_process_for_sysinfo(task_t *task)

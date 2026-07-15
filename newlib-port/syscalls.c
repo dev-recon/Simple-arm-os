@@ -138,6 +138,9 @@ extern long sys_nanosleep(const armos_timespec32_t *req,
                           armos_timespec32_t *rem);
 extern long sys_clock_gettime(int clock_id, armos_timespec_t *tp);
 extern long sys_clock_getres(int clock_id, armos_timespec_t *res);
+extern long sys_clock_nanosleep(int clock_id, int flags,
+                                const armos_timespec_t *req,
+                                armos_timespec_t *rem);
 extern long sys_mknod(const char *pathname, int mode, unsigned long dev);
 extern long sys_mmap(void *addr, unsigned long length, int prot, int flags, int fd);
 extern long sys_munmap(void *addr, unsigned long length);
@@ -1668,6 +1671,41 @@ int clock_getres(clockid_t clock_id, struct timespec *res)
     if (res) {
         res->tv_sec = (time_t)value.sec;
         res->tv_nsec = (long)value.nsec;
+    }
+    return 0;
+}
+
+int clock_nanosleep(clockid_t clock_id, int flags,
+                    const struct timespec *req, struct timespec *rem)
+{
+    armos_timespec_t request;
+    armos_timespec_t remaining;
+    int armos_clock;
+    int armos_flags;
+    long ret;
+
+    armos_clock = clock_id_to_armos(clock_id);
+    if (armos_clock < 0)
+        return EINVAL;
+    if (flags != 0 && flags != TIMER_ABSTIME)
+        return EINVAL;
+    if (!req)
+        return EFAULT;
+    if (req->tv_sec < 0 || req->tv_nsec < 0 ||
+        req->tv_nsec >= 1000000000L)
+        return EINVAL;
+
+    request.sec = (signed long long)req->tv_sec;
+    request.nsec = (signed long long)req->tv_nsec;
+    armos_flags = flags == TIMER_ABSTIME ? ARMOS_TIMER_ABSTIME : 0;
+    ret = sys_clock_nanosleep(armos_clock, armos_flags, &request,
+                              rem ? &remaining : NULL);
+    if (ret < 0) {
+        if (ret == -EINTR && rem && armos_flags == 0) {
+            rem->tv_sec = (time_t)remaining.sec;
+            rem->tv_nsec = (long)remaining.nsec;
+        }
+        return (int)-ret;
     }
     return 0;
 }

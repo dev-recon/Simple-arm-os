@@ -6,7 +6,7 @@ syscall ABI. POSIX specifies application-visible behavior; ArmOS remains free
 to implement that behavior with a smaller architecture-neutral kernel ABI and
 newlib wrappers.
 
-The current common dispatcher exposes 100 syscall entries. It already covers
+The current common dispatcher exposes 109 syscall entries. It already covers
 the central Unix process, VFS, descriptor, signal, virtual-memory, TTY, polling
 and identity contracts. The next stage is therefore semantic completion and a
 small number of missing primitives, not one syscall for every function listed
@@ -52,7 +52,7 @@ needed by a broad range of otherwise simple Unix programs.
 | --- | --- | --- |
 | `sched_yield` | Implemented | Common scheduler handler and symmetric ARM32/ARM64 wrappers |
 | `clock_gettime`, `clock_getres` | Realtime and monotonic clocks implemented | Preserve the common UAPI and improve realtime resolution when hardware RTC support grows |
-| `clock_nanosleep` | Missing | Build absolute and relative sleep on the scheduler deadline mechanism |
+| `clock_nanosleep` | Relative and absolute realtime/monotonic sleep implemented | Preserve direct POSIX error returns and extend clock support only with real clock sources |
 | `pread`, `pwrite` | Implemented for seekable files | Preserve the shared open-file offset and reject non-seekable descriptors with `ESPIPE` |
 | `openat` and `*at` path operations | Implemented with dirfds stable across `chdir` | Replace the stored canonical base path with dentry-relative lookup so an open directory also survives namespace renames |
 | `fchmod`, `fchown` | Implemented for ext2 descriptors | Extend descriptor metadata updates when writable filesystems gain equivalent inode operations |
@@ -116,6 +116,13 @@ the same permission and ext2 inode-update paths as their pathname variants.
 flush, which is persistence-safe but may write unrelated metadata. `systest`
 checks successful descriptor updates, ownership rules and invalid-descriptor
 errors on both ABIs.
+
+`clock_nanosleep()` now uses the same interruptible scheduler deadline path as
+`nanosleep()` while exposing a separate signed 64-bit time ABI. Relative and
+`TIMER_ABSTIME` sleeps accept both realtime and monotonic clocks, past absolute
+deadlines return immediately, and the newlib wrapper preserves the POSIX rule
+that this interface returns an error number directly instead of setting
+`errno`.
 
 ### P1 - Complete Existing Contracts
 
