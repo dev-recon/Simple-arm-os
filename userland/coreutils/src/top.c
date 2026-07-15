@@ -25,6 +25,10 @@
 #define TOP_MAX_TASKS 128
 #define TOP_HZ 1000
 #define TOP_MAX_CPUS 8
+#define TOP_DEFAULT_ROWS 24
+#define TOP_DEFAULT_COLS 80
+#define TOP_HEADER_ROWS 6
+#define TOP_FULL_WIDTH 112
 
 #define C_RESET   "\033[0m"
 #define C_BOLD    "\033[1m"
@@ -80,6 +84,20 @@ static unsigned top_cpu_count = 1;
 static char top_proc_dirbuf[TOP_PROC_BUF];
 static char top_frame_data[TOP_FRAME_BUF];
 
+static int top_write_all(int fd, const char *buf, size_t count)
+{
+    size_t written = 0;
+
+    while (written < count) {
+        ssize_t result = write(fd, buf + written, count - written);
+
+        if (result <= 0)
+            return -1;
+        written += (size_t)result;
+    }
+    return 0;
+}
+
 static void top_buf_free(top_buf_t *buf)
 {
     buf->len = 0;
@@ -133,13 +151,13 @@ static int top_buf_printf(top_buf_t *buf, const char *fmt, ...)
 static void top_enter_screen(void)
 {
     static const char seq[] = "\033[?1049h\033[?25l\033[H\033[2J";
-    write(STDOUT_FILENO, seq, sizeof(seq) - 1);
+    top_write_all(STDOUT_FILENO, seq, sizeof(seq) - 1);
 }
 
 static void top_leave_screen(void)
 {
-    static const char seq[] = C_RESET "\033[?25h\033[?1049l";
-    write(STDOUT_FILENO, seq, sizeof(seq) - 1);
+    static const char seq[] = "\033[?2026l" C_RESET "\033[?25h\033[?1049l";
+    top_write_all(STDOUT_FILENO, seq, sizeof(seq) - 1);
 }
 
 static void top_enable_interactive(void)
@@ -629,6 +647,63 @@ static void append_cpu(top_buf_t *buf, int cpu)
         top_buf_append(buf, "  -", 3);
 }
 
+static void read_terminal_size(unsigned *rows, unsigned *cols)
+{
+    struct winsize size;
+
+    *rows = TOP_DEFAULT_ROWS;
+    *cols = TOP_DEFAULT_COLS;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0) {
+        if (size.ws_row > 0)
+            *rows = size.ws_row;
+        if (size.ws_col > 0)
+            *cols = size.ws_col;
+    }
+}
+
+static void append_rule(top_buf_t *buf, unsigned cols)
+{
+    static const char rule[] =
+        "--------------------------------------------------------------------------------"
+        "------------------------------------------------";
+    unsigned width = cols > 2u ? cols - 2u : cols;
+
+    if (width > sizeof(rule) - 1u)
+        width = sizeof(rule) - 1u;
+    top_buf_append(buf, C_DIM, sizeof(C_DIM) - 1);
+    top_buf_append(buf, rule, (int)width);
+    top_buf_append(buf, C_RESET "\033[0K\r\n",
+                   sizeof(C_RESET "\033[0K\r\n") - 1);
+}
+
+static void append_task_compact(top_buf_t *buf, const top_task_t *task,
+                                unsigned cols)
+{
+    char timebuf[16];
+    char ctxbuf[16];
+    const char *color = state_color(task);
+    int name_width = cols > 53u ? (int)(cols - 53u) : 1;
+
+    format_runtime(task->runtime_ticks, timebuf, sizeof(timebuf));
+    format_count(task->ctx, ctxbuf, sizeof(ctxbuf));
+    top_buf_printf(buf, C_CYAN "%5d" C_RESET " ", task->pid);
+    if (task->tty >= 0)
+        top_buf_printf(buf, "tty%-1d", task->tty);
+    else
+        top_buf_append(buf, "?   ", 4);
+    top_buf_printf(buf, " %s%-5s" C_RESET " ", color, state_name(task));
+    append_cpu(buf, task->cpu);
+    top_buf_printf(buf, " %3u %3u.%u %7s %6s %5uK %.*s\033[0K\r\n",
+                   task->priority,
+                   task->cpu_pct_x10 / 10u,
+                   task->cpu_pct_x10 % 10u,
+                   timebuf,
+                   ctxbuf,
+                   task->rss_kb,
+                   name_width,
+                   task->name);
+}
+
 static void render_top(unsigned delay_sec, int iteration)
 {
     top_buf_t frame = {
@@ -641,6 +716,10 @@ static void render_top(unsigned delay_sec, int iteration)
     unsigned pct_x10;
     unsigned cpu_total_x10 = 0;
     unsigned cpu_average_x100;
+    unsigned terminal_rows;
+    unsigned terminal_cols;
+    int visible_count;
+    int full_width;
     int count;
 
     read_mem(&mem);
@@ -656,11 +735,18 @@ static void render_top(unsigned delay_sec, int iteration)
     cpu_average_x100 = (cpu_total_x10 * 10u + top_cpu_count / 2u) /
                        top_cpu_count;
     qsort(top_tasks, (size_t)count, sizeof(top_tasks[0]), compare_tasks);
+    read_terminal_size(&terminal_rows, &terminal_cols);
+    visible_count = terminal_rows > TOP_HEADER_ROWS ?
+                    (int)(terminal_rows - TOP_HEADER_ROWS) : 1;
+    if (visible_count > count)
+        visible_count = count;
+    full_width = terminal_cols >= TOP_FULL_WIDTH;
 
     used_kb = mem.total_kb >= mem.free_kb ? mem.total_kb - mem.free_kb : 0;
     pct_x10 = mem.total_kb ? (used_kb * 1000u / mem.total_kb) : 0;
 
-    top_buf_append(&frame, "\033[?25l\033[H", 9);
+    top_buf_append(&frame, "\033[?2026h\033[?25l\033[H",
+                   sizeof("\033[?2026h\033[?25l\033[H") - 1);
     top_buf_printf(&frame, C_BOLD C_CYAN "ArmOS top" C_RESET " - refresh %us", delay_sec);
     if (iteration >= 0)
         top_buf_printf(&frame, " - iteration %d", iteration + 1);
@@ -687,15 +773,24 @@ static void render_top(unsigned delay_sec, int iteration)
                    pct_x10 % 10u,
                    count);
 
-    top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %4s %3s %5s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
-                   "PID", "TTY", "STATE", "LAST", "PRI", "DEBT", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
-    top_buf_append(&frame, C_DIM "------------------------------------------------------------------------------" C_RESET "\033[0K\r\n",
-                   (int)strlen(C_DIM "------------------------------------------------------------------------------" C_RESET "\033[0K\r\n"));
+    if (full_width) {
+        top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %4s %3s %5s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
+                       "PID", "TTY", "STATE", "LAST", "PRI", "DEBT", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
+    } else {
+        top_buf_printf(&frame, C_BOLD "%5s %-4s %-5s %3s %3s %5s %7s %6s %6s %s" C_RESET "\033[0K\r\n",
+                       "PID", "TTY", "STATE", "CPU", "PRI", "%CPU", "TIME", "CTX", "RSS", "CMD");
+    }
+    append_rule(&frame, terminal_cols);
 
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < visible_count; i++) {
         char timebuf[16];
         char ctxbuf[16];
         const char *color = state_color(&top_tasks[i]);
+
+        if (!full_width) {
+            append_task_compact(&frame, &top_tasks[i], terminal_cols);
+            continue;
+        }
 
         format_runtime(top_tasks[i].runtime_ticks, timebuf, sizeof(timebuf));
         format_count(top_tasks[i].ctx, ctxbuf, sizeof(ctxbuf));
@@ -719,9 +814,10 @@ static void render_top(unsigned delay_sec, int iteration)
                        top_tasks[i].name);
     }
 
-    top_buf_append(&frame, "\033[J", 3);
+    top_buf_append(&frame, "\033[J\033[?2026l",
+                   sizeof("\033[J\033[?2026l") - 1);
     if (frame.data && frame.len > 0)
-        write(STDOUT_FILENO, frame.data, (size_t)frame.len);
+        top_write_all(STDOUT_FILENO, frame.data, (size_t)frame.len);
     top_buf_free(&frame);
 }
 
