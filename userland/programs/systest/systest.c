@@ -854,6 +854,107 @@ static void test_chmod_chown_syscalls(void)
     unlink(path);
 }
 
+static void test_utimens_syscalls(void)
+{
+    const char *path = tmp_path("utimens.txt");
+    const char *link_path = tmp_path("utimens-link");
+    struct timespec times[2];
+    struct timespec before;
+    struct timespec after;
+    struct stat st;
+    struct stat target_st;
+    int dirfd;
+    int fd;
+
+    unlink(link_path);
+    unlink(path);
+    fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
+    if (expect(fd >= 0, "utimens create test file", fd) < 0)
+        return;
+
+    times[0].tv_sec = 100;
+    times[0].tv_nsec = 123456789;
+    times[1].tv_sec = 200;
+    times[1].tv_nsec = 987654321;
+    expect(utimensat(AT_FDCWD, path, times, 0) == 0,
+           "utimensat explicit timestamps", errno);
+    if (expect(stat(path, &st) == 0, "utimensat stat result", errno) == 0) {
+        expect(st.st_atime == 100, "utimensat stores access seconds", (int)st.st_atime);
+        expect(st.st_mtime == 200, "utimensat stores modify seconds", (int)st.st_mtime);
+    }
+
+    dirfd = open(systest_tmp_root, O_RDONLY | O_DIRECTORY, 0);
+    if (expect(dirfd >= 0, "utimensat open directory fd", dirfd) == 0) {
+        times[0].tv_sec = 700;
+        times[0].tv_nsec = 0;
+        times[1].tv_sec = 800;
+        times[1].tv_nsec = 0;
+        expect(utimensat(dirfd, "utimens.txt", times, 0) == 0,
+               "utimensat directory-relative timestamps", errno);
+        if (expect(fstat(fd, &st) == 0,
+                   "utimensat directory-relative fstat", errno) == 0)
+            expect(st.st_mtime == 800,
+                   "utimensat resolves relative to dirfd", (int)st.st_mtime);
+        close(dirfd);
+    }
+
+    times[0].tv_sec = 300;
+    times[0].tv_nsec = 0;
+    times[1].tv_sec = 400;
+    times[1].tv_nsec = 0;
+    expect(futimens(fd, times) == 0, "futimens descriptor timestamps", errno);
+    if (expect(fstat(fd, &st) == 0, "futimens fstat result", errno) == 0) {
+        expect(st.st_atime == 300, "futimens stores access seconds", (int)st.st_atime);
+        expect(st.st_mtime == 400, "futimens stores modify seconds", (int)st.st_mtime);
+    }
+
+    clock_gettime(CLOCK_REALTIME, &before);
+    times[0].tv_sec = 0;
+    times[0].tv_nsec = UTIME_OMIT;
+    times[1].tv_sec = 0;
+    times[1].tv_nsec = UTIME_NOW;
+    expect(futimens(fd, times) == 0, "futimens NOW and OMIT", errno);
+    clock_gettime(CLOCK_REALTIME, &after);
+    if (expect(fstat(fd, &st) == 0, "futimens NOW and OMIT stat", errno) == 0) {
+        expect(st.st_atime == 300, "UTIME_OMIT preserves access time", (int)st.st_atime);
+        expect(st.st_mtime >= before.tv_sec && st.st_mtime <= after.tv_sec + 1,
+               "UTIME_NOW uses realtime clock", (int)st.st_mtime);
+    }
+
+    if (expect(symlink(path, link_path) == 0,
+               "utimens create symlink", errno) == 0) {
+        times[0].tv_sec = 500;
+        times[0].tv_nsec = 0;
+        times[1].tv_sec = 600;
+        times[1].tv_nsec = 0;
+        expect(utimensat(AT_FDCWD, link_path, times, AT_SYMLINK_NOFOLLOW) == 0,
+               "utimensat updates symlink itself", errno);
+        if (expect(lstat(link_path, &st) == 0,
+                   "utimensat lstat symlink", errno) == 0)
+            expect(st.st_mtime == 600,
+                   "utimensat nofollow symlink timestamp", (int)st.st_mtime);
+        if (expect(stat(path, &target_st) == 0,
+                   "utimensat target stat", errno) == 0)
+            expect(target_st.st_mtime != 600,
+                   "utimensat nofollow preserves target", (int)target_st.st_mtime);
+    }
+
+    times[0].tv_sec = 0;
+    times[0].tv_nsec = 1000000000L;
+    times[1].tv_sec = 0;
+    times[1].tv_nsec = 0;
+    errno = 0;
+    expect(futimens(fd, times) < 0 && errno == EINVAL,
+           "futimens rejects invalid nanoseconds", errno);
+    errno = 0;
+    expect(futimens(-1, NULL) < 0 && errno == EBADF,
+           "futimens rejects invalid descriptor", errno);
+
+    close(fd);
+    unlink(link_path);
+    unlink(path);
+}
+
 static void test_proc_net_syscalls(void)
 {
     char buf[512];
@@ -2556,6 +2657,7 @@ int main(int argc, char **argv)
     test_dev_null();
     test_dev_tty();
     test_chmod_chown_syscalls();
+    test_utimens_syscalls();
     test_proc_net_syscalls();
     test_posix_compat_syscalls();
     test_ext2_links_and_dirents();

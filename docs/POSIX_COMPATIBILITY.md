@@ -6,7 +6,7 @@ syscall ABI. POSIX specifies application-visible behavior; ArmOS remains free
 to implement that behavior with a smaller architecture-neutral kernel ABI and
 newlib wrappers.
 
-The current common dispatcher exposes 111 syscall entries. It already covers
+The current common dispatcher exposes 113 syscall entries. It already covers
 the central Unix process, VFS, descriptor, signal, virtual-memory, TTY, polling
 and identity contracts. The next stage is therefore semantic completion and a
 small number of missing primitives, not one syscall for every function listed
@@ -138,7 +138,7 @@ building blocks.
 | `pselect`, `ppoll` | Mask change and wait are separate operations | Make signal-mask replacement and blocking atomic in the kernel |
 | `getrlimit`, `setrlimit` | Mostly static newlib responses | Store and enforce at least file, address-space, data, stack, core and CPU limits |
 | `statvfs`, `fstatvfs` | Implemented for ext2 and FAT32 paths and descriptors | Extend mount flags and statistics when new filesystem backends are added |
-| `futimens`, `utimensat` | Only second-resolution `utime` exists | Support descriptor-relative nanosecond timestamps |
+| `futimens`, `utimensat` | Implemented with ext2 second-resolution persistence | Preserve nanoseconds when filesystem inode formats grow higher-resolution fields |
 | Process identity | Basic UID/GID only | Add effective-ID changes, supplementary groups and complete permission checks |
 | `waitid` | Missing | Expose non-destructive status queries and the required selection modes |
 
@@ -158,6 +158,16 @@ Newlib translates that structure into its native POSIX types, preserving the
 same source interface and counter widths on ARM32 and ARM64. Path queries
 validate that the named object exists, while descriptor queries retain their
 filesystem association after the file has been opened.
+
+`utimensat()` and `futimens()` share the existing VFS permission and inode
+metadata path. They support explicit timestamps, `UTIME_NOW`, `UTIME_OMIT`,
+directory-relative lookup and `AT_SYMLINK_NOFOLLOW`. The UAPI transports signed
+64-bit seconds and nanoseconds consistently across both architectures; ext2
+currently persists whole seconds because its supported inode format has no
+high-resolution timestamp fields. Cached VFS objects are canonicalized by ext2
+inode number so path and descriptor metadata remain coherent. The same metadata
+repair also makes legacy `utime()` persist access and modification times
+correctly.
 
 ### P2 - Threads And POSIX Synchronization
 

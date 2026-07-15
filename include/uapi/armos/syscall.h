@@ -55,6 +55,8 @@
 #define ARMOS_NR_CLOCK_NANOSLEEP 265
 #define ARMOS_NR_STATVFS         266
 #define ARMOS_NR_FSTATVFS        267
+#define ARMOS_NR_UTIMENSAT       268
+#define ARMOS_NR_FUTIMENS        269
 #define ARMOS_NR_OPENAT        322
 #define ARMOS_NR_MKDIRAT       323
 #define ARMOS_NR_FSTATAT       327

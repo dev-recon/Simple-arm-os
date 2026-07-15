@@ -106,6 +106,8 @@ int  vfs_sync(void);
 int  vfs_shutdown(void);
 inode_t* create_inode(void);
 inode_t* get_inode(uint32_t ino);
+inode_t* vfs_get_backing_inode(inode_operations_t* operations,
+                               uint32_t backing_id);
 inode_t* get_root_inode(void);
 void put_inode(inode_t* inode);
 inode_t* path_lookup(const char* path);

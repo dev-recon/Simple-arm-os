@@ -35,4 +35,7 @@ typedef struct {
 
 #define ARMOS_TIMER_ABSTIME 1
 
+#define ARMOS_UTIME_NOW  (-2LL)
+#define ARMOS_UTIME_OMIT (-1LL)
+
 #endif

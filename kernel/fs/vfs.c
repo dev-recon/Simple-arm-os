@@ -583,6 +583,31 @@ inode_t* get_inode(uint32_t ino)
     return NULL;
 }
 
+inode_t* vfs_get_backing_inode(inode_operations_t* operations,
+                               uint32_t backing_id)
+{
+    inode_t* inode;
+    unsigned long flags;
+    uint32_t hash;
+
+    if (!operations)
+        return NULL;
+
+    spin_lock_irqsave(&vfs_lock, &flags);
+    for (hash = 0; hash < MAX_INODES; hash++) {
+        for (inode = inode_table[hash]; inode; inode = inode->next) {
+            if (inode->i_op == operations &&
+                inode->first_cluster == backing_id) {
+                inode->ref_count++;
+                spin_unlock_irqrestore(&vfs_lock, flags);
+                return inode;
+            }
+        }
+    }
+    spin_unlock_irqrestore(&vfs_lock, flags);
+    return NULL;
+}
+
 void put_inode(inode_t* inode)
 {
     uint32_t hash;

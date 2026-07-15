@@ -2166,6 +2166,146 @@ int sys_utime(const char* pathname, const void* times)
     return ret;
 }
 
+static int validate_utimens(const armos_timespec_t times[2])
+{
+    int i;
+
+    if (!times)
+        return 0;
+    for (i = 0; i < 2; i++) {
+        if (times[i].nsec == ARMOS_UTIME_NOW ||
+            times[i].nsec == ARMOS_UTIME_OMIT)
+            continue;
+        if (times[i].nsec < 0 || times[i].nsec >= 1000000000LL)
+            return -EINVAL;
+        if (times[i].sec < 0 || times[i].sec > 0xffffffffLL)
+            return -EOVERFLOW;
+    }
+    return 0;
+}
+
+static int update_inode_times(inode_t* inode,
+                              const armos_timespec_t times[2],
+                              bool have_times)
+{
+    bool explicit_time = false;
+    bool changed = false;
+    uint32_t now;
+    int ret;
+    int i;
+
+    if (!inode)
+        return -EINVAL;
+    if (have_times) {
+        ret = validate_utimens(times);
+        if (ret < 0)
+            return ret;
+        for (i = 0; i < 2; i++) {
+            if (times[i].nsec != ARMOS_UTIME_NOW &&
+                times[i].nsec != ARMOS_UTIME_OMIT)
+                explicit_time = true;
+        }
+        if (times[0].nsec == ARMOS_UTIME_OMIT &&
+            times[1].nsec == ARMOS_UTIME_OMIT)
+            return 0;
+    }
+
+    if (current_uid() != 0 && current_uid() != inode->uid &&
+        (explicit_time || !inode_permission(inode, MAY_WRITE)))
+        return -EPERM;
+    if (inode->i_op != &ext2_inode_ops)
+        return -EROFS;
+
+    now = get_current_time();
+    if (!have_times || times[0].nsec == ARMOS_UTIME_NOW) {
+        inode->atime = now;
+        changed = true;
+    } else if (times[0].nsec != ARMOS_UTIME_OMIT) {
+        inode->atime = (uint32_t)times[0].sec;
+        changed = true;
+    }
+    if (!have_times || times[1].nsec == ARMOS_UTIME_NOW) {
+        inode->mtime = now;
+        changed = true;
+    } else if (times[1].nsec != ARMOS_UTIME_OMIT) {
+        inode->mtime = (uint32_t)times[1].sec;
+        changed = true;
+    }
+    if (!changed)
+        return 0;
+
+    inode->ctime = now;
+    return ext2_update_inode_metadata(inode);
+}
+
+int sys_utimensat(int dirfd, const char* pathname,
+                  const armos_timespec_t* times, int flags)
+{
+    armos_timespec_t ktimes[2];
+    bool follow_final;
+    char* kernel_path;
+    char* full_path;
+    inode_t* inode;
+    int ret;
+
+    if (flags & ~ARMOS_AT_SYMLINK_NOFOLLOW)
+        return -EINVAL;
+    if (times && copy_from_user(ktimes, times, sizeof(ktimes)) < 0)
+        return -EFAULT;
+    ret = validate_utimens(times ? ktimes : NULL);
+    if (ret < 0)
+        return ret;
+
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path)
+        return -EFAULT;
+    ret = resolve_path_at(dirfd, kernel_path, &full_path);
+    kfree(kernel_path);
+    if (ret < 0)
+        return ret;
+    ret = vfs_check_search_permission(full_path, false);
+    if (ret < 0) {
+        kfree(full_path);
+        return ret;
+    }
+
+    follow_final = !(flags & ARMOS_AT_SYMLINK_NOFOLLOW);
+    vfs_begin_mutation();
+    inode = path_lookup_ex(full_path, follow_final);
+    kfree(full_path);
+    if (!inode) {
+        vfs_end_mutation();
+        return -ENOENT;
+    }
+    ret = update_inode_times(inode, ktimes, times != NULL);
+    put_inode(inode);
+    vfs_end_mutation();
+    return ret;
+}
+
+int sys_futimens(int fd, const armos_timespec_t* times)
+{
+    task_t* task = task_current_local();
+    armos_timespec_t ktimes[2];
+    file_t* file;
+    int ret;
+
+    if (fd < 0 || fd >= MAX_FILES || !task || !task->process)
+        return -EBADF;
+    file = task->process->files[fd];
+    if (!file)
+        return -EBADF;
+    if (!file->inode)
+        return -EINVAL;
+    if (times && copy_from_user(ktimes, times, sizeof(ktimes)) < 0)
+        return -EFAULT;
+
+    vfs_begin_mutation();
+    ret = update_inode_times(file->inode, ktimes, times != NULL);
+    vfs_end_mutation();
+    return ret;
+}
+
 static int unlink_resolved(char *full_path)
 {
     char* parent_path;

@@ -148,6 +148,7 @@ typedef enum {
 #define ENOSYS         38       /* Function not implemented */
 #define ENOTEMPTY      39       /* Directory not empty */
 #define ELOOP          40       /* Too many symbolic links */
+#define EOVERFLOW      75       /* Value too large for defined data type */
 #define EADDRINUSE     98       /* Address already in use */
 #define ENOTCONN      107       /* Transport endpoint is not connected */
 #define ETIMEDOUT     110       /* Connection timed out */

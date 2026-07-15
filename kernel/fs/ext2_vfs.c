@@ -1364,6 +1364,8 @@ int ext2_update_inode_metadata(inode_t* inode)
     disk.i_mode = inode->mode;
     disk.i_uid = inode->uid;
     disk.i_gid = inode->gid;
+    disk.i_atime = inode->atime;
+    disk.i_mtime = inode->mtime;
     disk.i_ctime = inode->ctime ? inode->ctime : get_current_time();
 
     if (ext2_write_disk_inode(inode->first_cluster, &disk) < 0) {
@@ -1813,10 +1815,14 @@ static int ext2_add_dir_entry(inode_t* dir, uint32_t ino, const char* name, uint
 
 static inode_t* ext2_make_inode(uint32_t ino)
 {
+    inode_t* inode = vfs_get_backing_inode(&ext2_inode_ops, ino);
     ext2_inode_t disk;
+
+    if (inode)
+        return inode;
     if (ext2_read_disk_inode(ino, &disk) < 0) return NULL;
 
-    inode_t* inode = create_inode();
+    inode = create_inode();
     if (!inode) return NULL;
 
     inode->first_cluster = ino;   /* reuse field for ext2 inode number */

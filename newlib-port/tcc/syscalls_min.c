@@ -134,6 +134,9 @@ extern long sys_clock_getres(int clock_id, armos_timespec_t *res);
 extern long sys_clock_nanosleep(int clock_id, int flags,
                                 const armos_timespec_t *req,
                                 armos_timespec_t *rem);
+extern long sys_utimensat(int dirfd, const char *pathname,
+                          const armos_timespec_t *times, int flags);
+extern long sys_futimens(int fd, const armos_timespec_t *times);
 extern long sys_getcwd(char *buf, unsigned long size);
 extern long sys_shm_open(const char *name, unsigned long size, int flags);
 extern long sys_shm_unlink(const char *name);
@@ -860,6 +863,36 @@ int statvfs(const char *path, struct statvfs *buf)
     }
     copy_statvfs(buf, &os_st);
     return 0;
+}
+
+static const armos_timespec_t* copy_utimens_times(
+    const struct timespec times[2], armos_timespec_t out[2])
+{
+    int i;
+
+    if (!times)
+        return NULL;
+    for (i = 0; i < 2; i++) {
+        out[i].sec = (signed long long)times[i].tv_sec;
+        out[i].nsec = (signed long long)times[i].tv_nsec;
+    }
+    return out;
+}
+
+int utimensat(int dirfd, const char *pathname,
+              const struct timespec times[2], int flags)
+{
+    armos_timespec_t os_times[2];
+
+    return ret_errno(sys_utimensat(dirfd, pathname,
+        copy_utimens_times(times, os_times), flags));
+}
+
+int futimens(int fd, const struct timespec times[2])
+{
+    armos_timespec_t os_times[2];
+
+    return ret_errno(sys_futimens(fd, copy_utimens_times(times, os_times)));
 }
 
 int fstatvfs(int fd, struct statvfs *buf)

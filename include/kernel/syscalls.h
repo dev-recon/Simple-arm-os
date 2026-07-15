@@ -108,6 +108,8 @@ struct process;
 #define __NR_statfs              99
 #define __NR_statvfs             ARMOS_NR_STATVFS
 #define __NR_fstatvfs            ARMOS_NR_FSTATVFS
+#define __NR_utimensat           ARMOS_NR_UTIMENSAT
+#define __NR_futimens            ARMOS_NR_FUTIMENS
 #define __NR_stat               106
 #define __NR_lstat              107
 #define __NR_fstat              108
@@ -362,6 +364,9 @@ int sys_getrusage(int who, struct rusage_kernel* usage);
 int sys_alarm(uint32_t seconds);
 int sys_pause(void);
 int sys_utime(const char* pathname, const void* times);
+int sys_utimensat(int dirfd, const char* pathname,
+                  const armos_timespec_t* times, int flags);
+int sys_futimens(int fd, const armos_timespec_t* times);
 
 /* Signal syscalls */
 int sys_kill(pid_t pid, int sig);

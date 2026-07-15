@@ -15,6 +15,13 @@
 
 #include_next <sys/stat.h>
 
+#ifndef UTIME_NOW
+#define UTIME_NOW  (-2L)
+#endif
+#ifndef UTIME_OMIT
+#define UTIME_OMIT (-1L)
+#endif
+
 int lstat(const char *path, struct stat *buf);
 int mknod(const char *path, mode_t mode, unsigned long dev);
 

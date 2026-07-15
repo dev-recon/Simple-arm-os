@@ -118,6 +118,9 @@ extern long sys_times(void *buf);
 extern long sys_alarm(unsigned int seconds);
 extern long sys_pause(void);
 extern long sys_utime(const char *pathname, const void *times);
+extern long sys_utimensat(int dirfd, const char *pathname,
+                          const armos_timespec_t *times, int flags);
+extern long sys_futimens(int fd, const armos_timespec_t *times);
 extern long sys_fork(void);
 extern long sys_execve(const char *pathname, char *const argv[], char *const envp[]);
 extern long sys_waitpid(int pid, int *status, int options);
@@ -2068,6 +2071,36 @@ int pause(void)
 int utime(const char *pathname, const struct utimbuf *times)
 {
     return ret_errno(sys_utime(pathname, times));
+}
+
+static const armos_timespec_t* copy_utimens_times(
+    const struct timespec times[2], armos_timespec_t out[2])
+{
+    int i;
+
+    if (!times)
+        return NULL;
+    for (i = 0; i < 2; i++) {
+        out[i].sec = (signed long long)times[i].tv_sec;
+        out[i].nsec = (signed long long)times[i].tv_nsec;
+    }
+    return out;
+}
+
+int utimensat(int dirfd, const char *pathname,
+              const struct timespec times[2], int flags)
+{
+    armos_timespec_t os_times[2];
+
+    return ret_errno(sys_utimensat(dirfd, pathname,
+        copy_utimens_times(times, os_times), flags));
+}
+
+int futimens(int fd, const struct timespec times[2])
+{
+    armos_timespec_t os_times[2];
+
+    return ret_errno(sys_futimens(fd, copy_utimens_times(times, os_times)));
 }
 
 int mknod(const char *pathname, mode_t mode, unsigned long dev)
