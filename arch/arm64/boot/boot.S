@@ -9,7 +9,7 @@
  * Layer: ARM64 / early boot
  *
  * Responsibilities:
- * - Normalize QEMU virt entry from EL2 or EL1 into the EL1h kernel context.
+ * - Normalize firmware/QEMU entry from EL3, EL2 or EL1 into EL1h.
  * - Establish the boot stack, clear BSS and install the first vector table.
  * - Reset firmware-owned CPU-local task state before entering common C code.
  * - Enable the AArch64 FP/SIMD register file for EL0 and EL1 execution.
@@ -66,11 +66,32 @@ _start:
 
     mrs x1, CurrentEL
     lsr x1, x1, #2
+    cmp x1, #3
+    b.eq .Ldrop_from_el3
     cmp x1, #2
     b.eq .Ldrop_from_el2
     cmp x1, #1
     b.eq .Lenter_el1
     b .Lbad_el
+
+.Ldrop_from_el3:
+    /*
+     * QEMU raspi3b resets CPU0 in secure EL3 when a raw image is loaded.
+     * Real Raspberry Pi firmware enters the kernel in EL2, so this path is
+     * normally QEMU-only. Enter non-secure AArch64 EL2 with HVC enabled and
+     * let the established EL2 path perform the final transition to EL1h.
+     */
+    mov x2, #0x501              /* SCR_EL3: NS | HCE | RW */
+    msr scr_el3, x2
+    msr cptr_el3, xzr
+    mov x2, #0x3c9              /* Mask DAIF, return to EL2h. */
+    msr spsr_el3, x2
+    adr x2, .Ldrop_from_el2
+    msr elr_el3, x2
+    ldr x2, =__stack_top
+    msr sp_el2, x2
+    isb
+    eret
 
 .Ldrop_from_el2:
     arm64_enable_a53_smp x2
@@ -175,11 +196,25 @@ smp_secondary_entry:
 
     mrs x4, CurrentEL
     lsr x4, x4, #2
+    cmp x4, #3
+    b.eq .Lsecondary_drop_from_el3
     cmp x4, #2
     b.eq .Lsecondary_drop_from_el2
     cmp x4, #1
     b.eq .Lsecondary_enter_el1
     b .Lsecondary_halt
+
+.Lsecondary_drop_from_el3:
+    mov x4, #0x501
+    msr scr_el3, x4
+    msr cptr_el3, xzr
+    mov x4, #0x3c9
+    msr spsr_el3, x4
+    adr x4, .Lsecondary_drop_from_el2
+    msr elr_el3, x4
+    msr sp_el2, x2
+    isb
+    eret
 
 .Lsecondary_drop_from_el2:
     arm64_enable_a53_smp x4

@@ -32,12 +32,14 @@
 #include <kernel/virtio_net.h>
 #include <kernel/uart.h>
 #include <kernel/ext2.h>
+#include <kernel/fat32.h>
 #include <kernel/syscalls.h>
 #include <kernel/smp.h>
 #include <kernel/tlb.h>
 #include <kernel/arch_cpu.h>
 #include <kernel/arch_mmu_debug.h>
 #include <kernel/arch_platform.h>
+#include <kernel/block_device.h>
 
 extern uint32_t task_count;
 extern task_t* task_list_head;
@@ -73,6 +75,9 @@ static file_operations_t procfs_dir_ops;
 #define PROC_INO_SCHED      22u
 #define PROC_INO_SMP        23u
 #define PROC_INO_SMP_IPI    24u
+#define PROC_INO_DISKSTATS  25u
+#define PROC_INO_FS_FAT32   26u
+#define PROC_INO_FS_FAT32_STATS 27u
 #define PROC_PID_BASE       100000u
 #define PROC_PID_STRIDE     512u
 #define PROC_PID_DIR        0u
@@ -314,6 +319,8 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_FILESYSTEMS, S_IFREG | 0444, 0);
         if (strcmp(name, "partitions") == 0)
             return proc_make_inode(PROC_INO_PARTITIONS, S_IFREG | 0444, 0);
+        if (strcmp(name, "diskstats") == 0)
+            return proc_make_inode(PROC_INO_DISKSTATS, S_IFREG | 0444, 0);
         if (strcmp(name, "dmesg") == 0)
             return proc_make_inode(PROC_INO_DMESG, S_IFREG | 0444, 0);
         if (strcmp(name, "interrupts") == 0)
@@ -358,6 +365,8 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_ROOT, S_IFDIR | 0555, 0);
         if (strcmp(name, "ext2") == 0)
             return proc_make_inode(PROC_INO_FS_EXT2, S_IFDIR | 0555, 0);
+        if (strcmp(name, "fat32") == 0)
+            return proc_make_inode(PROC_INO_FS_FAT32, S_IFDIR | 0555, 0);
         return NULL;
     }
 
@@ -370,6 +379,16 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_FS_EXT2_STATS, S_IFREG | 0444, 0);
         if (strcmp(name, "check") == 0)
             return proc_make_inode(PROC_INO_FS_EXT2_CHECK, S_IFREG | 0444, 0);
+        return NULL;
+    }
+
+    if (dir_ino == PROC_INO_FS_FAT32) {
+        if (strcmp(name, ".") == 0)
+            return proc_make_inode(PROC_INO_FS_FAT32, S_IFDIR | 0555, 0);
+        if (strcmp(name, "..") == 0)
+            return proc_make_inode(PROC_INO_FS_DIR, S_IFDIR | 0555, 0);
+        if (strcmp(name, "stats") == 0)
+            return proc_make_inode(PROC_INO_FS_FAT32_STATS, S_IFREG | 0444, 0);
         return NULL;
     }
 
@@ -740,6 +759,35 @@ static void proc_fill_partitions(char* buf, size_t cap, size_t* len)
     }
 }
 
+static void proc_fill_diskstats(char* buf, size_t cap, size_t* len)
+{
+    block_device_stats_t st;
+
+    blk_get_stats(&st);
+    proc_append(buf, cap, len, "device %s\n", blk_get_name());
+    proc_append(buf, cap, len, "sector_size %u\n", blk_get_sector_size());
+    proc_append(buf, cap, len, "capacity_sectors %llu\n",
+                (unsigned long long)blk_get_capacity_sectors());
+    proc_append(buf, cap, len, "read_requests %llu\n",
+                (unsigned long long)st.read_requests);
+    proc_append(buf, cap, len, "read_sectors %llu\n",
+                (unsigned long long)st.read_sectors);
+    proc_append(buf, cap, len, "read_errors %llu\n",
+                (unsigned long long)st.read_errors);
+    proc_append(buf, cap, len, "write_requests %llu\n",
+                (unsigned long long)st.write_requests);
+    proc_append(buf, cap, len, "write_sectors %llu\n",
+                (unsigned long long)st.write_sectors);
+    proc_append(buf, cap, len, "write_errors %llu\n",
+                (unsigned long long)st.write_errors);
+    proc_append(buf, cap, len, "flush_requests %llu\n",
+                (unsigned long long)st.flush_requests);
+    proc_append(buf, cap, len, "flush_errors %llu\n",
+                (unsigned long long)st.flush_errors);
+    proc_append(buf, cap, len, "max_read_sectors %u\n", st.max_read_sectors);
+    proc_append(buf, cap, len, "max_write_sectors %u\n", st.max_write_sectors);
+}
+
 static void proc_fill_dmesg(char* buf, size_t cap, size_t* len)
 {
     *len = kmsg_read(buf, cap > 0 ? cap - 1 : 0);
@@ -900,6 +948,8 @@ static void proc_fill_fs_ext2(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "cache_hits %u\n", st.cache_hits);
     proc_append(buf, cap, len, "cache_misses %u\n", st.cache_misses);
     proc_append(buf, cap, len, "cache_writes %u\n", st.cache_writes);
+    proc_append(buf, cap, len, "cache_dirty_blocks %u\n", st.cache_dirty_blocks);
+    proc_append(buf, cap, len, "writeback_batches %u\n", st.writeback_batches);
     proc_append(buf, cap, len, "cache_waits %u\n", st.cache_waits);
     proc_append(buf, cap, len, "op_waits %u\n", st.op_waits);
     proc_append(buf, cap, len, "read_blocks %u\n", st.read_blocks);
@@ -917,6 +967,25 @@ static void proc_fill_fs_ext2(char* buf, size_t cap, size_t* len)
 static void proc_fill_fs_ext2_check(char* buf, size_t cap, size_t* len)
 {
     (void)ext2_check(buf, cap, len);
+}
+
+static void proc_fill_fs_fat32(char* buf, size_t cap, size_t* len)
+{
+    fat32_stats_t st;
+
+    fat32_get_stats(&st);
+    proc_append(buf, cap, len, "mounted %u\n", st.mounted);
+    proc_append(buf, cap, len, "dirty %u\n", st.dirty);
+    proc_append(buf, cap, len, "bytes_per_cluster %u\n", st.bytes_per_cluster);
+    proc_append(buf, cap, len, "cluster_reads %u\n", st.cluster_reads);
+    proc_append(buf, cap, len, "cluster_writes %u\n", st.cluster_writes);
+    proc_append(buf, cap, len, "fat_syncs %u\n", st.fat_syncs);
+    proc_append(buf, cap, len, "fat_sync_sectors %u\n", st.fat_sync_sectors);
+    if (st.dirty_first_sector == ~0u)
+        proc_append(buf, cap, len, "dirty_range none\n");
+    else
+        proc_append(buf, cap, len, "dirty_range %u-%u\n",
+                    st.dirty_first_sector, st.dirty_last_sector);
 }
 
 static const char* proc_sched_event_name(uint32_t event)
@@ -1783,6 +1852,7 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_SMP_IPI: proc_fill_smp_ipi(buf, cap, len); return 0;
         case PROC_INO_FILESYSTEMS: proc_fill_filesystems(buf, cap, len); return 0;
         case PROC_INO_PARTITIONS: proc_fill_partitions(buf, cap, len); return 0;
+        case PROC_INO_DISKSTATS: proc_fill_diskstats(buf, cap, len); return 0;
         case PROC_INO_DMESG:   proc_fill_dmesg(buf, cap, len); return 0;
         case PROC_INO_INTERRUPTS: proc_fill_interrupts(buf, cap, len); return 0;
         case PROC_INO_TTY:     proc_fill_tty(buf, cap, len); return 0;
@@ -1790,6 +1860,7 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_NET_TCP: proc_fill_net_tcp(buf, cap, len); return 0;
         case PROC_INO_FS_EXT2_STATS: proc_fill_fs_ext2(buf, cap, len); return 0;
         case PROC_INO_FS_EXT2_CHECK: proc_fill_fs_ext2_check(buf, cap, len); return 0;
+        case PROC_INO_FS_FAT32_STATS: proc_fill_fs_fat32(buf, cap, len); return 0;
         case PROC_INO_SCHED: proc_fill_sched(buf, cap, len); return 0;
         case PROC_INO_SCHED_TRACE: proc_fill_sched_trace(buf, cap, len); return 0;
         default: break;
@@ -1968,6 +2039,7 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         { "smp",     PROC_INO_SMP,     DT_REG },
         { "filesystems", PROC_INO_FILESYSTEMS, DT_REG },
         { "partitions", PROC_INO_PARTITIONS, DT_REG },
+        { "diskstats", PROC_INO_DISKSTATS, DT_REG },
         { "dmesg",   PROC_INO_DMESG,  DT_REG },
         { "interrupts", PROC_INO_INTERRUPTS, DT_REG },
         { "tty",     PROC_INO_TTY,    DT_REG },
@@ -2060,6 +2132,7 @@ static int procfs_fs_readdir(file_t* file, dirent_t* dirent)
         { ".",    PROC_INO_FS_DIR,  DT_DIR },
         { "..",   PROC_INO_ROOT,    DT_DIR },
         { "ext2", PROC_INO_FS_EXT2, DT_DIR },
+        { "fat32", PROC_INO_FS_FAT32, DT_DIR },
     };
     uint32_t offset = file->offset;
 
@@ -2089,6 +2162,27 @@ static int procfs_ext2_readdir(file_t* file, dirent_t* dirent)
     if (offset >= sizeof(entries) / sizeof(entries[0]))
         return 0;
 
+    proc_fill_dirent(dirent, entries[offset].ino, entries[offset].type,
+                     entries[offset].name);
+    file->offset++;
+    return 1;
+}
+
+static int procfs_fat32_readdir(file_t* file, dirent_t* dirent)
+{
+    static const struct {
+        const char* name;
+        uint32_t ino;
+        uint8_t type;
+    } entries[] = {
+        { ".",     PROC_INO_FS_FAT32,       DT_DIR },
+        { "..",    PROC_INO_FS_DIR,          DT_DIR },
+        { "stats", PROC_INO_FS_FAT32_STATS, DT_REG },
+    };
+    uint32_t offset = file->offset;
+
+    if (offset >= sizeof(entries) / sizeof(entries[0]))
+        return 0;
     proc_fill_dirent(dirent, entries[offset].ino, entries[offset].type,
                      entries[offset].name);
     file->offset++;
@@ -2197,6 +2291,8 @@ static int procfs_readdir(file_t* file, dirent_t* dirent)
         return procfs_fs_readdir(file, dirent);
     if (ino == PROC_INO_FS_EXT2)
         return procfs_ext2_readdir(file, dirent);
+    if (ino == PROC_INO_FS_FAT32)
+        return procfs_fat32_readdir(file, dirent);
     if (ino >= PROC_PID_BASE && proc_ino_type(ino) == PROC_PID_DIR)
         return procfs_pid_readdir(file, dirent);
     if (ino >= PROC_PID_BASE && proc_ino_type(ino) == PROC_PID_FD_DIR)

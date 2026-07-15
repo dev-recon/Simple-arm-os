@@ -21,9 +21,42 @@
 #include <kernel/block_device.h>
 #include <kernel/kprintf.h>
 #include <kernel/spinlock.h>
+#include <kernel/string.h>
 
 static block_device_t *active_block;
 static spinlock_t block_lock = SPINLOCK_INIT("blockdev");
+static block_device_stats_t block_stats;
+
+static void blk_account_request(bool write, uint32_t count)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&block_lock, &flags);
+    if (write) {
+        block_stats.write_requests++;
+        block_stats.write_sectors += count;
+        if (count > block_stats.max_write_sectors)
+            block_stats.max_write_sectors = count;
+    } else {
+        block_stats.read_requests++;
+        block_stats.read_sectors += count;
+        if (count > block_stats.max_read_sectors)
+            block_stats.max_read_sectors = count;
+    }
+    spin_unlock_irqrestore(&block_lock, flags);
+}
+
+static void blk_account_error(bool write)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&block_lock, &flags);
+    if (write)
+        block_stats.write_errors++;
+    else
+        block_stats.read_errors++;
+    spin_unlock_irqrestore(&block_lock, flags);
+}
 
 bool blk_register(block_device_t *dev)
 {
@@ -43,6 +76,7 @@ bool blk_register(block_device_t *dev)
     }
 
     active_block = dev;
+    memset(&block_stats, 0, sizeof(block_stats));
     spin_unlock_irqrestore(&block_lock, flags);
     return true;
 }
@@ -65,6 +99,7 @@ static block_device_t *blk_active(void)
 int blk_read_sectors(uint64_t lba, uint32_t count, void *buffer)
 {
     block_device_t *dev = blk_active();
+    int ret;
 
     if (!dev || !dev->ops || !dev->ops->read_sectors || !buffer || count == 0)
         return -1;
@@ -72,12 +107,17 @@ int blk_read_sectors(uint64_t lba, uint32_t count, void *buffer)
         (uint64_t)count > dev->capacity_sectors - lba)
         return -1;
 
-    return dev->ops->read_sectors(dev, lba, count, buffer);
+    blk_account_request(false, count);
+    ret = dev->ops->read_sectors(dev, lba, count, buffer);
+    if (ret < 0)
+        blk_account_error(false);
+    return ret;
 }
 
 int blk_write_sectors(uint64_t lba, uint32_t count, void *buffer)
 {
     block_device_t *dev = blk_active();
+    int ret;
 
     if (!dev || !dev->ops || !dev->ops->write_sectors || !buffer || count == 0)
         return -1;
@@ -87,7 +127,11 @@ int blk_write_sectors(uint64_t lba, uint32_t count, void *buffer)
         (uint64_t)count > dev->capacity_sectors - lba)
         return -1;
 
-    return dev->ops->write_sectors(dev, lba, count, buffer);
+    blk_account_request(true, count);
+    ret = dev->ops->write_sectors(dev, lba, count, buffer);
+    if (ret < 0)
+        blk_account_error(true);
+    return ret;
 }
 
 int blk_read_sector(uint64_t lba, void *buffer)
@@ -103,13 +147,22 @@ int blk_write_sector(uint64_t lba, void *buffer)
 int blk_flush(void)
 {
     block_device_t *dev = blk_active();
+    unsigned long flags;
+    int ret;
 
     if (!dev)
         return -1;
-    if (!dev->ops || !dev->ops->flush)
-        return 0;
+    spin_lock_irqsave(&block_lock, &flags);
+    block_stats.flush_requests++;
+    spin_unlock_irqrestore(&block_lock, flags);
 
-    return dev->ops->flush(dev);
+    ret = (!dev->ops || !dev->ops->flush) ? 0 : dev->ops->flush(dev);
+    if (ret < 0) {
+        spin_lock_irqsave(&block_lock, &flags);
+        block_stats.flush_errors++;
+        spin_unlock_irqrestore(&block_lock, flags);
+    }
+    return ret;
 }
 
 void blk_shutdown(void)
@@ -151,4 +204,16 @@ bool blk_is_readonly(void)
     block_device_t *dev = blk_active();
 
     return dev ? dev->read_only : false;
+}
+
+void blk_get_stats(block_device_stats_t *stats)
+{
+    unsigned long flags;
+
+    if (!stats)
+        return;
+
+    spin_lock_irqsave(&block_lock, &flags);
+    *stats = block_stats;
+    spin_unlock_irqrestore(&block_lock, flags);
 }

@@ -140,6 +140,8 @@ typedef struct {
     uint32_t cache_hits;
     uint32_t cache_misses;
     uint32_t cache_writes;
+    uint32_t cache_dirty_blocks;
+    uint32_t writeback_batches;
     uint32_t cache_waits;
     uint32_t op_waits;
     uint32_t read_blocks;

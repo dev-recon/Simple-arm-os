@@ -146,6 +146,18 @@ typedef struct {
     uint8_t padding[3];                 /* 3 bytes pour aligner sur 4 */
 } __attribute__((aligned(8))) fat32_fs_t;
 
+typedef struct {
+    uint32_t mounted;
+    uint32_t dirty;
+    uint32_t bytes_per_cluster;
+    uint32_t cluster_reads;
+    uint32_t cluster_writes;
+    uint32_t fat_syncs;
+    uint32_t fat_sync_sectors;
+    uint32_t dirty_first_sector;
+    uint32_t dirty_last_sector;
+} fat32_stats_t;
+
 
 int init_fat32(void);
 int mount_fat32_filesystem(void);
@@ -176,6 +188,9 @@ uint32_t get_fat32_sectors_per_cluster(void);
 bool is_fat32_mounted(void);
 struct statfs;
 int fat32_statfs(struct statfs* st);
+void fat32_get_stats(fat32_stats_t* out);
+void fat32_reset_stats(void);
+void fat32_note_cluster_reads(uint32_t count);
 bool is_dirty_inodes(void);
 void sync_dirty_inodes(void);
 bool is_fat_dirty(void);

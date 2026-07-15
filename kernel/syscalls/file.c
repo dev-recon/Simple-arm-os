@@ -34,7 +34,8 @@
 #include <kernel/virtio_net.h>
 #include <kernel/spinlock.h>
 
-#define SYSCALL_IO_BOUNCE_SIZE 16384u
+#define SYSCALL_IO_BOUNCE_SIZE     (64u * 1024u)
+#define SYSCALL_IO_BOUNCE_MIN_SIZE (4u * 1024u)
 
 
 /* Forward declarations de toutes les fonctions statiques */
@@ -107,6 +108,12 @@ static int file_read_buffer(file_t* file, void* buf, size_t count)
         read_count = SYSCALL_IO_BOUNCE_SIZE;
 
     kbuf = kmalloc(read_count);
+    while (!kbuf && read_count > SYSCALL_IO_BOUNCE_MIN_SIZE) {
+        read_count /= 2u;
+        if (read_count < SYSCALL_IO_BOUNCE_MIN_SIZE)
+            read_count = SYSCALL_IO_BOUNCE_MIN_SIZE;
+        kbuf = kmalloc(read_count);
+    }
     if (!kbuf) return -ENOMEM;
 
     result = file->f_op->read(file, kbuf, read_count);
@@ -145,6 +152,12 @@ static int file_write_buffer(file_t* file, const void* buf, size_t count)
      */
     chunk_cap = count < SYSCALL_IO_BOUNCE_SIZE ? count : SYSCALL_IO_BOUNCE_SIZE;
     kbuf = kmalloc(chunk_cap);
+    while (!kbuf && chunk_cap > SYSCALL_IO_BOUNCE_MIN_SIZE) {
+        chunk_cap /= 2u;
+        if (chunk_cap < SYSCALL_IO_BOUNCE_MIN_SIZE)
+            chunk_cap = SYSCALL_IO_BOUNCE_MIN_SIZE;
+        kbuf = kmalloc(chunk_cap);
+    }
     if (!kbuf) return -ENOMEM;
 
     /*

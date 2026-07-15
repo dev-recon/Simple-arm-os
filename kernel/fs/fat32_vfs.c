@@ -127,9 +127,13 @@ inode_operations_t fat32_inode_ops = {
 };
 
 static bool fat_dirty = false;
+static uint32_t fat_dirty_first_sector = ~0u;
+static uint32_t fat_dirty_last_sector;
+static fat32_stats_t fat32_stats;
 
 /* Liste des inodes modifiés */
 #define MAX_DIRTY_INODES 64
+#define FAT32_IO_BATCH_SECTORS 128u
 static inode_t* dirty_inodes[MAX_DIRTY_INODES];
 static int dirty_count = 0;
 
@@ -571,15 +575,13 @@ void fat32_init_empty_dir_cluster(uint32_t cluster) {
 void fat32_init_new_inode(inode_t* inode, fat32_dir_entry_t* entry, 
                          inode_t* parent, mode_t mode) {
     (void) entry;
-    /* Initialiser les champs de base */
-    inode->ino = get_next_inode_number();
+    /* create_inode() owns the VFS identity, reference count and hash link. */
     inode->mode = mode;
     inode->uid = current_uid();
     inode->gid = current_gid();
     inode->size = 0;
     inode->blocks = 0;
     inode->nlink = 1;
-    inode->ref_count = 1;
     
     /* Timestamps */
     uint32_t now = get_current_time();
@@ -600,7 +602,6 @@ void fat32_init_new_inode(inode_t* inode, fat32_dir_entry_t* entry,
         inode->f_op = &fat32_file_ops;
     }
     
-    inode->next = NULL;
 }
 
 
@@ -1155,45 +1156,85 @@ void mark_fat_dirty(void) {
     fat_dirty = true;
 }
 
+static void mark_fat_sector_dirty(uint32_t relative_sector)
+{
+    fat_dirty = true;
+    if (relative_sector < fat_dirty_first_sector)
+        fat_dirty_first_sector = relative_sector;
+    if (fat_dirty_first_sector == ~0u ||
+        relative_sector > fat_dirty_last_sector)
+        fat_dirty_last_sector = relative_sector;
+}
+
 bool is_fat_dirty(void){
     return fat_dirty;
 }
 
+void fat32_reset_stats(void)
+{
+    memset(&fat32_stats, 0, sizeof(fat32_stats));
+}
+
+void fat32_note_cluster_reads(uint32_t count)
+{
+    fat32_stats.cluster_reads += count;
+}
+
+void fat32_get_stats(fat32_stats_t* out)
+{
+    if (!out)
+        return;
+    *out = fat32_stats;
+    out->mounted = fat32_fs.mounted ? 1u : 0u;
+    out->dirty = fat_dirty ? 1u : 0u;
+    out->bytes_per_cluster = fat32_fs.bytes_per_cluster;
+    out->dirty_first_sector = fat_dirty_first_sector;
+    out->dirty_last_sector = fat_dirty_last_sector;
+}
+
 int sync_fat_to_disk(void) {
+    uint32_t first_sector;
+    uint32_t sector_count;
+    uint32_t fat2_start_sector;
+    char* fat_data;
+
     if (!fat_dirty ) {
         return 0;
     }
-    
-    //KDEBUG("SYNCING FAT TO DISK....\n");
-    /* Écrire la FAT sur le disque */
-    uint32_t fat_size_sectors = fat32_fs.boot_sector.fat_size_32;
-    char* fat_data = (char*)fat32_fs.fat_table;
-    
-    for (uint32_t sector = 0; sector < fat_size_sectors; sector++) {
-        if (blk_write_sector(fat32_fs.fat_start_sector + sector,
-                        fat_data + (sector * 512)) != 0) {
-            return -EIO;
-        }
+
+    if (!fat32_fs.fat_table)
+        return -EIO;
+
+    /*
+     * Cluster updates normally identify the exact FAT sector range. Keep the
+     * full-table fallback for older call sites that only mark the FAT dirty.
+     */
+    if (fat_dirty_first_sector == ~0u) {
+        first_sector = 0;
+        sector_count = fat32_fs.boot_sector.fat_size_32;
+    } else {
+        first_sector = fat_dirty_first_sector;
+        sector_count = fat_dirty_last_sector - fat_dirty_first_sector + 1u;
     }
 
-    //KDEBUG("SYNCING FAT1 START SECTOR = %u....\n", fat32_fs.fat_start_sector);
+    fat_data = (char*)fat32_fs.fat_table + first_sector * FAT32_SECTOR_SIZE;
+    if (blk_write_sectors(fat32_fs.fat_start_sector + first_sector,
+                          sector_count, fat_data) != 0)
+        return -EIO;
 
+    fat2_start_sector = fat32_fs.fat_start_sector +
+                        fat32_fs.boot_sector.fat_size_32;
+    if (fat32_fs.boot_sector.num_fats > 1 &&
+        blk_write_sectors(fat2_start_sector + first_sector,
+                          sector_count, fat_data) != 0)
+        return -EIO;
 
-    /* AJOUT : Écrire FAT2 */
-    uint32_t fat2_start_sector = fat32_fs.fat_start_sector + fat_size_sectors;
-    for (uint32_t sector = 0; sector < fat_size_sectors; sector++) {
-        if (blk_write_sector(fat2_start_sector + sector,
-                        fat_data + (sector * 512)) != 0) {
-            KDEBUG("ERROR: Failed to sync FAT2 at sector %u", fat2_start_sector + sector);
-            return -EIO;
-        }
-    }
-
-    //KDEBUG("SYNCING FAT2 START SECTOR = %u....->> fat_size_sectors=%u\n", fat2_start_sector, fat_size_sectors);
-
-
-    
+    fat32_stats.fat_syncs++;
+    fat32_stats.fat_sync_sectors += sector_count *
+        (fat32_fs.boot_sector.num_fats > 1 ? 2u : 1u);
     fat_dirty = false;
+    fat_dirty_first_sector = ~0u;
+    fat_dirty_last_sector = 0;
     return 0;
 }
 
@@ -1375,11 +1416,14 @@ int fat32_set_cluster_value(uint32_t cluster, uint32_t value) {
     
     /* Si la FAT est en mémoire */
     if (fat32_fs.fat_table) {
+        uint32_t relative_sector = (cluster * sizeof(uint32_t)) /
+                                   FAT32_SECTOR_SIZE;
+
         fat32_fs.fat_table[cluster] = 
             (fat32_fs.fat_table[cluster] & 0xF0000000) | (value & 0x0FFFFFFF);
         
         /* Marquer comme dirty pour synchronisation ultérieure */
-        mark_fat_dirty();
+        mark_fat_sector_dirty(relative_sector);
         return 0;
     }
     
@@ -1423,8 +1467,6 @@ int fat32_set_cluster_value(uint32_t cluster, uint32_t value) {
 
 
 int fat32_write_cluster(uint32_t cluster, const char* data) {
-    uint32_t bytes_per_sector;
-
     if (cluster < 2 || cluster >= fat32_get_total_clusters()) {
         return -EINVAL;
     }
@@ -1449,19 +1491,59 @@ int fat32_write_cluster(uint32_t cluster, const char* data) {
     }
 
     
-    bytes_per_sector = fat32_fs.boot_sector.bytes_per_sector;
-    if (bytes_per_sector == 0)
-        bytes_per_sector = FAT32_SECTOR_SIZE;
-
-    /* Write each sector from the cluster buffer. The buffer offset must
-     * advance by sector size, not by full cluster size. */
-    for (uint32_t i = 0; i < get_fat32_sectors_per_cluster(); i++) {
-        if (blk_write_sector(start_sector + i, (void *)(data + (i * bytes_per_sector))) != 0) {
-            return -EIO;
-        }
-    }
-    
+    if (blk_write_sectors(start_sector, get_fat32_sectors_per_cluster(),
+                          (void*)data) != 0)
+        return -EIO;
+    fat32_stats.cluster_writes++;
     return 0;
+}
+
+static int fat32_write_contiguous_clusters(uint32_t first_cluster,
+                                           uint32_t cluster_count,
+                                           const void* data)
+{
+    uint32_t sectors_per_cluster = get_fat32_sectors_per_cluster();
+    uint32_t sector_count;
+
+    if (!data || cluster_count == 0 || sectors_per_cluster == 0)
+        return -EINVAL;
+    if (cluster_count > FAT32_IO_BATCH_SECTORS / sectors_per_cluster)
+        return -EINVAL;
+
+    sector_count = cluster_count * sectors_per_cluster;
+    if (blk_write_sectors(fat32_cluster_to_sector(first_cluster),
+                          sector_count, (void*)data) != 0)
+        return -EIO;
+    fat32_stats.cluster_writes += cluster_count;
+    return 0;
+}
+
+static uint32_t fat32_prepare_contiguous_write_run(uint32_t first_cluster,
+                                                   uint32_t wanted,
+                                                   inode_t* inode,
+                                                   uint32_t* last_cluster)
+{
+    uint32_t current = first_cluster;
+    uint32_t count = 1;
+
+    while (count < wanted) {
+        uint32_t next = fat32_get_next_cluster(current);
+
+        if (next >= FAT32_EOC) {
+            next = fat32_alloc_cluster();
+            if (next == 0)
+                break;
+            fat32_set_cluster_value(current, next);
+            inode->blocks += fat32_fs.sectors_per_cluster;
+        }
+        if (next != current + 1u)
+            break;
+        current = next;
+        count++;
+    }
+
+    *last_cluster = current;
+    return count;
 }
 
 int fat32_update_file_size_in_dir(const char* filename, uint32_t parent_cluster, uint32_t new_size) {
@@ -1675,15 +1757,13 @@ ssize_t fat32_file_write(file_t* file, const void* buffer, size_t count) {
     size_t bytes_written = 0;
     uint32_t current_offset = file->offset;
     uint32_t cluster = inode->first_cluster;
+    void* cluster_data = NULL;
     
     /* CORRECTION: Taille du cluster, pas du secteur */
     uint32_t cluster_size = get_fat32_bytes_per_cluster();  // Pas 512 !
     
     //KDEBUG("fat32_file_write: offset=%u, cluster=%u, count=%u, cluster_size=%u\n", 
     //       current_offset, cluster, count, cluster_size);
-
-    if(is_dirty_inodes()) sync_dirty_inodes();
-    if(is_fat_dirty()) sync_fat_to_disk();
 
     /* Si le fichier est vide, allouer le premier cluster */
     if (cluster == 0) {
@@ -1712,7 +1792,7 @@ ssize_t fat32_file_write(file_t* file, const void* buffer, size_t count) {
         }
         cluster = next;
     }
-    
+
     /* Boucle d'écriture */
     while (count > 0 && cluster != 0 && cluster < FAT32_EOC) {
         uint32_t cluster_pos = current_offset % cluster_size;
@@ -1721,25 +1801,42 @@ ssize_t fat32_file_write(file_t* file, const void* buffer, size_t count) {
         //KDEBUG("Writing %u bytes at cluster %u, pos %u\n", 
         //       to_write, cluster, cluster_pos);
 
-        void* cluster_data = kzalloc(cluster_size);
-        if (!cluster_data) return bytes_written ? (ssize_t)bytes_written : -ENOMEM;
-        
-        /* Lire le cluster existant pour read-modify-write */
-        if (fat32_read_cluster(cluster, cluster_data) < 0) {
-            kfree(cluster_data);
-            return bytes_written ? (ssize_t)bytes_written : -EIO;
-        }
+        if (cluster_pos == 0 && count >= cluster_size) {
+            uint32_t max_clusters = FAT32_IO_BATCH_SECTORS /
+                                    fat32_fs.sectors_per_cluster;
+            uint32_t wanted = (uint32_t)(count / cluster_size);
+            uint32_t last_cluster;
+            uint32_t run;
 
-        /* Modifier */
-        memcpy(cluster_data + cluster_pos, buf + bytes_written, to_write);
+            if (wanted > max_clusters)
+                wanted = max_clusters;
+            run = fat32_prepare_contiguous_write_run(cluster, wanted, inode,
+                                                     &last_cluster);
+            to_write = run * cluster_size;
+            if (fat32_write_contiguous_clusters(cluster, run,
+                                                buf + bytes_written) != 0) {
+                if (cluster_data)
+                    kfree(cluster_data);
+                return bytes_written ? (ssize_t)bytes_written : -EIO;
+            }
+            cluster = last_cluster;
+        } else {
+            if (!cluster_data) {
+                cluster_data = kmalloc(cluster_size);
+                if (!cluster_data)
+                    return bytes_written ? (ssize_t)bytes_written : -ENOMEM;
+            }
+            if (fat32_read_cluster(cluster, cluster_data) < 0) {
+                kfree(cluster_data);
+                return bytes_written ? (ssize_t)bytes_written : -EIO;
+            }
 
-        /* Écrire */
-        if (fat32_write_cluster(cluster, cluster_data) != 0) {
-            kfree(cluster_data);
-            return bytes_written ? (ssize_t)bytes_written : -EIO;
+            memcpy(cluster_data + cluster_pos, buf + bytes_written, to_write);
+            if (fat32_write_cluster(cluster, cluster_data) != 0) {
+                kfree(cluster_data);
+                return bytes_written ? (ssize_t)bytes_written : -EIO;
+            }
         }
-        
-        kfree(cluster_data);
         
         bytes_written += to_write;
         count -= to_write;
@@ -1768,6 +1865,8 @@ ssize_t fat32_file_write(file_t* file, const void* buffer, size_t count) {
             cluster = next;
         }
     }
+    if (cluster_data)
+        kfree(cluster_data);
     
     /* Mettre à jour la taille */
     if (current_offset > inode->size) {
@@ -1975,8 +2074,13 @@ static inode_t* fat32_inode_lookup(inode_t* dir, const char* name)
 static ssize_t fat32_file_read(file_t* file, void* buffer, size_t count)
 {
     inode_t* inode = file->inode;
-    void* file_buffer;
-    int bytes_read;
+    uint32_t cluster_size;
+    uint32_t cluster;
+    uint32_t cluster_skip;
+    uint32_t cluster_pos;
+    unsigned char* cluster_data;
+    unsigned char* output = buffer;
+    size_t bytes_read = 0;
     
     if (!buffer || count == 0) return 0;
     if (!file) return -EINVAL;
@@ -1988,38 +2092,84 @@ static ssize_t fat32_file_read(file_t* file, void* buffer, size_t count)
         return 0; /* EOF */
     }
 
-    //KDEBUG("fat32_file_read : reading at offset %d for inode of size %d\n", file->offset, inode->size);
-    
     if (file->offset + count > inode->size) {
         count = inode->size - file->offset;
     }
-    
-    /* Allocate buffer for entire file (simple approach) */
-    file_buffer = kmalloc(inode->size);
-    if (!file_buffer) return -ENOMEM;
-    
-    /* Read entire file */
-    bytes_read = fat32_read_file(inode->first_cluster, inode->size, file_buffer);
-    if (bytes_read < 0) {
-        kfree(file_buffer);
-        return bytes_read;
-    }
-    
-    /* Copy requested portion */
-    memcpy(buffer, (char*)file_buffer + file->offset, count);
-    file->offset += count;
 
-    /*KDEBUG("fat32_file_read : succefully red %d bytes - count %d\n", bytes_read, count);
-    KINFO("[fat32_file_read] read function succeeded\n");
-    KINFO("[fat32_file_read] First 512 bytes:\n");
-    for (int i = 0; i < (int)inode->size; i++) {
-        if (i % 48 == 0) kprintf("\n[%03d]: ", i);
-        kprintf("%02X ", *(char *)(file_buffer+i));
+    cluster_size = get_fat32_bytes_per_cluster();
+    cluster = inode->first_cluster;
+    cluster_skip = file->offset / cluster_size;
+    cluster_pos = file->offset % cluster_size;
+
+    for (uint32_t i = 0; i < cluster_skip && cluster < FAT32_EOC; i++)
+        cluster = fat32_get_next_cluster(cluster);
+    if (cluster == 0 || cluster >= FAT32_EOC)
+        return 0;
+
+    cluster_data = NULL;
+
+    while (bytes_read < count && cluster != 0 && cluster < FAT32_EOC) {
+        size_t available;
+        size_t chunk;
+
+        if (cluster_pos == 0 && count - bytes_read >= cluster_size) {
+            uint32_t sectors_per_cluster = get_fat32_sectors_per_cluster();
+            uint32_t max_clusters = FAT32_IO_BATCH_SECTORS /
+                                    sectors_per_cluster;
+            uint32_t wanted = (uint32_t)((count - bytes_read) / cluster_size);
+            uint32_t last_cluster = cluster;
+            uint32_t run = 1;
+
+            if (wanted > max_clusters)
+                wanted = max_clusters;
+            while (run < wanted) {
+                uint32_t next = fat32_get_next_cluster(last_cluster);
+
+                if (next != last_cluster + 1u)
+                    break;
+                last_cluster = next;
+                run++;
+            }
+
+            chunk = (size_t)run * cluster_size;
+            if (blk_read_sectors(fat32_cluster_to_sector(cluster),
+                                 run * sectors_per_cluster,
+                                 output + bytes_read) != 0) {
+                if (cluster_data)
+                    kfree(cluster_data);
+                return bytes_read ? (ssize_t)bytes_read : -EIO;
+            }
+            fat32_note_cluster_reads(run);
+            bytes_read += chunk;
+            cluster = last_cluster;
+            if (bytes_read < count)
+                cluster = fat32_get_next_cluster(cluster);
+            continue;
+        }
+
+        if (!cluster_data) {
+            cluster_data = kmalloc(cluster_size);
+            if (!cluster_data)
+                return bytes_read ? (ssize_t)bytes_read : -ENOMEM;
+        }
+        if (fat32_read_cluster(cluster, cluster_data) < 0) {
+            kfree(cluster_data);
+            return bytes_read ? (ssize_t)bytes_read : -EIO;
+        }
+
+        available = cluster_size - cluster_pos;
+        chunk = MIN(count - bytes_read, available);
+        memcpy(output + bytes_read, cluster_data + cluster_pos, chunk);
+        bytes_read += chunk;
+        cluster_pos = 0;
+        if (bytes_read < count)
+            cluster = fat32_get_next_cluster(cluster);
     }
-    kprintf("\n");*/
-    
-    kfree(file_buffer);
-    return count;
+
+    if (cluster_data)
+        kfree(cluster_data);
+    file->offset += (uint32_t)bytes_read;
+    return (ssize_t)bytes_read;
 }
 
 static int fat32_file_open(inode_t* inode, file_t* file)

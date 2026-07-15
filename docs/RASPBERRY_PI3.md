@@ -10,7 +10,9 @@ TARGET_ARCH=arm64 TARGET_PLATFORM=raspi3
 It boots through the Raspberry Pi firmware as `kernel8.img`, runs all four
 Cortex-A53 cores in the common scheduler, and keeps PL011 `tty0` as the
 mandatory recovery console. QEMU `virt` remains the reference environment for
-kernel feature development and regression testing.
+kernel feature development and regression testing. QEMU's `raspi3b` machine is
+also supported as a focused CPU-entry and SD/eMMC functional test; it does not
+replace hardware timing and signal validation.
 
 ## Platform Contract
 
@@ -25,9 +27,8 @@ kernel feature development and regression testing.
 - Boot: dedicated FAT32 LBA firmware partition
 - Graphics, USB input, and networking: not yet provided by this profile
 
-The compatibility target `arm32/raspi3` remains useful for architecture
-comparison. The separate `arm32/raspi2` target supports Raspberry Pi 2 Model B
-v1.1 hardware and is also exercised with QEMU's `raspi2b` machine.
+The separate `arm32/raspi2` target supports Raspberry Pi 2 Model B v1.1
+hardware and is also exercised with QEMU's `raspi2b` machine.
 
 ## Build
 
@@ -43,6 +44,17 @@ The generated artifacts are isolated by architecture and platform:
 build/images/kernel-arm64-raspi3.bin
 build/images/disk-arm64-raspi3.img
 ```
+
+Boot the same platform through QEMU's Raspberry Pi 3 model:
+
+```sh
+TARGET_ARCH=arm64 TARGET_PLATFORM=raspi3 ./boot.sh
+```
+
+The QEMU profile loads the raw kernel at `0x02010000`. Unlike Raspberry Pi
+firmware, QEMU enters this raw image in EL3, so the common ARM64 bootstrap
+normalizes EL3 to EL2 before using the same validated EL2-to-EL1 path as
+hardware. No DTB pointer is supplied in this mode.
 
 For hardware iteration, the generic script accepts an explicit pair:
 
@@ -172,6 +184,9 @@ Expected properties:
 - SD reads and writes complete without EMMC timeout diagnostics;
 - shutdown parks secondary CPUs, syncs ext2, stops the block device, and enters
   firmware powerdown without an exception.
+
+Storage throughput and the final SD-card validation sequence are documented in
+[STORAGE_PERFORMANCE.md](STORAGE_PERFORMANCE.md).
 
 ## Current Limitations
 

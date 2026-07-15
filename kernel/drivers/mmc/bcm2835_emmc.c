@@ -13,9 +13,10 @@
  * - Expose the SD card as the active ArmOS block device through block_device.
  *
  * Notes:
- * - This is intentionally a conservative bring-up driver: polling, PIO and
- *   single-block commands.  It avoids DMA/cache and IRQ complexity until both
- *   QEMU raspi2b and a real Pi 2 Model B v1.1 are validated.
+ * - Transfers remain polling PIO, but contiguous requests use SD multi-block
+ *   commands and 4-bit mode when the card accepts them.
+ * - Multi-block failures disable that path and retry with the established
+ *   single-block commands so a controller quirk cannot make the card unusable.
  */
 
 #include <kernel/arch_barrier.h>
@@ -53,6 +54,7 @@
 #define EMMC_STATUS_READ_AVAILABLE   (1u << 11)
 
 #define EMMC_CONTROL0_POWER_330_ON   (0x0Fu << 8)
+#define EMMC_CONTROL0_HCTL_DWIDTH    (1u << 1)
 
 #define EMMC_CONTROL1_CLK_INTLEN     (1u << 0)
 #define EMMC_CONTROL1_CLK_STABLE     (1u << 1)
@@ -79,7 +81,9 @@
 #define EMMC_CMD_IXCHK               (1u << 20)
 #define EMMC_CMD_ISDATA              (1u << 21)
 #define EMMC_CMD_BLKCNT_EN           (1u << 1)
+#define EMMC_CMD_AUTO_CMD12          (1u << 2)
 #define EMMC_CMD_READ                (1u << 4)
+#define EMMC_CMD_MULTI_BLOCK         (1u << 5)
 
 #define EMMC_BLOCK_SIZE              512u
 #define EMMC_WORDS_PER_BLOCK         (EMMC_BLOCK_SIZE / sizeof(uint32_t))
@@ -94,6 +98,8 @@ typedef struct {
     volatile uint8_t *base;
     uint32_t rca;
     bool high_capacity;
+    bool wide_bus;
+    bool multiblock;
     bool ready;
 } bcm2835_emmc_state_t;
 
@@ -441,6 +447,107 @@ static int emmc_write_block(uint64_t lba, const uint8_t *src)
     return 0;
 }
 
+static int emmc_read_blocks(uint64_t lba, uint32_t count, uint8_t *dst)
+{
+    uint32_t arg;
+    int ret;
+
+    if (!dst || count < 2 || count > 0xffffu || lba > 0xffffffffULL)
+        return -EINVAL;
+    if ((uint64_t)count - 1u > 0xffffffffULL - lba)
+        return -EINVAL;
+
+    arg = emmc_state.high_capacity ? (uint32_t)lba :
+          (uint32_t)(lba * EMMC_BLOCK_SIZE);
+    emmc_write(EMMC_BLKSIZECNT, EMMC_BLOCK_SIZE | (count << 16));
+
+    ret = emmc_send_command(18, arg,
+                            EMMC_CMD_RSP_48 | EMMC_CMD_CRCCHK |
+                            EMMC_CMD_IXCHK | EMMC_CMD_ISDATA |
+                            EMMC_CMD_BLKCNT_EN | EMMC_CMD_AUTO_CMD12 |
+                            EMMC_CMD_MULTI_BLOCK | EMMC_CMD_READ,
+                            NULL);
+    if (ret < 0)
+        return ret;
+
+    for (uint32_t block = 0; block < count; block++) {
+        ret = emmc_wait_interrupt(EMMC_INT_READ_RDY, EMMC_TIMEOUT_MS);
+        if (ret < 0)
+            goto fail;
+        emmc_write(EMMC_INTERRUPT, EMMC_INT_READ_RDY);
+
+        for (uint32_t i = 0; i < EMMC_WORDS_PER_BLOCK; i++) {
+            uint32_t word = emmc_read(EMMC_DATA);
+            uint8_t *out = dst + block * EMMC_BLOCK_SIZE + i * 4u;
+
+            out[0] = (uint8_t)(word & 0xffu);
+            out[1] = (uint8_t)((word >> 8) & 0xffu);
+            out[2] = (uint8_t)((word >> 16) & 0xffu);
+            out[3] = (uint8_t)((word >> 24) & 0xffu);
+        }
+    }
+
+    ret = emmc_wait_interrupt(EMMC_INT_DATA_DONE, EMMC_TIMEOUT_MS);
+    if (ret < 0)
+        goto fail;
+    emmc_write(EMMC_INTERRUPT, EMMC_INT_DATA_DONE);
+    return 0;
+
+fail:
+    emmc_reset_cmd_data();
+    return ret;
+}
+
+static int emmc_write_blocks(uint64_t lba, uint32_t count, const uint8_t *src)
+{
+    uint32_t arg;
+    int ret;
+
+    if (!src || count < 2 || count > 0xffffu || lba > 0xffffffffULL)
+        return -EINVAL;
+    if ((uint64_t)count - 1u > 0xffffffffULL - lba)
+        return -EINVAL;
+
+    arg = emmc_state.high_capacity ? (uint32_t)lba :
+          (uint32_t)(lba * EMMC_BLOCK_SIZE);
+    emmc_write(EMMC_BLKSIZECNT, EMMC_BLOCK_SIZE | (count << 16));
+
+    ret = emmc_send_command(25, arg,
+                            EMMC_CMD_RSP_48 | EMMC_CMD_CRCCHK |
+                            EMMC_CMD_IXCHK | EMMC_CMD_ISDATA |
+                            EMMC_CMD_BLKCNT_EN | EMMC_CMD_AUTO_CMD12 |
+                            EMMC_CMD_MULTI_BLOCK,
+                            NULL);
+    if (ret < 0)
+        return ret;
+
+    for (uint32_t block = 0; block < count; block++) {
+        ret = emmc_wait_interrupt(EMMC_INT_WRITE_RDY, EMMC_TIMEOUT_MS);
+        if (ret < 0)
+            goto fail;
+        emmc_write(EMMC_INTERRUPT, EMMC_INT_WRITE_RDY);
+
+        for (uint32_t i = 0; i < EMMC_WORDS_PER_BLOCK; i++) {
+            const uint8_t *in = src + block * EMMC_BLOCK_SIZE + i * 4u;
+            uint32_t word = ((uint32_t)in[0]) |
+                            ((uint32_t)in[1] << 8) |
+                            ((uint32_t)in[2] << 16) |
+                            ((uint32_t)in[3] << 24);
+            emmc_write(EMMC_DATA, word);
+        }
+    }
+
+    ret = emmc_wait_interrupt(EMMC_INT_DATA_DONE, EMMC_TIMEOUT_MS);
+    if (ret < 0)
+        goto fail;
+    emmc_write(EMMC_INTERRUPT, EMMC_INT_DATA_DONE);
+    return 0;
+
+fail:
+    emmc_reset_cmd_data();
+    return ret;
+}
+
 static void emmc_acquire(void)
 {
     while (1) {
@@ -491,10 +598,20 @@ static int emmc_blockdev_read(block_device_t *dev, uint64_t lba,
         return -ENODEV;
 
     emmc_acquire();
-    for (uint32_t i = 0; i < count; i++) {
-        ret = emmc_read_block(lba + i, dst + i * EMMC_BLOCK_SIZE);
-        if (ret < 0)
-            break;
+    if (count > 1 && emmc_state.multiblock) {
+        ret = emmc_read_blocks(lba, count, dst);
+        if (ret < 0) {
+            emmc_state.multiblock = false;
+            KWARN("bcm_emmc: multiblock read unavailable, using CMD17\n");
+        }
+    }
+    if (count == 1 || !emmc_state.multiblock) {
+        ret = 0;
+        for (uint32_t i = 0; i < count; i++) {
+            ret = emmc_read_block(lba + i, dst + i * EMMC_BLOCK_SIZE);
+            if (ret < 0)
+                break;
+        }
     }
     emmc_release();
 
@@ -512,10 +629,20 @@ static int emmc_blockdev_write(block_device_t *dev, uint64_t lba,
         return -ENODEV;
 
     emmc_acquire();
-    for (uint32_t i = 0; i < count; i++) {
-        ret = emmc_write_block(lba + i, src + i * EMMC_BLOCK_SIZE);
-        if (ret < 0)
-            break;
+    if (count > 1 && emmc_state.multiblock) {
+        ret = emmc_write_blocks(lba, count, src);
+        if (ret < 0) {
+            emmc_state.multiblock = false;
+            KWARN("bcm_emmc: multiblock write unavailable, using CMD24\n");
+        }
+    }
+    if (count == 1 || !emmc_state.multiblock) {
+        ret = 0;
+        for (uint32_t i = 0; i < count; i++) {
+            ret = emmc_write_block(lba + i, src + i * EMMC_BLOCK_SIZE);
+            if (ret < 0)
+                break;
+        }
     }
     emmc_release();
 
@@ -546,6 +673,8 @@ bool bcm2835_emmc_init(void)
     emmc_state.base = (volatile uint8_t *)(uintptr_t)arch_platform_emmc_kernel_base();
     emmc_state.rca = 0;
     emmc_state.high_capacity = false;
+    emmc_state.wide_bus = false;
+    emmc_state.multiblock = true;
     emmc_state.ready = false;
     emmc_busy = false;
     emmc_owner = NULL;
@@ -609,6 +738,24 @@ bool bcm2835_emmc_init(void)
             return false;
     }
 
+    /*
+     * Select the SD four-bit data path when both card and host accept it.
+     * ACMD6 failure is deliberately non-fatal: old cards and incomplete QEMU
+     * board models continue on the validated one-bit path.
+     */
+    ret = emmc_app_command(emmc_state.rca, 6, 2u,
+                           EMMC_CMD_RSP_48 | EMMC_CMD_CRCCHK |
+                           EMMC_CMD_IXCHK, NULL);
+    if (ret == 0) {
+        uint32_t c0 = emmc_read(EMMC_CONTROL0);
+
+        emmc_write(EMMC_CONTROL0, c0 | EMMC_CONTROL0_HCTL_DWIDTH);
+        emmc_state.wide_bus = true;
+    } else {
+        emmc_reset_cmd_data();
+        KWARN("bcm_emmc: four-bit bus unavailable, using one-bit mode\n");
+    }
+
     if (!emmc_set_clock(EMMC_TRANSFER_CLOCK_HZ))
         return false;
 
@@ -620,9 +767,10 @@ bool bcm2835_emmc_init(void)
         return false;
     }
 
-    KINFO("BCM EMMC: rca=0x%04X %s capacity<=%uMB (fallback bound)\n",
+    KINFO("BCM EMMC: rca=0x%04X %s %u-bit multiblock capacity<=%uMB (fallback bound)\n",
           emmc_state.rca,
           emmc_state.high_capacity ? "SDHC/SDXC" : "SDSC",
+          emmc_state.wide_bus ? 4u : 1u,
           (uint32_t)((EMMC_FALLBACK_SECTORS * EMMC_BLOCK_SIZE) / (1024ULL * 1024ULL)));
     return true;
 }

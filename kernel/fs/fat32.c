@@ -242,6 +242,7 @@ bool fat32_mount_at(uint64_t lba_start){
     }
     
     fat32_fs.mounted = true;
+    fat32_reset_stats();
     
     KINFO("FAT32 mount successful! OK\n");
     
@@ -288,11 +289,15 @@ uint32_t fat32_get_next_cluster2(uint32_t cluster)
 int fat32_read_cluster(uint32_t cluster, void* buffer)
 {
     uint32_t sector;
+    int ret;
     
     if (!fat32_fs.mounted || cluster < 2) return -1;
     
     sector = cluster_to_sector(cluster);
-    return storage_read_sectors(sector, fat32_fs.sectors_per_cluster, buffer);
+    ret = storage_read_sectors(sector, fat32_fs.sectors_per_cluster, buffer);
+    if (ret == 0)
+        fat32_note_cluster_reads(1);
+    return ret;
 }
 
 
@@ -304,15 +309,6 @@ int fat32_read_file(uint32_t first_cluster, uint32_t file_size, void* buffer)
     void* cluster_buf;
     uint32_t bytes_to_copy;
 
-    if( is_dirty_inodes() ){
-        sync_dirty_inodes();
-    }
-
-    if( is_fat_dirty() )
-    {
-        sync_fat_to_disk();
-    }
-    
     while (cluster && cluster < 0x0FFFFFF8 && bytes_read < file_size) {
         cluster_buf = kmalloc(fat32_fs.bytes_per_cluster);
         if (!cluster_buf) return -1;
@@ -349,15 +345,6 @@ fat32_dir_entry_t* fat32_find_file(uint32_t dir_cluster, const char* filename)
     bool lfn_pending = false;
 
 
-    if( is_dirty_inodes() ){
-        sync_dirty_inodes();
-    }
-    
-    if( is_fat_dirty() )
-    {
-        sync_fat_to_disk();
-    }
-    
     while (cluster && cluster < 0x0FFFFFF8) {
         cluster_buf = kmalloc(fat32_fs.bytes_per_cluster);
         if (!cluster_buf) return NULL;

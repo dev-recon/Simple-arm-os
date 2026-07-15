@@ -13,8 +13,8 @@
  * - Keep Raspberry Pi 2 platform code from knowing controller internals.
  *
  * Notes:
- * - The first driver milestone is polling PIO, single-block I/O.  DMA and IRQ
- *   completion can be added once QEMU and real-board behavior are both known.
+ * - The driver uses polling PIO with multi-block transfers and a conservative
+ *   single-block fallback. DMA and IRQ completion remain future work.
  */
 
 #ifndef _KERNEL_BCM2835_EMMC_H

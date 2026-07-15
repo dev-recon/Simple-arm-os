@@ -25,6 +25,19 @@
 typedef struct block_device block_device_t;
 
 typedef struct {
+    uint64_t read_requests;
+    uint64_t read_sectors;
+    uint64_t read_errors;
+    uint64_t write_requests;
+    uint64_t write_sectors;
+    uint64_t write_errors;
+    uint64_t flush_requests;
+    uint64_t flush_errors;
+    uint32_t max_read_sectors;
+    uint32_t max_write_sectors;
+} block_device_stats_t;
+
+typedef struct {
     int (*read_sectors)(block_device_t *dev, uint64_t lba,
                         uint32_t count, void *buffer);
     int (*write_sectors)(block_device_t *dev, uint64_t lba,
@@ -57,5 +70,6 @@ const char *blk_get_name(void);
 uint64_t blk_get_capacity_sectors(void);
 uint32_t blk_get_sector_size(void);
 bool blk_is_readonly(void);
+void blk_get_stats(block_device_stats_t *stats);
 
 #endif /* _KERNEL_BLOCK_DEVICE_H */

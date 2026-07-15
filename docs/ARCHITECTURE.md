@@ -765,6 +765,10 @@ int blk_read_sector(uint64_t lba, void *buffer);
 int blk_write_sector(uint64_t lba, void *buffer);
 ```
 
+Transport counters are available through `/proc/diskstats`. Storage changes
+should be measured with `iobench`; the reproducible procedure and current QEMU
+baselines are in [STORAGE_PERFORMANCE.md](STORAGE_PERFORMANCE.md).
+
 Contributor rules:
 
 1. Keep VirtIO request buffers in RAM that has a stable kernel alias via
@@ -851,6 +855,13 @@ Ext2 operations are protected by an ext2 operation lock. This keeps the current
 implementation simple. Be careful not to hold that lock across unrelated
 blocking paths longer than necessary.
 
+The block cache is set-associative and can retain dirty data and allocation
+metadata. Sequential writeback groups up to 16 contiguous 4 KiB blocks into a
+single 64 KiB block request. The superblock is pinned while mounted, so free
+block and inode counters no longer cause a read/write pair for every
+allocation. Runtime cache and writeback counters are exposed in
+`/proc/fs/ext2/stats`.
+
 Contributor rules:
 
 1. Keep on-disk metadata updates ordered and check every write return.
@@ -874,6 +885,11 @@ Current role:
 - compatibility mount for `/mnt`;
 - exercise VFS cross-filesystem behavior;
 - provide an intentionally simpler filesystem for regression comparison.
+
+Sequential I/O coalesces contiguous cluster runs into block requests of up to
+128 sectors. FAT synchronization tracks an exact dirty entry range instead of
+rewriting the whole table. Runtime counters are exposed in
+`/proc/fs/fat32/stats`.
 
 Important differences from ext2:
 

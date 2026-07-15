@@ -118,6 +118,7 @@ _Static_assert((EXT2_BLOCK_CACHE_SETS & (EXT2_BLOCK_CACHE_SETS - 1u)) == 0,
 
 typedef struct ext2_block_cache_entry {
     bool valid;
+    bool dirty;
     uint32_t block;
     uint8_t* data;
 } ext2_block_cache_entry_t;
@@ -133,6 +134,7 @@ static task_t* ext2_op_owner;
 static uint32_t ext2_op_depth;
 static volatile bool ext2_dirty;
 static ext2_stats_t ext2_stats;
+static bool ext2_defer_allocation_writes;
 
 typedef struct ext2_wait_queue {
     spinlock_t lock;
@@ -403,8 +405,10 @@ static bool ext2_valid_disk_inode_ptr(const ext2_inode_t* di)
 
 static void ext2_block_cache_reset(void)
 {
-    for (uint32_t i = 0; i < EXT2_BLOCK_CACHE_SIZE; i++)
+    for (uint32_t i = 0; i < EXT2_BLOCK_CACHE_SIZE; i++) {
         ext2_block_cache[i].valid = false;
+        ext2_block_cache[i].dirty = false;
+    }
     for (uint32_t set = 0; set < EXT2_BLOCK_CACHE_SETS; set++)
         ext2_block_cache_set_clock[set] = 0;
 }
@@ -468,9 +472,17 @@ static ext2_block_cache_entry_t* ext2_block_cache_pick(uint32_t block)
             return &set[way];
     }
 
-    entry = &set[ext2_block_cache_set_clock[set_index]++ % EXT2_BLOCK_CACHE_WAYS];
-    entry->valid = false;
-    return entry;
+    for (uint32_t scanned = 0; scanned < EXT2_BLOCK_CACHE_WAYS; scanned++) {
+        entry = &set[ext2_block_cache_set_clock[set_index]++ %
+                     EXT2_BLOCK_CACHE_WAYS];
+        if (!entry->dirty) {
+            entry->valid = false;
+            return entry;
+        }
+    }
+
+    /* Never evict data that has not reached the block device. */
+    return NULL;
 }
 
 static int ext2_read_block(uint32_t block, void* buf)
@@ -518,6 +530,7 @@ static int ext2_read_block(uint32_t block, void* buf)
         memcpy(entry->data, buf, ext2_fs.block_size);
         entry->block = block;
         entry->valid = true;
+        entry->dirty = false;
     }
     ext2_cache_release();
     return 0;
@@ -543,13 +556,129 @@ static int ext2_write_block(uint32_t block, void* buf)
         entry = ext2_block_cache_pick(block);
 
     if (entry && ext2_block_cache_data(entry)) {
+        if (entry->dirty && ext2_stats.cache_dirty_blocks > 0)
+            ext2_stats.cache_dirty_blocks--;
         memcpy(entry->data, buf, ext2_fs.block_size);
         entry->block = block;
         entry->valid = true;
+        entry->dirty = false;
         ext2_stats.cache_writes++;
     }
 
     ext2_cache_release();
+    return ret;
+}
+
+#define EXT2_WRITEBACK_MAX_BLOCKS 16u
+
+static int ext2_write_data_block(uint32_t block, const void* buf)
+{
+    ext2_block_cache_entry_t* entry;
+
+    if (!buf || ext2_fs.block_size == 0)
+        return -EINVAL;
+
+    ext2_cache_acquire();
+    entry = ext2_block_cache_find(block);
+    if (!entry)
+        entry = ext2_block_cache_pick(block);
+    if (!entry || !ext2_block_cache_data(entry)) {
+        ext2_cache_release();
+        return ext2_write_block(block, (void*)buf);
+    }
+
+    if (!entry->dirty)
+        ext2_stats.cache_dirty_blocks++;
+    memcpy(entry->data, buf, ext2_fs.block_size);
+    entry->block = block;
+    entry->valid = true;
+    entry->dirty = true;
+    ext2_stats.cache_writes++;
+    ext2_mark_dirty();
+    ext2_cache_release();
+    return 0;
+}
+
+/*
+ * Sequential file writes hold ext2_op_lock and may allocate several blocks.
+ * Keep their allocation metadata in the same writeback transaction as the
+ * file data, then flush all of it before publishing the new inode size.
+ */
+static int ext2_write_allocation_block(uint32_t block, void* buf)
+{
+    if (ext2_defer_allocation_writes)
+        return ext2_write_data_block(block, buf);
+    return ext2_write_block(block, buf);
+}
+
+static int ext2_flush_dirty_blocks(void)
+{
+    uint8_t* batch;
+    uint32_t batch_capacity = EXT2_WRITEBACK_MAX_BLOCKS;
+    int ret = 0;
+
+    if (ext2_stats.cache_dirty_blocks == 0)
+        return 0;
+
+    batch = kmalloc(ext2_fs.block_size * batch_capacity);
+    while (!batch && batch_capacity > 1u) {
+        batch_capacity >>= 1;
+        batch = kmalloc(ext2_fs.block_size * batch_capacity);
+    }
+    if (!batch)
+        return -ENOMEM;
+
+    while (1) {
+        uint32_t first = ~0u;
+        uint32_t count = 0;
+
+        ext2_cache_acquire();
+        for (uint32_t i = 0; i < EXT2_BLOCK_CACHE_SIZE; i++) {
+            ext2_block_cache_entry_t* entry = &ext2_block_cache[i];
+
+            if (entry->valid && entry->dirty && entry->block < first)
+                first = entry->block;
+        }
+        if (first == ~0u) {
+            ext2_cache_release();
+            break;
+        }
+
+        while (count < batch_capacity) {
+            ext2_block_cache_entry_t* entry =
+                ext2_block_cache_find(first + count);
+
+            if (!entry || !entry->dirty || !entry->data)
+                break;
+            memcpy(batch + count * ext2_fs.block_size,
+                   entry->data, ext2_fs.block_size);
+            count++;
+        }
+        ext2_cache_release();
+
+        ret = blk_write_sectors(ext2_fs.lba_start +
+                                (uint64_t)first * ext2_fs.sectors_per_block,
+                                count * ext2_fs.sectors_per_block, batch);
+        if (ret < 0)
+            break;
+
+        ext2_stats.write_blocks += count;
+        ext2_stats.writeback_batches++;
+        ext2_cache_acquire();
+        for (uint32_t i = 0; i < count; i++) {
+            ext2_block_cache_entry_t* entry =
+                ext2_block_cache_find(first + i);
+
+            if (entry && entry->dirty) {
+                entry->dirty = false;
+                if (ext2_stats.cache_dirty_blocks > 0)
+                    ext2_stats.cache_dirty_blocks--;
+            }
+        }
+        ext2_cache_release();
+    }
+
+    kfree(batch);
     return ret;
 }
 
@@ -640,6 +769,12 @@ int ext2_sync(void)
 
     ext2_op_acquire();
     ext2_stats.syncs++;
+
+    if (ext2_flush_dirty_blocks() < 0) {
+        ext2_stats.sync_errors++;
+        ext2_op_release();
+        return -EIO;
+    }
 
     /* Write the pinned superblock before asking the device to flush. */
     if (ext2_sb_cache_dirty) {
@@ -892,7 +1027,7 @@ static int ext2_write_group_desc(uint32_t group, const ext2_group_desc_t* in)
 
     memcpy((ext2_group_desc_t*)blkbuf + gdesc_idx, in, sizeof(*in));
 
-    if (ext2_write_block(gdesc_blk, blkbuf) < 0) {
+    if (ext2_write_allocation_block(gdesc_blk, blkbuf) < 0) {
         kfree(blkbuf);
         return -1;
     }
@@ -990,7 +1125,7 @@ static int ext2_alloc_block(uint32_t* out_block)
                 return -ENOMEM;
             }
             memset(zero, 0, ext2_fs.block_size);
-            if (ext2_write_block(block, zero) < 0) {
+            if (ext2_write_allocation_block(block, zero) < 0) {
                 kfree(zero);
                 kfree(bitmap);
                 return -EIO;
@@ -998,7 +1133,7 @@ static int ext2_alloc_block(uint32_t* out_block)
             kfree(zero);
 
             ext2_bitmap_set(bitmap, bit);
-            if (ext2_write_block(gd.bg_block_bitmap, bitmap) < 0) {
+            if (ext2_write_allocation_block(gd.bg_block_bitmap, bitmap) < 0) {
                 kfree(bitmap);
                 return -EIO;
             }
@@ -1563,14 +1698,14 @@ static uint32_t ext2_get_or_alloc_block_at(ext2_inode_t* di, uint32_t idx, bool*
             uint32_t data_block;
             if (ext2_alloc_block(&data_block) < 0) {
                 if (new_indirect)
-                    ext2_write_block(di->i_block[12], indirect);
+                    ext2_write_allocation_block(di->i_block[12], indirect);
                 kfree(indirect);
                 return 0;
             }
 
             indirect[idx] = data_block;
 
-            if (ext2_write_block(di->i_block[12], indirect) < 0) {
+            if (ext2_write_allocation_block(di->i_block[12], indirect) < 0) {
                 kfree(indirect);
                 return 0;
             }
@@ -1626,7 +1761,7 @@ static uint32_t ext2_get_or_alloc_block_at(ext2_inode_t* di, uint32_t idx, bool*
         uint32_t indirect_block;
         if (ext2_alloc_block(&indirect_block) < 0) {
             if (new_double)
-                ext2_write_block(di->i_block[13], dbl);
+                ext2_write_allocation_block(di->i_block[13], dbl);
             kfree(dbl);
             kfree(indirect);
             return 0;
@@ -1639,7 +1774,7 @@ static uint32_t ext2_get_or_alloc_block_at(ext2_inode_t* di, uint32_t idx, bool*
             *allocated = true;
     }
 
-    if (ext2_write_block(di->i_block[13], dbl) < 0) {
+    if (ext2_write_allocation_block(di->i_block[13], dbl) < 0) {
         kfree(dbl);
         kfree(indirect);
         return 0;
@@ -1657,7 +1792,7 @@ static uint32_t ext2_get_or_alloc_block_at(ext2_inode_t* di, uint32_t idx, bool*
         uint32_t data_block;
         if (ext2_alloc_block(&data_block) < 0) {
             if (new_indirect)
-                ext2_write_block(dbl[first], indirect);
+                ext2_write_allocation_block(dbl[first], indirect);
             kfree(dbl);
             kfree(indirect);
             return 0;
@@ -1665,7 +1800,7 @@ static uint32_t ext2_get_or_alloc_block_at(ext2_inode_t* di, uint32_t idx, bool*
 
         indirect[second] = data_block;
 
-        if (ext2_write_block(dbl[first], indirect) < 0) {
+        if (ext2_write_allocation_block(dbl[first], indirect) < 0) {
             kfree(dbl);
             kfree(indirect);
             return 0;
@@ -3146,6 +3281,8 @@ static ssize_t ext2_file_write(file_t* file, const void* buffer, size_t count)
     const uint8_t* src = (const uint8_t*)buffer;
     bool allocated_block = false;
 
+    ext2_defer_allocation_writes = true;
+
     while (count > 0) {
         uint32_t blk_idx = file->offset / ext2_fs.block_size;
         uint32_t blk_off = file->offset % ext2_fs.block_size;
@@ -3178,7 +3315,7 @@ static ssize_t ext2_file_write(file_t* file, const void* buffer, size_t count)
 
         memcpy(blkbuf + blk_off, src, chunk);
 
-        if (ext2_write_block(blk, blkbuf) < 0) {
+        if (ext2_write_data_block(blk, blkbuf) < 0) {
             total = total ? total : -EIO;
             break;
         }
@@ -3187,6 +3324,13 @@ static ssize_t ext2_file_write(file_t* file, const void* buffer, size_t count)
         file->offset += chunk;
         total += chunk;
         count -= chunk;
+    }
+
+    ext2_defer_allocation_writes = false;
+    /* Persist allocation metadata and data before publishing inode size. */
+    if (ext2_flush_dirty_blocks() < 0) {
+        kfree(blkbuf);
+        return -EIO;
     }
 
     if (total > 0) {
