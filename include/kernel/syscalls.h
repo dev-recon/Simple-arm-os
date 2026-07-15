@@ -100,6 +100,8 @@ struct process;
 #define __NR_readlink            85
 #define __NR_truncate            92
 #define __NR_ftruncate           93
+#define __NR_fchmod              ARMOS_NR_FCHMOD
+#define __NR_fchown              ARMOS_NR_FCHOWN
 #define __NR_getpriority         96
 #define __NR_setpriority         97
 #define __NR_statfs              99
@@ -118,6 +120,7 @@ struct process;
 #define __NR_readv              145
 #define __NR_writev             146
 #define __NR_getsid             147
+#define __NR_fdatasync          ARMOS_NR_FDATASYNC
 #define __NR_sched_yield        ARMOS_NR_SCHED_YIELD
 #define __NR_nanosleep          162
 #define __NR_poll               168
@@ -281,6 +284,7 @@ int sys_fstatat(int dirfd, const char* pathname, struct stat* statbuf,
 int sys_ftruncate(int fd, off_t length);
 int sys_truncate(const char* pathname, off_t length);
 int sys_fsync(int fd);
+int sys_fdatasync(int fd);
 int sys_statfs(const char* path, struct statfs* buf);
 int sys_print(const char* msg);
 int sys_mknod(const char* pathname, mode_t mode, uint32_t dev);
@@ -303,7 +307,9 @@ int sys_access(const char* pathname, int mode);
 int sys_sync(void);
 int sys_umask(int mask);
 int sys_chmod(const char* pathname, mode_t mode);
+int sys_fchmod(int fd, mode_t mode);
 int sys_chown(const char* pathname, uid_t owner, gid_t group);
+int sys_fchown(int fd, uid_t owner, gid_t group);
 int sys_socket(int domain, int type, int protocol);
 int sys_bind(int sockfd, const void* addr, uint32_t addrlen);
 int sys_connect(int sockfd, const void* addr, uint32_t addrlen);

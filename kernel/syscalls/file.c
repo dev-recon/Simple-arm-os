@@ -337,7 +337,7 @@ int sys_truncate(const char* pathname, off_t length)
     return ret;
 }
 
-int sys_fsync(int fd)
+static int sync_file_descriptor(int fd)
 {
     task_t* task = task_current_local();
     file_t* file;
@@ -357,6 +357,17 @@ int sys_fsync(int fd)
      * than Linux fsync(2).
      */
     return vfs_sync();
+}
+
+int sys_fsync(int fd)
+{
+    return sync_file_descriptor(fd);
+}
+
+int sys_fdatasync(int fd)
+{
+    /* The current VFS sync is conservative and may flush extra metadata. */
+    return sync_file_descriptor(fd);
 }
 
 /**

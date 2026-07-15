@@ -82,6 +82,7 @@ extern long sys_readlink(const char *pathname, char *buf, unsigned long bufsiz);
 extern long sys_ftruncate(int fd, long length);
 extern long sys_truncate(const char *pathname, long length);
 extern long sys_fsync(int fd);
+extern long sys_fdatasync(int fd);
 extern long sys_statfs(const char *path, void *buf);
 extern long sys_stat(const char *pathname, void *st);
 extern long sys_lstat(const char *pathname, void *st);
@@ -124,7 +125,9 @@ extern long sys_sync(void);
 extern long sys_chdir(const char *path);
 extern long sys_getcwd(char *buf, unsigned long size);
 extern long sys_chmod(const char *path, int mode);
+extern long sys_fchmod(int fd, int mode);
 extern long sys_chown(const char *path, int owner, int group);
+extern long sys_fchown(int fd, int owner, int group);
 extern long sys_umask(int mask);
 extern long sys_pipe(int pipefd[2]);
 extern long sys_dup(int oldfd);
@@ -964,6 +967,11 @@ int fsync(int fd)
     return ret_errno(sys_fsync(fd));
 }
 
+int fdatasync(int fd)
+{
+    return ret_errno(sys_fdatasync(fd));
+}
+
 int _isatty(int fd)
 {
     struct armos_termios tio;
@@ -1347,12 +1355,25 @@ int chmod(const char *path, mode_t mode)
     return ret_errno(sys_chmod(path, (int)mode));
 }
 
+int fchmod(int fd, mode_t mode)
+{
+    return ret_errno(sys_fchmod(fd, (int)mode));
+}
+
 int chown(const char *path, uid_t owner, gid_t group)
 {
     int os_owner = ((unsigned int)owner == (unsigned int)(uid_t)-1) ? -1 : (int)owner;
     int os_group = ((unsigned int)group == (unsigned int)(gid_t)-1) ? -1 : (int)group;
 
     return ret_errno(sys_chown(path, os_owner, os_group));
+}
+
+int fchown(int fd, uid_t owner, gid_t group)
+{
+    int os_owner = ((unsigned int)owner == (unsigned int)(uid_t)-1) ? -1 : (int)owner;
+    int os_group = ((unsigned int)group == (unsigned int)(gid_t)-1) ? -1 : (int)group;
+
+    return ret_errno(sys_fchown(fd, os_owner, os_group));
 }
 
 mode_t umask(mode_t mask)

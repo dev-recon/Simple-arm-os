@@ -99,6 +99,8 @@ RAW_SYSCALL sys_symlink, 83
 RAW_SYSCALL sys_readlink, 85
 RAW_SYSCALL sys_truncate, 92
 RAW_SYSCALL sys_ftruncate, 93
+RAW_SYSCALL sys_fchmod, 94
+RAW_SYSCALL sys_fchown, 95
 RAW_SYSCALL sys_getpriority, 96
 RAW_SYSCALL sys_setpriority, 97
 RAW_SYSCALL sys_statfs, 99
@@ -117,6 +119,7 @@ RAW_SYSCALL5 sys_select, 142
 RAW_SYSCALL sys_readv, 145
 RAW_SYSCALL sys_writev, 146
 RAW_SYSCALL sys_getsid, 147
+RAW_SYSCALL sys_fdatasync, 148
 RAW_SYSCALL sys_sched_yield, 158
 RAW_SYSCALL sys_nanosleep, 162
 RAW_SYSCALL sys_poll, 168

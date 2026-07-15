@@ -55,8 +55,8 @@ needed by a broad range of otherwise simple Unix programs.
 | `clock_nanosleep` | Missing | Build absolute and relative sleep on the scheduler deadline mechanism |
 | `pread`, `pwrite` | Implemented for seekable files | Preserve the shared open-file offset and reject non-seekable descriptors with `ESPIPE` |
 | `openat` and `*at` path operations | Implemented with dirfds stable across `chdir` | Replace the stored canonical base path with dentry-relative lookup so an open directory also survives namespace renames |
-| `fchmod`, `fchown` | Missing | Apply ownership and mode changes through an open descriptor |
-| `fdatasync` | Missing | Reuse filesystem flush machinery while excluding unrelated metadata where possible |
+| `fchmod`, `fchown` | Implemented for ext2 descriptors | Extend descriptor metadata updates when writable filesystems gain equivalent inode operations |
+| `fdatasync` | Implemented with conservative VFS sync | Add per-file data-only flush callbacks to avoid syncing unrelated metadata |
 | `sysconf` | Limits, memory, CPUs, I/O vectors and selected capabilities implemented | Keep partial facilities explicitly unsupported and add selectors only with their complete contracts |
 
 Acceptance criteria:
@@ -109,6 +109,13 @@ ignore `dirfd`, `AT_SYMLINK_NOFOLLOW` controls the final `fstatat()` lookup,
 and `AT_REMOVEDIR` selects directory removal for `unlinkat()`. ARM32 and ARM64
 newlib use the same constants and kernel syscall numbers; `systest` combines
 all five interfaces and verifies descriptor, path and flag errors.
+
+Descriptor metadata operations now expose `fchmod()` and `fchown()` through
+the same permission and ext2 inode-update paths as their pathname variants.
+`fdatasync()` validates the open descriptor and currently uses the common VFS
+flush, which is persistence-safe but may write unrelated metadata. `systest`
+checks successful descriptor updates, ownership rules and invalid-descriptor
+errors on both ABIs.
 
 ### P1 - Complete Existing Contracts
 

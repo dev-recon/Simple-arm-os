@@ -742,10 +742,16 @@ static void test_chmod_chown_syscalls(void)
     int fd;
 
     unlink(path);
-    fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     if (expect(fd >= 0, "chmod/chown create test file", fd) < 0)
         return;
-    close(fd);
+
+    expect(fchmod(fd, 0640) == 0, "fchmod descriptor syscall", 0);
+    if (expect(fstat(fd, &st) == 0, "fchmod descriptor fstat", 0) == 0)
+        expect((st.st_mode & 0777) == 0640,
+               "fchmod descriptor mode visible", st.st_mode & 0777);
+
+    expect(fdatasync(fd) == 0, "fdatasync descriptor syscall", 0);
 
     expect(chmod(path, 0600) == 0, "chmod octal syscall", 0);
     if (expect(stat(path, &st) == 0, "chmod octal stat", 0) == 0)
@@ -758,6 +764,14 @@ static void test_chmod_chown_syscalls(void)
     }
 
     if (getuid() == 0) {
+        expect(fchown(fd, (uid_t)-1, 321) == 0,
+               "fchown gid-only syscall", 0);
+        if (expect(fstat(fd, &st) == 0, "fchown gid-only fstat", 0) == 0) {
+            expect(st.st_gid == 321, "fchown gid-only updates gid", st.st_gid);
+            expect(st.st_uid == original_uid,
+                   "fchown gid-only keeps uid", st.st_uid);
+        }
+
         expect(chown(path, (uid_t)-1, 789) == 0, "chown gid-only syscall", 0);
         if (expect(stat(path, &st) == 0, "chown gid-only stat", 0) == 0) {
             expect(st.st_gid == 789, "chown gid-only updates gid", st.st_gid);
@@ -770,12 +784,25 @@ static void test_chmod_chown_syscalls(void)
             expect(st.st_gid == 456, "chown gid visible", st.st_gid);
         }
     } else {
+        expect(fchown(fd, (uid_t)-1, 321) < 0,
+               "fchown gid-only denied for non-root", 0);
         expect(chown(path, (uid_t)-1, 789) < 0,
                "chown gid-only denied for non-root", 0);
         expect(chown(path, 123, 456) < 0,
                "chown uid/gid denied for non-root", 0);
     }
 
+    errno = 0;
+    expect(fchmod(-1, 0600) < 0 && errno == EBADF,
+           "fchmod invalid descriptor", errno);
+    errno = 0;
+    expect(fchown(-1, (uid_t)-1, (gid_t)-1) < 0 && errno == EBADF,
+           "fchown invalid descriptor", errno);
+    errno = 0;
+    expect(fdatasync(-1) < 0 && errno == EBADF,
+           "fdatasync invalid descriptor", errno);
+
+    close(fd);
     chmod(path, 0600);
     unlink(path);
 }

@@ -1853,6 +1853,46 @@ int sys_umask(int mask)
     return (int)old_mask;
 }
 
+static int chmod_inode(inode_t* inode, mode_t mode)
+{
+    if (!inode)
+        return -EINVAL;
+
+    if (current_uid() != 0 && current_uid() != inode->uid)
+        return -EPERM;
+
+    if (inode->i_op != &ext2_inode_ops)
+        return -EROFS;
+
+    inode->mode = (inode->mode & S_IFMT) | (mode & 07777);
+    inode->ctime = get_current_time();
+    return ext2_update_inode_metadata(inode);
+}
+
+static int chown_inode(inode_t* inode, uid_t owner, gid_t group)
+{
+    if (!inode)
+        return -EINVAL;
+
+    if (current_uid() != 0)
+        return -EPERM;
+
+    if (inode->i_op != &ext2_inode_ops)
+        return -EROFS;
+
+    if ((owner != (uid_t)-1 && owner > 0xFFFFu) ||
+        (group != (gid_t)-1 && group > 0xFFFFu))
+        return -EINVAL;
+
+    if (owner != (uid_t)-1)
+        inode->uid = owner;
+    if (group != (gid_t)-1)
+        inode->gid = group;
+
+    inode->ctime = get_current_time();
+    return ext2_update_inode_metadata(inode);
+}
+
 int sys_chmod(const char* pathname, mode_t mode)
 {
     char* kernel_path;
@@ -1886,23 +1926,32 @@ int sys_chmod(const char* pathname, mode_t mode)
         return -ENOENT;
     }
 
-    if (current_uid() != 0 && current_uid() != inode->uid) {
-        put_inode(inode);
-        vfs_end_mutation();
-        return -EPERM;
-    }
-
-    if (inode->i_op != &ext2_inode_ops) {
-        put_inode(inode);
-        vfs_end_mutation();
-        return -EROFS;
-    }
-
-    inode->mode = (inode->mode & S_IFMT) | (mode & 07777);
-    inode->ctime = get_current_time();
-    ret = ext2_update_inode_metadata(inode);
+    ret = chmod_inode(inode, mode);
 
     put_inode(inode);
+    vfs_end_mutation();
+    return ret;
+}
+
+int sys_fchmod(int fd, mode_t mode)
+{
+    task_t* task = task_current_local();
+    file_t* file;
+    int ret;
+
+    if (fd < 0 || fd >= MAX_FILES)
+        return -EBADF;
+    if (!task || !task->process)
+        return -EBADF;
+
+    file = task->process->files[fd];
+    if (!file)
+        return -EBADF;
+    if (!file->inode)
+        return -EINVAL;
+
+    vfs_begin_mutation();
+    ret = chmod_inode(file->inode, mode);
     vfs_end_mutation();
     return ret;
 }
@@ -1940,34 +1989,32 @@ int sys_chown(const char* pathname, uid_t owner, gid_t group)
         return -ENOENT;
     }
 
-    if (current_uid() != 0) {
-        put_inode(inode);
-        vfs_end_mutation();
-        return -EPERM;
-    }
-
-    if (inode->i_op != &ext2_inode_ops) {
-        put_inode(inode);
-        vfs_end_mutation();
-        return -EROFS;
-    }
-
-    if ((owner != (uid_t)-1 && owner > 0xFFFFu) ||
-        (group != (gid_t)-1 && group > 0xFFFFu)) {
-        put_inode(inode);
-        vfs_end_mutation();
-        return -EINVAL;
-    }
-
-    if (owner != (uid_t)-1)
-        inode->uid = owner;
-    if (group != (gid_t)-1)
-        inode->gid = group;
-
-    inode->ctime = get_current_time();
-    ret = ext2_update_inode_metadata(inode);
+    ret = chown_inode(inode, owner, group);
 
     put_inode(inode);
+    vfs_end_mutation();
+    return ret;
+}
+
+int sys_fchown(int fd, uid_t owner, gid_t group)
+{
+    task_t* task = task_current_local();
+    file_t* file;
+    int ret;
+
+    if (fd < 0 || fd >= MAX_FILES)
+        return -EBADF;
+    if (!task || !task->process)
+        return -EBADF;
+
+    file = task->process->files[fd];
+    if (!file)
+        return -EBADF;
+    if (!file->inode)
+        return -EINVAL;
+
+    vfs_begin_mutation();
+    ret = chown_inode(file->inode, owner, group);
     vfs_end_mutation();
     return ret;
 }
