@@ -33,8 +33,8 @@ The following families are already connected to the common kernel:
 | Area | Existing foundation |
 | --- | --- |
 | Processes | `fork`, `execve`, `_exit`, `waitpid`, `wait4`, process groups and sessions |
-| Descriptors | `open`, `close`, `read`, `write`, `readv`, `writev`, `lseek`, `dup`, `dup2`, partial `fcntl` |
-| VFS | `stat`, `lstat`, `fstat`, `getdents`, links, directories, ownership, permissions and truncation |
+| Descriptors | `open`, `openat`, `close`, `read`, `write`, `pread`, `pwrite`, `readv`, `writev`, `lseek`, `dup`, `dup2`, partial `fcntl` |
+| VFS | `stat`, `lstat`, `fstat`, `fstatat`, `getdents`, links, directories, `mkdirat`, `unlinkat`, `renameat`, ownership, permissions and truncation |
 | Signals | `kill`, `sigaction`, `sigprocmask`, `sigpending`, `sigsuspend` and signal return |
 | Memory | `brk`, private `mmap`, `munmap`, partial `mprotect` and ArmOS shared-memory calls |
 | Waiting | `select`, `poll`, `nanosleep`, pipes and blocking TTY I/O |
@@ -54,7 +54,7 @@ needed by a broad range of otherwise simple Unix programs.
 | `clock_gettime`, `clock_getres` | Realtime and monotonic clocks implemented | Preserve the common UAPI and improve realtime resolution when hardware RTC support grows |
 | `clock_nanosleep` | Missing | Build absolute and relative sleep on the scheduler deadline mechanism |
 | `pread`, `pwrite` | Implemented for seekable files | Preserve the shared open-file offset and reject non-seekable descriptors with `ESPIPE` |
-| `openat` and `*at` path operations | Missing | Add dirfd-aware VFS path resolution, then expose `fstatat`, `unlinkat`, `renameat` and `mkdirat` |
+| `openat` and `*at` path operations | Implemented with dirfds stable across `chdir` | Replace the stored canonical base path with dentry-relative lookup so an open directory also survives namespace renames |
 | `fchmod`, `fchown` | Missing | Apply ownership and mode changes through an open descriptor |
 | `fdatasync` | Missing | Reuse filesystem flush machinery while excluding unrelated metadata where possible |
 | `sysconf` | Limits, memory, CPUs, I/O vectors and selected capabilities implemented | Keep partial facilities explicitly unsupported and add selectors only with their complete contracts |
@@ -100,6 +100,15 @@ changing the offset shared by `dup()` or `fork()`. `pwrite()` also honors its
 explicit offset on an `O_APPEND` descriptor. Current ext2 and FAT32 inode sizes
 remain 32-bit; newlib reports `EOVERFLOW` before entering the kernel when an
 application requests an offset outside that filesystem range.
+
+Directory-relative I/O now exposes `openat()`, `fstatat()`, `mkdirat()`,
+`unlinkat()` and `renameat()` through one architecture-neutral resolver. Open
+directory descriptors retain their canonical absolute path, so relative
+operations remain anchored to the descriptor after `chdir()`. Absolute paths
+ignore `dirfd`, `AT_SYMLINK_NOFOLLOW` controls the final `fstatat()` lookup,
+and `AT_REMOVEDIR` selects directory removal for `unlinkat()`. ARM32 and ARM64
+newlib use the same constants and kernel syscall numbers; `systest` combines
+all five interfaces and verifies descriptor, path and flag errors.
 
 ### P1 - Complete Existing Contracts
 

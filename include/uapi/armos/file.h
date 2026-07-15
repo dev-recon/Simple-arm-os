@@ -11,6 +11,7 @@
  * Responsibilities:
  * - Define architecture-independent file values used by ArmOS syscalls.
  * - Keep ARM32 and ARM64 newlib type widths out of the kernel ABI.
+ * - Define directory-relative path constants shared with newlib.
  *
  * Notes:
  * - Positioned I/O passes its offset through a pointer to this fixed layout.
@@ -26,5 +27,10 @@ typedef struct {
 } armos_offset_t;
 
 #define ARMOS_FILE_OFFSET_MAX 0xffffffffULL
+
+/* Newlib's public *at interface uses these values on both architectures. */
+#define ARMOS_AT_FDCWD            (-2)
+#define ARMOS_AT_SYMLINK_NOFOLLOW 0x0002
+#define ARMOS_AT_REMOVEDIR        0x0008
 
 #endif

@@ -42,6 +42,16 @@ extern int sched_yield(void);
 extern ssize_t pread(int fd, void *buf, size_t count, off_t offset);
 extern ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset);
 
+#ifndef AT_FDCWD
+#define AT_FDCWD (-2)
+#endif
+#ifndef AT_SYMLINK_NOFOLLOW
+#define AT_SYMLINK_NOFOLLOW 0x0002
+#endif
+#ifndef AT_REMOVEDIR
+#define AT_REMOVEDIR 0x0008
+#endif
+
 extern char *realpath(const char *path, char *resolved_path);
 
 #define COLOR_GREEN "\033[32m"
@@ -381,6 +391,104 @@ static void test_positioned_io(void)
     }
 
     unlink(path);
+}
+
+static void test_directory_relative_io(void)
+{
+    const char *root = tmp_path("at-root");
+    char original_cwd[128];
+    char absolute_file[160];
+    char absolute_link[160];
+    struct stat st;
+    int dirfd = -1;
+    int subfd = -1;
+    int fd = -1;
+
+    remove_tree_local(root);
+    if (expect(mkdir(root, 0755) == 0, "*at create base directory", errno) < 0)
+        return;
+    dirfd = open(root, O_RDONLY | O_DIRECTORY, 0);
+    if (expect(dirfd >= 0, "*at open base directory", dirfd) < 0)
+        goto cleanup;
+
+    fd = openat(dirfd, "alpha.txt", O_CREAT | O_RDWR | O_TRUNC, 0644);
+    if (expect(fd >= 0, "openat creates relative file", fd) == 0) {
+        expect(write(fd, "relative", 8) == 8,
+               "openat file accepts ordinary I/O", errno);
+        close(fd);
+        fd = -1;
+    }
+    expect(fstatat(dirfd, "alpha.txt", &st, 0) == 0 && st.st_size == 8,
+           "fstatat reads relative metadata", errno);
+    expect(mkdirat(dirfd, "sub", 0755) == 0,
+           "mkdirat creates relative directory", errno);
+    snprintf(absolute_link, sizeof(absolute_link), "%s/sub/link", root);
+    if (expect(symlink("../alpha.txt", absolute_link) == 0,
+               "*at create relative symlink", errno) == 0) {
+        expect(fstatat(dirfd, "sub/link", &st, AT_SYMLINK_NOFOLLOW) == 0 &&
+               S_ISLNK(st.st_mode), "fstatat can inspect final symlink", errno);
+        expect(fstatat(dirfd, "sub/link", &st, 0) == 0 &&
+               S_ISREG(st.st_mode) && st.st_size == 8,
+               "fstatat follows final symlink by default", errno);
+        expect(unlinkat(dirfd, "sub/link", 0) == 0,
+               "unlinkat removes relative symlink", errno);
+    }
+
+    if (getcwd(original_cwd, sizeof(original_cwd)) != NULL &&
+        expect(chdir("/") == 0, "*at change cwd away from dirfd", errno) == 0) {
+        fd = openat(dirfd, "alpha.txt", O_RDONLY, 0);
+        expect(fd >= 0, "openat dirfd survives chdir", fd);
+        if (fd >= 0) {
+            close(fd);
+            fd = -1;
+        }
+        expect(chdir(original_cwd) == 0, "*at restore cwd", errno);
+    }
+
+    snprintf(absolute_file, sizeof(absolute_file), "%s/alpha.txt", root);
+    expect(fstatat(-1, absolute_file, &st, 0) == 0 && st.st_size == 8,
+           "fstatat absolute path ignores dirfd", errno);
+
+    subfd = openat(dirfd, "sub", O_RDONLY | O_DIRECTORY, 0);
+    if (expect(subfd >= 0, "openat opens relative directory", subfd) == 0) {
+        expect(renameat(dirfd, "alpha.txt", subfd, "beta.txt") == 0,
+               "renameat moves across directory descriptors", errno);
+        expect(fstatat(subfd, "beta.txt", &st, 0) == 0 && st.st_size == 8,
+               "fstatat sees renamed file", errno);
+    }
+
+    errno = 0;
+    expect(openat(-1, "relative", O_RDONLY, 0) < 0 && errno == EBADF,
+           "openat rejects invalid relative dirfd", errno);
+    fd = openat(subfd, "beta.txt", O_RDONLY, 0);
+    if (fd >= 0) {
+        errno = 0;
+        expect(openat(fd, "relative", O_RDONLY, 0) < 0 && errno == ENOTDIR,
+               "openat rejects non-directory dirfd", errno);
+        close(fd);
+        fd = -1;
+    }
+    if (subfd >= 0) {
+        close(subfd);
+        subfd = -1;
+    }
+
+    expect(unlinkat(dirfd, "sub/beta.txt", 0) == 0,
+           "unlinkat removes relative file", errno);
+    expect(unlinkat(dirfd, "sub", AT_REMOVEDIR) == 0,
+           "unlinkat AT_REMOVEDIR removes directory", errno);
+    errno = 0;
+    expect(unlinkat(dirfd, "missing", 0x4000) < 0 && errno == EINVAL,
+           "unlinkat rejects unknown flags", errno);
+
+cleanup:
+    if (fd >= 0)
+        close(fd);
+    if (subfd >= 0)
+        close(subfd);
+    if (dirfd >= 0)
+        close(dirfd);
+    remove_tree_local(root);
 }
 
 static void test_access_umask(void)
@@ -2325,6 +2433,7 @@ int main(int argc, char **argv)
     test_scheduler_priority_syscalls();
     test_file_io();
     test_positioned_io();
+    test_directory_relative_io();
     test_access_umask();
     test_open_permission_enforcement();
     test_pipe_dup2();

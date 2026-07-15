@@ -2031,25 +2031,14 @@ int sys_utime(const char* pathname, const void* times)
     return ret;
 }
 
-int sys_unlink(const char* pathname)
+static int unlink_resolved(char *full_path)
 {
-    char* kernel_path;
     char* parent_path;
     char* filename;
     inode_t* parent_inode;
     inode_t* target_inode;
     int result;
     
-    /* Copier le chemin depuis l'userspace */
-    kernel_path = copy_string_from_user(pathname);
-    if (!kernel_path) return -EFAULT;
-    
-    /* Résoudre le chemin (absolu ou relatif) */
-    char* full_path = resolve_path(kernel_path);
-    kfree(kernel_path);
-    
-    if (!full_path) return -ENOENT;
-
     result = vfs_check_search_permission(full_path, false);
     if (result < 0) {
         kfree(full_path);
@@ -2148,27 +2137,29 @@ int sys_unlink(const char* pathname)
     return result;
 }
 
-
-int sys_rename(const char* oldpath, const char* newpath)
+int sys_unlink(const char* pathname)
 {
-    char *old_kpath, *new_kpath;
-    char *old_full, *new_full;
+    char *kernel_path;
+    char *full_path;
+    int result;
+
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path)
+        return -EFAULT;
+    result = resolve_path_at(ARMOS_AT_FDCWD, kernel_path, &full_path);
+    kfree(kernel_path);
+    if (result < 0)
+        return result;
+    return unlink_resolved(full_path);
+}
+
+
+static int rename_resolved(char *old_full, char *new_full)
+{
     char *old_parent_path, *old_name;
     char *new_parent_path, *new_name;
     inode_t *old_parent, *new_parent;
     int result;
-
-    old_kpath = copy_string_from_user(oldpath);
-    if (!old_kpath) return -EFAULT;
-
-    new_kpath = copy_string_from_user(newpath);
-    if (!new_kpath) { kfree(old_kpath); return -EFAULT; }
-
-    old_full = resolve_path(old_kpath); kfree(old_kpath);
-    if (!old_full) { kfree(new_kpath); return -ENOENT; }
-
-    new_full = resolve_path(new_kpath); kfree(new_kpath);
-    if (!new_full) { kfree(old_full); return -ENOENT; }
 
     result = vfs_check_search_permission(old_full, false);
     if (result != 0) { kfree(old_full); kfree(new_full); return result; }
@@ -2239,23 +2230,52 @@ out:
     return result;
 }
 
-
-int sys_rmdir(const char* pathname)
+int sys_rename(const char* oldpath, const char* newpath)
 {
-    char* kernel_path;
-    char* abs_path;
+    return sys_renameat(ARMOS_AT_FDCWD, oldpath,
+                        ARMOS_AT_FDCWD, newpath);
+}
+
+int sys_renameat(int olddirfd, const char* oldpath,
+                 int newdirfd, const char* newpath)
+{
+    char *old_kernel_path;
+    char *new_kernel_path;
+    char *old_full;
+    char *new_full;
+    int result;
+
+    old_kernel_path = copy_string_from_user(oldpath);
+    if (!old_kernel_path)
+        return -EFAULT;
+    new_kernel_path = copy_string_from_user(newpath);
+    if (!new_kernel_path) {
+        kfree(old_kernel_path);
+        return -EFAULT;
+    }
+    result = resolve_path_at(olddirfd, old_kernel_path, &old_full);
+    kfree(old_kernel_path);
+    if (result < 0) {
+        kfree(new_kernel_path);
+        return result;
+    }
+    result = resolve_path_at(newdirfd, new_kernel_path, &new_full);
+    kfree(new_kernel_path);
+    if (result < 0) {
+        kfree(old_full);
+        return result;
+    }
+    return rename_resolved(old_full, new_full);
+}
+
+
+static int rmdir_resolved(char *abs_path)
+{
     char* parent_path;
     char* dir_name;
     inode_t* parent_inode;
     inode_t* target_inode;
     int result;
-
-    kernel_path = copy_string_from_user(pathname);
-    if (!kernel_path) return -EFAULT;
-
-    abs_path = resolve_path(kernel_path);
-    kfree(kernel_path);
-    if (!abs_path) return -ENOMEM;
 
     result = vfs_check_search_permission(abs_path, false);
     if (result < 0) {
@@ -2335,22 +2355,49 @@ int sys_rmdir(const char* pathname)
     return result;
 }
 
-
-int sys_mkdir(const char* pathname, mode_t mode)
+int sys_rmdir(const char* pathname)
 {
-    char* kernel_path;
-    char* abs_path;
+    char *kernel_path;
+    char *abs_path;
+    int result;
+
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path)
+        return -EFAULT;
+    result = resolve_path_at(ARMOS_AT_FDCWD, kernel_path, &abs_path);
+    kfree(kernel_path);
+    if (result < 0)
+        return result;
+    return rmdir_resolved(abs_path);
+}
+
+int sys_unlinkat(int dirfd, const char* pathname, int flags)
+{
+    char *kernel_path;
+    char *full_path;
+    int result;
+
+    if (flags & ~ARMOS_AT_REMOVEDIR)
+        return -EINVAL;
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path)
+        return -EFAULT;
+    result = resolve_path_at(dirfd, kernel_path, &full_path);
+    kfree(kernel_path);
+    if (result < 0)
+        return result;
+    if (flags & ARMOS_AT_REMOVEDIR)
+        return rmdir_resolved(full_path);
+    return unlink_resolved(full_path);
+}
+
+
+static int mkdir_resolved(char *abs_path, mode_t mode)
+{
     char* parent_path;
     char* dir_name;
     inode_t* parent_inode;
     int result;
-
-    kernel_path = copy_string_from_user(pathname);
-    if (!kernel_path) return -EFAULT;
-
-    abs_path = resolve_path(kernel_path);
-    kfree(kernel_path);
-    if (!abs_path) return -ENOMEM;
 
     result = vfs_check_search_permission(abs_path, false);
     if (result < 0) {
@@ -2407,6 +2454,27 @@ int sys_mkdir(const char* pathname, mode_t mode)
     kfree(dir_name);
 
     return result;
+}
+
+int sys_mkdir(const char* pathname, mode_t mode)
+{
+    return sys_mkdirat(ARMOS_AT_FDCWD, pathname, mode);
+}
+
+int sys_mkdirat(int dirfd, const char* pathname, mode_t mode)
+{
+    char *kernel_path;
+    char *abs_path;
+    int result;
+
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path)
+        return -EFAULT;
+    result = resolve_path_at(dirfd, kernel_path, &abs_path);
+    kfree(kernel_path);
+    if (result < 0)
+        return result;
+    return mkdir_resolved(abs_path, mode);
 }
 
 

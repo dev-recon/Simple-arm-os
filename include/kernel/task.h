@@ -216,6 +216,7 @@ struct inode {
 /* File structure */
 struct file {
     char name[256];               /* Nom du fichier */
+    char path[MAX_PATH];          /* Chemin absolu stable pour les appels *at */
     uint32_t pos;
     inode_t* inode;
     uint32_t offset;

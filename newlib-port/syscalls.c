@@ -60,6 +60,7 @@ extern long sys_pread(int fd, void *buf, unsigned long count,
 extern long sys_pwrite(int fd, const void *buf, unsigned long count,
                        const armos_offset_t *offset);
 extern long sys_open(const char *pathname, int flags, int mode);
+extern long sys_openat(int dirfd, const char *pathname, int flags, int mode);
 extern long sys_creat(const char *pathname, int mode);
 extern long sys_close(int fd);
 extern long sys_mount(const char *source, const char *target,
@@ -69,8 +70,12 @@ extern long sys_umount(const char *target);
 extern long sys_time(void *tloc);
 extern long sys_lseek(int fd, long offset, int whence);
 extern long sys_unlink(const char *pathname);
+extern long sys_unlinkat(int dirfd, const char *pathname, int flags);
 extern long sys_rename(const char *oldpath, const char *newpath);
+extern long sys_renameat(int olddirfd, const char *oldpath,
+                         int newdirfd, const char *newpath);
 extern long sys_mkdir(const char *pathname, int mode);
+extern long sys_mkdirat(int dirfd, const char *pathname, int mode);
 extern long sys_rmdir(const char *pathname);
 extern long sys_symlink(const char *target, const char *linkpath);
 extern long sys_readlink(const char *pathname, char *buf, unsigned long bufsiz);
@@ -81,6 +86,7 @@ extern long sys_statfs(const char *path, void *buf);
 extern long sys_stat(const char *pathname, void *st);
 extern long sys_lstat(const char *pathname, void *st);
 extern long sys_fstat(int fd, void *st);
+extern long sys_fstatat(int dirfd, const char *pathname, void *st, int flags);
 extern long sys_gettimeofday(struct timeval *tv, void *tz);
 extern long sys_ioctl(int fd, unsigned long request, void *arg);
 extern long sys_fcntl(int fd, int cmd, long arg);
@@ -730,6 +736,20 @@ int _open(const char *pathname, int flags, int mode)
     return ret_errno(sys_open(pathname, flags, mode));
 }
 
+int openat(int dirfd, const char *pathname, int flags, ...)
+{
+    int mode = 0;
+
+    if (flags & O_CREAT) {
+        va_list args;
+
+        va_start(args, flags);
+        mode = va_arg(args, int);
+        va_end(args);
+    }
+    return ret_errno(sys_openat(dirfd, pathname, flags, mode));
+}
+
 int creat(const char *pathname, mode_t mode)
 {
     return ret_errno(sys_creat(pathname, (int)mode));
@@ -766,6 +786,11 @@ int _unlink(const char *pathname)
     return ret_errno(sys_unlink(pathname));
 }
 
+int unlinkat(int dirfd, const char *pathname, int flags)
+{
+    return ret_errno(sys_unlinkat(dirfd, pathname, flags));
+}
+
 int _link(const char *oldpath, const char *newpath)
 {
     return ret_errno(sys_link(oldpath, newpath));
@@ -776,9 +801,20 @@ int _rename(const char *oldpath, const char *newpath)
     return ret_errno(sys_rename(oldpath, newpath));
 }
 
+int renameat(int olddirfd, const char *oldpath,
+             int newdirfd, const char *newpath)
+{
+    return ret_errno(sys_renameat(olddirfd, oldpath, newdirfd, newpath));
+}
+
 int mkdir(const char *pathname, mode_t mode)
 {
     return ret_errno(sys_mkdir(pathname, (int)mode));
+}
+
+int mkdirat(int dirfd, const char *pathname, mode_t mode)
+{
+    return ret_errno(sys_mkdirat(dirfd, pathname, (int)mode));
 }
 
 int rmdir(const char *pathname)
@@ -857,6 +893,24 @@ int _fstat(int fd, struct stat *st)
         return -1;
     }
 
+    copy_stat(st, &os_st);
+    return 0;
+}
+
+int fstatat(int dirfd, const char *pathname, struct stat *st, int flags)
+{
+    struct os_stat os_st;
+    long ret;
+
+    if (!st) {
+        errno = EFAULT;
+        return -1;
+    }
+    ret = sys_fstatat(dirfd, pathname, &os_st, flags);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
     copy_stat(st, &os_st);
     return 0;
 }

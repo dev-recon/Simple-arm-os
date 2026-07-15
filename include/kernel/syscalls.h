@@ -135,6 +135,11 @@ struct process;
 #define __NR_sysconf            ARMOS_NR_SYSCONF
 #define __NR_clock_gettime      ARMOS_NR_CLOCK_GETTIME
 #define __NR_clock_getres       ARMOS_NR_CLOCK_GETRES
+#define __NR_openat             ARMOS_NR_OPENAT
+#define __NR_mkdirat            ARMOS_NR_MKDIRAT
+#define __NR_fstatat            ARMOS_NR_FSTATAT
+#define __NR_unlinkat           ARMOS_NR_UNLINKAT
+#define __NR_renameat           ARMOS_NR_RENAMEAT
 #define __NR_socket             281
 #define __NR_bind               282
 #define __NR_connect            283
@@ -259,6 +264,7 @@ int sys_pread(int fd, void* buf, size_t count,
 int sys_pwrite(int fd, const void* buf, size_t count,
                const armos_offset_t* offset);
 int sys_open(const char* pathname, int flags, mode_t mode);
+int sys_openat(int dirfd, const char* pathname, int flags, mode_t mode);
 int sys_open_vfs(const char* pathname, int flags, mode_t mode);
 int sys_creat(const char* pathname, mode_t mode);
 int sys_close(int fd);
@@ -270,6 +276,8 @@ int sys_lstat(const char* pathname, struct stat* statbuf);
 int sys_stat_vfs(const char* pathname, struct stat* statbuf);
 int sys_lstat_vfs(const char* pathname, struct stat* statbuf);
 int sys_fstat(int fd, struct stat* statbuf);
+int sys_fstatat(int dirfd, const char* pathname, struct stat* statbuf,
+                int flags);
 int sys_ftruncate(int fd, off_t length);
 int sys_truncate(const char* pathname, off_t length);
 int sys_fsync(int fd);
@@ -280,12 +288,16 @@ int sys_mount(const char* source, const char* target, const char* fstype,
               uint32_t flags, const void* data);
 int sys_umount(const char* target);
 int sys_mkdir(const char* pathname, mode_t mode);
+int sys_mkdirat(int dirfd, const char* pathname, mode_t mode);
 int sys_rmdir(const char* pathname);
 int sys_link(const char* oldpath, const char* newpath);
 int sys_unlink(const char* pathname);
+int sys_unlinkat(int dirfd, const char* pathname, int flags);
 int sys_symlink(const char* target, const char* linkpath);
 int sys_readlink(const char* pathname, char* buf, size_t bufsiz);
 int sys_rename(const char* oldpath, const char* newpath);
+int sys_renameat(int olddirfd, const char* oldpath,
+                 int newdirfd, const char* newpath);
 int sys_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count);
 int sys_access(const char* pathname, int mode);
 int sys_sync(void);

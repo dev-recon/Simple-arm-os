@@ -399,7 +399,7 @@ int split_path(const char* full_path, char** parent_path, char** filename) {
 }
 
 static int install_open_file(task_t *task, inode_t *inode, int flags,
-                             const char *opened_name)
+                             const char *opened_name, const char *opened_path)
 {
     file_t *file;
     int fd;
@@ -421,6 +421,8 @@ static int install_open_file(task_t *task, inode_t *inode, int flags,
     vfs_inode_opened(inode);
     strncpy(file->name, opened_name, sizeof(file->name) - 1u);
     file->name[sizeof(file->name) - 1u] = '\0';
+    strncpy(file->path, opened_path, sizeof(file->path) - 1u);
+    file->path[sizeof(file->path) - 1u] = '\0';
 
     if (file->f_op && file->f_op->open) {
         int result = file->f_op->open(inode, file);
@@ -452,30 +454,41 @@ int kernel_open_existing(char* kernel_path, int flags)
 
     inode = flags & O_NOFOLLOW ? path_lookup_ex(kernel_path, false) :
                                 path_lookup(kernel_path);
-    kfree(kernel_path);
-    if (!inode)
+    if (!inode) {
+        kfree(kernel_path);
         return -ENOENT;
+    }
     if ((flags & O_NOFOLLOW) && S_ISLNK(inode->mode)) {
         put_inode(inode);
+        kfree(kernel_path);
         return -ELOOP;
     }
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
         put_inode(inode);
+        kfree(kernel_path);
         return -EEXIST;
     }
     if (!check_file_permission(inode, flags)) {
         put_inode(inode);
+        kfree(kernel_path);
         return -EACCES;
     }
     if ((flags & O_DIRECTORY) && !S_ISDIR(inode->mode)) {
         put_inode(inode);
+        kfree(kernel_path);
         return -ENOTDIR;
     }
     if (flags & O_TRUNC) {
         put_inode(inode);
+        kfree(kernel_path);
         return -EROFS;
     }
-    return install_open_file(task, inode, flags, opened_name);
+    {
+        int result = install_open_file(task, inode, flags, opened_name,
+                                       kernel_path);
+        kfree(kernel_path);
+        return result;
+    }
 }
 
 int kernel_open(char* kernel_path, int flags, mode_t mode)
@@ -486,9 +499,12 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     int fd;
     char* filename = NULL;
     char opened_name[256];
+    char opened_path[MAX_PATH];
     bool opened_existing;
 
     opened_name[0] = '\0';
+    strncpy(opened_path, kernel_path, sizeof(opened_path) - 1u);
+    opened_path[sizeof(opened_path) - 1u] = '\0';
     
     /* Suppression du warning unused parameter */
     (void)mode;
@@ -697,6 +713,8 @@ int kernel_open(char* kernel_path, int flags, mode_t mode)
     }
 
     file->f_op = inode->f_op;
+    strncpy(file->path, opened_path, sizeof(file->path) - 1u);
+    file->path[sizeof(file->path) - 1u] = '\0';
 
     if (filename) {
         strcpy(file->name, filename);
@@ -734,7 +752,7 @@ char *get_current_working_directory(void){
 
 /* Normalise un chemin absolu en place : résout . et .. composant par composant. */
 void path_canonicalize(char *path) {
-    const char *segs[64];
+    const char *segs[MAX_PATH / 2 + 1];
     int depth = 0;
     const char *p = path + 1;
 
@@ -763,39 +781,76 @@ void path_canonicalize(char *path) {
     *out = '\0';
 }
 
-char* resolve_path(const char* path) {
-    char* full_path;
-    char* cwd;
-    size_t cwd_len, path_len;
+int resolve_path_at(int dirfd, const char* path, char** resolved)
+{
+    task_t *task = task_current_local();
+    const char *base;
+    file_t *dir_file = NULL;
+    char *full_path;
+    size_t base_len;
+    size_t path_len;
+    bool add_slash;
 
+    if (!path || !resolved)
+        return -EINVAL;
+    *resolved = NULL;
+    if (path[0] == '\0')
+        return -ENOENT;
+
+    /* POSIX ignores dirfd when pathname is already absolute. */
     if (path[0] == '/') {
-        char* abs = strdup(path);
-        if (abs) path_canonicalize(abs);
-        return abs;
+        if (strlen(path) >= MAX_PATH)
+            return -ENAMETOOLONG;
+        full_path = strdup(path);
+        if (!full_path)
+            return -ENOMEM;
+        path_canonicalize(full_path);
+        *resolved = full_path;
+        return 0;
     }
 
-    /* Chemin relatif (y compris ".", "..", "./foo", "../foo") : préfixer avec cwd */
-    cwd = get_current_working_directory();
-    if (!cwd) return NULL;
+    if (!task || !task->process)
+        return -EINVAL;
+    if (dirfd == ARMOS_AT_FDCWD) {
+        base = task->process->cwd;
+    } else {
+        if (dirfd < 0 || dirfd >= MAX_FILES)
+            return -EBADF;
+        dir_file = task->process->files[dirfd];
+        if (!dir_file)
+            return -EBADF;
+        if (!dir_file->inode || !S_ISDIR(dir_file->inode->mode))
+            return -ENOTDIR;
+        if (dir_file->path[0] == '\0')
+            return -EBADF;
+        base = dir_file->path;
+    }
 
-    cwd_len = strlen(cwd);
+    base_len = strlen(base);
     path_len = strlen(path);
+    add_slash = base_len == 0 || base[base_len - 1u] != '/';
+    if (base_len + (add_slash ? 1u : 0u) + path_len + 1u > MAX_PATH)
+        return -ENAMETOOLONG;
 
-    full_path = kmalloc(cwd_len + 1 + path_len + 1);
-    if (!full_path) {
-        kfree(cwd);
-        return NULL;
-    }
-
-    strcpy(full_path, cwd);
-    if (cwd[cwd_len - 1] != '/') {
+    full_path = kmalloc(base_len + (add_slash ? 1u : 0u) + path_len + 1u);
+    if (!full_path)
+        return -ENOMEM;
+    strcpy(full_path, base);
+    if (add_slash)
         strcat(full_path, "/");
-    }
     strcat(full_path, path);
-
     path_canonicalize(full_path);
-    kfree(cwd);
-    return full_path;
+    *resolved = full_path;
+    return 0;
+}
+
+char* resolve_path(const char* path)
+{
+    char *resolved;
+
+    if (resolve_path_at(ARMOS_AT_FDCWD, path, &resolved) < 0)
+        return NULL;
+    return resolved;
 }
 
 int vfs_check_search_permission(const char* path, bool include_final)
@@ -900,11 +955,9 @@ int sys_open_vfs(const char* pathname, int flags, mode_t mode)
     return kernel_open_existing(full_path, flags);
 }
 
-int sys_open(const char* pathname, int flags, mode_t mode)
+static int sys_open_resolved(task_t *task, char *full_path,
+                             int flags, mode_t mode)
 {
-    task_t* task = task_current_local();
-    char* kernel_path;
-    char* full_path;
     file_t* tty_file;
     file_t* null_file;
     file_t* fb_file;
@@ -915,18 +968,10 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     /* Suppression du warning unused parameter */
     (void)mode;
 
-    if (!task || !task->process)
+    if (!task || !task->process || !full_path) {
+        kfree(full_path);
         return -EINVAL;
-
-    kernel_path = copy_string_from_user(pathname);
-    if (!kernel_path) return -EFAULT;
-
-    //KDEBUG("sys_open: opening file %s, kernel_path = %s, flags = %d\n", pathname, kernel_path, flags);
-    /* Résoudre le chemin (absolu ou relatif) */
-    full_path = resolve_path(kernel_path);
-    kfree(kernel_path);
-    
-    if (!full_path) return -ENOENT;
+    }
 
     int search_ret = vfs_check_search_permission(full_path, false);
     if (search_ret < 0) {
@@ -1052,10 +1097,45 @@ int sys_open(const char* pathname, int flags, mode_t mode)
     if (flags & O_CREAT)
         vfs_end_mutation();
 
-    //KDEBUG("sys_open: '%s' flags=0x%x -> fd=%d\n", pathname, flags, fd);
-  
-
     return fd;
+}
+
+int sys_open(const char* pathname, int flags, mode_t mode)
+{
+    task_t *task = task_current_local();
+    char *kernel_path;
+    char *full_path;
+    int result;
+
+    if (!task || !task->process)
+        return -EINVAL;
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path)
+        return -EFAULT;
+    result = resolve_path_at(ARMOS_AT_FDCWD, kernel_path, &full_path);
+    kfree(kernel_path);
+    if (result < 0)
+        return result;
+    return sys_open_resolved(task, full_path, flags, mode);
+}
+
+int sys_openat(int dirfd, const char* pathname, int flags, mode_t mode)
+{
+    task_t *task = task_current_local();
+    char *kernel_path;
+    char *full_path;
+    int result;
+
+    if (!task || !task->process)
+        return -EINVAL;
+    kernel_path = copy_string_from_user(pathname);
+    if (!kernel_path)
+        return -EFAULT;
+    result = resolve_path_at(dirfd, kernel_path, &full_path);
+    kfree(kernel_path);
+    if (result < 0)
+        return result;
+    return sys_open_resolved(task, full_path, flags, mode);
 }
 
 int sys_creat(const char* pathname, mode_t mode)
@@ -1165,151 +1245,92 @@ int sys_lstat_vfs(const char *pathname, struct stat *statbuf)
     return sys_stat_vfs_impl(pathname, statbuf, false);
 }
 
-int sys_stat(const char* pathname, struct stat* statbuf)
+static int stat_resolved_path(char *full_path, struct stat *kstat,
+                              bool follow_final_symlink)
 {
-    char* kernel_path;
-    inode_t* inode;
-    struct stat kstat;
-    char* full_path;
-    
-    kernel_path = copy_string_from_user(pathname);
-    if (!kernel_path) return -EFAULT;
+    inode_t *inode;
+    int search_ret;
 
-    /* Résoudre le chemin (absolu ou relatif) */
-    full_path = resolve_path(kernel_path);
-    kfree(kernel_path);
-
-    if (!full_path) return -ENOENT;
-
-    int search_ret = vfs_check_search_permission(full_path, false);
+    search_ret = vfs_check_search_permission(full_path, false);
     if (search_ret < 0) {
         kfree(full_path);
         return search_ret;
     }
 
     if (is_null_device_path(full_path)) {
-        fill_null_device_stat(&kstat);
+        fill_null_device_stat(kstat);
         kfree(full_path);
-        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
-            return -EFAULT;
-        }
         return 0;
     }
 
     if (is_tty_device_path(full_path)) {
-        fill_tty_device_stat(full_path, &kstat);
+        fill_tty_device_stat(full_path, kstat);
         kfree(full_path);
-        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
-            return -EFAULT;
-        }
         return 0;
     }
 
     if (is_framebuffer_device_path(full_path)) {
-        fill_framebuffer_device_stat(&kstat);
+        fill_framebuffer_device_stat(kstat);
         kfree(full_path);
-        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
-            return -EFAULT;
-        }
         return 0;
     }
 
     if (is_net_echo_device_path(full_path)) {
-        fill_net_echo_device_stat(&kstat);
+        fill_net_echo_device_stat(kstat);
         kfree(full_path);
-        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
-            return -EFAULT;
-        }
         return 0;
     }
-    
-    inode = path_lookup(full_path);
+
+    inode = path_lookup_ex(full_path, follow_final_symlink);
     kfree(full_path);
-    
-    if (!inode) return -ENOENT;
-    
-    fill_stat_from_inode(&kstat, inode);
-    
-    /* Copy to user space */
-    if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
-        put_inode(inode);
-        return -EFAULT;
-    }
-    
+    if (!inode)
+        return -ENOENT;
+    fill_stat_from_inode(kstat, inode);
     put_inode(inode);
     return 0;
 }
 
-int sys_lstat(const char* pathname, struct stat* statbuf)
+static int stat_user_path_at(int dirfd, const char *pathname,
+                             struct stat *statbuf,
+                             bool follow_final_symlink)
 {
-    char* kernel_path;
-    inode_t* inode;
+    char *kernel_path;
+    char *full_path;
     struct stat kstat;
-    char* full_path;
+    int result;
 
     kernel_path = copy_string_from_user(pathname);
-    if (!kernel_path) return -EFAULT;
-
-    full_path = resolve_path(kernel_path);
-    kfree(kernel_path);
-    if (!full_path) return -ENOENT;
-
-    int search_ret = vfs_check_search_permission(full_path, false);
-    if (search_ret < 0) {
-        kfree(full_path);
-        return search_ret;
-    }
-
-    if (is_null_device_path(full_path)) {
-        fill_null_device_stat(&kstat);
-        kfree(full_path);
-        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
-            return -EFAULT;
-        }
-        return 0;
-    }
-
-    if (is_tty_device_path(full_path)) {
-        fill_tty_device_stat(full_path, &kstat);
-        kfree(full_path);
-        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
-            return -EFAULT;
-        }
-        return 0;
-    }
-
-    if (is_framebuffer_device_path(full_path)) {
-        fill_framebuffer_device_stat(&kstat);
-        kfree(full_path);
-        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
-            return -EFAULT;
-        }
-        return 0;
-    }
-
-    if (is_net_echo_device_path(full_path)) {
-        fill_net_echo_device_stat(&kstat);
-        kfree(full_path);
-        if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
-            return -EFAULT;
-        }
-        return 0;
-    }
-
-    inode = path_lookup_ex(full_path, false);
-    kfree(full_path);
-
-    if (!inode) return -ENOENT;
-
-    fill_stat_from_inode(&kstat, inode);
-
-    if (copy_to_user(statbuf, &kstat, sizeof(struct stat)) < 0) {
-        put_inode(inode);
+    if (!kernel_path)
         return -EFAULT;
-    }
-
-    put_inode(inode);
+    result = resolve_path_at(dirfd, kernel_path, &full_path);
+    kfree(kernel_path);
+    if (result < 0)
+        return result;
+    result = stat_resolved_path(full_path, &kstat, follow_final_symlink);
+    if (result < 0)
+        return result;
+    if (copy_to_user(statbuf, &kstat, sizeof(kstat)) < 0)
+        return -EFAULT;
     return 0;
+}
+
+int sys_stat(const char* pathname, struct stat* statbuf)
+{
+    return stat_user_path_at(ARMOS_AT_FDCWD, pathname, statbuf, true);
+}
+
+int sys_lstat(const char* pathname, struct stat* statbuf)
+{
+    return stat_user_path_at(ARMOS_AT_FDCWD, pathname, statbuf, false);
+}
+
+int sys_fstatat(int dirfd, const char* pathname, struct stat* statbuf,
+                int flags)
+{
+    if (flags & ~ARMOS_AT_SYMLINK_NOFOLLOW)
+        return -EINVAL;
+    return stat_user_path_at(dirfd, pathname, statbuf,
+                             !(flags & ARMOS_AT_SYMLINK_NOFOLLOW));
 }
 
 int sys_fstat(int fd, struct stat* statbuf)
