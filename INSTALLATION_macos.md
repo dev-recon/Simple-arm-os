@@ -3,12 +3,13 @@
 This guide sets up ArmOS on macOS. The project is primarily developed on Apple
 Silicon, but Intel Homebrew paths are noted where they differ.
 
-ArmOS currently targets ARM32. `qemu-virt` is the reference platform for kernel
-features and day-to-day development. Raspberry Pi 3 running AArch32 is the
-reference hardware platform; see [docs/RASPBERRY_PI3.md](docs/RASPBERRY_PI3.md)
-for SD-card and UART setup.
+ArmOS supports ARM32 and ARM64. `arm32/qemu-virt` is the fresh-checkout default,
+and `arm64/qemu-virt` is the 64-bit feature reference. Supported hardware is
+Raspberry Pi 3 Model B+ in AArch64 mode and Raspberry Pi 2 Model B v1.1 in
+ARMv7-A mode; see [docs/RASPBERRY_PI3.md](docs/RASPBERRY_PI3.md) and
+[docs/RASPBERRY_PI2.md](docs/RASPBERRY_PI2.md).
 
-The reproducible v0.6 emulator baseline is QEMU 10.0.2. Newer releases can be
+The reproducible v0.7 emulator baseline is QEMU 10.0.2. Newer releases can be
 used for compatibility testing, but should not silently replace the baseline.
 
 ## Disk Layout
@@ -21,6 +22,8 @@ platform-specific artifacts under `build/images/`:
 - `kernel-arm64-raspi3.bin` and `disk-arm64-raspi3.img`: Raspberry Pi 3
   hardware images; standard FAT32 boot is partition 1 and ext2 root is
   partition 2
+- `kernel-arm32-raspi2.bin` and `disk-arm32-raspi2.img`: Raspberry Pi 2
+  hardware images with the same boot/root partition order
 
 Generated images are build artifacts and should not be committed.
 

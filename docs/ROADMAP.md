@@ -5,19 +5,21 @@ ArmOS. The goal is not to clone Linux line by line, but to converge toward the
 same useful Unix contracts while keeping the kernel understandable and
 debuggable.
 
-## v0.6 Baseline
+## v0.7 ARM64 Baseline
 
-The v0.6 baseline is:
+The v0.7 baseline is:
 
-- stable public profile: `SMP_CPUS=1`;
-- developer stress profile: `SMP_CPUS>1`;
+- fresh-checkout default: `arm32/qemu-virt`;
+- ARM64 feature reference: `arm64/qemu-virt`, four CPUs;
+- supported hardware: Raspberry Pi 3 Model B+ in AArch64 mode and Raspberry
+  Pi 2 Model B v1.1 in ARMv7-A mode;
 - UART `tty0` is the required recovery console;
 - optional graphical `tty1` remains additive;
 - ext2 root is 512 MB inside a real MBR-partitioned `disk.img`;
 - newlib is the supported libc;
 - TinyCC is the native end-user compiler path;
 - ncurses and nano are optional generated bundles;
-- multi-arch work includes an ARM64/QEMU-virt EL1 serial bootstrap, exception
+- ARM64 bring-up history includes an ARM64/QEMU-virt EL1 serial bootstrap, exception
   vectors, a minimal long-descriptor identity MMU, GICv2/generic-timer IRQ
   delivery, a shared early page allocator, and FDT-driven RAM/reservation
   discovery, allocated TTBR0 L1/L2/L3 tables, and a permission-checked TTBR1
@@ -73,14 +75,15 @@ The v0.6 baseline is:
   generic process state covers fork/exec/wait/signals; an AArch64 ELF64 loader
   validates and populates `PT_LOAD` segments; and lazy `brk`/anonymous `mmap`
   reservations are populated by lower-EL translation faults and released by
-  `munmap`; VFS-backed `execve`, runnable fork children, `/sbin/init`, and the
-  full Unix userland remain ARM32.
+  `munmap`; the completed production path now runs VFS-backed `execve`, fork,
+  `/sbin/init`, mash and the common ELF64 userland.
 
-Post-v0.6 hardware milestone:
+Version 0.7 hardware milestone:
 
-- Raspberry Pi 3 boots as a dedicated AArch32 platform;
+- Raspberry Pi 3 B+ boots as the AArch64 hardware reference;
 - four Cortex-A53 CPUs participate in scheduling and pass sustained `kload`;
 - SD/eMMC, ext2 root, UART console, procfs diagnostics, and shutdown are usable;
+- Raspberry Pi 2 Model B v1.1 is supported by the ARM32 `raspi2` target;
 - framebuffer/input/network remain future Raspberry Pi milestones;
 - ASID-aware context-switch optimization remains blocked on a hardware-correct
   residency and invalidation design.
@@ -134,6 +137,11 @@ First milestone: implemented.
 ## 4. Syscalls And Toolchain Support
 
 Status: active.
+
+The prioritized syscall and libc compatibility plan is maintained in
+[`POSIX_COMPATIBILITY.md`](POSIX_COMPATIBILITY.md). It distinguishes missing
+kernel primitives from interfaces that belong in newlib and records acceptance
+criteria for each priority axis.
 
 Immediate goals:
 - Keep newlib as the reference libc.
@@ -213,18 +221,19 @@ First milestone: implemented.
 - Static ncurses cross-build with compiled fallback terminfo.
 - Tiny GNU nano cross-build staged under `/opt/nano/bin`.
 
-## 9. Multi-Arch Preparation
+## 9. Multi-Arch Runtime
 
-Status: phase 0 landed.
+Status: ARM32 and ARM64 use the common production kernel.
 
 Immediate goals:
-- Restart the next multi-arch branch from the v0.6 `main` baseline.
+- Keep architecture code limited to CPU, MMU, exception and context-switch
+  mechanics.
 - Continue replacing ambiguous address values with `paddr_t`, `vaddr_t`, and
-  `pfn_t`.
+  `pfn_t` at hardware boundaries.
 - Keep generated `asm-offsets` as the only source of truth for C/ASM structure
   offsets.
 - Keep FDT parsing centralized instead of adding more hardcoded QEMU addresses.
-- Do not create a speculative HAL before a second concrete target exists.
+- Keep process, VFS, scheduler, syscall and device policy in the common kernel.
 - Track the active migration sequence in
   [`docs/MULTIARCH_MIGRATION.md`](MULTIARCH_MIGRATION.md).
 

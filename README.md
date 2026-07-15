@@ -1,10 +1,11 @@
 # ArmOS
 
 ArmOS is a small ARM Unix-like kernel for QEMU and Raspberry Pi experiments.
-The complete v0.6 kernel and userland remain 32-bit, with QEMU `virt` /
-Cortex-A15 as the feature-development reference and Raspberry Pi 3 as the
-AArch32 hardware reference. An isolated AArch64/QEMU-virt EL1 serial bootstrap
-now starts the ARM64 port.
+Version 0.7 marks the complete AArch64 common-kernel milestone: QEMU `virt`
+and Raspberry Pi 3 B+ run the same process, VM, VFS, syscall, scheduler and
+userland contracts as ARM32. ARM32 QEMU `virt` remains the default development
+boot on a fresh checkout, while ARM64 QEMU `virt` is the reference for extending
+the 64-bit port.
 
 It started as a learning experiment: can a Linux-like ARM kernel be built from
 scratch, with modern tooling and AI-assisted development? It is now a usable
@@ -16,10 +17,12 @@ ArmOS is not Linux, and it is not production-ready. The goal is to keep the
 system small enough to understand while still implementing real operating
 system mechanisms.
 
-## ArmOS v0.6 Milestone
+## ArmOS v0.7 ARM64 Milestone
 
-ArmOS v0.6 is the first release where ArmOS starts to feel like a small,
-self-contained Unix lab rather than only a kernel bring-up project.
+ArmOS v0.7 promotes AArch64 from an isolated bootstrap to a complete runtime.
+ELF64 init and mash use the common kernel, all four CPUs participate in the
+scheduler, and QEMU VirtIO block, network, GPU and keyboard drivers are shared
+with ARM32. The v0.6 native-userland milestone remains intact.
 
 The development workflow for the operating system itself remains deliberately
 conservative: kernel, filesystem, drivers, release images, and stabilization
@@ -56,8 +59,9 @@ but it is now a credible end-user programming environment.
 ArmOS currently provides:
 
 - ARMv7-A kernel running on QEMU `virt` / Cortex-A15
-- Raspberry Pi 3 AArch32 hardware target running on Cortex-A53
-- initial AArch64 QEMU `virt` bootstrap reaching EL1 with PL011 diagnostics,
+- ARMv7-A hardware target for Raspberry Pi 2 Model B v1.1 / Cortex-A7
+- AArch64 hardware target for Raspberry Pi 3 Model B+ / Cortex-A53
+- AArch64 QEMU `virt` runtime reaching EL1 with PL011 diagnostics,
   a complete exception-vector table, a recoverable BRK/ERET smoke test, and a
   4 KiB long-descriptor identity MMU with Device/normal memory attributes,
   plus GICv2 physical-timer IRQ delivery through the EL1h vector and a shared
@@ -131,7 +135,7 @@ ArmOS currently provides:
 Reference platform:
 
 - QEMU `virt`
-- QEMU 10.0.2 is the supported v0.6 reference emulator
+- QEMU 10.0.2 is the supported v0.7 reference emulator
 - QEMU 11.0.1 has been smoke-tested, but its macOS/Cocoa graphical window
   scaling differs from 10.0.2
 - ARM Cortex-A15
@@ -142,24 +146,30 @@ Reference platform:
 - UART console
 - Optional VirtIO-GPU display and VirtIO input keyboard
 
-Hardware reference platform:
+Supported hardware platforms:
 
-- Raspberry Pi 3 Model B/B+ in AArch64 mode
+- Raspberry Pi 3 Model B+ in AArch64 mode
   (`TARGET_ARCH=arm64 TARGET_PLATFORM=raspi3`)
 - four Cortex-A53 CPUs participating in the scheduler
 - PL011 UART rescue console on `tty0`
 - SD/eMMC block device with a dedicated FAT32 firmware partition and ext2 root
 - BCM2836 local interrupt controller and ARM generic timer
+- Raspberry Pi 2 Model B v1.1 in ARMv7-A mode
+  (`TARGET_ARCH=arm32 TARGET_PLATFORM=raspi2`)
+- four Cortex-A7 CPUs, PL011 UART, SD/eMMC and the same partitioned root layout
 
 See [Raspberry Pi 3](docs/RASPBERRY_PI3.md) for the build, SD-card,
 UART, validation, and current limitation contracts.
+
+See [Raspberry Pi 2](docs/RASPBERRY_PI2.md) for the ARM32 hardware image,
+firmware, SD-card and UART contract.
 
 See [ARM64 Port](docs/ARM64_PORT.md) for the AArch64 bootstrap contract,
 toolchain, validation marker, and staged migration plan.
 
 ### CPU Support Contract
 
-The stable public runtime profile is currently **SMP=1**:
+The fresh-checkout default remains the conservative ARM32 QEMU `virt` profile:
 
 ```sh
 ./boot.sh
@@ -171,15 +181,10 @@ or explicitly:
 SMP_CPUS=1 ./boot.sh
 ```
 
-The kernel contains active SMP bring-up work for multi-CPU QEMU runs, including
-per-CPU scheduler state, TLB shootdown rendezvous, shutdown parking, and stress
-diagnostics. `SMP_CPUS>1` is now useful and increasingly robust for developers,
-but the public release contract remains `SMP_CPUS=1` until the full mixed stress
-matrix is boring across repeated runs.
-
-The v0.6 release contract remains QEMU `virt` with one CPU. Raspberry Pi 3 SMP
-is a separately validated hardware-development profile, not yet a promise that
-all QEMU multi-CPU or future Raspberry Pi variants are release-stable.
+Version 0.7 additionally validates four-CPU scheduling on ARM64 QEMU `virt` and
+Raspberry Pi 3 B+. Per-CPU scheduling, timer preemption, TLB shootdown and
+shutdown parking are part of that ARM64 milestone. Raspberry Pi 2 Model B v1.1
+remains the supported ARM32 hardware target.
 
 ## Filesystems
 
@@ -272,6 +277,7 @@ See:
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`docs/GET_STARTED_KERNEL_DEV.md`](docs/GET_STARTED_KERNEL_DEV.md)
 - [`docs/GET_STARTED_USERLAND_DEV.md`](docs/GET_STARTED_USERLAND_DEV.md)
+- [`docs/POSIX_COMPATIBILITY.md`](docs/POSIX_COMPATIBILITY.md)
 - [`docs/BSD_USERLAND.md`](docs/BSD_USERLAND.md)
 - [`STABILITY.md`](STABILITY.md)
 - [`ROADMAP.md`](ROADMAP.md)
@@ -321,6 +327,19 @@ Boots an existing `kernel.bin` and `disk.img` without rebuilding.
 
 Boots the same kernel and disk with VirtIO-GPU enabled. The UART terminal stays
 available as `tty0`; the graphical QEMU window exposes `tty1`.
+
+Select another architecture explicitly when booting an existing image:
+
+```sh
+TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./boot-graphics.sh
+```
+
+The network diagnostic profile keeps the UART console and adds VirtIO-net with
+a host TCP forward to the guest echo service:
+
+```sh
+TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./boot-net.sh
+```
 
 Exit QEMU with:
 

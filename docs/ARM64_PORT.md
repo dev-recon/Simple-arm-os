@@ -133,6 +133,21 @@ systest
 kload -s 5 -m 2048 -c 4 -u 25 -p 8 -f 1
 ```
 
+QEMU VirtIO network and graphics use the same common drivers as ARM32. The
+ARM64 platform supplies only its MMIO aliases, DTB discovery inputs and GIC
+interrupt routing. Validate each optional profile independently:
+
+```sh
+TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./boot-net.sh
+TARGET_ARCH=arm64 TARGET_PLATFORM=qemu-virt ./boot-graphics.sh
+```
+
+The network boot must report a VirtIO MAC and IRQ. Running `netecho` in the
+guest and connecting to the displayed forwarded host port validates RX, TX and
+interrupt delivery. The graphics boot must report a 32-bit VirtIO framebuffer,
+attach `tty1`, detect the VirtIO keyboard and start the cursor daemon while
+keeping UART `tty0` usable.
+
 Expected behavior matches ARM32: the initial directory is `/home/user`, disk
 commands use the common VFS, sleeps use the common timer/scheduler path, and
 shutdown exits QEMU through the platform power backend.

@@ -1004,34 +1004,30 @@ specific legacy investigation requires otherwise.
 
 ## Portability Notes
 
-The v0.6 tree contains the first multi-arch preparation pass, not a second
-architecture port. The useful groundwork is now in place:
+Version 0.7 contains production ARM32 and ARM64 ports joined to one common
+kernel. The portability groundwork includes:
 
 - generated assembly offsets for C structures consumed from ARM assembly;
 - `paddr_t`, `vaddr_t`, and `pfn_t` names for address categories;
 - a shared FDT parser used by platform/device discovery;
-- more ARM-specific helpers isolated under `arch/arm32/include/asm/`;
+- architecture-specific helpers isolated under `arch/arm32` and `arch/arm64`;
 - clearer documentation of boot identity, explicit RAM direct-map, and MMIO
   assumptions.
 
-The current architecture is still intentionally practical for QEMU `virt`. The
-main assumptions to revisit for another board or architecture are:
+Platform and architecture backends now provide their own RAM, MMIO, interrupt,
+timer and translation-table contracts. Generic kernel code must not assume:
 
-- RAM starts at `0x40000000`;
-- the current ARM32 boot keeps a low identity window for the linked kernel
-  image and early metadata;
+- that RAM starts at one fixed address;
+- one page-table format or exception level;
 - general RAM is reached through the explicit direct-map window, not by assuming
   arbitrary `VA == PA`;
-- device MMIO addresses match QEMU `virt`;
-- ARMv7 short-descriptor page tables are used;
-- the split boundary is `0x40000000`;
-- the kernel runs 32-bit ARM, not AArch64;
+- that device MMIO addresses match QEMU `virt`;
+- that pointers and registers are 32-bit;
 - DMA-capable buffers are physical frames whose CPU alias is obtained through
   `phys_to_virt()`.
 
-Before porting, continue the type cleanup and introduce explicit
-physical/virtual conversion helpers wherever a value can cross between these
-domains:
+Continue using explicit physical/virtual conversion helpers wherever a value
+crosses between these domains:
 
 ```text
 physical address  -> paddr_t
@@ -1040,9 +1036,9 @@ user pointer      -> vaddr_t copied through usercopy helpers
 page frame number -> pfn_t
 ```
 
-Do not build a speculative portability layer before the second concrete port.
-The intended next branch is a new multi-arch branch based on the v0.6 `main`
-baseline, where the interfaces can emerge from a real second target.
+New ports must enter through `kernel/main.c` and join the common task, VM,
+syscall, VFS and driver contracts. Architecture-local replacements for those
+services are not accepted.
 
 ## Known Cleanup Targets
 

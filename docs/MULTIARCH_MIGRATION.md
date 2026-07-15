@@ -173,9 +173,10 @@ kernel integration and must not become the production userspace path.
 
 Status: implemented.
 
-The second ARM32 family now has two explicit profiles:
+The ARM32 Raspberry Pi family now has two explicit profiles:
 
-- `TARGET_PLATFORM=raspi2` for QEMU `raspi2b` / Cortex-A7;
+- `TARGET_PLATFORM=raspi2` for Raspberry Pi 2 Model B v1.1 and QEMU
+  `raspi2b` / Cortex-A7;
 - `TARGET_PLATFORM=raspi3` for Raspberry Pi 3 hardware / Cortex-A53 in AArch32.
 
 They select the common BCM283x UART, local interrupt controller, timer,
@@ -214,6 +215,8 @@ The production AArch64 path now provides:
 - ELF64 `execve`, process lifecycle, signals and core dumps;
 - a newlib AArch64 sysroot and the same installed userland paths as ARM32;
 - QEMU VirtIO block storage and Raspberry Pi SD/eMMC through common drivers;
+- QEMU VirtIO network, GPU and keyboard through the same common drivers as
+  ARM32;
 - common init, mash, kernel tasks, timer accounting and shutdown;
 - artifacts isolated by architecture and platform.
 

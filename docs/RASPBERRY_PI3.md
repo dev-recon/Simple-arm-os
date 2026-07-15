@@ -1,7 +1,7 @@
 # Raspberry Pi 3
 
-Raspberry Pi 3 Model B/B+ is the ArmOS hardware reference platform. The
-production hardware target is AArch64:
+Raspberry Pi 3 Model B+ is the ArmOS AArch64 hardware reference platform. The
+production hardware target is:
 
 ```text
 TARGET_ARCH=arm64 TARGET_PLATFORM=raspi3
@@ -26,8 +26,8 @@ kernel feature development and regression testing.
 - Graphics, USB input, and networking: not yet provided by this profile
 
 The compatibility target `arm32/raspi3` remains useful for architecture
-comparison. The `raspi2` target names the QEMU `raspi2b` platform; in project
-discussions, `pi2` therefore means QEMU and `raspi3` means real Pi 3 hardware.
+comparison. The separate `arm32/raspi2` target supports Raspberry Pi 2 Model B
+v1.1 hardware and is also exercised with QEMU's `raspi2b` machine.
 
 ## Build
 
