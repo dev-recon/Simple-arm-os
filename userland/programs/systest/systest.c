@@ -22,6 +22,7 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <sys/uio.h>
@@ -650,6 +651,49 @@ static void test_stat_syscalls(void)
     expect(stat("/", &st) == 0, "stat root directory", 0);
     expect(S_ISDIR(st.st_mode), "stat reports directory", st.st_mode);
     expect(stat("/bin/does-not-exist", &st) < 0, "stat missing file fails", 0);
+}
+
+static void test_statvfs_syscalls(void)
+{
+    struct statvfs path_st;
+    struct statvfs fd_st;
+    int root_ok;
+    int fd;
+
+    root_ok = statvfs("/", &path_st) == 0;
+    if (expect(root_ok, "statvfs root filesystem", errno) == 0) {
+        expect(path_st.f_bsize > 0, "statvfs block size", (int)path_st.f_bsize);
+        expect(path_st.f_frsize > 0, "statvfs fragment size", (int)path_st.f_frsize);
+        expect(path_st.f_blocks > 0, "statvfs block count", (int)path_st.f_blocks);
+        expect(path_st.f_bfree <= path_st.f_blocks,
+               "statvfs free blocks bounded", (int)path_st.f_bfree);
+        expect(path_st.f_bavail <= path_st.f_bfree,
+               "statvfs available blocks bounded", (int)path_st.f_bavail);
+        expect(path_st.f_namemax > 0,
+               "statvfs filename limit", (int)path_st.f_namemax);
+    }
+
+    fd = open("/usr/bin/systest", O_RDONLY, 0);
+    if (expect(fd >= 0, "open executable for fstatvfs", fd) >= 0) {
+        if (expect(fstatvfs(fd, &fd_st) == 0,
+                   "fstatvfs open executable", errno) == 0 && root_ok) {
+            expect(fd_st.f_bsize == path_st.f_bsize,
+                   "fstatvfs block size matches root", (int)fd_st.f_bsize);
+            expect(fd_st.f_fsid == path_st.f_fsid,
+                   "fstatvfs filesystem id matches root", (int)fd_st.f_fsid);
+        }
+        close(fd);
+    }
+
+    errno = 0;
+    expect(statvfs("/does-not-exist", &path_st) < 0 && errno == ENOENT,
+           "statvfs missing path reports ENOENT", errno);
+    errno = 0;
+    expect(fstatvfs(-1, &fd_st) < 0 && errno == EBADF,
+           "fstatvfs invalid descriptor reports EBADF", errno);
+    errno = 0;
+    expect(statvfs("/", NULL) < 0 && errno == EFAULT,
+           "statvfs null result reports EFAULT", errno);
 }
 
 static void test_dev_null(void)
@@ -2508,6 +2552,7 @@ int main(int argc, char **argv)
     test_pipe_dup2();
     test_fd_access_modes();
     test_stat_syscalls();
+    test_statvfs_syscalls();
     test_dev_null();
     test_dev_tty();
     test_chmod_chown_syscalls();

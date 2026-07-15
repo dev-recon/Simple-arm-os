@@ -25,6 +25,7 @@
 #include <kernel/signal.h>  /* Pour sig_handler_t et sigaction_t */
 #include <kernel/dirent.h>
 #include <uapi/armos/file.h>
+#include <uapi/armos/statvfs.h>
 #include <uapi/armos/syscall.h>
 #include <uapi/armos/time.h>
 
@@ -105,6 +106,8 @@ struct process;
 #define __NR_getpriority         96
 #define __NR_setpriority         97
 #define __NR_statfs              99
+#define __NR_statvfs             ARMOS_NR_STATVFS
+#define __NR_fstatvfs            ARMOS_NR_FSTATVFS
 #define __NR_stat               106
 #define __NR_lstat              107
 #define __NR_fstat              108
@@ -287,6 +290,8 @@ int sys_truncate(const char* pathname, off_t length);
 int sys_fsync(int fd);
 int sys_fdatasync(int fd);
 int sys_statfs(const char* path, struct statfs* buf);
+int sys_statvfs(const char* path, armos_statvfs_t* buf);
+int sys_fstatvfs(int fd, armos_statvfs_t* buf);
 int sys_print(const char* msg);
 int sys_mknod(const char* pathname, mode_t mode, uint32_t dev);
 int sys_mount(const char* source, const char* target, const char* fstype,

@@ -996,6 +996,8 @@ static const char* proc_syscall_name(uint32_t nr)
         case __NR_readlink: return "readlink";
         case __NR_ftruncate: return "ftruncate";
         case __NR_statfs: return "statfs";
+        case __NR_statvfs: return "statvfs";
+        case __NR_fstatvfs: return "fstatvfs";
         case __NR_stat: return "stat";
         case __NR_lstat: return "lstat";
         case __NR_fstat: return "fstat";

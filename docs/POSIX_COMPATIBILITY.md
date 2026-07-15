@@ -6,7 +6,7 @@ syscall ABI. POSIX specifies application-visible behavior; ArmOS remains free
 to implement that behavior with a smaller architecture-neutral kernel ABI and
 newlib wrappers.
 
-The current common dispatcher exposes 109 syscall entries. It already covers
+The current common dispatcher exposes 111 syscall entries. It already covers
 the central Unix process, VFS, descriptor, signal, virtual-memory, TTY, polling
 and identity contracts. The next stage is therefore semantic completion and a
 small number of missing primitives, not one syscall for every function listed
@@ -137,7 +137,7 @@ building blocks.
 | `fcntl` locks | Lock requests are accepted but not enforced | Add open-file-description lock state, conflict detection and interruptible `F_SETLKW` waiting |
 | `pselect`, `ppoll` | Mask change and wait are separate operations | Make signal-mask replacement and blocking atomic in the kernel |
 | `getrlimit`, `setrlimit` | Mostly static newlib responses | Store and enforce at least file, address-space, data, stack, core and CPU limits |
-| `statvfs`, `fstatvfs` | Only non-POSIX `statfs` exists | Add a stable POSIX structure and VFS translation |
+| `statvfs`, `fstatvfs` | Implemented for ext2 and FAT32 paths and descriptors | Extend mount flags and statistics when new filesystem backends are added |
 | `futimens`, `utimensat` | Only second-resolution `utime` exists | Support descriptor-relative nanosecond timestamps |
 | Process identity | Basic UID/GID only | Add effective-ID changes, supplementary groups and complete permission checks |
 | `waitid` | Missing | Expose non-destructive status queries and the required selection modes |
@@ -151,6 +151,13 @@ Acceptance criteria:
 - signal delivery cannot be lost between mask replacement and `pselect` or
   `ppoll` sleep;
 - resource limits are enforced by the subsystem that consumes the resource.
+
+`statvfs()` and `fstatvfs()` expose block, inode, filesystem identity and name
+length information through an architecture-neutral 64-bit UAPI structure.
+Newlib translates that structure into its native POSIX types, preserving the
+same source interface and counter widths on ARM32 and ARM64. Path queries
+validate that the named object exists, while descriptor queries retain their
+filesystem association after the file has been opened.
 
 ### P2 - Threads And POSIX Synchronization
 

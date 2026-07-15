@@ -35,12 +35,14 @@
 #include <termios.h>
 #include <time.h>
 #include <uapi/armos/file.h>
+#include <uapi/armos/statvfs.h>
 #include <uapi/armos/time.h>
 #include <sys/mman.h>
 #include <poll.h>
 #include <sys/resource.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <sys/times.h>
 #include <sys/types.h>
@@ -112,6 +114,8 @@ extern long sys_getrusage(int who, void *usage);
 extern long sys_getpriority(int which, int who);
 extern long sys_setpriority(int which, int who, int prio);
 extern long sys_statfs(const char *path, void *buf);
+extern long sys_statvfs(const char *path, armos_statvfs_t *buf);
+extern long sys_fstatvfs(int fd, armos_statvfs_t *buf);
 extern long sys_ftruncate(int fd, long length);
 extern long sys_fsync(int fd);
 extern long sys_uname(void *name);
@@ -823,6 +827,57 @@ int fsync(int fd)
 int statfs(const char *path, struct statfs *buf)
 {
     return ret_errno(sys_statfs(path, buf));
+}
+
+static void copy_statvfs(struct statvfs *dst, const armos_statvfs_t *src)
+{
+    dst->f_bsize = (unsigned long)src->f_bsize;
+    dst->f_frsize = (unsigned long)src->f_frsize;
+    dst->f_blocks = (fsblkcnt_t)src->f_blocks;
+    dst->f_bfree = (fsblkcnt_t)src->f_bfree;
+    dst->f_bavail = (fsblkcnt_t)src->f_bavail;
+    dst->f_files = (fsfilcnt_t)src->f_files;
+    dst->f_ffree = (fsfilcnt_t)src->f_ffree;
+    dst->f_favail = (fsfilcnt_t)src->f_favail;
+    dst->f_fsid = (unsigned long)src->f_fsid;
+    dst->f_flag = (unsigned long)src->f_flag;
+    dst->f_namemax = (unsigned long)src->f_namemax;
+}
+
+int statvfs(const char *path, struct statvfs *buf)
+{
+    armos_statvfs_t os_st;
+    long ret;
+
+    if (!buf) {
+        errno = EFAULT;
+        return -1;
+    }
+    ret = sys_statvfs(path, &os_st);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    copy_statvfs(buf, &os_st);
+    return 0;
+}
+
+int fstatvfs(int fd, struct statvfs *buf)
+{
+    armos_statvfs_t os_st;
+    long ret;
+
+    if (!buf) {
+        errno = EFAULT;
+        return -1;
+    }
+    ret = sys_fstatvfs(fd, &os_st);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    copy_statvfs(buf, &os_st);
+    return 0;
 }
 
 int uname(struct utsname *name)

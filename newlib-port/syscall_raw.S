@@ -104,6 +104,8 @@ RAW_SYSCALL sys_fchown, 95
 RAW_SYSCALL sys_getpriority, 96
 RAW_SYSCALL sys_setpriority, 97
 RAW_SYSCALL sys_statfs, 99
+RAW_SYSCALL sys_statvfs, 266
+RAW_SYSCALL sys_fstatvfs, 267
 RAW_SYSCALL sys_fsync, 118
 RAW_SYSCALL sys_stat, 106
 RAW_SYSCALL sys_lstat, 107

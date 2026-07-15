@@ -154,8 +154,8 @@ Immediate goals:
   contract.
 
 First milestone:
-- Maintain `getcwd`, `fcntl`, `ioctl`, `stat`, `lstat`, `fstat`, `statfs`, and
-  process-control syscalls as stable contracts.
+- Maintain `getcwd`, `fcntl`, `ioctl`, `stat`, `lstat`, `fstat`, `statfs`,
+  `statvfs`, `fstatvfs`, and process-control syscalls as stable contracts.
 - Keep experimental TCC sources out of the default userland build unless
   `ENABLE_TCC=1` is set.
 - Native TCC can compile and run `hello.c`, and can compile/link the ArmOS kilo

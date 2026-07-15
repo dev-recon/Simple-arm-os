@@ -280,6 +280,94 @@ int sys_statfs(const char* path, struct statfs* buf)
     return 0;
 }
 
+static int statvfs_from_path(const char* path, armos_statvfs_t* out)
+{
+    struct statfs st;
+    int ret;
+
+    if (!path || !out)
+        return -EINVAL;
+
+    ret = vfs_statfs(path, &st);
+    if (ret < 0)
+        return ret;
+
+    memset(out, 0, sizeof(*out));
+    out->f_bsize = st.f_bsize;
+    out->f_frsize = st.f_frsize ? st.f_frsize : st.f_bsize;
+    out->f_blocks = st.f_blocks;
+    out->f_bfree = st.f_bfree;
+    out->f_bavail = st.f_bavail;
+    out->f_files = st.f_files;
+    out->f_ffree = st.f_ffree;
+    out->f_favail = st.f_ffree;
+    out->f_fsid = st.f_type;
+    out->f_namemax = st.f_namelen;
+    return 0;
+}
+
+int sys_statvfs(const char* path, armos_statvfs_t* buf)
+{
+    armos_statvfs_t st;
+    inode_t* inode;
+    char* full_path;
+    char* kpath;
+    int ret;
+
+    if (!buf)
+        return -EFAULT;
+
+    kpath = copy_string_from_user(path);
+    if (!kpath)
+        return -EFAULT;
+    full_path = resolve_path(kpath);
+    kfree(kpath);
+    if (!full_path)
+        return -ENOENT;
+
+    path_canonicalize(full_path);
+    inode = path_lookup(full_path);
+    if (!inode) {
+        kfree(full_path);
+        return -ENOENT;
+    }
+    put_inode(inode);
+
+    ret = statvfs_from_path(full_path, &st);
+    kfree(full_path);
+    if (ret < 0)
+        return ret;
+    if (copy_to_user(buf, &st, sizeof(st)) < 0)
+        return -EFAULT;
+    return 0;
+}
+
+int sys_fstatvfs(int fd, armos_statvfs_t* buf)
+{
+    task_t* task = task_current_local();
+    armos_statvfs_t st;
+    file_t* file;
+    int ret;
+
+    if (!buf)
+        return -EFAULT;
+    if (fd < 0 || fd >= MAX_FILES || !task || !task->process)
+        return -EBADF;
+
+    file = task->process->files[fd];
+    if (!file)
+        return -EBADF;
+    if (file->path[0] == '\0')
+        return -ENOSYS;
+
+    ret = statvfs_from_path(file->path, &st);
+    if (ret < 0)
+        return ret;
+    if (copy_to_user(buf, &st, sizeof(st)) < 0)
+        return -EFAULT;
+    return 0;
+}
+
 static int pipe_wait_interruptible(void)
 {
     return task_poll_wait_once() == 0 ? 0 : -EINTR;
