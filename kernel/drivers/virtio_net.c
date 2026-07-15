@@ -399,7 +399,7 @@ static bool net_probe_fallback(paddr_t *out_phys, uint32_t *out_irq, bool *out_e
 static void net_read_mac(volatile uint32_t *mmio, uint8_t mac[6])
 {
     for (uint32_t i = 0; i < 6; i++)
-        mac[i] = (uint8_t)mmio_read32(mmio, VNET_CFG_MAC + i);
+        mac[i] = mmio_read8(mmio, VNET_CFG_MAC + i);
 }
 
 static void net_rx_post_desc(uint16_t id)
