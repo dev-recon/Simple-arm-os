@@ -2609,6 +2609,75 @@ static void test_scheduler_priority_syscalls(void)
     waitpid(pid, &status, 0);
 }
 
+static void test_resource_limit_syscalls(void)
+{
+    struct rlimit saved;
+    struct rlimit limited;
+    struct rlimit observed;
+    int fds[16];
+    int opened = 0;
+    int status;
+    pid_t pid;
+    int fd;
+
+    if (expect(getrlimit(RLIMIT_NOFILE, &saved) == 0,
+               "getrlimit RLIMIT_NOFILE", errno) < 0)
+        return;
+    expect(saved.rlim_cur >= 8 && saved.rlim_max >= saved.rlim_cur,
+           "getrlimit reports usable descriptor limits", (int)saved.rlim_cur);
+
+    limited.rlim_cur = 8;
+    limited.rlim_max = saved.rlim_max;
+    if (expect(setrlimit(RLIMIT_NOFILE, &limited) == 0,
+               "setrlimit lowers RLIMIT_NOFILE", errno) < 0)
+        return;
+    if (expect(getrlimit(RLIMIT_NOFILE, &observed) == 0,
+               "getrlimit observes lowered limit", errno) == 0)
+        expect(observed.rlim_cur == 8 && observed.rlim_max == saved.rlim_max,
+               "RLIMIT_NOFILE values persist", (int)observed.rlim_cur);
+    expect(sysconf(_SC_OPEN_MAX) == 8,
+           "sysconf OPEN_MAX follows soft limit", (int)sysconf(_SC_OPEN_MAX));
+
+    errno = 0;
+    while (opened < (int)(sizeof(fds) / sizeof(fds[0]))) {
+        fd = open("/dev/null", O_RDONLY);
+        if (fd < 0)
+            break;
+        fds[opened++] = fd;
+    }
+    expect(fd < 0 && errno == EMFILE,
+           "RLIMIT_NOFILE enforces descriptor allocation", errno);
+    errno = 0;
+    expect(dup2(STDIN_FILENO, 8) < 0 && errno == EBADF,
+           "dup2 rejects descriptor at soft limit", errno);
+    while (opened > 0)
+        close(fds[--opened]);
+
+    pid = fork();
+    if (pid == 0) {
+        struct rlimit child_limit;
+        _exit(getrlimit(RLIMIT_NOFILE, &child_limit) == 0 &&
+              child_limit.rlim_cur == 8 ? 0 : 1);
+    }
+    if (expect(pid > 0, "RLIMIT_NOFILE fork child", pid) == 0) {
+        waitpid(pid, &status, 0);
+        expect(status_exited(status, 0),
+               "fork inherits RLIMIT_NOFILE", status);
+    }
+
+    limited.rlim_cur = saved.rlim_max + 1;
+    limited.rlim_max = saved.rlim_max;
+    errno = 0;
+    expect(setrlimit(RLIMIT_NOFILE, &limited) < 0 && errno == EINVAL,
+           "setrlimit rejects soft limit above hard limit", errno);
+    errno = 0;
+    expect(setrlimit(RLIMIT_CORE, &saved) < 0 && errno == EINVAL,
+           "setrlimit rejects unenforced resources", errno);
+
+    expect(setrlimit(RLIMIT_NOFILE, &saved) == 0,
+           "setrlimit restores RLIMIT_NOFILE", errno);
+}
+
 static void usage(void)
 {
     printf("usage: systest [-q|-v]\n");
@@ -2645,6 +2714,7 @@ int main(int argc, char **argv)
     test_background_tty_read_stops();
     test_process_session_info();
     test_scheduler_priority_syscalls();
+    test_resource_limit_syscalls();
     test_file_io();
     test_positioned_io();
     test_directory_relative_io();

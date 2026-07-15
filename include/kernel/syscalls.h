@@ -25,6 +25,7 @@
 #include <kernel/signal.h>  /* Pour sig_handler_t et sigaction_t */
 #include <kernel/dirent.h>
 #include <uapi/armos/file.h>
+#include <uapi/armos/resource.h>
 #include <uapi/armos/statvfs.h>
 #include <uapi/armos/syscall.h>
 #include <uapi/armos/time.h>
@@ -95,6 +96,8 @@ struct process;
 #define __NR_sigaction           67
 #define __NR_sigsuspend          72
 #define __NR_sigpending          73
+#define __NR_setrlimit           ARMOS_NR_SETRLIMIT
+#define __NR_getrlimit           ARMOS_NR_GETRLIMIT
 #define __NR_gettimeofday        78
 #define __NR_getrusage           77
 #define __NR_symlink             83
@@ -361,6 +364,8 @@ int sys_setsid(void);
 int sys_getsid(pid_t pid);
 int sys_times(void* buf);
 int sys_getrusage(int who, struct rusage_kernel* usage);
+int sys_getrlimit(int resource, armos_rlimit_t* limit);
+int sys_setrlimit(int resource, const armos_rlimit_t* limit);
 int sys_alarm(uint32_t seconds);
 int sys_pause(void);
 int sys_utime(const char* pathname, const void* times);

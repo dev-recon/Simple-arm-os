@@ -6,7 +6,7 @@ syscall ABI. POSIX specifies application-visible behavior; ArmOS remains free
 to implement that behavior with a smaller architecture-neutral kernel ABI and
 newlib wrappers.
 
-The current common dispatcher exposes 113 syscall entries. It already covers
+The current common dispatcher exposes 115 syscall entries. It already covers
 the central Unix process, VFS, descriptor, signal, virtual-memory, TTY, polling
 and identity contracts. The next stage is therefore semantic completion and a
 small number of missing primitives, not one syscall for every function listed
@@ -120,9 +120,10 @@ errors on both ABIs.
 `clock_nanosleep()` now uses the same interruptible scheduler deadline path as
 `nanosleep()` while exposing a separate signed 64-bit time ABI. Relative and
 `TIMER_ABSTIME` sleeps accept both realtime and monotonic clocks, past absolute
-deadlines return immediately, and the newlib wrapper preserves the POSIX rule
-that this interface returns an error number directly instead of setting
-`errno`.
+deadlines return immediately, and absolute waits recheck their clock after
+every scheduler wakeup so they never return before the requested deadline. The
+newlib wrapper preserves the POSIX rule that this interface returns an error
+number directly instead of setting `errno`.
 
 ### P1 - Complete Existing Contracts
 
@@ -136,7 +137,7 @@ building blocks.
 | `msync` | Missing | Flush dirty shared file-backed pages through VFS |
 | `fcntl` locks | Lock requests are accepted but not enforced | Add open-file-description lock state, conflict detection and interruptible `F_SETLKW` waiting |
 | `pselect`, `ppoll` | Mask change and wait are separate operations | Make signal-mask replacement and blocking atomic in the kernel |
-| `getrlimit`, `setrlimit` | Mostly static newlib responses | Store and enforce at least file, address-space, data, stack, core and CPU limits |
+| `getrlimit`, `setrlimit` | `RLIMIT_NOFILE` stored, inherited and enforced; other known limits report infinity | Enforce address-space, data, stack, core, file-size and CPU limits in their owning subsystems |
 | `statvfs`, `fstatvfs` | Implemented for ext2 and FAT32 paths and descriptors | Extend mount flags and statistics when new filesystem backends are added |
 | `futimens`, `utimensat` | Implemented with ext2 second-resolution persistence | Preserve nanoseconds when filesystem inode formats grow higher-resolution fields |
 | Process identity | Basic UID/GID only | Add effective-ID changes, supplementary groups and complete permission checks |
@@ -168,6 +169,12 @@ high-resolution timestamp fields. Cached VFS objects are canonicalized by ext2
 inode number so path and descriptor metadata remain coherent. The same metadata
 repair also makes legacy `utime()` persist access and modification times
 correctly.
+
+`RLIMIT_NOFILE` is now process state rather than a newlib constant. The soft
+and hard limits cross a fixed 64-bit UAPI, survive `fork()`, constrain common
+descriptor allocation and duplication, and drive `_SC_OPEN_MAX`. Known limits
+whose consumers do not yet enforce them remain readable as infinity but cannot
+be changed, so applications do not receive a misleading successful update.
 
 ### P2 - Threads And POSIX Synchronization
 

@@ -37,6 +37,8 @@
 #define ARMOS_NR_DUP2       63
 #define ARMOS_NR_GETPGRP    65
 #define ARMOS_NR_SIGACTION  67
+#define ARMOS_NR_SETRLIMIT  75
+#define ARMOS_NR_GETRLIMIT  76
 #define ARMOS_NR_FCHMOD     94
 #define ARMOS_NR_FCHOWN     95
 #define ARMOS_NR_GETPPID    119

@@ -81,6 +81,8 @@ RAW_SYSCALL sys_setsid, 66
 RAW_SYSCALL sys_sigaction, 67
 RAW_SYSCALL sys_sigsuspend, 72
 RAW_SYSCALL sys_sigpending, 73
+RAW_SYSCALL sys_setrlimit, 75
+RAW_SYSCALL sys_getrlimit, 76
 RAW_SYSCALL sys_getrusage, 77
 RAW_SYSCALL sys_gettimeofday, 78
 RAW_SYSCALL sys_symlink, 83

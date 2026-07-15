@@ -800,12 +800,10 @@ int sys_dup2(int oldfd, int newfd)
         return -EBADF;
     
     if (oldfd < 0 || oldfd >= MAX_FILES) return -EBADF;
-    if (newfd < 0 || newfd >= MAX_FILES) return -EBADF;
-    
-    if (oldfd == newfd) return newfd;
-    
     file = task->process->files[oldfd];
     if (!file) return -EBADF;
+    if (oldfd == newfd) return newfd;
+    if (newfd < 0 || newfd >= (int)vfs_fd_limit(task)) return -EBADF;
     
     /* Close newfd if it's open */
     if (task->process->files[newfd]) {
@@ -884,9 +882,9 @@ int sys_fcntl(int fd, int cmd, uintptr_t arg)
 
     switch (cmd) {
     case F_DUPFD:
-        if ((int)arg < 0 || arg >= MAX_FILES)
+        if ((int)arg < 0 || arg >= vfs_fd_limit(task))
             return -EINVAL;
-        for (newfd = (int)arg; newfd < MAX_FILES; newfd++) {
+        for (newfd = (int)arg; newfd < (int)vfs_fd_limit(task); newfd++) {
             if (!task->process->files[newfd]) {
                 task->process->files[newfd] = get_file(file);
                 if (!task->process->files[newfd])
@@ -1122,8 +1120,10 @@ int sys_sysconf(int name)
         return MAX_PROCESSES;
     case ARMOS_SC_CLK_TCK:
         return TIMER_FREQ;
-    case ARMOS_SC_OPEN_MAX:
-        return MAX_FILES;
+    case ARMOS_SC_OPEN_MAX: {
+        task_t* task = task_current_local();
+        return task && task->process ? (int)vfs_fd_limit(task) : MAX_FILES;
+    }
     case ARMOS_SC_JOB_CONTROL:
         return ARMOS_POSIX_VERSION;
     case ARMOS_SC_SAVED_IDS:
@@ -1187,6 +1187,70 @@ int sys_getrusage(int who, struct rusage_kernel* usage)
      */
     fill_rusage_for_task(who == ARMOS_RUSAGE_SELF ? task : NULL, &local);
     return copy_to_user(usage, &local, sizeof(local)) < 0 ? -EFAULT : 0;
+}
+
+static bool rlimit_resource_known(int resource)
+{
+    switch (resource) {
+    case ARMOS_RLIMIT_CPU:
+    case ARMOS_RLIMIT_FSIZE:
+    case ARMOS_RLIMIT_DATA:
+    case ARMOS_RLIMIT_STACK:
+    case ARMOS_RLIMIT_CORE:
+    case ARMOS_RLIMIT_RSS:
+    case ARMOS_RLIMIT_NOFILE:
+    case ARMOS_RLIMIT_AS:
+        return true;
+    default:
+        return false;
+    }
+}
+
+int sys_getrlimit(int resource, armos_rlimit_t* limit)
+{
+    task_t* task = task_current_local();
+    armos_rlimit_t local;
+
+    if (!limit)
+        return -EFAULT;
+    if (!task || !task->process)
+        return -EINVAL;
+    if (!rlimit_resource_known(resource))
+        return -EINVAL;
+
+    local.current = ARMOS_RLIM_INFINITY;
+    local.maximum = ARMOS_RLIM_INFINITY;
+    if (resource == ARMOS_RLIMIT_NOFILE) {
+        local.current = task->process->rlimit_nofile_cur;
+        local.maximum = task->process->rlimit_nofile_max;
+    }
+    return copy_to_user(limit, &local, sizeof(local)) < 0 ? -EFAULT : 0;
+}
+
+int sys_setrlimit(int resource, const armos_rlimit_t* limit)
+{
+    task_t* task = task_current_local();
+    armos_rlimit_t local;
+
+    if (!limit)
+        return -EFAULT;
+    if (!task || !task->process)
+        return -EINVAL;
+    if (resource != ARMOS_RLIMIT_NOFILE)
+        return -EINVAL;
+    if (copy_from_user(&local, limit, sizeof(local)) < 0)
+        return -EFAULT;
+    if (local.current > local.maximum)
+        return -EINVAL;
+    if (local.current > MAX_FILES || local.maximum > MAX_FILES)
+        return -EPERM;
+    if (local.maximum > task->process->rlimit_nofile_max &&
+        task->process->uid != 0)
+        return -EPERM;
+
+    task->process->rlimit_nofile_cur = (uint32_t)local.current;
+    task->process->rlimit_nofile_max = (uint32_t)local.maximum;
+    return 0;
 }
 
 static int select_words_for_nfds(int nfds)
@@ -2958,12 +3022,14 @@ int sys_clock_nanosleep(int clock_id, int flags,
         request.nsec >= 1000000000LL)
         return -EINVAL;
 
-    ret = clock_gettime_value(clock_id, &now);
-    if (ret < 0)
-        return ret;
+    do {
+        ret = clock_gettime_value(clock_id, &now);
+        if (ret < 0)
+            return ret;
 
-    duration = request;
-    if (flags == ARMOS_TIMER_ABSTIME) {
+        duration = request;
+        if (flags != ARMOS_TIMER_ABSTIME)
+            break;
         if (request.sec < now.sec ||
             (request.sec == now.sec && request.nsec <= now.nsec))
             return 0;
@@ -2974,18 +3040,23 @@ int sys_clock_nanosleep(int clock_id, int flags,
             duration.sec--;
             duration.nsec += 1000000000LL;
         }
-    }
 
-    ret = sleep_interruptible_ticks(
-        task, duration_to_ticks(duration.sec, duration.nsec),
-        &remaining_ticks);
-    if (ret == -EINTR && rem && flags == 0) {
-        remaining.sec = remaining_ticks / TIMER_FREQ;
-        remaining.nsec = (remaining_ticks % TIMER_FREQ) *
-            (1000000000u / TIMER_FREQ);
-        if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0)
-            return -EFAULT;
-    }
+        ret = sleep_interruptible_ticks(
+            task, duration_to_ticks(duration.sec, duration.nsec), NULL);
+        if (ret < 0)
+            return ret;
+    } while (flags == ARMOS_TIMER_ABSTIME);
+
+    ret = sleep_interruptible_ticks(task,
+        duration_to_ticks(duration.sec, duration.nsec), &remaining_ticks);
+    if (ret != -EINTR || !rem)
+        return ret;
+
+    remaining.sec = remaining_ticks / TIMER_FREQ;
+    remaining.nsec = (remaining_ticks % TIMER_FREQ) *
+        (1000000000u / TIMER_FREQ);
+    if (copy_to_user(rem, &remaining, sizeof(remaining)) < 0)
+        return -EFAULT;
     return ret;
 }
 

@@ -782,20 +782,31 @@ inode_t* path_lookup(const char* path)
 int allocate_fd(task_t* process)
 {
     int i;
+    uint32_t limit;
     
     if (!process || !process->process) {
         KERROR("NULL PROC\n");
         return -EINVAL;
     }
     
-    /* ACCeS CORRECT */
-    for (i = 0; i < MAX_FILES; i++) {
+    limit = vfs_fd_limit(process);
+    for (i = 0; i < (int)limit; i++) {
         if (process->process->files[i] == NULL) {
             return i;
         }
     }
     
     return -EMFILE;
+}
+
+uint32_t vfs_fd_limit(task_t* process)
+{
+    uint32_t limit;
+
+    if (!process || !process->process)
+        return 0;
+    limit = process->process->rlimit_nofile_cur;
+    return limit < MAX_FILES ? limit : MAX_FILES;
 }
 
 

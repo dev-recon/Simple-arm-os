@@ -116,6 +116,7 @@ inode_t* path_lookup_ex(const char* path, bool follow_final_symlink);
 /* File descriptor management */
 void free_fd(task_t* proc, int fd);
 int allocate_fd(task_t* process);
+uint32_t vfs_fd_limit(task_t* process);
 
 /* File operations */
 file_t* get_file(file_t* file);

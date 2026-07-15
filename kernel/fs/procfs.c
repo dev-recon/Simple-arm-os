@@ -970,6 +970,8 @@ static const char* proc_syscall_name(uint32_t nr)
         case __NR_dup2: return "dup2";
         case __NR_setsid: return "setsid";
         case __NR_sigaction: return "sigaction";
+        case __NR_setrlimit: return "setrlimit";
+        case __NR_getrlimit: return "getrlimit";
         case __NR_sigsuspend: return "sigsuspend";
         case __NR_sigpending: return "sigpending";
         case __NR_sigprocmask: return "sigprocmask";

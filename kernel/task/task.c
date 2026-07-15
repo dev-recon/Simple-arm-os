@@ -1136,6 +1136,8 @@ task_t* task_create_copy(task_t* parent, bool from_user)
             child->process->uid = parent->process->uid;
             child->process->gid = parent->process->gid;
             child->process->umask = parent->process->umask;
+            child->process->rlimit_nofile_cur = parent->process->rlimit_nofile_cur;
+            child->process->rlimit_nofile_max = parent->process->rlimit_nofile_max;
             child->process->alarm_expire_tick = 0;
             child->process->alarm_active = 0;
             child->process->state = (proc_state_t)PROC_READY;
@@ -1696,6 +1698,8 @@ task_t* task_create_process(const char* name, void (*entry)(void* arg),
         task->process->uid = 0;
         task->process->gid = 0;
         task->process->umask = 022;
+        task->process->rlimit_nofile_cur = MAX_FILES;
+        task->process->rlimit_nofile_max = MAX_FILES;
         task->process->alarm_expire_tick = 0;
         task->process->alarm_active = 0;
         task->process->state = (proc_state_t)PROC_READY;

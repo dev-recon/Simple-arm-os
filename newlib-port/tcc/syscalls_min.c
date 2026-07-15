@@ -35,6 +35,7 @@
 #include <termios.h>
 #include <time.h>
 #include <uapi/armos/file.h>
+#include <uapi/armos/resource.h>
 #include <uapi/armos/statvfs.h>
 #include <uapi/armos/time.h>
 #include <sys/mman.h>
@@ -111,6 +112,8 @@ extern long sys_wait4(int pid, int *status, int options, void *rusage);
 extern long sys_sysinfo(void *resp);
 extern long sys_gettimeofday(struct timeval *tv, void *tz);
 extern long sys_getrusage(int who, void *usage);
+extern long sys_getrlimit(int resource, armos_rlimit_t *limit);
+extern long sys_setrlimit(int resource, const armos_rlimit_t *limit);
 extern long sys_getpriority(int which, int who);
 extern long sys_setpriority(int which, int who, int prio);
 extern long sys_statfs(const char *path, void *buf);
@@ -1795,50 +1798,40 @@ int getrusage(int who, struct rusage *usage)
 
 int getrlimit(int resource, struct rlimit *rlim)
 {
+    armos_rlimit_t os_limit;
+    long ret;
+
     if (!rlim) {
         errno = EFAULT;
         return -1;
     }
 
-    switch (resource) {
-    case RLIMIT_NOFILE:
-        rlim->rlim_cur = ARMOS_OPEN_MAX;
-        rlim->rlim_max = ARMOS_OPEN_MAX;
-        return 0;
-    case RLIMIT_STACK:
-    case RLIMIT_DATA:
-    case RLIMIT_AS:
-    case RLIMIT_RSS:
-    case RLIMIT_CORE:
-    case RLIMIT_CPU:
-    case RLIMIT_FSIZE:
-        rlim->rlim_cur = RLIM_INFINITY;
-        rlim->rlim_max = RLIM_INFINITY;
-        return 0;
-    default:
-        errno = EINVAL;
+    ret = sys_getrlimit(resource, &os_limit);
+    if (ret < 0) {
+        errno = (int)-ret;
         return -1;
     }
+    rlim->rlim_cur = os_limit.current == ARMOS_RLIM_INFINITY ?
+        RLIM_INFINITY : (rlim_t)os_limit.current;
+    rlim->rlim_max = os_limit.maximum == ARMOS_RLIM_INFINITY ?
+        RLIM_INFINITY : (rlim_t)os_limit.maximum;
+    return 0;
 }
 
 int setrlimit(int resource, const struct rlimit *rlim)
 {
+    armos_rlimit_t os_limit;
+
     if (!rlim) {
         errno = EFAULT;
         return -1;
     }
 
-    if (resource != RLIMIT_NOFILE) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    if (rlim->rlim_cur > ARMOS_OPEN_MAX || rlim->rlim_max > ARMOS_OPEN_MAX) {
-        errno = EPERM;
-        return -1;
-    }
-
-    return 0;
+    os_limit.current = rlim->rlim_cur == RLIM_INFINITY ?
+        ARMOS_RLIM_INFINITY : (unsigned long long)rlim->rlim_cur;
+    os_limit.maximum = rlim->rlim_max == RLIM_INFINITY ?
+        ARMOS_RLIM_INFINITY : (unsigned long long)rlim->rlim_max;
+    return ret_errno(sys_setrlimit(resource, &os_limit));
 }
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
