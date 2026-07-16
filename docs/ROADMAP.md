@@ -5,9 +5,29 @@ ArmOS. The goal is not to clone Linux line by line, but to converge toward the
 same useful Unix contracts while keeping the kernel understandable and
 debuggable.
 
-## v0.7 ARM64 Baseline
+## 0.7.1 Current Baseline
 
-The v0.7 baseline is:
+The 0.7.1 release keeps the 0.7 common-kernel architecture and adds:
+
+- one POSIX implementation path for ARM32 and ARM64, including clocks,
+  positioned I/O, directory-relative operations, filesystem capacity,
+  timestamp updates, and descriptor limits;
+- one `armos.conf` configuration layer for builds, QEMU launch features,
+  userland bundles, and Raspberry Pi image staging;
+- measured ext2 and FAT32 improvements, filesystem and block statistics, and
+  the `iobench` regression tool;
+- four-bit, multi-block Raspberry Pi SD/eMMC transfers with automatic fallback
+  to the validated single-block path;
+- stronger ASID, COW, process-reaping, and cross-CPU executable-cache
+  coherency under sustained SMP process churn;
+- target-specific Raspberry Pi firmware staging.
+
+The next release should build on this baseline instead of introducing an
+architecture-private implementation of a common kernel policy.
+
+## 0.7 ARM64 Baseline
+
+The 0.7 baseline is:
 
 - fresh-checkout default: `arm32/qemu-virt`;
 - ARM64 feature reference: `arm64/qemu-virt`, four CPUs;

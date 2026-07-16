@@ -63,6 +63,23 @@ throughput gain is only about 21%. The reduction in command count should matter
 more on hardware, but that must be measured on the Raspberry Pi 3 rather than
 inferred from emulation.
 
+### Preliminary Raspberry Pi 3 Results
+
+An 8 MiB `iobench` run on the current ARM64 Raspberry Pi 3 path produced the
+following preliminary ext2 figures. The SD-card model was not recorded, so
+these are diagnostic observations rather than a release performance promise.
+
+| Pass | Write | First read | Second read |
+|---|---:|---:|---:|
+| First run after boot | 0.73 MiB/s | 16.84 MiB/s | 18.05 MiB/s |
+| Repeated steady runs | 0.50-0.55 MiB/s | 7.87-7.88 MiB/s | 8.15 MiB/s |
+
+The faster first run is consistent with a different initial cache and card
+state. Later runs stabilized closely, which is more useful as the current
+hardware regression baseline. Writes remain the dominant bottleneck; `fsync`
+returned in about 5 ms because dirty ext2 data had already been written through
+the synchronous benchmark path before the explicit flush.
+
 ## Implemented Optimizations
 
 The generic block layer records requests, sectors, errors, flushes and maximum

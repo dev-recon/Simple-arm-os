@@ -144,8 +144,10 @@ if [ "${QEMU_BLOCK_ENABLED}" != "0" ]; then
             ;;
     esac
 fi
+if [ "$ENABLE_NET" = 1 ]; then
+    QEMU_ARGS+=("${NET_ARGS[@]}")
+fi
 QEMU_ARGS+=(
-    "${NET_ARGS[@]}"
     -device "${GPU_DEVICE}"
     -device "${QEMU_INPUT_DEVICE}"
     -chardev stdio,id=uart0,signal=off

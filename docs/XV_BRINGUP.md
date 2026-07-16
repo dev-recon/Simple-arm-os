@@ -3,6 +3,10 @@
 The goal is to make `xv` build and run on ArmOS without turning the work into a
 full Xorg port by default.
 
+ArmOS 0.7.1 builds the framebuffer dependency set and `fbview` for the
+selected ARM32 or ARM64 userland. This does not change the xv redistribution
+boundary below and does not place xv sources in the worktree.
+
 ## Source And Redistribution Boundary
 
 `xv` is an external test target for ArmOS graphics bring-up, not vendored

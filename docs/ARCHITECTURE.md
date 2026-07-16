@@ -316,31 +316,15 @@ Useful diagnostics:
 
 ## SMP Bring-Up Model
 
-ArmOS now contains active SMP bring-up code, but the stable public runtime
-profile remains `SMP_CPUS=1`. Multi-CPU boots are intentionally available for
-kernel development and race hunting, but they are not yet the supported release
-configuration.
+Four-CPU scheduling is part of the 0.7 release contract on `arm64/qemu-virt`
+and `arm64/raspi3`. The fresh-checkout `arm32/qemu-virt` profile remains a
+conservative development default, while `arm32/raspi2` keeps the validated
+Raspberry Pi 2 hardware path. `SMP_CPUS` is still configurable so single-CPU
+regression runs can isolate scheduler and coherency failures.
 
-Raspberry Pi 3 uses a separate `pi3` AArch32 platform profile. On that hardware,
-all four Cortex-A53 CPUs have completed sustained scheduler/fork/COW stress and
-clean shutdown. This hardware milestone does not automatically promote the
-generic QEMU `SMP_CPUS>1` profile or other boards to the public release
-contract.
-
-Stable profile:
-
-```sh
-SMP_CPUS=1 ./boot.sh
-```
-
-Experimental developer profile:
-
-```sh
-SMP_CPUS=4 ./boot.sh
-```
-
-When documenting, testing, or publishing a release, treat `SMP_CPUS=1` as the
-baseline unless the test explicitly says it is exercising experimental SMP.
+The Raspberry Pi 3 profile is AArch64-only. Common scheduler, VM, VFS and
+process policy must behave identically across architectures; platform code may
+only provide CPU-release, interrupt, timer, MMU and cache mechanisms.
 
 Current SMP contract:
 
@@ -350,42 +334,32 @@ Current SMP contract:
 - `/proc/smp` exposes the boot CPU, online count, seen CPU mask, and per-CPU
   state, scheduler participation, timer/IPI counters, TLB counters, and the
   currently running task on each CPU;
-- spinlocks use ARMv7 `LDREX` / `STREX`, not compiler test-and-set helpers;
+- spinlocks use architecture primitives (`LDREX`/`STREX` on ARMv7 and
+  acquire/release exclusives on AArch64), not compiler-only test-and-set
+  helpers;
 - spinlocks record the owning CPU for diagnostics;
 - TLB maintenance now has two layers: local ARM helpers in `asm/mmu.h`
   (`tlb_flush_*`) and SMP-aware kernel entry points in `kernel/tlb.h`
   (`tlb_shootdown_*`);
 - `IRQ_SGI_TLB_SHOOTDOWN` is the TLB IPI and is visible in `/proc/interrupts`;
   `/proc/smp_ipi` can trigger a full shootdown rendezvous for diagnostics;
-- the scheduler has SMP-aware task ownership and runqueue protection, but this
-  path is still under hardening.
+- the scheduler has SMP-aware task ownership and runqueue protection;
+- process reaping returns task, kernel-stack and physical-page ownership only
+  after no CPU can still schedule the dead task;
+- executable publication performs the required data and instruction cache
+  maintenance on every scheduler CPU before a freshly loaded task can migrate.
 
-On Raspberry Pi 3, short-descriptor page-table walks must be shareable and
-WBWA, and user PTEs must be non-global for ASID tagging. The current context
-switch still performs a full local `TLBIALL`. Local and inner-shareable
-ASID-only invalidations both exposed stale user instruction mappings on real
-Cortex-A53 hardware even though the same tests passed QEMU. Any future ASID
-optimization therefore needs an explicit per-CPU residency/generation protocol
-and hardware validation; changing only the CP15 invalidation opcode is not a
-valid optimization.
+ARM32 short-descriptor page tables and ARM64 long-descriptor tables have
+different shareability and invalidation instructions, but they implement the
+same VM contract. ASID reuse must pass through generation-aware allocation,
+and page-table or executable changes must be visible to every CPU that may run
+the address space. A QEMU-only success is insufficient for changing these
+rules; Raspberry Pi 3 hardware stress remains the coherency reference.
 
-The intended bring-up sequence is deliberately conservative:
-
-1. keep the public release profile on `SMP_CPUS=1`;
-2. make atomics, spinlocks, CPU identity, and per-CPU current-task ownership
-   correct;
-3. keep one global scheduler lock and one global run queue initially;
-4. use SMP stress runs to expose races without promoting them to release
-   support;
-5. harden TLB shootdown before relying on user address spaces across CPUs;
-6. audit shared kernel structures: task lists, ready queues, ASIDs, physical
-   allocator, VFS mounts, file descriptors, TTY state, and signal queues;
-7. only then consider per-CPU run queues and load balancing.
-
-Do not describe `SMP_CPUS>1` as stable until the stress baseline includes mixed
-`kload`, `memstress`, `systest`, `vfstest`, `top`, TTY, procfs, and shutdown
-runs without corruption. A multi-core kernel that occasionally works is less
-useful than a single-core kernel with clear invariants.
+Release validation includes mixed `kload`, `memstress`, `systest`, `vfstest`,
+`mmaptest`, `top`, TTY, procfs, native compilation and shutdown runs. Live
+task, zombie, kernel-stack and physical-page counters must return to baseline
+after the workload.
 
 ## MMIO Mapping
 
@@ -722,7 +696,7 @@ and missing mappings.
 The storage stack is layered:
 
 ```text
-VirtIO block driver
+block transport: VirtIO or Raspberry Pi SD/eMMC
         |
 sector read/write API
         |
@@ -916,9 +890,9 @@ filesystem metadata/data writes
         |
 blk_write_sector(s)
         |
-virtio request
+selected block transport request
         |
-optional VirtIO flush
+transport flush/stop contract
         |
 shutdown / boot.sh verification
 ```
@@ -1020,8 +994,10 @@ specific legacy investigation requires otherwise.
 
 ## Portability Notes
 
-Version 0.7 contains production ARM32 and ARM64 ports joined to one common
-kernel. The portability groundwork includes:
+Version 0.7 established production ARM32 and ARM64 ports joined to one common
+kernel. Version 0.7.1 extends the same contract with symmetric POSIX calls,
+storage paths, ASID/COW hardening and cross-CPU executable publication. The
+portability groundwork includes:
 
 - generated assembly offsets for C structures consumed from ARM assembly;
 - `paddr_t`, `vaddr_t`, and `pfn_t` names for address categories;

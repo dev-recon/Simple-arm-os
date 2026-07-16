@@ -7,6 +7,10 @@ the running ArmOS system feel more like a small Unix workstation, with enough
 real tools to write Makefiles, transform text, inspect trees, create archives,
 and apply patches from inside `mash`.
 
+The bundle is part of the 0.7 common userland and builds for both ARM32 and
+AArch64. Sources and runtime paths are identical; only the generated ELF ABI
+changes with the selected ArmOS target.
+
 ## Build Flag
 
 Build and stage the BSD bundle with:

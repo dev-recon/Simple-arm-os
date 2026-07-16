@@ -50,6 +50,15 @@ partition contains `kernel7.img`, `config.txt`, the Pi 2 DTB and firmware. The
 ext2 root remains a separate partition and is identical in layout to the other
 ArmOS targets.
 
+The staging script selects the Pi 2 DTB and configured overlays instead of
+copying the complete Raspberry Pi firmware tree. After the initial raw image
+write, use boot-only mode for normal kernel iteration:
+
+```sh
+tools/build_pi2_sd.sh --skip-build --mode boot \
+  --boot-volume /Volumes/PI2
+```
+
 ## UART Console
 
 Connect adapter GND, RX and TX only. GPIO14 is Pi TX and GPIO15 is Pi RX:

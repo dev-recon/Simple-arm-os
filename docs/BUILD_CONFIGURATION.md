@@ -25,6 +25,8 @@ Then use the normal entry points:
 ./run.sh
 ./build.sh
 ./boot.sh
+./boot-graphics.sh
+./boot-net.sh
 ```
 
 Without a local file or environment overrides, the reference target remains
@@ -85,6 +87,11 @@ ENABLE_GPU=no
 starts. `ENABLE_GPU=yes` opens the VirtIO-GPU display and adds the keyboard
 device. Both can be enabled together. These two launch options require the
 `qemu-virt` platform.
+
+`boot-graphics.sh` always enables the graphical device for that invocation.
+It does not require networking: with `ENABLE_NET=no`, no network arguments are
+passed to QEMU. `boot-net.sh` similarly provides the explicit network-oriented
+entry point.
 
 Optional userland components:
 

@@ -9,7 +9,7 @@ Raspberry Pi 3 Model B+ in AArch64 mode and Raspberry Pi 2 Model B v1.1 in
 ARMv7-A mode; see [docs/RASPBERRY_PI3.md](docs/RASPBERRY_PI3.md) and
 [docs/RASPBERRY_PI2.md](docs/RASPBERRY_PI2.md).
 
-The reproducible v0.7 emulator baseline is QEMU 10.0.2. Newer releases can be
+The reproducible 0.7.1 emulator baseline is QEMU 10.0.2. Newer releases can be
 used for compatibility testing, but should not silently replace the baseline.
 
 ## Disk Layout
@@ -17,8 +17,10 @@ used for compatibility testing, but should not silently replace the baseline.
 The build creates intermediate `ext2.img` and `fat32.img` files, then publishes
 platform-specific artifacts under `build/images/`:
 
-- `kernel-qemu-virt.bin` and `disk-qemu-virt.img`: QEMU development images;
-  ext2 root is partition 1 and FAT32 compatibility storage is partition 2
+- `kernel-arm32-qemu-virt.bin` and `disk-arm32-qemu-virt.img`: default QEMU
+  development images
+- `kernel-arm64-qemu-virt.bin` and `disk-arm64-qemu-virt.img`: AArch64 QEMU
+  development images; QEMU Virt disks use ext2 partition 1 and FAT32 partition 2
 - `kernel-arm64-raspi3.bin` and `disk-arm64-raspi3.img`: Raspberry Pi 3
   hardware images; standard FAT32 boot is partition 1 and ext2 root is
   partition 2
@@ -51,6 +53,7 @@ brew install make
 brew install git
 brew install python
 brew install arm-none-eabi-gcc
+brew install aarch64-elf-gcc
 brew install qemu
 brew install mtools
 brew install dosfstools
@@ -66,6 +69,8 @@ Tool purpose:
 - `git`: source checkout and QEMU fallback subproject retrieval
 - `python`: host Python used by ArmOS image tools and QEMU's build system
 - `arm-none-eabi-gcc`: ARM bare-metal compiler, assembler, linker, and binutils
+- `aarch64-elf-gcc`: AArch64 bare-metal compiler and binutils used by ARM64
+  kernels, newlib and userland
 - `qemu`: `qemu-system-arm`
 - `mtools`: FAT image manipulation (`mcopy`, `mmd`, `mdir`)
 - `dosfstools`: FAT image creation (`mkfs.fat`)
@@ -131,7 +136,10 @@ make --version
 arm-none-eabi-gcc --version
 arm-none-eabi-ld --version
 arm-none-eabi-objcopy --version
+aarch64-elf-gcc --version
+aarch64-elf-objcopy --version
 qemu-system-arm --version
+qemu-system-aarch64 --version
 mkfs.fat -V
 mcopy -V
 mmd -V
@@ -157,7 +165,7 @@ If `mke2fs`, `debugfs`, or `e2fsck` are not found, your shell is missing the
 ## 5. Clone And Build
 
 ```sh
-git clone https://github.com/dev-recon/Simple-arm-os.git arm-os
+git clone https://github.com/dev-recon/ArmOS.git arm-os
 cd arm-os
 chmod +x run.sh boot.sh tools/build_newlib.sh tools/build_qemu_10_0_2.sh
 ./run.sh
@@ -256,9 +264,16 @@ The installed sysroot lives in:
 
 ```text
 build/newlib-sysroot/arm-none-eabi
+build/newlib-sysroot/aarch64-elf
 ```
 
-That directory is generated and should not be committed.
+Select the AArch64 sysroot explicitly when rebuilding it alone:
+
+```sh
+TARGET=aarch64-elf ./tools/build_newlib.sh
+```
+
+Those directories are generated and should not be committed.
 
 You can also point the build at another sysroot:
 
@@ -289,10 +304,10 @@ filesystem.
 
 ## 9. Native TinyCC And Shipped Sources
 
-ArmOS v0.6 can build small C programs from inside the running system. This is
-for end-user programming and experiments inside ArmOS; the project itself still
-uses the macOS/Linux cross toolchain for kernel work, stabilization, and release
-builds.
+ArmOS 0.7.1 can build small C programs from inside ARM32 and ARM64 systems.
+This is for end-user programming and experiments inside ArmOS; the project
+itself still uses the macOS/Linux cross toolchain for kernel work,
+stabilization, and release builds.
 
 The standard build scripts stage TinyCC under:
 
@@ -324,7 +339,7 @@ native TinyCC bundle during local development.
 
 ## 10. Optional ncurses And nano
 
-ArmOS v0.6 can also stage static ncurses and nano bundles:
+ArmOS 0.7.1 can also stage static ncurses and nano bundles:
 
 ```sh
 BUILD_NCURSES=1 BUILD_NANO=1 ./build.sh
@@ -343,7 +358,33 @@ These bundles are optional generated artifacts and are intentionally ignored by
 Git. Use them for terminal UI experiments, not as a replacement for the normal
 host cross-build workflow.
 
-## 11. Common Problems
+Build the complete optional userland for the configured ABI with:
+
+```sh
+BUILD_ALL_USERLAND=1 ./build.sh
+```
+
+This includes TinyCC, ncurses, nano, the BSD tools and the supported graphics
+libraries. Rebuilding it is unnecessary for a kernel-only iteration.
+
+## 11. Raspberry Pi Images
+
+Use the tracked hardware profiles and the generic SD builder:
+
+```sh
+ARMOS_CONFIG=configs/raspi2-arm32.conf \
+  tools/build_raspberry_sd.sh --mode image
+ARMOS_CONFIG=configs/raspi3-arm64.conf \
+  tools/build_raspberry_sd.sh --mode image
+```
+
+For raw-device writes, identify the whole removable disk with `diskutil list`
+and follow [the Raspberry Pi 2 guide](docs/RASPBERRY_PI2.md) or
+[the Raspberry Pi 3 guide](docs/RASPBERRY_PI3.md). Raw mode is destructive;
+normal kernel iteration should use boot-only mode once the complete card has
+been initialized.
+
+## 12. Common Problems
 
 ### `arm-none-eabi-gcc: command not found`
 
@@ -393,8 +434,8 @@ Ctrl+A, then X
 `make clean` removes kernel objects and binaries. To force fresh disk images:
 
 ```sh
-rm -f disk.img ext2.img fat32.img build/images/disk-qemu-virt.img
-TARGET_PLATFORM=qemu-virt make platform-disk
+rm -f disk.img ext2.img fat32.img build/images/disk-arm32-qemu-virt.img
+TARGET_ARCH=arm32 TARGET_PLATFORM=qemu-virt make platform-disk
 ```
 
 `./run.sh` already removes and recreates these images before booting.

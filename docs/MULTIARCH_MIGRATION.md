@@ -1,9 +1,14 @@
 # ArmOS Multi-Arch Migration
 
-This branch restarts the multi-arch work from the v0.6 baseline. The goal is
-not to invent a generic HAL up front. The goal is to make ARM32 dependencies
-visible, contained, and testable, then let the second concrete port define the
-interfaces that are actually needed.
+This is a historical design record for the migration that started from the
+`v0.6` tag and reached the production common-kernel contract in ArmOS 0.7.
+Current architecture rules live in [ARCHITECTURE.md](ARCHITECTURE.md) and the
+ARM64 runtime status lives in [ARM64_PORT.md](ARM64_PORT.md).
+
+The migration restarted the multi-arch work from the v0.6 baseline. The goal
+was not to invent a generic HAL up front. It made ARM32 dependencies visible,
+contained, and testable, then let the second concrete port define the
+interfaces that were actually needed.
 
 ## Current Rule
 

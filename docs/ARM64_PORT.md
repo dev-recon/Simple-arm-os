@@ -1,8 +1,10 @@
 # ARM64 Port
 
-ArmOS supports AArch64 on QEMU `virt` alongside the stable ARM32 kernel. Both
-targets enter the same kernel at `kernel/main.c` and use the same process,
-scheduler, syscall, VFS, device, timer and shutdown subsystems.
+ArmOS supports AArch64 on QEMU `virt` and Raspberry Pi 3 B+ alongside the
+ARM32 QEMU Virt and Raspberry Pi 2 targets. Every target enters the same kernel
+at `kernel/main.c` and uses the same process, scheduler, syscall, VFS, device,
+timer and shutdown subsystems. ArmOS 0.7 established this common-kernel
+contract; 0.7.1 hardens it under sustained SMP process and storage stress.
 
 The ARM64 port is an architecture backend, not a second kernel.
 
@@ -62,6 +64,12 @@ heap or configured user virtual-address space is genuinely exhausted. The
 remaining numeric bounds in the backend describe AArch64 hardware or the active
 translation regime, such as 512 entries per table, the 39-bit TTBR0 range and
 the implemented ASID width.
+
+Executable publication is also an SMP contract. After `execve()` installs new
+EL0 text, the common kernel cleans data-cache lines to the point of unification
+and requests instruction-cache invalidation on every scheduler CPU before the
+task may migrate. A local-only cache flush is insufficient on Cortex-A53 even
+when the same workload appears correct under QEMU.
 
 ## Userland And Disk
 
@@ -131,6 +139,8 @@ mmaptest
 vfstest
 systest
 kload -s 5 -m 2048 -c 4 -u 25 -p 8 -f 1
+iobench -f /tmp/iobench.dat -m 8 -b 64
+nano /tmp/arm64-smoke.c
 ```
 
 QEMU VirtIO network and graphics use the same common drivers as ARM32. The
@@ -170,7 +180,8 @@ TARGET_ARCH=arm32 TARGET_PLATFORM=qemu-virt ./boot.sh
 1. High-link the complete ARM64 kernel and retire the temporary privileged
    TTBR0 RAM mapping.
 2. Broaden repeated mixed CPU, VM, VFS, and SD stress on Pi 3 hardware.
-3. Replace conservative full local TLB invalidation only after per-CPU ASID
-   residency and generation tracking are hardware-validated.
+3. Reduce conservative TLB maintenance only after per-CPU ASID residency,
+   generation tracking and executable publication remain hardware-validated
+   through repeated fork/exec/COW stress.
 4. Add Raspberry Pi graphics, USB input, and networking through common device
    contracts.

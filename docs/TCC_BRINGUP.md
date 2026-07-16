@@ -4,6 +4,10 @@ ArmOS can now build and run a small C program from inside `mash` using a native
 TinyCC binary staged under `/opt/tcc`. This document records the exact working
 shape so the bring-up does not get lost again.
 
+The native path is validated for both ARM32 and AArch64 userlands. Each TinyCC
+build targets the ABI of the running ArmOS image; it is not a multilib compiler
+and does not generate the other architecture's executable format.
+
 ## Current Status
 
 Validated inside ArmOS:
@@ -48,6 +52,10 @@ The direct one-command path works too:
 ```sh
 tcc /home/user/tcc-src/kilo.c -o /tmp/kilo-direct
 ```
+
+On AArch64, an additional fork/wait smoke test has been compiled and executed
+on Raspberry Pi 3 hardware. This validates native ELF64 output, process startup
+and exit-status propagation rather than only successful compilation.
 
 ## Important Architecture Decision
 

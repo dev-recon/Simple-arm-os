@@ -82,6 +82,12 @@ FAT32 partition, then writes through the end of the last real partition. The
 unused QEMU padding is not copied to the card. A target marker prevents a later
 boot-only update from mixing an ARM32 root filesystem with an ARM64 kernel.
 
+Staging is target-specific. The script copies the base firmware files, the
+Pi 3 B+ DTB, `kernel8.img`, `config.txt`, and only overlays requested by the
+configuration. It does not copy every DTB and overlay found in the firmware
+source tree. This keeps normal boot-only updates bounded by the kernel and the
+small target firmware set.
+
 The generated firmware configuration is equivalent to:
 
 ```ini
@@ -169,6 +175,8 @@ kload -s 120 -m 2048 -c 4 -u 25 -p 8 -f 1 &
 top -s 1
 lps
 cat /proc/smp
+iobench -f /tmp/iobench-ext2.dat -m 8 -b 64 -k
+nano /tmp/arm64-smoke.c
 /sbin/shutdown
 ```
 
@@ -182,6 +190,8 @@ Expected properties:
 - `forkfail`, `sched-refuse`, and `ready-refuse` remain zero;
 - zombies and live physical/kernel-stack allocations return to baseline;
 - SD reads and writes complete without EMMC timeout diagnostics;
+- repeated `nano`, `ls`, `top`, fork/exec and COW activity does not produce
+  lower-EL faults after tasks migrate between CPUs;
 - shutdown parks secondary CPUs, syncs ext2, stops the block device, and enters
   firmware powerdown without an exception.
 

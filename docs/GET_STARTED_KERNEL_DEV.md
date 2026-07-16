@@ -15,22 +15,29 @@ ArmOS is small enough to understand, but it is now a real Unix-like kernel with
 preemption, userspace, newlib, filesystems, signals, procfs, and a shell. Treat
 small changes with the same care you would use in a larger kernel.
 
-## Current Platform
+## Current Platforms
 
-Target:
+The fresh-checkout development target is `arm32/qemu-virt`. The supported
+matrix also includes `arm64/qemu-virt`, Raspberry Pi 2 Model B v1.1 through
+`arm32/raspi2`, and Raspberry Pi 3 B+ through `arm64/raspi3`.
 
-- ARMv7-A
-- Cortex-A15
-- QEMU `virt`
-- GICv2
-- ARM generic timer
-- VirtIO block
-- UART-backed TTY
+All targets enter `kernel/main.c` and share scheduler, process, VM policy, VFS,
+syscalls and device policy. Architecture code supplies CPU, MMU, exception,
+context-switch, timer and interrupt mechanisms. Do not add an ARM32- or
+ARM64-private implementation of a common kernel service.
+
+Use a tracked configuration profile for reproducible work:
+
+```sh
+ARMOS_CONFIG=configs/qemu-virt-arm32.conf ./run.sh
+ARMOS_CONFIG=configs/qemu-virt-arm64.conf ./run.sh
+ARMOS_CONFIG=configs/raspi3-arm64.conf ./build.sh
+```
 
 Memory model:
 
-- `TTBR0`: per-process user mappings below `0x40000000`
-- `TTBR1`: global kernel mappings above `0x40000000`
+- `TTBR0`: per-process user mappings in the architecture user range
+- `TTBR1`: global privileged kernel mappings
 - low boot identity window: the linked kernel image and early metadata remain
   reachable at their physical addresses during/after MMU bring-up
 - explicit RAM direct-map window: general physical RAM is reached through
@@ -54,9 +61,11 @@ addresses, but that is not the general RAM contract.
 Kernel entry and architecture:
 
 - `arch/arm32/boot/boot.S`
+- `arch/arm64/boot/boot.S`
 - `arch/arm32/interrupt/interrupt.S`
+- `arch/arm64/interrupt/vectors.S`
 - `arch/arm32/task/task_switch.S`
-- `arch/arm32/syscall/syscall.S`
+- `arch/arm64/task/context_switch.S`
 - `kernel/main.c`
 - `kernel/interrupt/`
 
@@ -64,6 +73,8 @@ Memory:
 
 - `arch/arm32/mmu/mmu.c`
 - `arch/arm32/mmu/virtual.c`
+- `arch/arm64/mmu/mmu.c`
+- `arch/arm64/mmu/user_vm.c`
 - `kernel/memory/physical.c`
 - `kernel/memory/kmalloc.c`
 - `include/kernel/memory.h`

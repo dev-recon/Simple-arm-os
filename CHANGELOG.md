@@ -1,27 +1,71 @@
 # Changelog
 
+Release tags use the bare version number starting with `0.7` (`0.7`, `0.7.1`,
+and so on). Older `v0.x` tags remain historical and are not moved.
+
 ## Unreleased
 
-- Added a dedicated `TARGET_PLATFORM=pi3` hardware profile for Raspberry Pi 3
-  boards booting `kernel7.img` in AArch32 mode.
-- Brought all four Cortex-A53 CPUs online on Raspberry Pi 3, with coherent
-  page-table walks, per-CPU scheduler participation, local timer interrupts,
-  task migration, TLB/IPI diagnostics, and clean secondary-CPU parking during
-  shutdown.
-- Added `tools/build_pi3_sd.sh` and a FAT32-first SD layout whose firmware
-  partition is marked hidden while ext2 remains the ArmOS root filesystem.
-- Kept the proven full local TLB invalidation on address-space switches after
-  ASID-only variants passed QEMU but produced stale user instruction mappings
-  on Raspberry Pi 3 hardware.
-- Removed temporary mappings from read-only user page-table inspection and made
-  `top` use fixed bounded buffers so long monitoring sessions do not churn or
-  corrupt the newlib heap under process stress.
-- Added an optional BSD-style userland tool bundle behind `BUILD_BSD=1`,
-  including `bmake`, BSD `sed`/`awk`, `install`, `mtree`, `xargs`, `diff`,
-  `patch`, `pax`/`tar`, `m4`, and small ELF/archive tools: `ar`, `ranlib`,
-  `nm`, `strip`, and `size`.
-- Documented the BSD bundle layout, visible command symlinks, port structure,
-  compatibility notes, and smoke tests in `docs/BSD_USERLAND.md`.
+- Fixed `boot-graphics.sh` on the macOS system Bash when networking is
+  disabled. Empty network argument arrays are no longer expanded under
+  `set -u`.
+
+## ArmOS 0.7.1 - 2026-07-16
+
+ArmOS 0.7.1 consolidates the first post-ARM64 release cycle. It extends the
+common POSIX surface, improves filesystem and SD throughput, and fixes
+cross-CPU address-space and executable-cache coherency bugs found by sustained
+Raspberry Pi 3 stress testing.
+
+### Highlights
+
+- Extended the common ARM32/ARM64 POSIX surface with clocks,
+  `clock_nanosleep()`, `sched_yield()`, capability queries, positioned I/O,
+  directory-relative operations, descriptor metadata operations, filesystem
+  capacity queries, timestamp updates, and per-process descriptor limits.
+- Added `armos.conf` and `armos.conf.example` as a single configuration layer
+  for architecture, platform, SMP, QEMU features, userland bundles, and
+  Raspberry Pi image staging. Environment variables remain supported as
+  explicit overrides.
+- Added `iobench`, `/proc/diskstats`, filesystem statistics, ext2 dirty block
+  caching and grouped writeback, FAT32 clustered I/O, and SD/eMMC four-bit
+  multi-block transfers using CMD18/CMD25 with a conservative fallback path.
+- Hardened ARM64 ASID allocation and COW fault handling under process churn.
+- Fixed SMP process reaping and ARM32 ASID reuse after long fork/exec stress.
+- Published newly loaded executable code to every participating CPU's
+  instruction cache before a task may migrate.
+- Reduced Raspberry Pi boot staging to the firmware, DTB and overlays required
+  by the selected target instead of copying the complete firmware tree.
+- Refreshed the project overview and added Raspberry Pi 3 hardware screenshots.
+
+## ArmOS 0.7 - 2026-07-15
+
+ArmOS 0.7 is the common-kernel ARM64 milestone. ARM32 and ARM64 now enter the
+same kernel subsystems for processes, scheduling, VFS, filesystems, syscalls
+and device policy; architecture code is limited to CPU, MMU, exception and
+context-switch mechanics.
+
+### Highlights
+
+- Added the production ARM64 port for QEMU Virt and Raspberry Pi 3 B+,
+  including EL0, ELF64, fork/COW, exec, signals, mmap, timer preemption,
+  ASIDs, TLB shootdown and four-CPU SMP scheduling.
+- Kept `arm32/qemu-virt` as the fresh-checkout development default while making
+  `arm64/qemu-virt` the ARM64 feature reference and Raspberry Pi 3 B+ the
+  AArch64 hardware reference.
+- Added Raspberry Pi 2 Model B v1.1 support through the ARM32 `raspi2` target,
+  with firmware boot, SD/eMMC, ext2 root, FAT32 and UART console support.
+- Added Raspberry Pi 3 SD-card tooling, hidden FAT32 firmware partition,
+  hardware shutdown and UART development helpers.
+- Made newlib the canonical libc and supplied matching ARM32 and AArch64
+  userlands containing init, mash, core tools and native TinyCC.
+- Added optional ncurses/nano support, syntax highlighting and line numbers.
+- Added the BSD userland bundle: `bmake`, `sed`, `awk`, `install`, `mtree`,
+  `xargs`, `diff`, `patch`, `pax`, `tar`, `m4`, `ar`, `ranlib`, `nm`, `strip`
+  and `size`.
+- Added zlib, libjpeg, libpng and libtiff ports, raw framebuffer access,
+  framebuffer tests and an image viewer smoke test.
+- Enabled the QEMU Virt networking and graphics development paths on ARM64.
+- Centralized the release version used by the kernel banner and `uname`.
 
 ## ArmOS v0.6 - 2026-07-05
 

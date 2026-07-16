@@ -12,6 +12,11 @@ and identity contracts. The next stage is therefore semantic completion and a
 small number of missing primitives, not one syscall for every function listed
 in the POSIX System Interfaces volume.
 
+ArmOS 0.7.1 is the first release carrying the complete implemented baseline
+listed below on both ARM32 and ARM64. Later work must preserve that ABI parity:
+an interface is not considered delivered when only one architecture can use
+the common kernel implementation.
+
 ## Design Rules
 
 - All architectures use the same syscall numbers, kernel implementations and

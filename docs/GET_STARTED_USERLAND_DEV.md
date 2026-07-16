@@ -7,6 +7,11 @@ ArmOS userland now uses newlib as the supported C library. The older home-grown
 libc and old programs are archived under `userland/legacy/` for reference only.
 New work should use the newlib path.
 
+ARM32 and ARM64 install the same directory tree and command set. Executables
+are rebuilt for the selected ABI; source-level behavior and the common syscall
+contracts must remain identical. Select a reproducible target with
+`armos.conf` or one of the profiles in `configs/` before rebuilding userland.
+
 Read this first:
 
 - `README.md`
@@ -54,6 +59,8 @@ Newlib port:
 
 ```text
 newlib-port/
+  arm64/crt0_newlib.S
+  arm64/syscall_raw.S
   crt0_newlib.S
   syscall_raw.S
   syscalls.c
