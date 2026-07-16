@@ -206,6 +206,25 @@ copy_to_image_fat() {
     mcopy -o -i "$image_spec" "$source" "::$target"
 }
 
+copy_boot_firmware_to_dir() {
+    local target_dir="$1"
+    local file
+
+    for file in bootcode.bin start.elf fixup.dat "$DEVICE_TREE"; do
+        cp "$RASPI_FIRMWARE_DIR/$file" "$target_dir/$file"
+    done
+
+    if [ -n "$DTOVERLAY" ]; then
+        mkdir -p "$target_dir/overlays"
+        if [ -f "$RASPI_FIRMWARE_DIR/overlays/overlay_map.dtb" ]; then
+            cp "$RASPI_FIRMWARE_DIR/overlays/overlay_map.dtb" \
+                "$target_dir/overlays/overlay_map.dtb"
+        fi
+        cp "$RASPI_FIRMWARE_DIR/overlays/$DTOVERLAY.dtbo" \
+            "$target_dir/overlays/$DTOVERLAY.dtbo"
+    fi
+}
+
 ensure_image_dir() {
     local image_spec="$1"
     local target="$2"
@@ -445,18 +464,19 @@ case "$PUSH_MODE" in
             for file in bootcode.bin start.elf fixup.dat "$DEVICE_TREE"; do
                 [ -f "$RASPI_FIRMWARE_DIR/$file" ] || die "firmware file not found: $RASPI_FIRMWARE_DIR/$file"
             done
+            if [ -n "$DTOVERLAY" ]; then
+                [ -f "$RASPI_FIRMWARE_DIR/overlays/$DTOVERLAY.dtbo" ] || \
+                    die "overlay not found: $RASPI_FIRMWARE_DIR/overlays/$DTOVERLAY.dtbo"
+            fi
 
             echo "=== Copying $PI_LABEL firmware to SD boot volume ==="
             echo "source: $RASPI_FIRMWARE_DIR"
             echo "target: $SD_VOLUME"
-            rsync -a \
-                --exclude '.git/' \
-                --exclude '.github/' \
-                --exclude '.DS_Store' \
-                --exclude 'kernel*.img' \
-                --exclude 'config.txt' \
-                --exclude 'cmdline.txt' \
-                "$RASPI_FIRMWARE_DIR/" "$SD_VOLUME/"
+            echo "files:  bootcode.bin start.elf fixup.dat $DEVICE_TREE"
+            if [ -n "$DTOVERLAY" ]; then
+                echo "overlay: $DTOVERLAY.dtbo"
+            fi
+            copy_boot_firmware_to_dir "$SD_VOLUME"
         fi
 
         echo "=== Copying $PI_LABEL kernel to SD boot volume ==="
