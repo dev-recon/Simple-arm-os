@@ -420,6 +420,13 @@ INLINE void flush_icache(void)
     instruction_sync_barrier();
 }
 
+INLINE void flush_icache_inner_shareable(void)
+{
+    __asm__ volatile("mcr p15, 0, %0, c7, c1, 0" : : "r"(0) : "memory");
+    data_sync_barrier_inner_shareable();
+    instruction_sync_barrier();
+}
+
 /* Branch predictor operations */
 INLINE void flush_branch_predictor(void)
 {
@@ -879,9 +886,8 @@ INLINE void dcache_clean_by_va(void *va, size_t len)
 
 INLINE void sync_icache_for_exec(void)
 {
-    flush_icache();
-    data_sync_barrier_inner_shareable();
-    instruction_sync_barrier();
+    /* A recycled executable page may next run on any CPU in the cluster. */
+    flush_icache_inner_shareable();
 }
 
 INLINE int ats1cpr_probe(uint32_t va, uint32_t *pa_out, uint32_t *par_out)

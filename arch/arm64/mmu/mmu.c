@@ -784,13 +784,11 @@ void arm64_mmu_sync_code(arm64_mmu_u64 address,
 {
     uint64_t ctr;
     uint64_t dline_size;
-    uint64_t iline_size;
     uint64_t cursor;
     uint64_t end = address + length;
 
     __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
     dline_size = 4ULL << ((ctr >> 16) & 0xfu);
-    iline_size = 4ULL << (ctr & 0xfu);
 
     cursor = address & ~(dline_size - 1u);
     while (cursor < end) {
@@ -799,11 +797,14 @@ void arm64_mmu_sync_code(arm64_mmu_u64 address,
     }
     __asm__ volatile("dsb ish" ::: "memory");
 
-    cursor = address & ~(iline_size - 1u);
-    while (cursor < end) {
-        __asm__ volatile("ic ivau, %0" :: "r"(cursor) : "memory");
-        cursor += iline_size;
-    }
+    /*
+     * The loader can publish this physical page on a CPU different from the
+     * one that will first execute it. IC IVAU only invalidates the local PE,
+     * so a secondary Cortex-A53 could otherwise execute instructions left in
+     * its cache by the page's previous owner. Exec is infrequent enough that
+     * the conservative inner-shareable broadcast is the right contract here.
+     */
+    __asm__ volatile("ic ialluis" ::: "memory");
     __asm__ volatile("dsb ish" ::: "memory");
     arm64_isb();
 }
