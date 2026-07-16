@@ -808,6 +808,17 @@ static bool waitpid_prepare_sleep(task_t* parent, pid_t pid, int options,
     spin_lock_irqsave(&task_lock, &flags);
 
     /*
+     * Close the zombie handoff race atomically with publishing the blocked
+     * state.  The scheduler can make a child reapable between the unlocked
+     * scan in kernel_waitpid() and this point; sleeping without this recheck
+     * would lose that wakeup and leave both parent and zombie stranded.
+     */
+    if (find_zombie_child_locked(parent, pid)) {
+        spin_unlock_irqrestore(&task_lock, flags);
+        return false;
+    }
+
+    /*
      * Avoid a lost wakeup with WUNTRACED: the child may stop between the
      * caller's last unlocked scan and the moment the parent publishes its
      * wait state. Re-check and consume the stop report in the same critical

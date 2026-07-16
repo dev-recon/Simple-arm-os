@@ -29,6 +29,10 @@
 #define CPU_TIME_CHECK_MASK 0x0fU
 #define SMP_MAX_CPUS        8U
 #define SMP_PROC_BUF        4096
+#define WNOHANG_BATCH        8U
+#define WNOHANG_ROUNDS       16U
+#define WNOHANG_POLL_US      1000U
+#define WNOHANG_TIMEOUT_US   2000000ULL
 
 static volatile sig_atomic_t running = 1;
 static volatile sig_atomic_t interrupted_signal = 0;
@@ -256,6 +260,85 @@ static int probe_worker(unsigned seconds, unsigned index)
     return 0;
 }
 
+static int waitpid_wnohang_handoff_test(void)
+{
+    unsigned created = 0;
+
+    for (unsigned round = 0; round < WNOHANG_ROUNDS; round++) {
+        int pids[WNOHANG_BATCH];
+        unsigned char reaped[WNOHANG_BATCH];
+        unsigned launched = 0;
+        unsigned remaining;
+        unsigned long long deadline;
+
+        memset(reaped, 0, sizeof(reaped));
+        for (unsigned child = 0; child < WNOHANG_BATCH; child++) {
+            int pid = fork();
+
+            if (pid == 0)
+                _exit((int)((round + child) & 0x7fU));
+            if (pid < 0) {
+                printf("schedtest: WNOHANG fork failed round=%u errno=%d\n",
+                       round, errno);
+                break;
+            }
+
+            pids[launched++] = pid;
+            created++;
+        }
+
+        remaining = launched;
+        deadline = now_us() + WNOHANG_TIMEOUT_US;
+        while (remaining > 0 && now_us() < deadline) {
+            for (unsigned child = 0; child < launched; child++) {
+                int status = 0;
+                int result;
+
+                if (reaped[child])
+                    continue;
+
+                result = waitpid(pids[child], &status, WNOHANG);
+                if (result == pids[child]) {
+                    reaped[child] = 1;
+                    remaining--;
+                    if (!WIFEXITED(status) ||
+                        WEXITSTATUS(status) !=
+                            (int)((round + child) & 0x7fU)) {
+                        printf("schedtest: WNOHANG bad status pid=%d status=%d\n",
+                               result, status);
+                        return 1;
+                    }
+                } else if (result < 0) {
+                    printf("schedtest: WNOHANG wait failed pid=%d errno=%d\n",
+                           pids[child], errno);
+                    return 1;
+                }
+            }
+
+            if (remaining > 0)
+                usleep(WNOHANG_POLL_US);
+        }
+
+        if (remaining > 0) {
+            printf("schedtest: WNOHANG timeout round=%u remaining=%u\n",
+                   round, remaining);
+            for (unsigned child = 0; child < launched; child++) {
+                int status;
+
+                if (!reaped[child])
+                    waitpid(pids[child], &status, 0);
+            }
+            return 1;
+        }
+
+        if (launched != WNOHANG_BATCH)
+            return 1;
+    }
+
+    printf("schedtest: WNOHANG handoff passed children=%u\n", created);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     unsigned seconds = DEFAULT_SECONDS;
@@ -376,6 +459,9 @@ int main(int argc, char **argv)
         } else if (check_smp_timer_progress(&smp_before, &smp_after) != 0) {
             failures++;
         }
+
+        if (waitpid_wnohang_handoff_test() != 0)
+            failures++;
     }
 
     if (failures) {

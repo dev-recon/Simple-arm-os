@@ -14,9 +14,9 @@
  * - Send bounded SGI rendezvous requests to CPUs that may need the flush.
  *
  * Notes:
- * - CPU1 can be started into the holding pen, but only CPU0 runs the scheduler.
- *   Remote shootdown exists now so the MMU path is ready before user tasks can
- *   ever migrate to another CPU.
+ * - User tasks may migrate across every scheduler-enabled CPU.
+ * - The serialized request slot and per-CPU acknowledgements prevent an ASID
+ *   or mapping from being reused before remote invalidation completes.
  */
 
 #include <kernel/tlb.h>
@@ -197,10 +197,9 @@ static void tlb_shootdown_common(tlb_request_kind_t kind, vaddr_t vaddr, uint32_
     }
 
     /*
-     * Publish the request before sending the SGI. The current parked-CPU path
-     * only has one boot CPU initiating shootdowns, so this simple global slot is
-     * enough. A future scheduler-on-all-CPUs step should replace it with a
-     * locked or per-CPU rendezvous object.
+     * Publish the request before sending the SGI. Requesters serialize through
+     * shootdown_lock, while contenders service pending TLB IPIs so the owner
+     * can collect every acknowledgement without a lock-order deadlock.
      */
     generation = shootdown_generation + 1;
     shootdown_vaddr = vaddr;

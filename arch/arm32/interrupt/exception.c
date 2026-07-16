@@ -554,11 +554,12 @@ static bool coredump_path_is_tmp_file(const char* path)
     return true;
 }
 
-static void core_write(int fd, const char* text)
+static int core_write(int fd, const char* text)
 {
     if (fd >= 0 && text) {
-        sys_write(fd, text, strlen(text));
+        return kernel_write(fd, text, strlen(text));
     }
+    return -EINVAL;
 }
 
 static void core_printf(int fd, const char* fmt, ...)
@@ -582,7 +583,8 @@ static void core_printf(int fd, const char* fmt, ...)
         len = sizeof(line) - 1;
     }
 
-    sys_write(fd, line, (size_t)len);
+    if (kernel_write(fd, line, (size_t)len) < 0)
+        KERROR("coredump: failed to write diagnostic file\n");
 }
 
 static void coredump_write_words_to_file(int fd, const char* label,
@@ -664,7 +666,11 @@ static void coredump_write_event_to_file(const coredump_event_t* event)
         return;
     }
 
-    core_write(fd, "=== USER SEGFAULT ===\n");
+    if (core_write(fd, "=== USER SEGFAULT ===\n") < 0) {
+        KERROR("coredump: failed to write %s\n", event->path);
+        sys_close(fd);
+        return;
+    }
     core_printf(fd, "signal=SIGSEGV pid=%d task=%s\n", event->pid, event->task_name);
     core_printf(fd, "PC=0x%08X DFAR=0x%08X DFSR=0x%08X (%s) SPSR=0x%08X\n",
                 event->fault_pc, event->dfar, event->dfsr,

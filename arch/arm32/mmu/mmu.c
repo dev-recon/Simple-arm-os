@@ -164,12 +164,6 @@ static bool asid_cookie_valid(uint32_t asid)
     return asid_map[hw_asid] && asid_slot_generation[hw_asid] == generation;
 }
 
-static void flush_all_tlb_local(void)
-{
-    data_sync_barrier();
-    tlb_flush_all();
-}
-
 static uint32_t user_page_flags(uint32_t vma_flags, bool writable)
 {
     uint32_t page_flags = 0x02 | 0x0C | (1u << 10) | (1u << 11);
@@ -748,7 +742,12 @@ static uint32_t allocate_asid(void)
     }
 
     asid_reserve_special();
-    flush_all_tlb_local();
+    /*
+     * Hardware ASIDs are now being reused under a new software generation.
+     * Every CPU must discard translations from the previous generation before
+     * any slot can become visible again.
+     */
+    tlb_shootdown_all();
     kernel_lifecycle_stats.asid_rollovers++;
 
     KINFO("MMU: ASID generation rollover -> %u\n", asid_generation);
@@ -773,11 +772,13 @@ static void free_asid(uint32_t asid)
     if (!asid_hw_reserved(hw_asid) &&
         asid_map[hw_asid] &&
         asid_slot_generation[hw_asid] == generation) {
+        /*
+         * The software generation is not encoded in CONTEXTIDR.  Purge the
+         * hardware ASID from every CPU before its slot becomes reusable.
+         */
+        tlb_shootdown_asid(hw_asid);
         asid_map[hw_asid] = false;
         asid_slot_generation[hw_asid] = 0;
-        
-        /* Invalider les entrées TLB pour cet ASID */
-        tlb_flush_by_asid(hw_asid);
     }
 }
 

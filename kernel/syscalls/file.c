@@ -219,6 +219,17 @@ int sys_write(int fd, const void* buf, size_t count)
     return file_write_buffer(task->process->files[fd], buf, count);
 }
 
+int kernel_write(int fd, const void* kernel_buf, size_t count)
+{
+    task_t* task = task_current_local();
+
+    if (count == 0) return 0;
+    if (!kernel_buf || !is_kernel_pointer(kernel_buf)) return -EFAULT;
+    if (fd < 0 || fd >= MAX_FILES) return -EBADF;
+    if (!task || !task->process) return -EBADF;
+    return file_write_buffer(task->process->files[fd], kernel_buf, count);
+}
+
 static int positioned_file(int fd, const armos_offset_t* user_offset,
                            file_t* positioned)
 {

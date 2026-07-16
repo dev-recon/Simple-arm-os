@@ -191,47 +191,47 @@ static bool child_matches_waitpid(task_t* parent, task_t* child, pid_t pid)
     return child->process->pgid == -pid;
 }
 
+task_t* find_zombie_child_locked(task_t* parent, pid_t pid)
+{
+    task_t* child;
+
+    if (!parent || parent->type != TASK_TYPE_PROCESS || !parent->process)
+        return NULL;
+
+    child = parent->process->children;
+
+    while (child) {
+        /*
+         * sys_exit() publishes TASK_ZOMBIE before switching away from the
+         * exiting task's kernel stack.  A WNOHANG waiter can poll during that
+         * handoff window, so do not expose the child as reapable until the
+         * context switch has released CPU ownership and the scheduler has
+         * cleared the deferred-wakeup marker.  Reaping earlier frees the VM
+         * and kernel stack while another CPU can still be executing on them.
+         */
+        if (child_matches_waitpid(parent, child, pid) &&
+            child->state == TASK_ZOMBIE &&
+            child->process->state == (proc_state_t)PROC_ZOMBIE &&
+            child->running_cpu == TASK_CPU_NONE &&
+            child->wakeup_time == 0) {
+            return child;
+        }
+        child = child->process->sibling_next;
+    }
+
+    return NULL;
+}
+
 task_t* find_zombie_child(task_t* parent, pid_t pid)
 {
     unsigned long flags;
-    task_t* child;
-    task_t* zombie = NULL;
+    task_t* zombie;
 
-    if (!parent) {
-        KERROR("find_zombie_child: NULL Parent\n");
+    if (!parent || parent->type != TASK_TYPE_PROCESS || !parent->process)
         return NULL;
-    }
 
-    if (parent->type != TASK_TYPE_PROCESS) {
-        KERROR("find_zombie_child: Parent not Processs task\n");
-        KERROR("find_zombie_child: Parent name = %s\n", parent->name);
-        return NULL;
-    }
-
-    if (!parent->process) {
-        KERROR("find_zombie_child: NULL Proc\n");
-        return NULL;
-    }
-
-    /* Chercher un processus zombie - ACCeS CORRECT */
     spin_lock_irqsave(&task_lock, &flags);
-    child = parent->process->children;
-    //task_t* prev = NULL;
-
-            //KINFO("find_zombie_child: checking childs of PID %u for zombie PID %d \n", 
-            //      parent->process->pid, pid);
-
-    while (child) {
-        /* CORRIGER: Utiliser TASK_ZOMBIE au lieu de TASK_TERMINATED */
-
-        if (child_matches_waitpid(parent, child, pid) &&
-            child->state == TASK_ZOMBIE && child->process->state == (proc_state_t)PROC_ZOMBIE) {
-            zombie = child;
-            break;
-        }
-        //prev = child;
-        child = child->process->sibling_next;
-    }
+    zombie = find_zombie_child_locked(parent, pid);
     spin_unlock_irqrestore(&task_lock, flags);
 
     return zombie;

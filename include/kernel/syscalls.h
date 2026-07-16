@@ -271,6 +271,7 @@ syscall_result_t syscall_dispatch_common_handler(
 /* File syscalls */
 int sys_read(int fd, void* buf, size_t count);
 int sys_write(int fd, const void* buf, size_t count);
+int kernel_write(int fd, const void* kernel_buf, size_t count);
 int sys_pread(int fd, void* buf, size_t count,
               const armos_offset_t* offset);
 int sys_pwrite(int fd, const void* buf, size_t count,
