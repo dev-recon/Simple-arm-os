@@ -38,10 +38,12 @@ else
     TCC_OUTPUT=arm-eabi-tcc
 fi
 
-if [ ! -f "$SRC_DIR/configure" ]; then
-    echo "error: TinyCC sources not found in $SRC_DIR" >&2
-    exit 1
-fi
+for required_source in configure conftest.c; do
+    if [ ! -f "$SRC_DIR/$required_source" ]; then
+        echo "error: TinyCC source '$required_source' not found in $SRC_DIR" >&2
+        exit 1
+    fi
+done
 
 if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_LIBC" ]; then
     echo "error: newlib sysroot is incomplete: $NEWLIB_SYSROOT" >&2
@@ -120,8 +122,8 @@ cd "$BUILD_DIR"
     --libpaths=/opt/tcc/lib \
     --crtprefix=/opt/tcc/lib
 
-# TCC's c2str generator is a build-host utility.  Keep it as a macOS binary
-# even though the compiler being produced is an ArmOS ARM executable.
+# TCC's c2str generator is a build-host utility.  Keep it as a host executable
+# even though the compiler being produced is an ArmOS executable.
 "$HOST_CC" -DC2STR "$PATCHED_SRC/conftest.c" -o "$BUILD_DIR/c2str.exe"
 
 TCC_CFLAGS="-Wall -O2 -Wdeclaration-after-statement -Wno-unused-result"
