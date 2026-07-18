@@ -39,6 +39,8 @@ sudo apt install -y \
   build-essential \
   make \
   git \
+  file \
+  procps \
   curl \
   xz-utils \
   gcc-arm-none-eabi \
@@ -58,7 +60,8 @@ sudo apt install -y \
 
 Tool purpose:
 
-- `build-essential`, `make`: host build tools
+- `build-essential`, `make`, `file`, `procps`: host build and Homebrew bootstrap
+  tools
 - `gcc-arm-none-eabi`, `binutils-arm-none-eabi`: ARM bare-metal toolchain
 - `qemu-system-arm`, `qemu-utils`: emulator and disk tooling
 - `mtools`: FAT image manipulation (`mcopy`, `mmd`, `mdir`)
@@ -76,15 +79,49 @@ including `gcc`, `ld`, `objcopy`, `objdump`, `readelf` and `nm`. Do not silently
 substitute an `aarch64-linux-gnu-` compiler: the ArmOS userland targets newlib,
 not the Linux ABI.
 
-Where the distribution does not package `aarch64-elf-gcc`, the
-[Homebrew formula](https://formulae.brew.sh/formula/aarch64-elf-gcc) is
-available on Linux as well as macOS:
+## 2. Optional Homebrew Fallback
+
+Use the distribution packages when they are available. If a required package
+is missing, too old, or does not expose the expected tools, Homebrew is a
+supported fallback on Linux. Install it with the official installer:
+
+```sh
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+The default Linux prefix is `/home/linuxbrew/.linuxbrew`. Activate it in the
+current shell and make it persistent for Bash:
+
+```sh
+eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> ~/.bashrc
+```
+
+For Zsh, write the same line to `~/.zshrc` instead. See the official
+[Homebrew on Linux documentation](https://docs.brew.sh/Homebrew-on-Linux) for
+other distributions and non-default shells.
+
+For example, install `e2fsprogs` when `mke2fs` or `debugfs` is unavailable from
+the distribution:
+
+```sh
+brew install e2fsprogs
+export PATH="$(brew --prefix e2fsprogs)/sbin:$PATH"
+echo 'export PATH="$(brew --prefix e2fsprogs)/sbin:$PATH"' >> ~/.bashrc
+```
+
+Use `~/.zshrc` instead of `~/.bashrc` for Zsh. `build.sh` and the root Makefile
+also discover the Homebrew `e2fsprogs` prefix automatically, but adding its
+`sbin` directory to `PATH` makes the verification commands below work directly.
+
+Where the distribution does not package `aarch64-elf-gcc`, install the
+[Homebrew formula](https://formulae.brew.sh/formula/aarch64-elf-gcc):
 
 ```sh
 brew install aarch64-elf-gcc
 ```
 
-## 2. Clone The Repository
+## 3. Clone The Repository
 
 The pinned QEMU builder and the ArmOS build scripts live in the repository, so
 clone it before running any command under `tools/`:
@@ -98,7 +135,7 @@ chmod +x run.sh boot.sh boot-graphics.sh tools/build_newlib.sh \
 
 All remaining commands in this guide are run from this `arm-os` directory.
 
-## 3. Install Exactly QEMU 10.0.2
+## 4. Install Exactly QEMU 10.0.2
 
 The distro package installs the version carried by the configured Debian or
 Ubuntu release. The reliable cross-distribution method is an isolated source
@@ -138,7 +175,7 @@ sudo apt-mark hold qemu-system-arm
 The APT version includes distro epoch/revision fields and usually does not map
 to a portable `10.0.2` command, so the source build is the documented baseline.
 
-## 4. Verify The Toolchain
+## 5. Verify The Toolchain
 
 ```sh
 make --version
@@ -164,7 +201,7 @@ QEMU_REQUIRED_VERSION=10.0.2 ./boot.sh
 QEMU_REQUIRED_VERSION=10.0.2 ./boot-graphics.sh
 ```
 
-## 5. Build And Run
+## 6. Build And Run
 
 ```sh
 ./run.sh
@@ -213,7 +250,7 @@ Exit QEMU with:
 Ctrl+A, then X
 ```
 
-## 6. Useful Commands
+## 7. Useful Commands
 
 Build kernel only:
 
@@ -246,7 +283,7 @@ Boot without rebuilding:
 ./boot.sh
 ```
 
-## 7. Optional Newlib Build
+## 8. Optional Newlib Build
 
 Build the optional repo-local newlib sysroot and include newlib-linked test
 programs:
@@ -280,7 +317,7 @@ You can also point the build at another sysroot:
 BUILD_NEWLIB=1 NEWLIB_SYSROOT=/path/to/arm-none-eabi ./run.sh
 ```
 
-## 8. Native TinyCC And Shipped Sources
+## 9. Native TinyCC And Shipped Sources
 
 ArmOS 0.7.1 can build small C programs from inside ARM32 and ARM64 systems.
 This is for end-user programming and experiments inside ArmOS; the project
@@ -315,7 +352,7 @@ tcc /usr/src/armos/userland/coreutils/src/ls.c -o /tmp/ls-tcc
 Set `BUILD_TCC=0` when running `build.sh` or `run.sh` if you want to skip the
 native TinyCC bundle during local development.
 
-## 9. Optional ncurses And nano
+## 10. Optional ncurses And nano
 
 ArmOS 0.7.1 can also stage static ncurses and nano bundles:
 
@@ -336,7 +373,7 @@ BUILD_ALL_USERLAND=1 ./build.sh
 This includes TinyCC, ncurses, nano, the BSD tools and supported graphics
 libraries. Kernel-only iterations should reuse these generated bundles.
 
-## 10. Raspberry Pi Images
+## 11. Raspberry Pi Images
 
 The generic SD-image builder accepts the same tracked profiles as QEMU builds:
 
@@ -353,7 +390,7 @@ whole block device carefully, then follow
 [the Raspberry Pi 3 guide](docs/RASPBERRY_PI3.md). Use boot-only mode for
 normal kernel updates after the first complete card initialization.
 
-## 11. Common Problems
+## 12. Common Problems
 
 ### `arm-none-eabi-gcc: command not found`
 
@@ -384,6 +421,10 @@ If `mke2fs`, `debugfs`, or `e2fsck` are missing:
 ```sh
 sudo apt install e2fsprogs
 ```
+
+If the distribution package is unavailable or incomplete, follow
+[the Homebrew fallback](#2-optional-homebrew-fallback). `run.sh` detects the
+Homebrew formula automatically.
 
 ### QEMU starts but the terminal looks stuck
 
