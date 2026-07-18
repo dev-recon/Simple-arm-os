@@ -1,5 +1,16 @@
 /*
- * ArmOS libtiff installed configuration.
+ * ArmOS
+ * Copyright (c) 2026 Mohamed Ennassiri
+ *
+ * Licensed under the Apache License, Version 2.0.
+ * See LICENSE for details.
+ *
+ * File: userland/opt/libtiff/src/tiffconf.h
+ * Layer: Userland / third-party configuration
+ *
+ * Responsibilities:
+ * - Define the public libtiff scalar types used by ArmOS builds.
+ * - Keep ABI-sized types valid for both ARM32 and ARM64 userlands.
  */
 
 #ifndef _TIFFCONF_
@@ -17,7 +28,7 @@
 #define TIFF_UINT32_T uint32_t
 #define TIFF_INT64_T int64_t
 #define TIFF_UINT64_T uint64_t
-#define TIFF_SSIZE_T int32_t
+#define TIFF_SSIZE_T ptrdiff_t
 
 #define HAVE_IEEEFP 1
 #define HOST_FILLORDER FILLORDER_LSB2MSB

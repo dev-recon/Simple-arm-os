@@ -2291,6 +2291,11 @@ static void scheduler_enable_secondary_cpus_once(void)
     }
 }
 
+void scheduler_prepare_secondary_cpus(void)
+{
+    scheduler_enable_secondary_cpus_once();
+}
+
 static bool scheduler_entry_allowed(const char* caller, task_t* requested)
 {
     task_t* current = task_current_local();

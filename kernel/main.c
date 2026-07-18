@@ -276,7 +276,16 @@ void kernel_main(void)
     if (smp_possible_cpu_count() > 1) {
         KBOOT_OK("SMP: TLB/IPI preflight");
         tlb_shootdown_all();
+        /*
+         * Admit secondary schedulers while PID 1 is still outside the
+         * runqueue. This keeps late SMP boot messages from interleaving with
+         * init or the first shell banner on a framebuffer console.
+         */
+        scheduler_prepare_secondary_cpus();
     }
+
+    if (rootfs_ready)
+        process_release_init();
 
     /* Main scheduler loop */
     sched_start();

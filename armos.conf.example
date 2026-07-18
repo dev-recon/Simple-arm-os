@@ -9,6 +9,10 @@ SMP_CPUS=1
 ENABLE_NET=no
 ENABLE_GPU=no
 
+# Raspberry Pi 3 GPIO display. The raspi3 platform enables it by default;
+# set this to no when the selected pins are needed by another peripheral.
+# ENABLE_ILI9341=no
+
 # Userland build content.
 BUILD_NEWLIB=yes
 BUILD_ALL_USERLAND=no

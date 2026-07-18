@@ -33,6 +33,7 @@
 #define RASPI3_LOCAL_IRQ_END         0x40100000u
 #define RASPI3_UART0_BASE            0x3F201000u
 #define RASPI3_UART0_SECTION_BASE    0x3F200000u
+#define RASPI3_GPIO_BASE             0x3F200000u
 #define RASPI3_EMMC_BASE             0x3F300000u
 #define RASPI3_EMMC_SECTION_BASE     0x3F300000u
 
@@ -62,6 +63,21 @@
     (RASPI3_KERNEL_MMIO_UART_BASE + (RASPI3_UART0_BASE - RASPI3_UART0_SECTION_BASE))
 #define ARMOS_PLATFORM_UART0_CLOCK_HZ            4000000u
 #define ARMOS_PLATFORM_UART0_BAUD                115200u
+#define ARMOS_PLATFORM_GPIO_KERNEL_BASE          RASPI3_KERNEL_MMIO_UART_BASE
+
+/* 2.8-inch ILI9341 shield, write-only 8080 bus; RD is tied high. */
+#define ARMOS_PLATFORM_ILI9341_D0_PIN             4u
+#define ARMOS_PLATFORM_ILI9341_D1_PIN             17u
+#define ARMOS_PLATFORM_ILI9341_D2_PIN             18u
+#define ARMOS_PLATFORM_ILI9341_D3_PIN             27u
+#define ARMOS_PLATFORM_ILI9341_D4_PIN             22u
+#define ARMOS_PLATFORM_ILI9341_D5_PIN             23u
+#define ARMOS_PLATFORM_ILI9341_D6_PIN             24u
+#define ARMOS_PLATFORM_ILI9341_D7_PIN             25u
+#define ARMOS_PLATFORM_ILI9341_CS_PIN              5u
+#define ARMOS_PLATFORM_ILI9341_DC_PIN              6u
+#define ARMOS_PLATFORM_ILI9341_WR_PIN              12u
+#define ARMOS_PLATFORM_ILI9341_RESET_PIN           13u
 
 #define ARMOS_PLATFORM_UART_IRQ                  57u
 #define ARMOS_PLATFORM_TIMER_IRQ                 1u

@@ -1,10 +1,32 @@
 # Changelog
 
 Release tags use the bare version number starting with `0.7` (`0.7`, `0.7.1`,
-and so on). Older `v0.x` tags remain historical and are not moved.
+`0.7.2`, and so on). Older `v0.x` tags remain historical and are not moved.
 
 ## Unreleased
 
+## ArmOS 0.7.2 - 2026-07-18
+
+ArmOS 0.7.2 adds the first framebuffer console on Raspberry Pi hardware and
+polishes the fresh-machine build path introduced by the 0.7 series.
+
+### Highlights
+
+- Added a BCM283x GPIO driver, an 8-bit 8080 parallel bus, and an
+  ILI9341-compatible backend for the HSD028309 B6 shield on Raspberry Pi 3.
+- Kept one framebuffer contract across hardware and emulation: `/dev/fb0`
+  exposes ARGB8888 pixels and `tty1` uses either ILI9341 or VirtIO-GPU through
+  a common display backend.
+- Added runtime portrait/landscape rotation with `fbctl`, framebuffer ioctls,
+  tty geometry updates, and `SIGWINCH` notification.
+- Added public-domain PNG, JPEG, and minimal uncompressed TIFF samples under
+  `/home/user/images` for `fbview` and local XV compatibility testing.
+- Corrected the cross-build libtiff `size_t`/`ptrdiff_t` configuration for
+  both ARM32 and ARM64.
+- Ordered secondary scheduler admission before PID 1 becomes runnable, so SMP
+  boot messages cannot overwrite the first framebuffer shell banner.
+- Fixed fresh Linux and macOS setup details around TinyCC source staging,
+  e2fsprogs discovery, the pinned QEMU GTK display, and Linux Homebrew fallback.
 - Fixed `boot-graphics.sh` on the macOS system Bash when networking is
   disabled. Empty network argument arrays are no longer expanded under
   `set -u`.

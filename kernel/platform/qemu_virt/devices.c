@@ -30,14 +30,30 @@
 #include <kernel/virtio_input.h>
 #include <kernel/virtio_net.h>
 
+static int qemu_display_flush_rect(const uint8_t *framebuffer, uint32_t pitch,
+                                   uint32_t x, uint32_t y,
+                                   uint32_t width, uint32_t height)
+{
+    (void)framebuffer;
+    (void)pitch;
+    return virtio_gpu_flush_rect(x, y, width, height);
+}
+
+static const display_backend_ops_t qemu_display_backend = {
+    .name = "virtio-gpu",
+    .flush_rect = qemu_display_flush_rect,
+    .check_resize = virtio_gpu_check_resize,
+    .set_orientation = NULL,
+};
+
 platform_devices_state_t platform_devices_init(void)
 {
     platform_devices_state_t state = {0};
 
     init_keyboard();
 
-    init_display();
-    if (virtio_gpu_init()) {
+    if (init_display(FB_WIDTH, FB_HEIGHT, FB_BPP) && virtio_gpu_init()) {
+        display_set_backend(&qemu_display_backend);
         KBOOT_OKF("GPU: virtio-gpu %ux%ux%u", FB_WIDTH, FB_HEIGHT, FB_BPP);
         if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0) {
             state.tty1_graphics_ready = true;

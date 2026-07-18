@@ -25,7 +25,8 @@ replace hardware timing and signal validation.
 - Storage: BCM2835/BCM2837 SD/eMMC controller
 - Root: ext2 partition
 - Boot: dedicated FAT32 LBA firmware partition
-- Graphics, USB input, and networking: not yet provided by this profile
+- Graphics: optional HSD028309 B6 / ILI9341 GPIO parallel display on `/dev/fb0`
+- USB input and networking: not yet provided by this profile
 
 The separate `arm32/raspi2` target supports Raspberry Pi 2 Model B v1.1
 hardware and is also exercised with QEMU's `raspi2b` machine.
@@ -123,6 +124,105 @@ tools/pi2_uart_screen.sh \
 Despite its historical filename, the helper supports Pi 3. Quit `screen` with
 `Ctrl-A`, then `K`, then `y`.
 
+## HSD028309 B6 / ILI9341 Display
+
+The Raspberry Pi 3 profile includes a write-only 8-bit 8080 backend for the
+2.8-inch HSD028309 B6 shield. The panel controller is ILI9341-compatible and
+is initialized from the sequence validated by the original 6502/6821 test
+program. It uses the same framebuffer ABI as QEMU:
+
+- `/dev/fb0` is always the active framebuffer;
+- QEMU `virt` attaches the VirtIO-GPU backend;
+- Raspberry Pi 3 attaches the ILI9341 GPIO backend;
+- kernel rendering remains ARGB8888 and the ILI9341 backend converts dirty
+rectangles to RGB565 while flushing them.
+
+The backend is enabled by default for `raspi3`. Set `ENABLE_ILI9341=no` in
+`armos.conf` to leave the GPIOs untouched and keep an UART-only profile.
+
+The initial mode is portrait `240x320x32`. With the current VGA `8x16` TTY
+font this provides a readable `30x20` terminal. Runtime landscape mode is
+`320x240x32` and provides `40x15`. An `80x24` terminal would require a font no
+wider than four pixels and is therefore not the default for this panel.
+
+Connect the shield as follows. Physical pin numbers are included to avoid
+confusing Raspberry Pi header positions with BCM GPIO numbers:
+
+| Shield signal | BCM GPIO | Pi physical pin |
+| --- | ---: | ---: |
+| `LCD_D0` | 4 | 7 |
+| `LCD_D1` | 17 | 11 |
+| `LCD_D2` | 18 | 12 |
+| `LCD_D3` | 27 | 13 |
+| `LCD_D4` | 22 | 15 |
+| `LCD_D5` | 23 | 16 |
+| `LCD_D6` | 24 | 18 |
+| `LCD_D7` | 25 | 22 |
+| `LCD_CS` | 5 | 29 |
+| `LCD_RS` / D-C | 6 | 31 |
+| `LCD_WR` | 12 | 32 |
+| `LCD_RST` | 13 | 33 |
+| `LCD_RD` | tie high to 3.3 V | 1 or 17 |
+| `GND` | ground | 6, 9, 14, 20, 25, 30, 34, or 39 |
+| `5V` | 5 V supply | 2 or 4 |
+
+Power the Pi down before changing any connection. The board shown in the
+hardware notes contains an AMS1117-3.3 regulator and
+two LVC245A level translators. Supply the shield through its labelled `5V`
+and `GND` pins and leave its labelled `3V3` pin disconnected unless the exact
+board schematic proves that it is an input. Do not join the Pi 5 V and 3.3 V
+rails through the shield. `LCD_RD` must remain high because this first driver
+does not read the controller bus.
+
+The selected GPIOs leave PL011 on GPIO14/GPIO15 untouched and avoid the SPI0
+pins. The display is output-only, so `tty0` remains the interactive UART and
+`tty1` renders to the panel.
+
+After wiring and rebuilding the Pi 3 target, expect these boot lines:
+
+```text
+GPU: ILI9341 GPIO parallel 240x320x32                   [ OK ]
+TTY: console tty1 on ILI9341 /dev/fb0                   [ OK ]
+Input: GPIO display is output-only                      [WARN]
+```
+
+Use the UART console for the first smoke test:
+
+```sh
+fbtest
+fbview /path/to/image.png
+ttyinfo
+echo 'ILI9341_OK' > /dev/tty1
+```
+
+The panel starts in portrait mode. Its orientation can be changed while the
+system is running:
+
+```sh
+fbctl orientation
+fbctl rotate landscape
+fbctl rotate portrait
+```
+
+The landscape geometry is 320x240 and gives a 40-column by 15-line `tty1`
+with the current 8x16 font. Portrait mode is 240x320 and gives 30 columns by
+20 lines. A successful rotation redraws the framebuffer, updates the tty1
+window size, and sends `SIGWINCH` to its foreground process group. Backends
+without hardware rotation support reject `ARMOS_FBIOSET_ORIENTATION` with
+`ENOTSUP`.
+
+Public-domain PNG, JPEG, and TIFF samples are installed in
+`/home/user/images` for framebuffer and local XV testing:
+
+```sh
+fbview /home/user/images/test-pattern.png
+fbview /home/user/images/jpeg-landscape.jpg
+fbview /home/user/images/test-pattern-320x240.tiff
+```
+
+The panel should start black, then show the `tty1` output. Keep the UART
+connected during initial tests so a wiring error cannot hide kernel logs.
+
 ## A53 Boot Invariant
 
 The Pi 3 firmware path validated by ArmOS enters the kernel through EL2. The
@@ -200,7 +300,9 @@ Storage throughput and the final SD-card validation sequence are documented in
 
 ## Current Limitations
 
-- Only UART and SD-backed console/root workflows are supported.
+- The ILI9341 backend is write-only, polling, and uses GPIO PIO;
+  it does not yet use DMA, touch input, or controller readback.
+- UART remains the only interactive console on Raspberry Pi 3.
 - The FAT32 firmware partition is separate from the ext2 root and is mounted
   only when explicitly requested.
 - ARM64 still uses a conservative local TLB invalidation strategy during

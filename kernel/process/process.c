@@ -42,6 +42,8 @@ extern task_t* idle_task;         /* Defini dans votre task.c */
 extern task_t* init_process;      /* Defini dans votre task.c */
 extern void switch_to_idle_stack(void);
 
+static bool init_process_released;
+
 /**
  * Point d'entree principal du kernel - adapte a votre architecture
  */
@@ -124,6 +126,7 @@ void init_process_system(void)
     
     /* Initialiser d'abord votre systeme de taches de base existant */
     init_task_system();
+    init_process_released = false;
 
     /* Creer le processus init (PID 1) */
     init_process = task_create_process("init", init_process_main, NULL,
@@ -155,10 +158,18 @@ void init_process_system(void)
     create_idle_tasks();
 
 
-    /* Mettre init dans la liste des taches pretes */
-    add_to_ready_queue(init_process);
+    /* PID 1 is released after secondary scheduler admission completes. */
     add_to_ready_queue(idle_task);
 
+}
+
+void process_release_init(void)
+{
+    if (!init_process || init_process_released)
+        return;
+
+    init_process_released = true;
+    add_to_ready_queue(init_process);
 }
 
 /**

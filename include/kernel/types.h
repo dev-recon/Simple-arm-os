@@ -153,6 +153,7 @@ typedef enum {
 #define ENOTCONN      107       /* Transport endpoint is not connected */
 #define ETIMEDOUT     110       /* Connection timed out */
 #define EINPROGRESS   115       /* Operation now in progress */
+#define ENOTSUP       134       /* Operation not supported */
 
 /* === TYPES DE SYNCHRONISATION === */
 

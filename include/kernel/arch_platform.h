@@ -101,6 +101,25 @@
 #define ARMOS_PLATFORM_EMMC_KERNEL_BASE 0u
 #endif
 
+#ifndef ARMOS_PLATFORM_GPIO_KERNEL_BASE
+#define ARMOS_PLATFORM_GPIO_KERNEL_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_ILI9341_D0_PIN
+#define ARMOS_PLATFORM_ILI9341_D0_PIN 0xffu
+#define ARMOS_PLATFORM_ILI9341_D1_PIN 0xffu
+#define ARMOS_PLATFORM_ILI9341_D2_PIN 0xffu
+#define ARMOS_PLATFORM_ILI9341_D3_PIN 0xffu
+#define ARMOS_PLATFORM_ILI9341_D4_PIN 0xffu
+#define ARMOS_PLATFORM_ILI9341_D5_PIN 0xffu
+#define ARMOS_PLATFORM_ILI9341_D6_PIN 0xffu
+#define ARMOS_PLATFORM_ILI9341_D7_PIN 0xffu
+#define ARMOS_PLATFORM_ILI9341_CS_PIN 0xffu
+#define ARMOS_PLATFORM_ILI9341_DC_PIN 0xffu
+#define ARMOS_PLATFORM_ILI9341_WR_PIN 0xffu
+#define ARMOS_PLATFORM_ILI9341_RESET_PIN 0xffu
+#endif
+
 #ifndef ARMOS_PLATFORM_VIRTIO_PHYS_START
 #define ARMOS_PLATFORM_VIRTIO_PHYS_START 0u
 #endif
@@ -438,6 +457,11 @@ static inline paddr_t arch_platform_emmc_phys_section_base(void)
 static inline vaddr_t arch_platform_emmc_kernel_base(void)
 {
     return (vaddr_t)ARMOS_PLATFORM_EMMC_KERNEL_BASE;
+}
+
+static inline vaddr_t arch_platform_gpio_kernel_base(void)
+{
+    return (vaddr_t)ARMOS_PLATFORM_GPIO_KERNEL_BASE;
 }
 
 static inline bool arch_platform_phys_is_device(paddr_t phys)

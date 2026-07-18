@@ -22,7 +22,6 @@
 #include <kernel/uart.h>
 #include <kernel/kprintf.h>
 #include <kernel/tty.h>
-#include <kernel/virtio_gpu.h>
 #include <kernel/timer.h>
 #include <kernel/string.h>
 #include <kernel/task.h>
@@ -43,6 +42,12 @@ extern file_t* create_file(void);
 #define DISPLAYD_PRIORITY 5
 
 static display_state_t display = {0};
+static const display_backend_ops_t *display_backend;
+static uint32_t framebuffer_capacity;
+static uint32_t framebuffer_orientation = ARMOS_FB_ORIENTATION_PORTRAIT;
+static int framebuffer_tty_id = -1;
+static spinlock_t display_geometry_lock = SPINLOCK_INIT("fb_geometry");
+static spinlock_t display_console_lock = SPINLOCK_INIT("fb_console");
 
 /*
  * Dirty rectangle shared between producers and the flusher.
@@ -183,6 +188,12 @@ static void framebuffer_mark_dirty(uint32_t x, uint32_t y,
 
 static void framebuffer_flush_dirty(void)
 {
+    unsigned long console_flags;
+
+    if (!display_backend || !display_backend->flush_rect)
+        return;
+
+    spin_lock_irqsave(&display_console_lock, &console_flags);
     if (cursor_drawn && !cursor_blink_on)
         console_erase_cursor();
 
@@ -221,13 +232,16 @@ static void framebuffer_flush_dirty(void)
         cursor_drawn_x = display.cursor_x;
         cursor_drawn_y = display.cursor_y;
     }
+    spin_unlock_irqrestore(&display_console_lock, console_flags);
 
     uint32_t x0, y0, x1, y1;
     unsigned long flags;
 
+    spin_lock(&display_geometry_lock);
     spin_lock_irqsave(&dirty_lock, &flags);
     if (!framebuffer_dirty) {
         spin_unlock_irqrestore(&dirty_lock, flags);
+        spin_unlock(&display_geometry_lock);
         return;
     }
     x0 = dirty_x0;
@@ -237,8 +251,30 @@ static void framebuffer_flush_dirty(void)
     framebuffer_dirty = false;
     spin_unlock_irqrestore(&dirty_lock, flags);
 
-    /* Submit outside the lock: the GPU round trip is the slow part. */
-    virtio_gpu_flush_rect(x0, y0, x1 - x0, y1 - y0);
+    /* Submit outside the lock: device I/O is the slow part. */
+    display_backend->flush_rect(framebuffer_base, display.pitch,
+                                x0, y0, x1 - x0, y1 - y0);
+    spin_unlock(&display_geometry_lock);
+}
+
+void display_set_backend(const display_backend_ops_t *backend)
+{
+    display_backend = backend;
+}
+
+const char *display_backend_name(void)
+{
+    return display_backend && display_backend->name ?
+           display_backend->name : "none";
+}
+
+void display_flush_all(void)
+{
+    if (!framebuffer_base)
+        return;
+
+    framebuffer_mark_dirty(0, 0, display.width, display.height);
+    framebuffer_flush_dirty();
 }
 
 void display_cursor_tick(void)
@@ -280,11 +316,8 @@ static void displayd_main(void *arg)
     while (1) {
         task_sleep_ms(DISPLAYD_FRAME_MS);
 
-        /*
-         * QEMU window resizes raise a virtio-gpu config change. Re-assert
-         * the scanout and repaint everything so no stale region survives.
-         */
-        if (virtio_gpu_check_resize())
+        if (display_backend && display_backend->check_resize &&
+            display_backend->check_resize())
             framebuffer_mark_dirty(0, 0, display.width, display.height);
 
         display_process_scrollback_request();
@@ -335,6 +368,28 @@ static void console_reset_cells(void)
     console_cells_ready = true;
     cursor_drawn = false;
     scrollback_offset = 0;
+}
+
+static void console_resize_cells(uint32_t old_rows, uint32_t old_cols,
+                                 uint32_t new_rows, uint32_t new_cols)
+{
+    uint32_t keep_rows = old_rows < new_rows ? old_rows : new_rows;
+    uint32_t keep_cols = old_cols < new_cols ? old_cols : new_cols;
+
+    if (keep_rows > CONSOLE_MAX_ROWS)
+        keep_rows = CONSOLE_MAX_ROWS;
+    if (keep_cols > CONSOLE_MAX_COLS)
+        keep_cols = CONSOLE_MAX_COLS;
+
+    for (uint32_t row = 0; row < CONSOLE_MAX_ROWS; row++) {
+        for (uint32_t col = 0; col < CONSOLE_MAX_COLS; col++) {
+            if (row < keep_rows && col < keep_cols)
+                continue;
+            console_cells[row][col].ch = ' ';
+            console_cells[row][col].fg = default_fg_color;
+            console_cells[row][col].bg = default_bg_color;
+        }
+    }
 }
 
 static void console_reset_scrollback(void)
@@ -431,7 +486,6 @@ static void console_render_scrollback(void)
     }
 
     framebuffer_mark_dirty(0, 0, display.width, display.height);
-    display_request_flush();
 }
 
 static void console_scrollback_reset_view(void)
@@ -495,6 +549,7 @@ void display_scrollback_down(uint32_t lines)
 
 static void display_process_scrollback_request(void)
 {
+    unsigned long console_flags;
     uint32_t irq_flags;
     int32_t lines;
 
@@ -506,10 +561,12 @@ static void display_process_scrollback_request(void)
     if (lines == 0)
         return;
 
+    spin_lock_irqsave(&display_console_lock, &console_flags);
     if (lines > 0)
         display_scrollback_apply_up((uint32_t)lines);
     else
         display_scrollback_apply_down((uint32_t)-lines);
+    spin_unlock_irqrestore(&display_console_lock, console_flags);
 }
 
 static uint32_t ansi_param_or(uint32_t index, uint32_t fallback)
@@ -863,12 +920,20 @@ static bool console_consume_ansi(char c)
     return false;
 }
 
-void init_display(void)
+bool init_display(uint32_t width, uint32_t height, uint32_t bpp)
 {
     KINFO("=== DISPLAY INITIALIZATION (RAM-based) ===\n");
+
+    if (!width || !height || bpp != 32u) {
+        KERROR("Unsupported framebuffer geometry %ux%ux%u\n",
+               width, height, bpp);
+        return false;
+    }
+    if (framebuffer_base)
+        return true;
     
     /* Allouer le framebuffer en RAM */
-    uint32_t fb_size = FB_WIDTH * FB_HEIGHT * (FB_BPP / 8);
+    uint32_t fb_size = width * height * (bpp / 8u);
     KINFO("Allocating framebuffer: %u bytes (%u KB)\n", 
             fb_size, fb_size / 1024);
     
@@ -879,19 +944,22 @@ void init_display(void)
     framebuffer_phys = (paddr_t)allocate_pages(pages_needed);
     if (!framebuffer_phys) {
         KERROR("Failed to allocate framebuffer memory\n");
-        return;
+        return false;
     }
     framebuffer_base = (uint8_t*)phys_to_virt(framebuffer_phys);
+    framebuffer_capacity = pages_needed * PAGE_SIZE;
     
     KINFO("Framebuffer allocated at: phys=%p virt=%p\n",
           (void *)(uintptr_t)framebuffer_phys, (void *)framebuffer_base);
     
-    display.width = FB_WIDTH;
-    display.height = FB_HEIGHT;
-    display.bpp = FB_BPP;
-    display.pitch = FB_WIDTH * (FB_BPP / 8);
+    display.width = width;
+    display.height = height;
+    display.bpp = bpp;
+    display.pitch = width * (bpp / 8u);
     display.framebuffer = framebuffer_base;
     display.font = &font_vga_8x16;
+    framebuffer_orientation = width > height ?
+        ARMOS_FB_ORIENTATION_LANDSCAPE : ARMOS_FB_ORIENTATION_PORTRAIT;
     
     /* Test d'acces au framebuffer */
     KINFO("Testing framebuffer access...\n");
@@ -916,6 +984,7 @@ void init_display(void)
         clear_screen();
         KINFO("Display initialized: %d x %d (RAM-based)\n", 
                 display.width, display.height);
+        return true;
         
     } else {
         KERROR("Framebuffer write/read test FAILED\n");
@@ -925,6 +994,8 @@ void init_display(void)
         free_pages((void*)framebuffer_phys, pages_needed);
         framebuffer_base = NULL;
         framebuffer_phys = 0;
+        framebuffer_capacity = 0;
+        return false;
     }
 }
 
@@ -1033,11 +1104,16 @@ static void console_put_cell(uint32_t col, uint32_t row, char c,
 
 void console_putchar(char c)
 {
+    unsigned long flags;
+
+    spin_lock_irqsave(&display_console_lock, &flags);
     console_scrollback_reset_view();
     console_erase_cursor();
 
-    if (console_consume_ansi(c))
+    if (console_consume_ansi(c)) {
+        spin_unlock_irqrestore(&display_console_lock, flags);
         return;
+    }
 
     switch (c) {
         case '\n':
@@ -1074,6 +1150,7 @@ void console_putchar(char c)
                 console_printable_char(c);
             break;
     }
+    spin_unlock_irqrestore(&display_console_lock, flags);
 }
 
 void console_puts(const char* str)
@@ -1185,18 +1262,128 @@ int framebuffer_get_info(struct armos_fb_info* info)
     if (!framebuffer_base)
         return -ENODEV;
 
+    spin_lock(&display_geometry_lock);
     info->width = display.width;
     info->height = display.height;
     info->pitch = display.pitch;
     info->bpp = display.bpp;
     info->size = framebuffer_size_bytes();
     info->format = ARMOS_FB_FORMAT_ARGB8888;
+    spin_unlock(&display_geometry_lock);
+    return 0;
+}
+
+int framebuffer_get_orientation(struct armos_fb_orientation *orientation)
+{
+    if (!orientation)
+        return -EINVAL;
+    if (!framebuffer_base)
+        return -ENODEV;
+
+    spin_lock(&display_geometry_lock);
+    orientation->orientation = framebuffer_orientation;
+    spin_unlock(&display_geometry_lock);
+    return 0;
+}
+
+int framebuffer_set_orientation(const struct armos_fb_orientation *orientation)
+{
+    uint32_t old_orientation;
+    uint32_t old_rows;
+    uint32_t old_cols;
+    uint32_t width;
+    uint32_t height;
+    uint64_t required;
+    uint32_t *pixels;
+    unsigned long console_flags;
+    int tty_id;
+    int ret;
+
+    if (!orientation)
+        return -EINVAL;
+    if (orientation->orientation != ARMOS_FB_ORIENTATION_PORTRAIT &&
+        orientation->orientation != ARMOS_FB_ORIENTATION_LANDSCAPE)
+        return -EINVAL;
+    if (!framebuffer_base || !display_backend)
+        return -ENODEV;
+    if (!display_backend->set_orientation)
+        return -ENOTSUP;
+
+    spin_lock_irqsave(&display_console_lock, &console_flags);
+    spin_lock(&display_geometry_lock);
+    if (orientation->orientation == framebuffer_orientation) {
+        spin_unlock(&display_geometry_lock);
+        spin_unlock_irqrestore(&display_console_lock, console_flags);
+        return 0;
+    }
+
+    old_orientation = framebuffer_orientation;
+    old_rows = display.text_rows;
+    old_cols = display.text_cols;
+    width = display.width;
+    height = display.height;
+
+    ret = display_backend->set_orientation(orientation->orientation,
+                                           &width, &height);
+    if (ret < 0) {
+        spin_unlock(&display_geometry_lock);
+        spin_unlock_irqrestore(&display_console_lock, console_flags);
+        return ret;
+    }
+
+    required = (uint64_t)width * (uint64_t)height *
+               (uint64_t)(display.bpp / 8u);
+    if (!width || !height || display.bpp != 32u ||
+        required > (uint64_t)framebuffer_capacity) {
+        uint32_t rollback_width = display.width;
+        uint32_t rollback_height = display.height;
+
+        display_backend->set_orientation(old_orientation,
+                                         &rollback_width, &rollback_height);
+        spin_unlock(&display_geometry_lock);
+        spin_unlock_irqrestore(&display_console_lock, console_flags);
+        return -EINVAL;
+    }
+
+    display.width = width;
+    display.height = height;
+    display.pitch = width * (display.bpp / 8u);
+    display.text_cols = width / display.font->width;
+    display.text_rows = height / display.font->height;
+    framebuffer_orientation = orientation->orientation;
+    cursor_drawn = false;
+    pending_wrap = false;
+
+    if (display.cursor_x >= display.text_cols)
+        display.cursor_x = display.text_cols - 1u;
+    if (display.cursor_y >= display.text_rows)
+        display.cursor_y = display.text_rows - 1u;
+
+    console_resize_cells(old_rows, old_cols,
+                         display.text_rows, display.text_cols);
+    pixels = (uint32_t *)(void *)framebuffer_base;
+    for (uint32_t i = 0; i < width * height; i++)
+        pixels[i] = display.bg_color;
+
+    console_render_scrollback();
+    tty_id = framebuffer_tty_id;
+    spin_unlock(&display_geometry_lock);
+    spin_unlock_irqrestore(&display_console_lock, console_flags);
+
+    if (tty_id >= 0) {
+        tty_set_winsize_for_id(tty_id,
+                               (uint16_t)display.text_rows,
+                               (uint16_t)display.text_cols,
+                               (uint16_t)display.width,
+                               (uint16_t)display.height);
+    }
+    display_request_flush();
     return 0;
 }
 
 static ssize_t fb0_read(file_t* file, void* buffer, size_t count)
 {
-    uint32_t fb_size = framebuffer_size_bytes();
+    uint32_t fb_size;
     uint32_t offset;
     uint32_t available;
     uint32_t to_copy;
@@ -1206,20 +1393,25 @@ static ssize_t fb0_read(file_t* file, void* buffer, size_t count)
     if (!file || !buffer)
         return -EINVAL;
 
+    spin_lock(&display_geometry_lock);
+    fb_size = framebuffer_size_bytes();
     offset = file->offset;
-    if (offset >= fb_size)
+    if (offset >= fb_size) {
+        spin_unlock(&display_geometry_lock);
         return 0;
+    }
 
     available = fb_size - offset;
     to_copy = MIN(count, available);
     memcpy(buffer, framebuffer_base + offset, to_copy);
     file->offset += to_copy;
+    spin_unlock(&display_geometry_lock);
     return (ssize_t)to_copy;
 }
 
 static ssize_t fb0_write(file_t* file, const void* buffer, size_t count)
 {
-    uint32_t fb_size = framebuffer_size_bytes();
+    uint32_t fb_size;
     uint32_t offset;
     uint32_t available;
     uint32_t to_copy;
@@ -1229,9 +1421,13 @@ static ssize_t fb0_write(file_t* file, const void* buffer, size_t count)
     if (!file || !buffer)
         return -EINVAL;
 
+    spin_lock(&display_geometry_lock);
+    fb_size = framebuffer_size_bytes();
     offset = file->offset;
-    if (offset >= fb_size)
+    if (offset >= fb_size) {
+        spin_unlock(&display_geometry_lock);
         return 0;
+    }
 
     available = fb_size - offset;
     to_copy = MIN(count, available);
@@ -1239,6 +1435,7 @@ static ssize_t fb0_write(file_t* file, const void* buffer, size_t count)
     file->offset += to_copy;
 
     framebuffer_mark_dirty(0, 0, display.width, display.height);
+    spin_unlock(&display_geometry_lock);
     display_request_flush();
     return (ssize_t)to_copy;
 }
@@ -1247,11 +1444,13 @@ static off_t fb0_lseek(file_t* file, off_t offset, int whence)
 {
     off_t base;
     off_t next;
-    uint32_t fb_size = framebuffer_size_bytes();
+    uint32_t fb_size;
 
     if (!file)
         return -EINVAL;
 
+    spin_lock(&display_geometry_lock);
+    fb_size = framebuffer_size_bytes();
     switch (whence) {
     case SEEK_SET:
         base = 0;
@@ -1263,14 +1462,18 @@ static off_t fb0_lseek(file_t* file, off_t offset, int whence)
         base = (off_t)fb_size;
         break;
     default:
+        spin_unlock(&display_geometry_lock);
         return -EINVAL;
     }
 
     next = base + offset;
-    if (next < 0 || next > (off_t)fb_size)
+    if (next < 0 || next > (off_t)fb_size) {
+        spin_unlock(&display_geometry_lock);
         return -EINVAL;
+    }
 
     file->offset = (uint32_t)next;
+    spin_unlock(&display_geometry_lock);
     return next;
 }
 
@@ -1430,6 +1633,7 @@ int framebuffer_attach_tty_backend(int tty_id)
 
     int ret = tty_attach_backend_to(tty_id, &framebuffer_tty_backend);
     if (ret == 0) {
+        framebuffer_tty_id = tty_id;
         tty_set_winsize_for_id(tty_id,
                                (uint16_t)display.text_rows,
                                (uint16_t)display.text_cols,

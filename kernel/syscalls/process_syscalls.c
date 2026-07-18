@@ -944,6 +944,7 @@ int sys_ioctl(int fd, uint32_t request, uintptr_t arg)
     struct termios tio;
     struct winsize wsz;
     struct armos_fb_info fbinfo;
+    struct armos_fb_orientation fborientation;
     int tty_id;
     int fbret;
 
@@ -970,6 +971,27 @@ int sys_ioctl(int fd, uint32_t request, uintptr_t arg)
         if (fbret < 0)
             return fbret;
         return copy_to_user((void*)arg, &fbinfo, sizeof(fbinfo)) < 0 ? -EFAULT : 0;
+
+    case ARMOS_FBIOGET_ORIENTATION:
+        if (file->type != FILE_TYPE_FRAMEBUFFER)
+            return -ENOTTY;
+        if (!arg)
+            return -EFAULT;
+        fbret = framebuffer_get_orientation(&fborientation);
+        if (fbret < 0)
+            return fbret;
+        return copy_to_user((void*)arg, &fborientation,
+                            sizeof(fborientation)) < 0 ? -EFAULT : 0;
+
+    case ARMOS_FBIOSET_ORIENTATION:
+        if (file->type != FILE_TYPE_FRAMEBUFFER)
+            return -ENOTTY;
+        if (!arg)
+            return -EFAULT;
+        if (copy_from_user(&fborientation, (void*)arg,
+                           sizeof(fborientation)) < 0)
+            return -EFAULT;
+        return framebuffer_set_orientation(&fborientation);
 
     case TIOCGWINSZ:
         if (!file_is_tty(file))

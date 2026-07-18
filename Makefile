@@ -1,6 +1,6 @@
 # ArmOS kernel Makefile
 
-ARMOS_VERSION := 0.7
+ARMOS_VERSION := 0.7.2
 
 # Local configuration is optional. Command-line assignments retain GNU make's
 # highest priority; environment values are restored after the include so the
@@ -263,6 +263,7 @@ config:
 	@echo "  SMP_CPUS:        $(SMP_CPUS)"
 	@echo "  ENABLE_NET:      $(if $(ENABLE_NET),$(ENABLE_NET),no)"
 	@echo "  ENABLE_GPU:      $(if $(ENABLE_GPU),$(ENABLE_GPU),no)"
+	@echo "  ENABLE_ILI9341:  $(if $(ENABLE_ILI9341),$(ENABLE_ILI9341),platform default)"
 
 # Linkage
 $(KERNEL_ELF): $(ALL_OBJS) $(LINKER_SCRIPT)

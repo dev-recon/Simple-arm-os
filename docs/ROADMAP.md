@@ -5,9 +5,9 @@ ArmOS. The goal is not to clone Linux line by line, but to converge toward the
 same useful Unix contracts while keeping the kernel understandable and
 debuggable.
 
-## 0.7.1 Current Baseline
+## 0.7.2 Current Baseline
 
-The 0.7.1 release keeps the 0.7 common-kernel architecture and adds:
+The 0.7.2 release keeps the 0.7 common-kernel architecture and adds:
 
 - one POSIX implementation path for ARM32 and ARM64, including clocks,
   positioned I/O, directory-relative operations, filesystem capacity,
@@ -20,7 +20,12 @@ The 0.7.1 release keeps the 0.7 common-kernel architecture and adds:
   to the validated single-block path;
 - stronger ASID, COW, process-reaping, and cross-CPU executable-cache
   coherency under sustained SMP process churn;
-- target-specific Raspberry Pi firmware staging.
+- target-specific Raspberry Pi firmware staging;
+- a common display-backend contract shared by VirtIO-GPU and the Raspberry
+  Pi 3 ILI9341 GPIO panel, including `/dev/fb0`, graphical `tty1`, runtime
+  orientation changes, and public-domain image fixtures;
+- deterministic boot ordering that admits secondary schedulers before PID 1
+  can print the first framebuffer shell banner.
 
 The next release should build on this baseline instead of introducing an
 architecture-private implementation of a common kernel policy.

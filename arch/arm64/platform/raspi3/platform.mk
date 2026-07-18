@@ -18,6 +18,7 @@ PLATFORM_DISK_LAYOUT ?= fat32-first
 # Pi 3 firmware and macOS both require a standard FAT32 LBA partition type.
 PLATFORM_DISK_HIDDEN_BOOT ?= 0
 
+ENABLE_ILI9341 ?= 1
 PLATFORM_OBJS = \
 	kernel/platform/raspberrypi/devices.o \
 	kernel/platform/raspberrypi/irq.o \
@@ -25,7 +26,14 @@ PLATFORM_OBJS = \
 	kernel/drivers/mmc/bcm2835_emmc.o \
 	kernel/drivers/keyboard.o \
 	kernel/drivers/display.o \
-	kernel/drivers/virtio_gpu.o \
 	kernel/drivers/virtio_input.o \
 	kernel/drivers/virtio_net.o \
 	kernel/drivers/virtio_block.o
+
+ifneq ($(filter 1 yes true on,$(ENABLE_ILI9341)),)
+PLATFORM_CFLAGS += -DARMOS_ENABLE_ILI9341
+PLATFORM_OBJS += \
+	kernel/drivers/gpio/bcm283x_gpio.o \
+	kernel/drivers/gpio/gpio_parallel8.o \
+	kernel/drivers/video/ili9341.o
+endif

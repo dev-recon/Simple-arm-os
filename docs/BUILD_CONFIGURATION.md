@@ -81,6 +81,7 @@ TARGET_PLATFORM=qemu-virt
 SMP_CPUS=1
 ENABLE_NET=no
 ENABLE_GPU=no
+ENABLE_ILI9341=no
 ```
 
 `ENABLE_NET=yes` adds VirtIO-net and the configured host forwarding when QEMU
@@ -92,6 +93,11 @@ device. Both can be enabled together. These two launch options require the
 It does not require networking: with `ENABLE_NET=no`, no network arguments are
 passed to QEMU. `boot-net.sh` similarly provides the explicit network-oriented
 entry point.
+
+`ENABLE_ILI9341` controls the HSD028309 B6 / ILI9341 GPIO display backend on
+Raspberry Pi 3. The `raspi3` platform enables it by default; set it to `no`
+when those GPIO pins are needed by another peripheral. It is not a QEMU launch
+option and has no effect on `qemu-virt`.
 
 Optional userland components:
 

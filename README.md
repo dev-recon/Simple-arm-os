@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dev-recon/ArmOS/releases/tag/v0.7"><img src="https://img.shields.io/badge/release-v0.7-2878d7" alt="ArmOS v0.7"></a>
+  <a href="https://github.com/dev-recon/ArmOS/releases/tag/0.7.2"><img src="https://img.shields.io/badge/release-0.7.2-2878d7" alt="ArmOS 0.7.2"></a>
   <img src="https://img.shields.io/badge/architectures-ARMv7%20%7C%20AArch64-22a06b" alt="ARMv7 and AArch64">
   <img src="https://img.shields.io/badge/SMP-4%20cores-7557d3" alt="SMP on four cores">
   <img src="https://img.shields.io/badge/QEMU-10.0.2-e65d19" alt="QEMU 10.0.2">
@@ -20,9 +20,9 @@
 
 ArmOS is an educational and research operating system, not a Linux
 distribution. Version 0.7 brought ARM64 onto the same common kernel used by
-ARM32: the architecture layer handles CPU and MMU details while processes,
-syscalls, scheduling, VFS, filesystems, drivers, and userland contracts remain
-shared.
+ARM32; version 0.7.2 adds the first Raspberry Pi GPIO display driver. The
+architecture layer handles CPU and MMU details while processes, syscalls,
+scheduling, VFS, filesystems, drivers, and userland contracts remain shared.
 
 ## See It Run
 
@@ -69,8 +69,10 @@ userland used by the QEMU targets.
   </tr>
 </table>
 
-The graphical captures come from `arm64/qemu-virt`. The UART rescue console
-remains available as `tty0` while the framebuffer console runs on `tty1`.
+The graphical captures come from `arm64/qemu-virt`. The Raspberry Pi 3 target
+can now drive an HSD028309 B6 / ILI9341 panel through GPIO using the same
+`/dev/fb0` and `tty1` interfaces. The UART rescue console remains available as
+`tty0` on both platforms.
 
 ## Quick Start
 
@@ -108,7 +110,7 @@ command line.
 | Processes | Preemptive scheduling, SMP, `fork`, ELF `execve`, `waitpid`, signals, job control |
 | Virtual memory | Split user/kernel address spaces, MMU, ASIDs, copy-on-write, anonymous `mmap` |
 | Files and IPC | VFS, descriptors, pipes, `dup`, ext2 root, FAT32, `/proc` |
-| Devices | PL011 UART, TTYs, VirtIO block/net/GPU/input, Raspberry Pi SD/eMMC |
+| Devices | PL011 UART, TTYs, VirtIO block/net/GPU/input, Raspberry Pi SD/eMMC and ILI9341 GPIO display |
 | Userland | newlib, `mash`, core Unix tools, editors, tests, optional BSD utilities |
 | Native development | TinyCC can compile and run small C programs from inside ArmOS |
 
@@ -122,10 +124,10 @@ release build system.
 | --- | --- | --- | --- |
 | `arm32/qemu-virt` | Fresh-checkout default | ARMv7-A | GICv2, PL011, VirtIO |
 | `arm64/qemu-virt` | Kernel feature reference | AArch64 | GICv2, PL011, VirtIO, 4-core SMP |
-| `arm64/raspi3` | Hardware reference | AArch64 | Raspberry Pi 3 B+, PL011, SD/eMMC, 4-core SMP |
+| `arm64/raspi3` | Hardware reference | AArch64 | Raspberry Pi 3 B+, PL011, SD/eMMC, ILI9341, 4-core SMP |
 | `arm32/raspi2` | Supported hardware | ARMv7-A | Raspberry Pi 2 B v1.1, PL011, SD/eMMC |
 
-QEMU 10.0.2 is the reference emulator for the v0.7 line. Hardware images use a
+QEMU 10.0.2 is the reference emulator for the 0.7 line. Hardware images use a
 dedicated FAT32 firmware partition and an ext2 root filesystem.
 
 ## Try ArmOS

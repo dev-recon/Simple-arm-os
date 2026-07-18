@@ -16,7 +16,12 @@
 #include <stdint.h>
 
 #define ARMOS_FBIOGET_INFO      0x4600u
+#define ARMOS_FBIOGET_ORIENTATION 0x4601u
+#define ARMOS_FBIOSET_ORIENTATION 0x4602u
 #define ARMOS_FB_FORMAT_ARGB8888 1u
+
+#define ARMOS_FB_ORIENTATION_PORTRAIT  0u
+#define ARMOS_FB_ORIENTATION_LANDSCAPE 1u
 
 struct armos_fb_info {
     uint32_t width;
@@ -25,6 +30,10 @@ struct armos_fb_info {
     uint32_t bpp;
     uint32_t size;
     uint32_t format;
+};
+
+struct armos_fb_orientation {
+    uint32_t orientation;
 };
 
 #endif

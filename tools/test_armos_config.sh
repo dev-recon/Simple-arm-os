@@ -11,6 +11,7 @@ printf '%s\n' \
     'TARGET_ARCH=arm64' \
     'TARGET_PLATFORM=qemu-virt' \
     'ENABLE_NET=yes' \
+    'ENABLE_ILI9341=no' \
     'BUILD_NCURSES=yes' \
     'BUILD_NANO=yes' > "$TMP_CONFIG"
 
@@ -18,10 +19,11 @@ resolved="$(ARMOS_CONFIG="$TMP_CONFIG" bash -c '
     ROOT_DIR="$1"
     source "$1/tools/armos_config.sh"
     armos_config_validate "$1"
-    printf "%s/%s net=%s nano=%s\n" \
-        "$TARGET_ARCH" "$TARGET_PLATFORM" "$ENABLE_NET" "$BUILD_NANO"
+    printf "%s/%s net=%s ili9341=%s nano=%s\n" \
+        "$TARGET_ARCH" "$TARGET_PLATFORM" "$ENABLE_NET" \
+        "$ENABLE_ILI9341" "$BUILD_NANO"
 ' _ "$ROOT_DIR")"
-[ "$resolved" = 'arm64/qemu-virt net=1 nano=1' ]
+[ "$resolved" = 'arm64/qemu-virt net=1 ili9341=0 nano=1' ]
 
 resolved="$(TARGET_ARCH=arm32 ARMOS_CONFIG="$TMP_CONFIG" bash -c '
     ROOT_DIR="$1"

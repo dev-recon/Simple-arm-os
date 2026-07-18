@@ -3,7 +3,7 @@
 The goal is to make `xv` build and run on ArmOS without turning the work into a
 full Xorg port by default.
 
-ArmOS 0.7.1 builds the framebuffer dependency set and `fbview` for the
+ArmOS 0.7.2 builds the framebuffer dependency set and `fbview` for the
 selected ARM32 or ARM64 userland. This does not change the xv redistribution
 boundary below and does not place xv sources in the worktree.
 
@@ -147,6 +147,12 @@ The current `tifftest` covers uncompressed grayscale scanlines.  The port builds
 Deflate/ZIP support through zlib, but compressed TIFF runtime coverage should be
 added separately before treating that path as proven.
 
+The ArmOS libtiff configuration derives `size_t` from the active compiler and
+uses `ptrdiff_t` for `tmsize_t`.  Do not replace these with fixed 32-bit values:
+the same source configuration is used for ARM32 and ARM64 builds.  The bundled
+`/home/user/images/test-pattern-320x240.tiff` is intentionally a minimal,
+little-endian, uncompressed RGB file without EXIF or ICC metadata.
+
 ## fbview Smoke Test
 
 Build and stage `fbview` plus its image dependencies with:
@@ -172,6 +178,19 @@ status=0
 `fbview` is ArmOS-owned test code.  It supports JPEG, PNG, and TIFF input,
 scales large images down to fit `/dev/fb0`, and paints ARGB8888 pixels through
 the public framebuffer ABI.
+
+The generated user filesystem includes public-domain samples for the three
+supported formats under `/home/user/images`:
+
+```sh
+fbview /home/user/images/test-pattern.png
+fbview /home/user/images/jpeg-landscape.jpg
+fbview /home/user/images/test-pattern-320x240.tiff
+```
+
+The directory's `README.txt` records the source page and license of each
+downloaded image. The TIFF is a local 320x240 derivative of the PNG test
+pattern and is convenient for the Raspberry Pi 3 ILI9341 landscape mode.
 
 ## External xv Loader Probe
 

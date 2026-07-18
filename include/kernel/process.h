@@ -60,6 +60,7 @@ void close_cloexec_files(task_t* process);
 /* Fonctions d'initialisation */
 void init_process_system(void);
 void init_kernel_task_system(void);
+void process_release_init(void);
 void init_main(void);
 void list_all_processes(void);
 

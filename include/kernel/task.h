@@ -552,6 +552,7 @@ bool task_is_valid(task_t* task);
 bool task_is_idle_task(task_t* task);
 void task_register_idle_cpu(uint32_t cpu_id, task_t* task);
 void task_start_secondary_scheduler(uint32_t cpu_id) __attribute__((noreturn));
+void scheduler_prepare_secondary_cpus(void);
 void scheduler_request_resched_current_cpu(void);
 bool scheduler_take_resched_current_cpu(void);
 bool scheduler_resched_pending_on_cpu(uint32_t cpu_id);
