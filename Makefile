@@ -336,13 +336,22 @@ E2FSPROGS_PREFIX ?= $(shell \
 	elif [ -d /usr/local/opt/e2fsprogs ]; then \
 		echo /usr/local/opt/e2fsprogs; \
 	fi)
-MKE2FS  := $(E2FSPROGS_PREFIX)/sbin/mke2fs
-DEBUGFS := $(E2FSPROGS_PREFIX)/sbin/debugfs
+MKE2FS ?= $(shell command -v mke2fs 2>/dev/null)
+DEBUGFS ?= $(shell command -v debugfs 2>/dev/null)
+ifeq ($(strip $(MKE2FS)),)
+MKE2FS := $(if $(E2FSPROGS_PREFIX),$(E2FSPROGS_PREFIX)/sbin/mke2fs,mke2fs)
+endif
+ifeq ($(strip $(DEBUGFS)),)
+DEBUGFS := $(if $(E2FSPROGS_PREFIX),$(E2FSPROGS_PREFIX)/sbin/debugfs,debugfs)
+endif
 
 $(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	@echo "=== Creating ext2 image ($(EXT2_SIZE_MB) MB) ==="
-	@if [ ! -x "$(MKE2FS)" ] || [ ! -x "$(DEBUGFS)" ]; then \
-		echo "Error: e2fsprogs not found — run: brew install e2fsprogs"; \
+	@if ! command -v "$(MKE2FS)" >/dev/null 2>&1 || \
+	    ! command -v "$(DEBUGFS)" >/dev/null 2>&1; then \
+		echo "Error: e2fsprogs tools mke2fs/debugfs not found"; \
+		echo "Linux: install the e2fsprogs package (for example: sudo apt install e2fsprogs)"; \
+		echo "macOS: run brew install e2fsprogs"; \
 		echo "MKE2FS=$(MKE2FS)"; \
 		echo "DEBUGFS=$(DEBUGFS)"; \
 		exit 1; \

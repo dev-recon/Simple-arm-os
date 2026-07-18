@@ -59,6 +59,12 @@ IMAGE_SUFFIX="${TARGET_ARCH}-${TARGET_PLATFORM}"
 
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
+if command -v brew >/dev/null 2>&1; then
+    E2FSPROGS_PREFIX="$(brew --prefix e2fsprogs 2>/dev/null || true)"
+    if [ -d "$E2FSPROGS_PREFIX/sbin" ]; then
+        export PATH="$E2FSPROGS_PREFIX/sbin:$PATH"
+    fi
+fi
 if [ -d /opt/homebrew/opt/e2fsprogs/sbin ]; then
     export PATH="/opt/homebrew/opt/e2fsprogs/sbin:$PATH"
 fi
