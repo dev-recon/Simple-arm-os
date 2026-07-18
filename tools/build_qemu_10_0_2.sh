@@ -26,12 +26,29 @@ sha256_file() {
     fi
 }
 
-for tool in curl tar make pkg-config python3 ninja git; do
+for tool in curl tar make pkg-config python3 ninja git grep; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "error: required host tool '$tool' not found" >&2
         exit 1
     fi
 done
+
+QEMU_CONFIGURE_ARGS=(
+    "--prefix=$PREFIX"
+    --target-list=arm-softmmu,aarch64-softmmu
+    --disable-docs
+    --disable-werror
+)
+QEMU_REQUIRED_DISPLAY_BACKEND=""
+if [ "$(uname -s)" = "Linux" ]; then
+    if ! pkg-config --exists gtk+-3.0; then
+        echo "error: GTK 3 development files are required for graphical QEMU on Linux" >&2
+        echo "hint: sudo apt install libgtk-3-dev" >&2
+        exit 1
+    fi
+    QEMU_CONFIGURE_ARGS+=(--enable-gtk)
+    QEMU_REQUIRED_DISPLAY_BACKEND=gtk
+fi
 
 mkdir -p "$DOWNLOAD_DIR" "$WORK_DIR"
 if [ ! -f "$ARCHIVE" ]; then
@@ -60,11 +77,7 @@ mkdir -p "$BUILD_DIR" "$PREFIX"
 cd "$BUILD_DIR"
 
 echo "=== Configuring QEMU $QEMU_VERSION (ARM32 + ARM64 system emulation) ==="
-"$SOURCE_DIR/configure" \
-    --prefix="$PREFIX" \
-    --target-list=arm-softmmu,aarch64-softmmu \
-    --disable-docs \
-    --disable-werror
+"$SOURCE_DIR/configure" "${QEMU_CONFIGURE_ARGS[@]}"
 
 echo "=== Building QEMU $QEMU_VERSION ==="
 make -j"$JOBS"
@@ -78,7 +91,16 @@ for qemu_name in qemu-system-arm qemu-system-aarch64; do
         echo "error: unexpected installed QEMU version: $version_line" >&2
         exit 1
     fi
+    if [ -n "$QEMU_REQUIRED_DISPLAY_BACKEND" ] &&
+       ! "$QEMU_BINARY" -display help 2>/dev/null |
+           grep -qx "$QEMU_REQUIRED_DISPLAY_BACKEND"; then
+        echo "error: $QEMU_BINARY lacks the required '$QEMU_REQUIRED_DISPLAY_BACKEND' display backend" >&2
+        exit 1
+    fi
     echo "Installed: $QEMU_BINARY"
+    if [ -n "$QEMU_REQUIRED_DISPLAY_BACKEND" ]; then
+        echo "Display:   $QEMU_REQUIRED_DISPLAY_BACKEND"
+    fi
 done
 
 echo

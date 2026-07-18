@@ -17,6 +17,8 @@ ENABLE_GPU=1
 . "$ROOT_DIR/tools/qemu_helpers.sh"
 
 select_display() {
+    local display_help
+
     if [ -n "${QEMU_DISPLAY:-}" ]; then
         printf '%s\n' "$QEMU_DISPLAY"
         return
@@ -27,12 +29,16 @@ select_display() {
             printf '%s\n' "cocoa,show-cursor=on"
             ;;
         Linux)
-            if "$QEMU" -display help 2>/dev/null | grep -q '^gtk\b'; then
+            display_help="$("$QEMU" -display help 2>/dev/null || true)"
+            if printf '%s\n' "$display_help" | grep -qx gtk; then
                 printf '%s\n' "gtk,show-cursor=on"
-            elif "$QEMU" -display help 2>/dev/null | grep -q '^sdl\b'; then
+            elif printf '%s\n' "$display_help" | grep -qx sdl; then
                 printf '%s\n' "sdl,show-cursor=on"
             else
-                printf '%s\n' "default"
+                echo "Error: QEMU '$QEMU' has no GTK or SDL window display backend" >&2
+                echo "Install libgtk-3-dev and rebuild QEMU with:" >&2
+                echo "  ./tools/build_qemu_10_0_2.sh" >&2
+                return 1
             fi
             ;;
         *)

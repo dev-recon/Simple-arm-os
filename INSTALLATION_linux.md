@@ -52,7 +52,8 @@ sudo apt install -y \
   pkg-config \
   python3-venv \
   libglib2.0-dev \
-  libpixman-1-dev
+  libpixman-1-dev \
+  libgtk-3-dev
 ```
 
 Tool purpose:
@@ -65,7 +66,9 @@ Tool purpose:
 - `e2fsprogs`: ext2 tools (`mke2fs`, `debugfs`, `e2fsck`)
 - `curl`, `xz-utils`: optional source package download/extraction helpers
 - `ninja-build`, `pkg-config`, `python3-venv`, `libglib2.0-dev`,
-  `libpixman-1-dev`: host dependencies for the exact QEMU 10.0.2 build
+  `libpixman-1-dev`: core host dependencies for the exact QEMU 10.0.2 build
+- `libgtk-3-dev`: GTK window backend used by `boot-graphics.sh` with the
+  repo-local QEMU build
 
 The package list above is sufficient for the default ARM32 route. ARM64 builds
 also require a bare-metal toolchain exposing the `aarch64-elf-` prefix,
@@ -81,7 +84,21 @@ available on Linux as well as macOS:
 brew install aarch64-elf-gcc
 ```
 
-### Install Exactly QEMU 10.0.2
+## 2. Clone The Repository
+
+The pinned QEMU builder and the ArmOS build scripts live in the repository, so
+clone it before running any command under `tools/`:
+
+```sh
+git clone https://github.com/dev-recon/ArmOS.git arm-os
+cd arm-os
+chmod +x run.sh boot.sh boot-graphics.sh tools/build_newlib.sh \
+  tools/build_qemu_10_0_2.sh
+```
+
+All remaining commands in this guide are run from this `arm-os` directory.
+
+## 3. Install Exactly QEMU 10.0.2
 
 The distro package installs the version carried by the configured Debian or
 Ubuntu release. The reliable cross-distribution method is an isolated source
@@ -100,6 +117,15 @@ build/qemu-10.0.2/install/bin/qemu-system-arm
 build/qemu-10.0.2/install/bin/qemu-system-aarch64
 ```
 
+On Linux the script explicitly enables GTK and refuses to install a headless
+reference build. Verify the available display backends with:
+
+```sh
+build/qemu-10.0.2/install/bin/qemu-system-arm -display help
+```
+
+The output must contain `gtk` for `boot-graphics.sh` to open a window.
+
 ArmOS boot scripts automatically prefer that binary. APT can install an exact
 package only if that package version is present in the configured repositories:
 
@@ -112,7 +138,7 @@ sudo apt-mark hold qemu-system-arm
 The APT version includes distro epoch/revision fields and usually does not map
 to a portable `10.0.2` command, so the source build is the documented baseline.
 
-## 2. Verify The Toolchain
+## 4. Verify The Toolchain
 
 ```sh
 make --version
@@ -138,12 +164,9 @@ QEMU_REQUIRED_VERSION=10.0.2 ./boot.sh
 QEMU_REQUIRED_VERSION=10.0.2 ./boot-graphics.sh
 ```
 
-## 3. Clone And Build
+## 5. Build And Run
 
 ```sh
-git clone https://github.com/dev-recon/ArmOS.git arm-os
-cd arm-os
-chmod +x run.sh boot.sh tools/build_newlib.sh tools/build_qemu_10_0_2.sh
 ./run.sh
 ```
 
@@ -190,7 +213,7 @@ Exit QEMU with:
 Ctrl+A, then X
 ```
 
-## 4. Useful Commands
+## 6. Useful Commands
 
 Build kernel only:
 
@@ -223,7 +246,7 @@ Boot without rebuilding:
 ./boot.sh
 ```
 
-## 5. Optional Newlib Build
+## 7. Optional Newlib Build
 
 Build the optional repo-local newlib sysroot and include newlib-linked test
 programs:
@@ -257,7 +280,7 @@ You can also point the build at another sysroot:
 BUILD_NEWLIB=1 NEWLIB_SYSROOT=/path/to/arm-none-eabi ./run.sh
 ```
 
-## 6. Native TinyCC And Shipped Sources
+## 8. Native TinyCC And Shipped Sources
 
 ArmOS 0.7.1 can build small C programs from inside ARM32 and ARM64 systems.
 This is for end-user programming and experiments inside ArmOS; the project
@@ -292,7 +315,7 @@ tcc /usr/src/armos/userland/coreutils/src/ls.c -o /tmp/ls-tcc
 Set `BUILD_TCC=0` when running `build.sh` or `run.sh` if you want to skip the
 native TinyCC bundle during local development.
 
-## 7. Optional ncurses And nano
+## 9. Optional ncurses And nano
 
 ArmOS 0.7.1 can also stage static ncurses and nano bundles:
 
@@ -313,7 +336,7 @@ BUILD_ALL_USERLAND=1 ./build.sh
 This includes TinyCC, ncurses, nano, the BSD tools and supported graphics
 libraries. Kernel-only iterations should reuse these generated bundles.
 
-## 8. Raspberry Pi Images
+## 10. Raspberry Pi Images
 
 The generic SD-image builder accepts the same tracked profiles as QEMU builds:
 
@@ -330,7 +353,7 @@ whole block device carefully, then follow
 [the Raspberry Pi 3 guide](docs/RASPBERRY_PI3.md). Use boot-only mode for
 normal kernel updates after the first complete card initialization.
 
-## 9. Common Problems
+## 11. Common Problems
 
 ### `arm-none-eabi-gcc: command not found`
 
@@ -372,6 +395,26 @@ Exit with:
 ```text
 Ctrl+A, then X
 ```
+
+### The graphical console does not open
+
+Check whether the selected QEMU binary includes a window backend:
+
+```sh
+build/qemu-10.0.2/install/bin/qemu-system-arm -display help
+```
+
+If `gtk` is absent, install its development package and rebuild the pinned
+emulator. The ArmOS build script now enables and verifies GTK explicitly:
+
+```sh
+sudo apt install libgtk-3-dev
+./tools/build_qemu_10_0_2.sh
+./boot-graphics.sh
+```
+
+`boot-graphics.sh` reports this condition directly instead of silently
+selecting a headless display backend.
 
 ### Permission problems on scripts
 

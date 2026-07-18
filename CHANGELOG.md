@@ -8,6 +8,8 @@ and so on). Older `v0.x` tags remain historical and are not moved.
 - Fixed `boot-graphics.sh` on the macOS system Bash when networking is
   disabled. Empty network argument arrays are no longer expanded under
   `set -u`.
+- Made the pinned QEMU 10.0.2 source build require GTK on Linux and made
+  `boot-graphics.sh` reject headless QEMU binaries with an actionable error.
 
 ## ArmOS 0.7.1 - 2026-07-16
 

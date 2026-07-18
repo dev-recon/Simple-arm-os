@@ -83,7 +83,37 @@ Tool purpose:
 `brew install qemu` installs Homebrew's current QEMU release, not necessarily
 10.0.2. Keep it as a convenient fallback, or use the pinned build below.
 
-### Install Exactly QEMU 10.0.2
+## 3. Configure PATH
+
+`run.sh` prepends common Homebrew locations, including the `e2fsprogs` sbin
+directory. For an interactive shell, this is still useful:
+
+```sh
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+export PATH="/opt/homebrew/opt/e2fsprogs/sbin:$PATH"
+```
+
+For Intel Homebrew:
+
+```sh
+export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
+export PATH="/usr/local/opt/e2fsprogs/sbin:$PATH"
+```
+
+To make it permanent, add the relevant lines to `~/.zshrc`.
+
+## 4. Clone The Repository
+
+```sh
+git clone https://github.com/dev-recon/ArmOS.git arm-os
+cd arm-os
+chmod +x run.sh boot.sh boot-graphics.sh tools/build_newlib.sh \
+  tools/build_qemu_10_0_2.sh
+```
+
+The remaining commands in this guide are run from the repository root.
+
+## 5. Install Exactly QEMU 10.0.2
 
 The reliable method is to build the official source release in an isolated,
 repo-local prefix:
@@ -108,28 +138,9 @@ a historical formula in a personal tap, but that formula is user-maintained and
 less reproducible than the source build. See the
 [Homebrew versioning documentation](https://docs.brew.sh/Versions).
 
-## 3. Configure PATH
+## 6. Verify The Toolchain
 
-`run.sh` prepends common Homebrew locations, including the `e2fsprogs` sbin
-directory. For an interactive shell, this is still useful:
-
-```sh
-export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
-export PATH="/opt/homebrew/opt/e2fsprogs/sbin:$PATH"
-```
-
-For Intel Homebrew:
-
-```sh
-export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
-export PATH="/usr/local/opt/e2fsprogs/sbin:$PATH"
-```
-
-To make it permanent, add the relevant lines to `~/.zshrc`.
-
-## 4. Verify The Toolchain
-
-From a fresh terminal:
+From the repository root:
 
 ```sh
 make --version
@@ -162,12 +173,9 @@ repo-local pinned build.
 If `mke2fs`, `debugfs`, or `e2fsck` are not found, your shell is missing the
 `e2fsprogs` sbin path.
 
-## 5. Clone And Build
+## 7. Build And Run
 
 ```sh
-git clone https://github.com/dev-recon/ArmOS.git arm-os
-cd arm-os
-chmod +x run.sh boot.sh tools/build_newlib.sh tools/build_qemu_10_0_2.sh
 ./run.sh
 ```
 
@@ -214,7 +222,7 @@ Exit QEMU with:
 Ctrl+A, then X
 ```
 
-## 6. Useful Commands
+## 8. Useful Commands
 
 Build kernel only:
 
@@ -247,7 +255,7 @@ Boot without rebuilding:
 ./boot.sh
 ```
 
-## 7. Optional Newlib Build
+## 9. Optional Newlib Build
 
 Build the optional repo-local newlib sysroot and include newlib-linked test
 programs:
@@ -281,7 +289,7 @@ You can also point the build at another sysroot:
 BUILD_NEWLIB=1 NEWLIB_SYSROOT=/path/to/arm-none-eabi ./run.sh
 ```
 
-## 8. Adding Userland Programs
+## 10. Adding Userland Programs
 
 User programs live under `userland/` and are installed into the generated
 `userfs` tree.
@@ -302,7 +310,7 @@ The root filesystem is ext2, so long filenames are supported there. FAT32 is
 still available under `/mnt`, but it is intentionally a smaller compatibility
 filesystem.
 
-## 9. Native TinyCC And Shipped Sources
+## 11. Native TinyCC And Shipped Sources
 
 ArmOS 0.7.1 can build small C programs from inside ARM32 and ARM64 systems.
 This is for end-user programming and experiments inside ArmOS; the project
@@ -337,7 +345,7 @@ tcc /usr/src/armos/userland/coreutils/src/ls.c -o /tmp/ls-tcc
 Set `BUILD_TCC=0` when running `build.sh` or `run.sh` if you want to skip the
 native TinyCC bundle during local development.
 
-## 10. Optional ncurses And nano
+## 12. Optional ncurses And nano
 
 ArmOS 0.7.1 can also stage static ncurses and nano bundles:
 
@@ -367,7 +375,7 @@ BUILD_ALL_USERLAND=1 ./build.sh
 This includes TinyCC, ncurses, nano, the BSD tools and the supported graphics
 libraries. Rebuilding it is unnecessary for a kernel-only iteration.
 
-## 11. Raspberry Pi Images
+## 13. Raspberry Pi Images
 
 Use the tracked hardware profiles and the generic SD builder:
 
@@ -384,7 +392,7 @@ and follow [the Raspberry Pi 2 guide](docs/RASPBERRY_PI2.md) or
 normal kernel iteration should use boot-only mode once the complete card has
 been initialized.
 
-## 12. Common Problems
+## 14. Common Problems
 
 ### `arm-none-eabi-gcc: command not found`
 
