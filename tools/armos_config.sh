@@ -7,7 +7,7 @@
 
 ARMOS_CONFIG_KEYS="
 TARGET_ARCH TARGET_PLATFORM ARCH CROSS_COMPILE NEWLIB_SYSROOT SMP_CPUS
-ENABLE_NET ENABLE_GPU ENABLE_ILI9341
+ENABLE_NET ENABLE_GPU ENABLE_HDMI ENABLE_ILI9341 ENABLE_USB HDMI_WIDTH HDMI_HEIGHT
 BUILD_NEWLIB BUILD_ALL_USERLAND BUILD_TCC BUILD_BSD BUILD_NCURSES BUILD_NANO
 BUILD_XV_DEPS BUILD_FBVIEW BUILD_ZLIB BUILD_LIBJPEG BUILD_LIBPNG BUILD_LIBTIFF
 QEMU_MEMORY QEMU_CPU QEMU_MACHINE QEMU_REQUIRED_VERSION QEMU_DISPLAY
@@ -16,7 +16,7 @@ SD_VOLUME RASPI_FIRMWARE_DIR DEVICE_TREE DTOVERLAY
 "
 
 ARMOS_CONFIG_BOOLEAN_KEYS="
-ENABLE_NET ENABLE_GPU ENABLE_ILI9341
+ENABLE_NET ENABLE_GPU ENABLE_HDMI ENABLE_ILI9341 ENABLE_USB
 BUILD_NEWLIB BUILD_ALL_USERLAND BUILD_TCC BUILD_BSD BUILD_NCURSES BUILD_NANO
 BUILD_XV_DEPS BUILD_FBVIEW BUILD_ZLIB BUILD_LIBJPEG BUILD_LIBPNG BUILD_LIBTIFF
 "
@@ -149,6 +149,7 @@ armos_config_load() {
 armos_config_validate() {
     local root_dir="$1"
     local platform_dir
+    local dimension
 
     armos_config_normalize || return 1
 
@@ -175,6 +176,28 @@ armos_config_validate() {
         armos_config_error "ENABLE_NET and ENABLE_GPU are QEMU launch options and require qemu-virt"
         return 1
     fi
+
+    if { [ "${ENABLE_HDMI:-0}" = 1 ] || [ "${ENABLE_USB:-0}" = 1 ]; } &&
+       [ "${TARGET_PLATFORM:-qemu-virt}" != raspi3 ]; then
+        armos_config_error "ENABLE_HDMI and ENABLE_USB require TARGET_PLATFORM=raspi3"
+        return 1
+    fi
+
+    if [ "${ENABLE_HDMI:-0}" = 1 ] && [ "${ENABLE_ILI9341:-0}" = 1 ]; then
+        armos_config_error "ENABLE_HDMI and ENABLE_ILI9341 are mutually exclusive"
+        return 1
+    fi
+
+    for dimension in HDMI_WIDTH HDMI_HEIGHT; do
+        [ -n "${!dimension:-}" ] || continue
+        case "${!dimension}" in
+            *[!0-9]*|'') armos_config_error "$dimension must be an integer"; return 1 ;;
+        esac
+        [ "${!dimension}" -ge 1 ] && [ "${!dimension}" -le 8192 ] || {
+            armos_config_error "$dimension must be between 1 and 8192"
+            return 1
+        }
+    done
 
     if [ "${BUILD_NANO:-0}" = 1 ] && [ "${BUILD_NCURSES:-0}" = 0 ] &&
        [ ! -f "$root_dir/userfs/opt/ncurses/lib/libncurses.a" ]; then
@@ -227,7 +250,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
     ENABLE_NET="${ENABLE_NET:-0}"
     ENABLE_GPU="${ENABLE_GPU:-0}"
+    ENABLE_HDMI="${ENABLE_HDMI:-0}"
     ENABLE_ILI9341="${ENABLE_ILI9341:-0}"
+    ENABLE_USB="${ENABLE_USB:-0}"
     SMP_CPUS="${SMP_CPUS:-1}"
     BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
     BUILD_ALL_USERLAND="${BUILD_ALL_USERLAND:-0}"
@@ -237,7 +262,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     BUILD_NANO="${BUILD_NANO:-0}"
     BUILD_XV_DEPS="${BUILD_XV_DEPS:-0}"
     BUILD_FBVIEW="${BUILD_FBVIEW:-0}"
-    armos_config_validate "$ROOT_DIR"
+    armos_config_validate "$ROOT_DIR" || exit $?
     case "${1:---show}" in
         --show) armos_config_show ;;
         *) armos_config_error "usage: tools/armos_config.sh [--show]"; exit 2 ;;

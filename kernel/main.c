@@ -40,6 +40,7 @@
 
 #include <kernel/task.h>
 #include <kernel/kernel_tasks.h>
+#include <kernel/usb.h>
 
 #include <kernel/tty.h>
 #include <kernel/exceptions.h>
@@ -269,6 +270,15 @@ void kernel_main(void)
             KBOOT_OK("Display: cursor daemon");
         else
             KBOOT_WARN("Display: cursor daemon unavailable");
+    }
+
+    {
+        int usb_daemon = usb_start_daemon();
+
+        if (usb_daemon > 0)
+            KBOOT_OK("USB: service daemon");
+        else if (usb_daemon < 0)
+            KBOOT_WARN("USB: service daemon unavailable");
     }
 
     KBOOT_OK("Process: scheduler ready");

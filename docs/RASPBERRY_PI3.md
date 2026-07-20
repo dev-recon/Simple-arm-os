@@ -25,8 +25,11 @@ replace hardware timing and signal validation.
 - Storage: BCM2835/BCM2837 SD/eMMC controller
 - Root: ext2 partition
 - Boot: dedicated FAT32 LBA firmware partition
-- Graphics: optional HSD028309 B6 / ILI9341 GPIO parallel display on `/dev/fb0`
-- USB input and networking: not yet provided by this profile
+- Graphics: optional firmware HDMI framebuffer or HSD028309 B6 / ILI9341
+  GPIO parallel display on `/dev/fb0`
+- USB input: optional DWC2 host with boot-protocol keyboards and mice behind
+  the Pi 3 internal USB hub
+- Networking: not yet provided by this profile
 
 The separate `arm32/raspi2` target supports Raspberry Pi 2 Model B v1.1
 hardware and is also exercised with QEMU's `raspi2b` machine.
@@ -66,6 +69,80 @@ tools/build_raspberry_sd.sh --arch arm64 --platform raspi3 --mode none
 `tools/build_pi3_sd.sh` is a compatibility wrapper selecting that same target.
 Both scripts reuse newlib and TCC by default; set their build variables only
 when the corresponding toolchain or sysroot changed.
+
+## HDMI And USB Input
+
+The first HDMI and USB hardware profile is opt-in. HDMI and ILI9341 both own
+`/dev/fb0`, so they cannot be enabled together. A useful `armos.conf` for a
+Pi 3 connected to a monitor and a USB keyboard/mouse receiver is:
+
+```ini
+TARGET_ARCH=arm64
+TARGET_PLATFORM=raspi3
+SMP_CPUS=4
+ENABLE_HDMI=yes
+ENABLE_ILI9341=no
+HDMI_WIDTH=1280
+HDMI_HEIGHT=720
+ENABLE_USB=yes
+```
+
+The HDMI driver asks the VideoCore firmware for a 32-bit RGB framebuffer. It
+then attaches the common ArmOS framebuffer, `/dev/fb0`, and graphical `tty1`
+to that memory. The monitor must be connected before power-on so the firmware
+can establish a compatible display mode. The requested geometry is currently
+strict: if firmware cannot supply the configured width, height, depth, and
+tightly packed pitch, the driver leaves UART `tty0` available and reports a
+warning instead of using an unsafe layout.
+
+The USB driver brings up the BCM2837 DWC2 controller in host mode, enumerates
+the Pi 3 internal USB hub, and recognizes USB boot-protocol HID interfaces.
+Keyboard input is routed to `tty1` when HDMI is active and otherwise to UART
+`tty0`; a mouse wheel controls graphical console scrollback. The initial key
+map is French AZERTY, matching the Logitech 920-009795 keyboard/receiver used
+for hardware validation.
+
+Connect the HDMI monitor and USB receiver before powering the Pi. Expected
+boot lines with both devices present are:
+
+```text
+GPU: firmware HDMI 1280x720x32                         [ OK ]
+TTY: console tty1 on HDMI /dev/fb0                     [ OK ]
+USB: DWC2 host and hub initialized                     [ OK ]
+Input: USB HID polling worker                          [ OK ]
+```
+
+Keep the UART cable connected during the first tests. From `tty0`, verify the
+display and input path with:
+
+```sh
+ttyinfo
+echo 'HDMI_OK' > /dev/tty1
+fbtest
+fbview /home/user/images/test-pattern.png
+```
+
+The HDMI mode can be changed at runtime through the common framebuffer ABI:
+
+```sh
+fbctl mode 1920x1080
+fbctl mode 1280x720
+```
+
+`fbctl` reports the mode accepted by the firmware. The framebuffer address,
+geometry, graphical `tty1` window size, and console font are updated together.
+At 1920x1080 the console selects the 12x24 font and exposes 160 columns by 45
+lines. Unsupported exact modes return an error. If firmware partially applies
+a rejected request, the driver immediately requests the previous mode again.
+The operation is supported by the Raspberry Pi firmware HDMI backend; fixed
+framebuffers such as ILI9341 and the current VirtIO-GPU scanout return
+`ENOTSUP`.
+
+The first USB milestone is deliberately bounded. It uses one polling host
+channel with DMA, supports the internal hub and split transactions, and
+handles boot keyboards and mice detected during startup. It does not yet
+provide hotplug, USB mass storage, audio, Bluetooth, isochronous transfers, or
+an interrupt-driven host-controller scheduler.
 
 ## Write An SD Card
 
@@ -302,7 +379,10 @@ Storage throughput and the final SD-card validation sequence are documented in
 
 - The ILI9341 backend is write-only, polling, and uses GPIO PIO;
   it does not yet use DMA, touch input, or controller readback.
-- UART remains the only interactive console on Raspberry Pi 3.
+- HDMI currently uses the firmware framebuffer rather than a native VC4/KMS
+  display pipeline and requires the monitor to be present at boot.
+- USB is limited to startup enumeration and boot-protocol HID devices; UART
+  remains the mandatory recovery console.
 - The FAT32 firmware partition is separate from the ext2 root and is mounted
   only when explicitly requested.
 - ARM64 still uses a conservative local TLB invalidation strategy during

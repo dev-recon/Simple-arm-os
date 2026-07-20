@@ -73,6 +73,23 @@ paddr_t framebuffer_phys = 0;
 #define CONSOLE_MAX_ROWS 64
 #define SCROLLBACK_ROWS 256
 
+static const font_t *display_font_for_geometry(uint32_t width, uint32_t height)
+{
+    if (width >= font_vga_8x16.width && height >= font_vga_8x16.height &&
+        width / font_vga_8x16.width <= CONSOLE_MAX_COLS &&
+        height / font_vga_8x16.height <= CONSOLE_MAX_ROWS)
+        return &font_vga_8x16;
+    if (width >= font_meslo_10x20.width && height >= font_meslo_10x20.height &&
+        width / font_meslo_10x20.width <= CONSOLE_MAX_COLS &&
+        height / font_meslo_10x20.height <= CONSOLE_MAX_ROWS)
+        return &font_meslo_10x20;
+    if (width >= font_meslo_12x24.width && height >= font_meslo_12x24.height &&
+        width / font_meslo_12x24.width <= CONSOLE_MAX_COLS &&
+        height / font_meslo_12x24.height <= CONSOLE_MAX_ROWS)
+        return &font_meslo_12x24;
+    return NULL;
+}
+
 typedef struct {
     char ch;
     uint32_t fg;
@@ -922,11 +939,19 @@ static bool console_consume_ansi(char c)
 
 bool init_display(uint32_t width, uint32_t height, uint32_t bpp)
 {
+    const font_t *font;
+
     KINFO("=== DISPLAY INITIALIZATION (RAM-based) ===\n");
 
     if (!width || !height || bpp != 32u) {
         KERROR("Unsupported framebuffer geometry %ux%ux%u\n",
                width, height, bpp);
+        return false;
+    }
+    font = display_font_for_geometry(width, height);
+    if (!font) {
+        KERROR("Framebuffer geometry exceeds console limits: %ux%u\n",
+               width, height);
         return false;
     }
     if (framebuffer_base)
@@ -957,7 +982,7 @@ bool init_display(uint32_t width, uint32_t height, uint32_t bpp)
     display.bpp = bpp;
     display.pitch = width * (bpp / 8u);
     display.framebuffer = framebuffer_base;
-    display.font = &font_vga_8x16;
+    display.font = font;
     framebuffer_orientation = width > height ?
         ARMOS_FB_ORIENTATION_LANDSCAPE : ARMOS_FB_ORIENTATION_PORTRAIT;
     
@@ -997,6 +1022,50 @@ bool init_display(uint32_t width, uint32_t height, uint32_t bpp)
         framebuffer_capacity = 0;
         return false;
     }
+}
+
+bool init_display_external(uint32_t width, uint32_t height, uint32_t bpp,
+                           uint32_t pitch, paddr_t physical,
+                           uint8_t *virtual_address, uint32_t size)
+{
+    const font_t *font;
+    uint64_t required = (uint64_t)pitch * height;
+
+    if (!width || !height || bpp != 32u || !physical || !virtual_address ||
+        pitch != width * 4u || required > size || required > 0xffffffffu) {
+        KERROR("Unsupported external framebuffer %ux%ux%u pitch=%u size=%u\n",
+               width, height, bpp, pitch, size);
+        return false;
+    }
+    font = display_font_for_geometry(width, height);
+    if (!font) {
+        KERROR("External framebuffer exceeds console limits: %ux%u\n",
+               width, height);
+        return false;
+    }
+    if (framebuffer_base)
+        return true;
+
+    framebuffer_phys = physical;
+    framebuffer_base = virtual_address;
+    framebuffer_capacity = size;
+    display.width = width;
+    display.height = height;
+    display.bpp = bpp;
+    display.pitch = pitch;
+    display.framebuffer = virtual_address;
+    display.font = font;
+    display.text_cols = width / display.font->width;
+    display.text_rows = height / display.font->height;
+    display.cursor_x = 0;
+    display.cursor_y = 0;
+    framebuffer_orientation = width > height ?
+        ARMOS_FB_ORIENTATION_LANDSCAPE : ARMOS_FB_ORIENTATION_PORTRAIT;
+    cursor_blink_on = true;
+    cursor_blink_last_tick = get_system_ticks();
+    console_reset_attrs();
+    clear_screen();
+    return true;
 }
 
 
@@ -1376,6 +1445,110 @@ int framebuffer_set_orientation(const struct armos_fb_orientation *orientation)
                                (uint16_t)display.text_cols,
                                (uint16_t)display.width,
                                (uint16_t)display.height);
+    }
+    display_request_flush();
+    return 0;
+}
+
+int framebuffer_set_mode(const struct armos_fb_mode *mode)
+{
+    display_backend_mode_t backend_mode;
+    const font_t *font;
+    uint32_t old_rows;
+    uint32_t old_cols;
+    uint32_t new_rows;
+    uint32_t new_cols;
+    uint32_t *pixels;
+    uint64_t required;
+    unsigned long console_flags;
+    unsigned long dirty_flags;
+    int tty_id;
+    int ret;
+
+    if (!mode || !mode->width || !mode->height)
+        return -EINVAL;
+    if (!framebuffer_base || !display_backend)
+        return -ENODEV;
+    if (!display_backend->set_mode)
+        return -ENOTSUP;
+
+    font = display_font_for_geometry(mode->width, mode->height);
+    if (!font)
+        return -EINVAL;
+
+    spin_lock_irqsave(&display_console_lock, &console_flags);
+    spin_lock(&display_geometry_lock);
+
+    ret = display_backend->set_mode(mode->width, mode->height,
+                                    &backend_mode);
+    if (ret < 0) {
+        spin_unlock(&display_geometry_lock);
+        spin_unlock_irqrestore(&display_console_lock, console_flags);
+        return ret;
+    }
+
+    required = (uint64_t)backend_mode.pitch * backend_mode.height;
+    if (backend_mode.width != mode->width ||
+        backend_mode.height != mode->height ||
+        backend_mode.bpp != 32u ||
+        backend_mode.pitch != backend_mode.width * 4u ||
+        !backend_mode.physical || !backend_mode.virtual_address ||
+        !backend_mode.size || required > backend_mode.size ||
+        required > 0xffffffffu) {
+        spin_unlock(&display_geometry_lock);
+        spin_unlock_irqrestore(&display_console_lock, console_flags);
+        return -EIO;
+    }
+
+    old_rows = display.text_rows;
+    old_cols = display.text_cols;
+    new_cols = backend_mode.width / font->width;
+    new_rows = backend_mode.height / font->height;
+
+    framebuffer_phys = backend_mode.physical;
+    framebuffer_base = backend_mode.virtual_address;
+    framebuffer_capacity = backend_mode.size;
+    display.width = backend_mode.width;
+    display.height = backend_mode.height;
+    display.pitch = backend_mode.pitch;
+    display.bpp = backend_mode.bpp;
+    display.framebuffer = backend_mode.virtual_address;
+    display.font = font;
+    display.text_cols = new_cols;
+    display.text_rows = new_rows;
+    framebuffer_orientation = display.width > display.height ?
+        ARMOS_FB_ORIENTATION_LANDSCAPE : ARMOS_FB_ORIENTATION_PORTRAIT;
+    cursor_drawn = false;
+    pending_wrap = false;
+
+    if (display.cursor_x >= display.text_cols)
+        display.cursor_x = display.text_cols - 1u;
+    if (display.cursor_y >= display.text_rows)
+        display.cursor_y = display.text_rows - 1u;
+
+    console_resize_cells(old_rows, old_cols, new_rows, new_cols);
+
+    spin_lock_irqsave(&dirty_lock, &dirty_flags);
+    framebuffer_dirty = false;
+    spin_unlock_irqrestore(&dirty_lock, dirty_flags);
+
+    pixels = (uint32_t *)(void *)framebuffer_base;
+    for (uint32_t i = 0; i < display.width * display.height; i++)
+        pixels[i] = display.bg_color;
+
+    console_render_scrollback();
+    tty_id = framebuffer_tty_id;
+    new_rows = display.text_rows;
+    new_cols = display.text_cols;
+    spin_unlock(&display_geometry_lock);
+    spin_unlock_irqrestore(&display_console_lock, console_flags);
+
+    if (tty_id >= 0) {
+        tty_set_winsize_for_id(tty_id,
+                               (uint16_t)new_rows,
+                               (uint16_t)new_cols,
+                               (uint16_t)mode->width,
+                               (uint16_t)mode->height);
     }
     display_request_flush();
     return 0;

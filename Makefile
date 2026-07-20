@@ -152,6 +152,7 @@ COMMON_KERNEL_OBJS = \
 	kernel/drivers/tty.o \
 	kernel/drivers/null.o \
 	kernel/drivers/power.o \
+	kernel/drivers/usb/core.o \
 	kernel/timer/timer.o \
 	kernel/syscalls/syscalls.o \
 	kernel/syscalls/file.o \
@@ -263,7 +264,9 @@ config:
 	@echo "  SMP_CPUS:        $(SMP_CPUS)"
 	@echo "  ENABLE_NET:      $(if $(ENABLE_NET),$(ENABLE_NET),no)"
 	@echo "  ENABLE_GPU:      $(if $(ENABLE_GPU),$(ENABLE_GPU),no)"
+	@echo "  ENABLE_HDMI:     $(if $(ENABLE_HDMI),$(ENABLE_HDMI),platform default)"
 	@echo "  ENABLE_ILI9341:  $(if $(ENABLE_ILI9341),$(ENABLE_ILI9341),platform default)"
+	@echo "  ENABLE_USB:      $(if $(ENABLE_USB),$(ENABLE_USB),platform default)"
 
 # Linkage
 $(KERNEL_ELF): $(ALL_OBJS) $(LINKER_SCRIPT)

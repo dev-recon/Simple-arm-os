@@ -44,6 +44,7 @@ static const display_backend_ops_t qemu_display_backend = {
     .flush_rect = qemu_display_flush_rect,
     .check_resize = virtio_gpu_check_resize,
     .set_orientation = NULL,
+    .set_mode = NULL,
 };
 
 platform_devices_state_t platform_devices_init(void)

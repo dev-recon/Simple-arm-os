@@ -9,9 +9,13 @@ SMP_CPUS=1
 ENABLE_NET=no
 ENABLE_GPU=no
 
-# Raspberry Pi 3 GPIO display. The raspi3 platform enables it by default;
-# set this to no when the selected pins are needed by another peripheral.
+# Raspberry Pi 3 displays and USB. Select either ILI9341 or HDMI. HDMI uses
+# the firmware framebuffer; USB enables the DWC2 host and boot HID devices.
 # ENABLE_ILI9341=no
+# ENABLE_HDMI=no
+# HDMI_WIDTH=1280
+# HDMI_HEIGHT=720
+# ENABLE_USB=no
 
 # Userland build content.
 BUILD_NEWLIB=yes

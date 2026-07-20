@@ -30,6 +30,32 @@ The 0.7.2 release keeps the 0.7 common-kernel architecture and adds:
 The next release should build on this baseline instead of introducing an
 architecture-private implementation of a common kernel policy.
 
+## HDMI And USB Development
+
+The `hdmi-usb` hardware branch adds two opt-in Raspberry Pi 3 backends while
+preserving UART as the recovery path:
+
+- a VideoCore mailbox framebuffer exposed through the common `/dev/fb0` and
+  graphical `tty1` interfaces;
+- a BCM2837 DWC2 host path that enumerates the internal hub and routes USB boot
+  keyboard/mouse input through the common TTY and display input contracts.
+
+Hardware validation is the gate before these drivers become a release
+baseline. Follow-up work includes USB hotplug, interrupt-driven transfers,
+more HID layouts, and eventually native VC4 display management.
+
+USB architecture debt to remove after first hardware validation:
+
+- move the `usbd` task and device enumeration out of the Raspberry Pi DWC2
+  driver into a platform-independent USB core;
+- discover host controllers from the DTB and register each one through a
+  common HCD contract;
+- let the USB core enumerate the live bus and bind generic hub, HID, storage,
+  and future class drivers dynamically. The DTB describes controllers and
+  fixed wiring; it cannot report which removable USB devices are connected;
+- keep `dwc2.c` limited to controller registers, channels, transfer mechanics,
+  root-port state, and interrupts.
+
 ## 0.7 ARM64 Baseline
 
 The 0.7 baseline is:

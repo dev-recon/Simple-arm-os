@@ -70,9 +70,10 @@ userland used by the QEMU targets.
 </table>
 
 The graphical captures come from `arm64/qemu-virt`. The Raspberry Pi 3 target
-can now drive an HSD028309 B6 / ILI9341 panel through GPIO using the same
-`/dev/fb0` and `tty1` interfaces. The UART rescue console remains available as
-`tty0` on both platforms.
+can drive either an HSD028309 B6 / ILI9341 panel through GPIO or an HDMI
+monitor through the firmware framebuffer, using the same `/dev/fb0` and
+`tty1` interfaces. Its opt-in USB host supports boot keyboards and mice through
+the Pi 3 internal hub. The UART rescue console remains available as `tty0`.
 
 ## Quick Start
 
@@ -110,7 +111,7 @@ command line.
 | Processes | Preemptive scheduling, SMP, `fork`, ELF `execve`, `waitpid`, signals, job control |
 | Virtual memory | Split user/kernel address spaces, MMU, ASIDs, copy-on-write, anonymous `mmap` |
 | Files and IPC | VFS, descriptors, pipes, `dup`, ext2 root, FAT32, `/proc` |
-| Devices | PL011 UART, TTYs, VirtIO block/net/GPU/input, Raspberry Pi SD/eMMC and ILI9341 GPIO display |
+| Devices | PL011 UART, TTYs, VirtIO block/net/GPU/input, Raspberry Pi SD/eMMC, HDMI, ILI9341 and USB boot HID |
 | Userland | newlib, `mash`, core Unix tools, editors, tests, optional BSD utilities |
 | Native development | TinyCC can compile and run small C programs from inside ArmOS |
 
@@ -124,7 +125,7 @@ release build system.
 | --- | --- | --- | --- |
 | `arm32/qemu-virt` | Fresh-checkout default | ARMv7-A | GICv2, PL011, VirtIO |
 | `arm64/qemu-virt` | Kernel feature reference | AArch64 | GICv2, PL011, VirtIO, 4-core SMP |
-| `arm64/raspi3` | Hardware reference | AArch64 | Raspberry Pi 3 B+, PL011, SD/eMMC, ILI9341, 4-core SMP |
+| `arm64/raspi3` | Hardware reference | AArch64 | Raspberry Pi 3 B+, PL011, SD/eMMC, HDMI/ILI9341, USB HID, 4-core SMP |
 | `arm32/raspi2` | Supported hardware | ARMv7-A | Raspberry Pi 2 B v1.1, PL011, SD/eMMC |
 
 QEMU 10.0.2 is the reference emulator for the 0.7 line. Hardware images use a

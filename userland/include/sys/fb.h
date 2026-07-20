@@ -18,6 +18,7 @@
 #define ARMOS_FBIOGET_INFO      0x4600u
 #define ARMOS_FBIOGET_ORIENTATION 0x4601u
 #define ARMOS_FBIOSET_ORIENTATION 0x4602u
+#define ARMOS_FBIOSET_MODE      0x4603u
 #define ARMOS_FB_FORMAT_ARGB8888 1u
 
 #define ARMOS_FB_ORIENTATION_PORTRAIT  0u
@@ -34,6 +35,11 @@ struct armos_fb_info {
 
 struct armos_fb_orientation {
     uint32_t orientation;
+};
+
+struct armos_fb_mode {
+    uint32_t width;
+    uint32_t height;
 };
 
 #endif

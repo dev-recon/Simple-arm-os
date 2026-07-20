@@ -945,6 +945,7 @@ int sys_ioctl(int fd, uint32_t request, uintptr_t arg)
     struct winsize wsz;
     struct armos_fb_info fbinfo;
     struct armos_fb_orientation fborientation;
+    struct armos_fb_mode fbmode;
     int tty_id;
     int fbret;
 
@@ -992,6 +993,15 @@ int sys_ioctl(int fd, uint32_t request, uintptr_t arg)
                            sizeof(fborientation)) < 0)
             return -EFAULT;
         return framebuffer_set_orientation(&fborientation);
+
+    case ARMOS_FBIOSET_MODE:
+        if (file->type != FILE_TYPE_FRAMEBUFFER)
+            return -ENOTTY;
+        if (!arg)
+            return -EFAULT;
+        if (copy_from_user(&fbmode, (void*)arg, sizeof(fbmode)) < 0)
+            return -EFAULT;
+        return framebuffer_set_mode(&fbmode);
 
     case TIOCGWINSZ:
         if (!file_is_tty(file))

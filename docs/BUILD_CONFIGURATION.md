@@ -81,7 +81,11 @@ TARGET_PLATFORM=qemu-virt
 SMP_CPUS=1
 ENABLE_NET=no
 ENABLE_GPU=no
+ENABLE_HDMI=no
 ENABLE_ILI9341=no
+ENABLE_USB=no
+HDMI_WIDTH=1280
+HDMI_HEIGHT=720
 ```
 
 `ENABLE_NET=yes` adds VirtIO-net and the configured host forwarding when QEMU
@@ -98,6 +102,18 @@ entry point.
 Raspberry Pi 3. The `raspi3` platform enables it by default; set it to `no`
 when those GPIO pins are needed by another peripheral. It is not a QEMU launch
 option and has no effect on `qemu-virt`.
+
+`ENABLE_HDMI=yes` selects the Raspberry Pi firmware framebuffer and exposes it
+through the same `/dev/fb0` and graphical `tty1` contract. It requires
+`TARGET_PLATFORM=raspi3`; `HDMI_WIDTH` and `HDMI_HEIGHT` request an exact mode.
+HDMI and ILI9341 are mutually exclusive because both are framebuffer backends.
+These values select the boot mode. On a running Raspberry Pi HDMI system,
+`fbctl mode WIDTHxHEIGHT` requests another exact firmware mode through
+`/dev/fb0`.
+
+`ENABLE_USB=yes` enables the Raspberry Pi 3 DWC2 host, internal hub support,
+and boot-protocol keyboard/mouse input. This first milestone enumerates devices
+present during startup and requires `TARGET_PLATFORM=raspi3`.
 
 Optional userland components:
 

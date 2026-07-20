@@ -76,6 +76,18 @@
 #define ARMOS_PLATFORM_KERNEL_MMIO_IRQCTRL2_BASE 0u
 #endif
 
+#ifndef ARMOS_PLATFORM_KERNEL_MMIO_USB_BASE
+#define ARMOS_PLATFORM_KERNEL_MMIO_USB_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_KERNEL_MMIO_USB_SECTION_BASE
+#define ARMOS_PLATFORM_KERNEL_MMIO_USB_SECTION_BASE 0u
+#endif
+
+#ifndef ARMOS_PLATFORM_USB_PHYS_SECTION_BASE
+#define ARMOS_PLATFORM_USB_PHYS_SECTION_BASE 0u
+#endif
+
 #ifndef ARMOS_PLATFORM_IRQCTRL2_PHYS_SECTION_BASE
 #define ARMOS_PLATFORM_IRQCTRL2_PHYS_SECTION_BASE 0u
 #endif
@@ -315,6 +327,28 @@ static inline vaddr_t arch_platform_kernel_mmio_emmc_base(void)
 static inline vaddr_t arch_platform_kernel_mmio_irqctrl2_base(void)
 {
     return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_IRQCTRL2_BASE;
+}
+
+static inline vaddr_t arch_platform_kernel_mmio_usb_base(void)
+{
+    return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_USB_BASE;
+}
+
+static inline vaddr_t arch_platform_kernel_mmio_usb_section_base(void)
+{
+    return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_USB_SECTION_BASE;
+}
+
+static inline paddr_t arch_platform_usb_phys_section_base(void)
+{
+    return (paddr_t)ARMOS_PLATFORM_USB_PHYS_SECTION_BASE;
+}
+
+static inline bool arch_platform_has_usb(void)
+{
+    return ARMOS_PLATFORM_KERNEL_MMIO_USB_BASE != 0u &&
+           ARMOS_PLATFORM_KERNEL_MMIO_USB_SECTION_BASE != 0u &&
+           ARMOS_PLATFORM_USB_PHYS_SECTION_BASE != 0u;
 }
 
 static inline paddr_t arch_platform_irqctrl2_phys_section_base(void)

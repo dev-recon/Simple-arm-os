@@ -25,6 +25,16 @@
 #define ARMOS_FB_ORIENTATION_PORTRAIT  0u
 #define ARMOS_FB_ORIENTATION_LANDSCAPE 1u
 
+typedef struct display_backend_mode {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint32_t size;
+    paddr_t physical;
+    uint8_t *virtual_address;
+} display_backend_mode_t;
+
 typedef struct display_backend_ops {
     const char *name;
     int (*flush_rect)(const uint8_t *framebuffer, uint32_t pitch,
@@ -33,6 +43,8 @@ typedef struct display_backend_ops {
     bool (*check_resize)(void);
     int (*set_orientation)(uint32_t orientation,
                            uint32_t *width, uint32_t *height);
+    int (*set_mode)(uint32_t width, uint32_t height,
+                    display_backend_mode_t *mode);
 } display_backend_ops_t;
 
 #endif /* _KERNEL_DISPLAY_BACKEND_H */

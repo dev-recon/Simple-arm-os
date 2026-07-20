@@ -605,6 +605,14 @@ static void setup_kernel_space(void)
      *   KERNEL_DIRECT_MAP_BASE + (paddr - ram_start) -> paddr
      */
     uint64_t direct_phys_end = ram_end;
+#ifdef ARMOS_PLATFORM_KERNEL_DIRECT_MAP_PHYS_END
+    /*
+     * Raspberry Pi firmware allocates framebuffers from VideoCore-reserved
+     * SDRAM. Map that range as normal memory, but never add it to the physical
+     * allocator: only an address explicitly returned by the firmware is used.
+     */
+    direct_phys_end = ARMOS_PLATFORM_KERNEL_DIRECT_MAP_PHYS_END;
+#endif
     uint64_t direct_max_phys = (uint64_t)ram_start + KERNEL_DIRECT_MAP_SIZE;
     if (direct_phys_end > direct_max_phys) {
         direct_phys_end = direct_max_phys;
@@ -642,6 +650,7 @@ static void setup_kernel_space(void)
     vaddr_t mmio_virtio_base = arch_platform_kernel_mmio_virtio_base();
     vaddr_t mmio_emmc_base = arch_platform_kernel_mmio_emmc_base();
     vaddr_t mmio_irqctrl2_base = arch_platform_kernel_mmio_irqctrl2_base();
+    vaddr_t mmio_usb_base = arch_platform_kernel_mmio_usb_base();
 
     map_kernel_mmio_alias(mmio_irqctrl_base, arch_platform_irqctrl_phys_start());
     if (arch_platform_has_irqctrl2_alias()) {
@@ -652,19 +661,25 @@ static void setup_kernel_space(void)
     if (arch_platform_has_emmc()) {
         map_kernel_mmio_alias(mmio_emmc_base, arch_platform_emmc_phys_section_base());
     }
+    if (arch_platform_has_usb()) {
+        map_kernel_mmio_alias(arch_platform_kernel_mmio_usb_section_base(),
+                              arch_platform_usb_phys_section_base());
+    }
     if (arch_platform_has_virtio_mmio()) {
         map_kernel_mmio_alias(mmio_virtio_base, arch_platform_virtio_phys_start());
-        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X IRQ2=0x%08X UART=0x%08X VirtIO=0x%08X EMMC=0x%08X\n",
+        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X IRQ2=0x%08X UART=0x%08X VirtIO=0x%08X EMMC=0x%08X USB=0x%08X\n",
               mmio_irqctrl_base,
               arch_platform_has_irqctrl2_alias() ? mmio_irqctrl2_base : 0u,
               mmio_uart_base, mmio_virtio_base,
-              arch_platform_has_emmc() ? mmio_emmc_base : 0u);
+              arch_platform_has_emmc() ? mmio_emmc_base : 0u,
+              arch_platform_has_usb() ? mmio_usb_base : 0u);
     } else {
-        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X IRQ2=0x%08X UART=0x%08X EMMC=0x%08X\n",
+        KINFO("MMU: Kernel MMIO aliases mapped: IRQ=0x%08X IRQ2=0x%08X UART=0x%08X EMMC=0x%08X USB=0x%08X\n",
               mmio_irqctrl_base,
               arch_platform_has_irqctrl2_alias() ? mmio_irqctrl2_base : 0u,
               mmio_uart_base,
-              arch_platform_has_emmc() ? mmio_emmc_base : 0u);
+              arch_platform_has_emmc() ? mmio_emmc_base : 0u,
+              arch_platform_has_usb() ? mmio_usb_base : 0u);
     }
 
     /* 3. NOUVEAU: Pré-allouer et configurer les temp mappings ICI */

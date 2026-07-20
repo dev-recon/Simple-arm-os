@@ -170,6 +170,7 @@ static const display_backend_ops_t ili9341_backend = {
     .flush_rect = ili9341_flush_rect,
     .check_resize = NULL,
     .set_orientation = ili9341_set_orientation,
+    .set_mode = NULL,
 };
 
 bool ili9341_init(void)

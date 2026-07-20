@@ -39,6 +39,7 @@ extern paddr_t framebuffer_phys;   /* Physical/DMA address of framebuffer_base *
 #define ARMOS_FBIOGET_INFO      0x4600u
 #define ARMOS_FBIOGET_ORIENTATION 0x4601u
 #define ARMOS_FBIOSET_ORIENTATION 0x4602u
+#define ARMOS_FBIOSET_MODE      0x4603u
 #define ARMOS_FB_FORMAT_ARGB8888 1u
 
 struct armos_fb_info {
@@ -52,6 +53,11 @@ struct armos_fb_info {
 
 struct armos_fb_orientation {
     uint32_t orientation;
+};
+
+struct armos_fb_mode {
+    uint32_t width;
+    uint32_t height;
 };
 
 typedef struct {
@@ -86,6 +92,9 @@ extern const font_t font_vga_8x16;
 
 /* Display functions */
 bool init_display(uint32_t width, uint32_t height, uint32_t bpp);
+bool init_display_external(uint32_t width, uint32_t height, uint32_t bpp,
+                           uint32_t pitch, paddr_t physical,
+                           uint8_t *virtual_address, uint32_t size);
 void display_set_backend(const display_backend_ops_t *backend);
 const char *display_backend_name(void);
 void display_flush_all(void);
@@ -109,6 +118,7 @@ void fill_framebuffer_device_stat(struct stat* st);
 int framebuffer_get_info(struct armos_fb_info* info);
 int framebuffer_get_orientation(struct armos_fb_orientation *orientation);
 int framebuffer_set_orientation(const struct armos_fb_orientation *orientation);
+int framebuffer_set_mode(const struct armos_fb_mode *mode);
 file_t* create_framebuffer_device_file(const char* name, int flags);
 
 #endif

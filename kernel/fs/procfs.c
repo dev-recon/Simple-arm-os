@@ -40,6 +40,7 @@
 #include <kernel/arch_mmu_debug.h>
 #include <kernel/arch_platform.h>
 #include <kernel/block_device.h>
+#include <kernel/usb.h>
 
 extern uint32_t task_count;
 extern task_t* task_list_head;
@@ -78,6 +79,7 @@ static file_operations_t procfs_dir_ops;
 #define PROC_INO_DISKSTATS  25u
 #define PROC_INO_FS_FAT32   26u
 #define PROC_INO_FS_FAT32_STATS 27u
+#define PROC_INO_USB        28u
 #define PROC_PID_BASE       100000u
 #define PROC_PID_STRIDE     512u
 #define PROC_PID_DIR        0u
@@ -321,6 +323,8 @@ static inode_t* procfs_lookup(inode_t* dir, const char* name)
             return proc_make_inode(PROC_INO_PARTITIONS, S_IFREG | 0444, 0);
         if (strcmp(name, "diskstats") == 0)
             return proc_make_inode(PROC_INO_DISKSTATS, S_IFREG | 0444, 0);
+        if (strcmp(name, "usb") == 0)
+            return proc_make_inode(PROC_INO_USB, S_IFREG | 0444, 0);
         if (strcmp(name, "dmesg") == 0)
             return proc_make_inode(PROC_INO_DMESG, S_IFREG | 0444, 0);
         if (strcmp(name, "interrupts") == 0)
@@ -786,6 +790,39 @@ static void proc_fill_diskstats(char* buf, size_t cap, size_t* len)
                 (unsigned long long)st.flush_errors);
     proc_append(buf, cap, len, "max_read_sectors %u\n", st.max_read_sectors);
     proc_append(buf, cap, len, "max_write_sectors %u\n", st.max_write_sectors);
+}
+
+static void proc_fill_usb(char* buf, size_t cap, size_t* len)
+{
+    usb_device_info_t *devices;
+    size_t count;
+
+    proc_append(buf, cap, len,
+                "bus|address|parent|port|speed|max_packet|class|subclass|"
+                "protocol|usb|vendor|product|device|configs|interfaces|"
+                "ports|keyboards|mice|manufacturer|product_name|serial\n");
+    devices = kmalloc(sizeof(*devices) * USB_TOPOLOGY_MAX_DEVICES);
+    if (!devices)
+        return;
+
+    count = usb_topology_snapshot(devices, USB_TOPOLOGY_MAX_DEVICES);
+    for (size_t i = 0; i < count; i++) {
+        const usb_device_info_t *dev = &devices[i];
+
+        proc_append(buf, cap, len,
+                    "%u|%u|%u|%u|%s|%u|%02x|%02x|%02x|%04x|%04x|%04x|"
+                    "%04x|%u|%u|%u|%u|%u|%s|%s|%s\n",
+                    dev->bus, dev->address, dev->parent_address,
+                    dev->parent_port, usb_speed_name(dev->speed),
+                    dev->max_packet_size, dev->device_class,
+                    dev->device_subclass, dev->device_protocol,
+                    dev->usb_version, dev->vendor_id, dev->product_id,
+                    dev->device_version, dev->configuration_count,
+                    dev->interface_count, dev->port_count,
+                    dev->keyboard_interfaces, dev->mouse_interfaces,
+                    dev->manufacturer, dev->product, dev->serial);
+    }
+    kfree(devices);
 }
 
 static void proc_fill_dmesg(char* buf, size_t cap, size_t* len)
@@ -1853,6 +1890,7 @@ static int proc_generate_file(uint32_t ino, char* buf, size_t cap, size_t* len)
         case PROC_INO_FILESYSTEMS: proc_fill_filesystems(buf, cap, len); return 0;
         case PROC_INO_PARTITIONS: proc_fill_partitions(buf, cap, len); return 0;
         case PROC_INO_DISKSTATS: proc_fill_diskstats(buf, cap, len); return 0;
+        case PROC_INO_USB: proc_fill_usb(buf, cap, len); return 0;
         case PROC_INO_DMESG:   proc_fill_dmesg(buf, cap, len); return 0;
         case PROC_INO_INTERRUPTS: proc_fill_interrupts(buf, cap, len); return 0;
         case PROC_INO_TTY:     proc_fill_tty(buf, cap, len); return 0;
@@ -2040,6 +2078,7 @@ static int procfs_root_readdir(file_t* file, dirent_t* dirent)
         { "filesystems", PROC_INO_FILESYSTEMS, DT_REG },
         { "partitions", PROC_INO_PARTITIONS, DT_REG },
         { "diskstats", PROC_INO_DISKSTATS, DT_REG },
+        { "usb",     PROC_INO_USB,       DT_REG },
         { "dmesg",   PROC_INO_DMESG,  DT_REG },
         { "interrupts", PROC_INO_INTERRUPTS, DT_REG },
         { "tty",     PROC_INO_TTY,    DT_REG },

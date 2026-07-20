@@ -19,6 +19,7 @@
  */
 
 #include <asm/mmu.h>
+#include <asm/memory_layout.h>
 #include <asm/platform.h>
 #include <kernel/arch_mmu_debug.h>
 #include <kernel/arch_memory.h>
@@ -123,8 +124,7 @@ static void populate_identity_l1(uint64_t *table)
 
         arm64_identity_l2_low[i] = 0;
         arm64_identity_l2_high[i] = 0;
-        if ((low_phys - ARMOS_PLATFORM_RAM_START) <
-            ARMOS_PLATFORM_RAM_FALLBACK_SIZE) {
+        if ((low_phys - ARMOS_PLATFORM_RAM_START) < KERNEL_DIRECT_MAP_SIZE) {
             arm64_identity_l2_low[i] =
                 low_phys | DESC_VALID | DESC_ATTR_INDEX(1) | DESC_AF |
                 DESC_SH_INNER;
