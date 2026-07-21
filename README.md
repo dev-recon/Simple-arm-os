@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dev-recon/ArmOS/releases/tag/0.7.2"><img src="https://img.shields.io/badge/release-0.7.2-2878d7" alt="ArmOS 0.7.2"></a>
+  <a href="https://github.com/dev-recon/ArmOS/releases/tag/0.7.3"><img src="https://img.shields.io/badge/release-0.7.3-2878d7" alt="ArmOS 0.7.3"></a>
   <img src="https://img.shields.io/badge/architectures-ARMv7%20%7C%20AArch64-22a06b" alt="ARMv7 and AArch64">
   <img src="https://img.shields.io/badge/SMP-4%20cores-7557d3" alt="SMP on four cores">
   <img src="https://img.shields.io/badge/QEMU-10.0.2-e65d19" alt="QEMU 10.0.2">
@@ -20,7 +20,8 @@
 
 ArmOS is an educational and research operating system, not a Linux
 distribution. Version 0.7 brought ARM64 onto the same common kernel used by
-ARM32; version 0.7.2 adds the first Raspberry Pi GPIO display driver. The
+ARM32; version 0.7.3 adds Raspberry Pi HDMI and USB HID support alongside the
+GPIO display driver introduced in 0.7.2. The
 architecture layer handles CPU and MMU details while processes, syscalls,
 scheduling, VFS, filesystems, drivers, and userland contracts remain shared.
 

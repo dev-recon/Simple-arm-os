@@ -1,6 +1,6 @@
 # ArmOS kernel Makefile
 
-ARMOS_VERSION := 0.7.2
+ARMOS_VERSION := 0.7.3
 
 # Local configuration is optional. Command-line assignments retain GNU make's
 # highest priority; environment values are restored after the include so the

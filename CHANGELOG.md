@@ -5,6 +5,28 @@ Release tags use the bare version number starting with `0.7` (`0.7`, `0.7.1`,
 
 ## Unreleased
 
+## ArmOS 0.7.3 - 2026-07-21
+
+ArmOS 0.7.3 turns the Raspberry Pi 3 into a directly usable workstation target
+with firmware HDMI output and USB keyboard/mouse input.
+
+### Highlights
+
+- Added a VideoCore mailbox framebuffer backend for Raspberry Pi HDMI, exposed
+  through the common `/dev/fb0` and graphical `tty1` contracts.
+- Added a BCM2837 DWC2 host-controller driver with internal-hub enumeration and
+  USB boot-protocol keyboard and mouse support.
+- Moved USB lifecycle and polling into the architecture-neutral USB core and
+  its `usbd` kernel task; the Raspberry Pi platform now only registers the
+  controller discovered from the boot DTB.
+- Added `/proc/usb` and `lsusb` list, verbose, and topology views.
+- Added responsive HID polling and held-key repeat for printable keys,
+  Backspace, Tab, and cursor keys.
+- Kept HDMI and the ILI9341 backend behind the same framebuffer/display policy,
+  with build-time configuration validation preventing conflicting backends.
+- Made HDMI plus USB the default Raspberry Pi 3 ARM64 hardware profile while
+  preserving UART as the recovery console.
+
 ## ArmOS 0.7.2 - 2026-07-18
 
 ArmOS 0.7.2 adds the first framebuffer console on Raspberry Pi hardware and

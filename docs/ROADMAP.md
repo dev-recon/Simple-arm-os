@@ -5,9 +5,9 @@ ArmOS. The goal is not to clone Linux line by line, but to converge toward the
 same useful Unix contracts while keeping the kernel understandable and
 debuggable.
 
-## 0.7.2 Current Baseline
+## 0.7.3 Current Baseline
 
-The 0.7.2 release keeps the 0.7 common-kernel architecture and adds:
+The 0.7.3 release keeps the 0.7 common-kernel architecture and adds:
 
 - one POSIX implementation path for ARM32 and ARM64, including clocks,
   positioned I/O, directory-relative operations, filesystem capacity,
@@ -22,17 +22,20 @@ The 0.7.2 release keeps the 0.7 common-kernel architecture and adds:
   coherency under sustained SMP process churn;
 - target-specific Raspberry Pi firmware staging;
 - a common display-backend contract shared by VirtIO-GPU and the Raspberry
-  Pi 3 ILI9341 GPIO panel, including `/dev/fb0`, graphical `tty1`, runtime
-  orientation changes, and public-domain image fixtures;
+  Pi 3 HDMI and ILI9341 GPIO backends, including `/dev/fb0`, graphical `tty1`,
+  runtime orientation changes, and public-domain image fixtures;
+- a common USB core and `usbd` task, with the Raspberry Pi DWC2 controller,
+  internal hub enumeration, HID keyboard/mouse input, `/proc/usb`, and
+  `lsusb`;
 - deterministic boot ordering that admits secondary schedulers before PID 1
   can print the first framebuffer shell banner.
 
 The next release should build on this baseline instead of introducing an
 architecture-private implementation of a common kernel policy.
 
-## HDMI And USB Development
+## HDMI And USB Follow-up
 
-The `hdmi-usb` hardware branch adds two opt-in Raspberry Pi 3 backends while
+The 0.7.3 hardware baseline includes two Raspberry Pi 3 backends while
 preserving UART as the recovery path:
 
 - a VideoCore mailbox framebuffer exposed through the common `/dev/fb0` and
@@ -40,21 +43,9 @@ preserving UART as the recovery path:
 - a BCM2837 DWC2 host path that enumerates the internal hub and routes USB boot
   keyboard/mouse input through the common TTY and display input contracts.
 
-Hardware validation is the gate before these drivers become a release
-baseline. Follow-up work includes USB hotplug, interrupt-driven transfers,
-more HID layouts, and eventually native VC4 display management.
-
-USB architecture debt to remove after first hardware validation:
-
-- move the `usbd` task and device enumeration out of the Raspberry Pi DWC2
-  driver into a platform-independent USB core;
-- discover host controllers from the DTB and register each one through a
-  common HCD contract;
-- let the USB core enumerate the live bus and bind generic hub, HID, storage,
-  and future class drivers dynamically. The DTB describes controllers and
-  fixed wiring; it cannot report which removable USB devices are connected;
-- keep `dwc2.c` limited to controller registers, channels, transfer mechanics,
-  root-port state, and interrupts.
+Follow-up work includes USB hotplug, interrupt-driven transfers, more HID
+layouts, USB storage, dynamic class-driver binding, and eventually native VC4
+display management.
 
 ## 0.7 ARM64 Baseline
 
