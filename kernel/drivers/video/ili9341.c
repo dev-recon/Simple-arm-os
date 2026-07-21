@@ -20,8 +20,11 @@
 #include <kernel/arch_platform.h>
 #include <kernel/gpio_parallel8.h>
 #include <kernel/ili9341.h>
+#include <kernel/display.h>
 #include <kernel/spinlock.h>
+#include <kernel/string.h>
 #include <kernel/timer.h>
+#include <kernel/tty.h>
 
 #define ILI9341_SWRESET 0x01u
 #define ILI9341_SLPOUT  0x11u
@@ -37,6 +40,48 @@ static uint32_t ili9341_width = ILI9341_WIDTH;
 static uint32_t ili9341_height = ILI9341_HEIGHT;
 static uint32_t ili9341_orientation = ARMOS_FB_ORIENTATION_PORTRAIT;
 static spinlock_t ili9341_lock = SPINLOCK_INIT("ili9341");
+
+#define ILI9341_AUX_CAPACITY (ILI9341_WIDTH * ILI9341_HEIGHT)
+#define ILI9341_ANSI_PARAMS  8u
+
+typedef enum {
+    ILI9341_ANSI_NORMAL = 0,
+    ILI9341_ANSI_ESC,
+    ILI9341_ANSI_CSI,
+} ili9341_ansi_state_t;
+
+typedef struct {
+    bool attached;
+    int tty_id;
+    uint32_t cursor_x;
+    uint32_t cursor_y;
+    uint32_t columns;
+    uint32_t rows;
+    uint32_t fg;
+    uint32_t bg;
+    ili9341_ansi_state_t ansi_state;
+    uint32_t ansi_params[ILI9341_ANSI_PARAMS];
+    uint32_t ansi_count;
+    bool ansi_active;
+    spinlock_t lock;
+} ili9341_aux_console_t;
+
+static uint32_t ili9341_aux_pixels[ILI9341_AUX_CAPACITY]
+    __attribute__((aligned(64)));
+static ili9341_aux_console_t ili9341_aux = {
+    .tty_id = -1,
+    .lock = SPINLOCK_INIT("ili9341_aux"),
+};
+
+static const uint32_t ili9341_ansi_colors[8] = {
+    0xff000000u, 0xffaa0000u, 0xff00aa00u, 0xffaa5500u,
+    0xff0000aau, 0xffaa00aau, 0xff00aaaau, 0xffaaaaaau,
+};
+
+static const uint32_t ili9341_ansi_bright_colors[8] = {
+    0xff555555u, 0xffff5555u, 0xff55ff55u, 0xffffff55u,
+    0xff5555ffu, 0xffff55ffu, 0xff55ffffu, 0xffffffffu,
+};
 
 static void ili9341_delay_ms(uint32_t milliseconds)
 {
@@ -124,6 +169,281 @@ static int ili9341_flush_rect(const uint8_t *framebuffer, uint32_t pitch,
     return 0;
 }
 
+static void ili9341_aux_mark_cell(uint32_t column, uint32_t row)
+{
+    display_mark_auxiliary_dirty(column * font_vga_8x16.width,
+                                 row * font_vga_8x16.height,
+                                 font_vga_8x16.width,
+                                 font_vga_8x16.height);
+}
+
+static void ili9341_aux_draw_cell(uint32_t column, uint32_t row, char ch)
+{
+    uint32_t x = column * font_vga_8x16.width;
+    uint32_t y = row * font_vga_8x16.height;
+    const uint8_t *glyph = NULL;
+
+    if (x + font_vga_8x16.width > ili9341_width ||
+        y + font_vga_8x16.height > ili9341_height)
+        return;
+    if ((uint8_t)ch >= font_vga_8x16.first &&
+        (uint8_t)ch <= font_vga_8x16.last) {
+        uint32_t glyph_index = (uint8_t)ch - font_vga_8x16.first;
+        glyph = font_vga_8x16.glyphs +
+            glyph_index * font_vga_8x16.width * font_vga_8x16.height;
+    }
+
+    for (uint32_t gy = 0; gy < font_vga_8x16.height; gy++) {
+        uint32_t *pixels = &ili9341_aux_pixels[(y + gy) * ili9341_width + x];
+
+        for (uint32_t gx = 0; gx < font_vga_8x16.width; gx++) {
+            uint8_t alpha = glyph ?
+                glyph[gy * font_vga_8x16.width + gx] : 0;
+            pixels[gx] = alpha >= 128u ? ili9341_aux.fg : ili9341_aux.bg;
+        }
+    }
+    ili9341_aux_mark_cell(column, row);
+}
+
+static void ili9341_aux_clear(void)
+{
+    uint32_t count = ili9341_width * ili9341_height;
+
+    for (uint32_t i = 0; i < count; i++)
+        ili9341_aux_pixels[i] = ili9341_aux.bg;
+    ili9341_aux.cursor_x = 0;
+    ili9341_aux.cursor_y = 0;
+    display_mark_auxiliary_dirty(0, 0, ili9341_width, ili9341_height);
+}
+
+static void ili9341_aux_clear_line_from_cursor(void)
+{
+    uint32_t y = ili9341_aux.cursor_y * font_vga_8x16.height;
+    uint32_t x = ili9341_aux.cursor_x * font_vga_8x16.width;
+
+    if (y >= ili9341_height || x >= ili9341_width)
+        return;
+    for (uint32_t row = 0; row < font_vga_8x16.height; row++) {
+        uint32_t *pixels = &ili9341_aux_pixels[(y + row) * ili9341_width + x];
+
+        for (uint32_t column = x; column < ili9341_width; column++)
+            pixels[column - x] = ili9341_aux.bg;
+    }
+    display_mark_auxiliary_dirty(x, y, ili9341_width - x,
+                                 font_vga_8x16.height);
+}
+
+static void ili9341_aux_scroll(void)
+{
+    uint32_t line_pixels = ili9341_width * font_vga_8x16.height;
+    uint32_t retained = ili9341_width *
+        (ili9341_height - font_vga_8x16.height);
+
+    memmove(ili9341_aux_pixels,
+            ili9341_aux_pixels + line_pixels,
+            retained * sizeof(uint32_t));
+    for (uint32_t i = retained; i < retained + line_pixels; i++)
+        ili9341_aux_pixels[i] = ili9341_aux.bg;
+    if (ili9341_aux.rows)
+        ili9341_aux.cursor_y = ili9341_aux.rows - 1u;
+    display_mark_auxiliary_dirty(0, 0, ili9341_width, ili9341_height);
+}
+
+static void ili9341_aux_newline(void)
+{
+    ili9341_aux.cursor_x = 0;
+    ili9341_aux.cursor_y++;
+    if (ili9341_aux.cursor_y >= ili9341_aux.rows)
+        ili9341_aux_scroll();
+}
+
+static uint32_t ili9341_aux_param(uint32_t index, uint32_t fallback)
+{
+    if (index >= ili9341_aux.ansi_count)
+        return fallback;
+    return ili9341_aux.ansi_params[index];
+}
+
+static void ili9341_aux_apply_sgr(void)
+{
+    if (ili9341_aux.ansi_count == 0u) {
+        ili9341_aux.fg = 0xffaaaaaau;
+        ili9341_aux.bg = 0xff000000u;
+        return;
+    }
+
+    for (uint32_t i = 0; i < ili9341_aux.ansi_count; i++) {
+        uint32_t value = ili9341_aux.ansi_params[i];
+
+        if (value == 0u) {
+            ili9341_aux.fg = 0xffaaaaaau;
+            ili9341_aux.bg = 0xff000000u;
+        } else if (value >= 30u && value <= 37u) {
+            ili9341_aux.fg = ili9341_ansi_colors[value - 30u];
+        } else if (value >= 40u && value <= 47u) {
+            ili9341_aux.bg = ili9341_ansi_colors[value - 40u];
+        } else if (value >= 90u && value <= 97u) {
+            ili9341_aux.fg = ili9341_ansi_bright_colors[value - 90u];
+        } else if (value >= 100u && value <= 107u) {
+            ili9341_aux.bg = ili9341_ansi_bright_colors[value - 100u];
+        }
+    }
+}
+
+static void ili9341_aux_execute_csi(char command)
+{
+    uint32_t amount;
+
+    switch (command) {
+    case 'A':
+        amount = ili9341_aux_param(0, 1u);
+        ili9341_aux.cursor_y = amount > ili9341_aux.cursor_y ?
+            0u : ili9341_aux.cursor_y - amount;
+        break;
+    case 'B':
+        amount = ili9341_aux_param(0, 1u);
+        ili9341_aux.cursor_y = MIN(ili9341_aux.cursor_y + amount,
+                                  ili9341_aux.rows - 1u);
+        break;
+    case 'C':
+        amount = ili9341_aux_param(0, 1u);
+        ili9341_aux.cursor_x = MIN(ili9341_aux.cursor_x + amount,
+                                  ili9341_aux.columns - 1u);
+        break;
+    case 'D':
+        amount = ili9341_aux_param(0, 1u);
+        ili9341_aux.cursor_x = amount > ili9341_aux.cursor_x ?
+            0u : ili9341_aux.cursor_x - amount;
+        break;
+    case 'H':
+    case 'f': {
+        uint32_t row = ili9341_aux_param(0, 1u);
+        uint32_t column = ili9341_aux_param(1, 1u);
+
+        ili9341_aux.cursor_y = MIN(row ? row - 1u : 0u,
+                                  ili9341_aux.rows - 1u);
+        ili9341_aux.cursor_x = MIN(column ? column - 1u : 0u,
+                                  ili9341_aux.columns - 1u);
+        break;
+    }
+    case 'J':
+        if (ili9341_aux_param(0, 0u) == 2u ||
+            ili9341_aux_param(0, 0u) == 0u)
+            ili9341_aux_clear();
+        break;
+    case 'K':
+        ili9341_aux_clear_line_from_cursor();
+        break;
+    case 'm':
+        ili9341_aux_apply_sgr();
+        break;
+    default:
+        break;
+    }
+}
+
+static void ili9341_aux_putchar_locked(char ch)
+{
+    if (ili9341_aux.ansi_state == ILI9341_ANSI_ESC) {
+        ili9341_aux.ansi_state = ch == '[' ?
+            ILI9341_ANSI_CSI : ILI9341_ANSI_NORMAL;
+        ili9341_aux.ansi_count = 0;
+        ili9341_aux.ansi_active = false;
+        memset(ili9341_aux.ansi_params, 0, sizeof(ili9341_aux.ansi_params));
+        return;
+    }
+    if (ili9341_aux.ansi_state == ILI9341_ANSI_CSI) {
+        if (ch >= '0' && ch <= '9') {
+            uint32_t index = MIN(ili9341_aux.ansi_count,
+                                 ILI9341_ANSI_PARAMS - 1u);
+            ili9341_aux.ansi_params[index] =
+                ili9341_aux.ansi_params[index] * 10u + (uint32_t)(ch - '0');
+            ili9341_aux.ansi_active = true;
+            return;
+        }
+        if (ch == ';') {
+            if (ili9341_aux.ansi_count < ILI9341_ANSI_PARAMS)
+                ili9341_aux.ansi_count++;
+            ili9341_aux.ansi_active = false;
+            return;
+        }
+        if (ili9341_aux.ansi_active || ili9341_aux.ansi_count)
+            ili9341_aux.ansi_count++;
+        ili9341_aux_execute_csi(ch);
+        ili9341_aux.ansi_state = ILI9341_ANSI_NORMAL;
+        return;
+    }
+
+    if (ch == '\033') {
+        ili9341_aux.ansi_state = ILI9341_ANSI_ESC;
+    } else if (ch == '\r') {
+        ili9341_aux.cursor_x = 0;
+    } else if (ch == '\n') {
+        ili9341_aux_newline();
+    } else if (ch == '\b' || ch == 0x7f) {
+        if (ili9341_aux.cursor_x)
+            ili9341_aux.cursor_x--;
+        ili9341_aux_draw_cell(ili9341_aux.cursor_x,
+                              ili9341_aux.cursor_y, ' ');
+    } else if (ch == '\t') {
+        uint32_t next = (ili9341_aux.cursor_x + 8u) & ~7u;
+        ili9341_aux.cursor_x = MIN(next, ili9341_aux.columns - 1u);
+    } else if ((uint8_t)ch >= 0x20u) {
+        ili9341_aux_draw_cell(ili9341_aux.cursor_x,
+                              ili9341_aux.cursor_y, ch);
+        ili9341_aux.cursor_x++;
+        if (ili9341_aux.cursor_x >= ili9341_aux.columns)
+            ili9341_aux_newline();
+    }
+}
+
+static void ili9341_aux_tty_putc(char ch)
+{
+    spin_lock(&ili9341_aux.lock);
+    ili9341_aux_putchar_locked(ch);
+    spin_unlock(&ili9341_aux.lock);
+}
+
+static bool ili9341_aux_tty_try_putc(char ch)
+{
+    ili9341_aux_tty_putc(ch);
+    return true;
+}
+
+static void ili9341_aux_tty_puts(const char *text)
+{
+    if (!text)
+        return;
+    spin_lock(&ili9341_aux.lock);
+    while (*text)
+        ili9341_aux_putchar_locked(*text++);
+    spin_unlock(&ili9341_aux.lock);
+}
+
+static void ili9341_aux_tty_tx(bool enabled)
+{
+    (void)enabled;
+}
+
+static bool ili9341_aux_tty_has_data(void)
+{
+    return false;
+}
+
+static int ili9341_aux_tty_getc(void)
+{
+    return -1;
+}
+
+static const tty_backend_ops_t ili9341_aux_tty_backend = {
+    .putc = ili9341_aux_tty_putc,
+    .try_putc = ili9341_aux_tty_try_putc,
+    .puts = ili9341_aux_tty_puts,
+    .set_tx_irq_enabled = ili9341_aux_tty_tx,
+    .has_data = ili9341_aux_tty_has_data,
+    .getc = ili9341_aux_tty_getc,
+};
+
 static int ili9341_set_orientation(uint32_t orientation,
                                    uint32_t *width, uint32_t *height)
 {
@@ -159,6 +479,22 @@ static int ili9341_set_orientation(uint32_t orientation,
         ili9341_height = next_height;
     }
     spin_unlock(&ili9341_lock);
+
+    if (ili9341_aux.attached) {
+        spin_lock(&ili9341_aux.lock);
+        ili9341_aux.columns = next_width / font_vga_8x16.width;
+        ili9341_aux.rows = next_height / font_vga_8x16.height;
+        ili9341_aux.cursor_x = 0;
+        ili9341_aux.cursor_y = 0;
+        for (uint32_t i = 0; i < next_width * next_height; i++)
+            ili9341_aux_pixels[i] = ili9341_aux.bg;
+        spin_unlock(&ili9341_aux.lock);
+        tty_set_winsize_for_id(ili9341_aux.tty_id,
+                               (uint16_t)ili9341_aux.rows,
+                               (uint16_t)ili9341_aux.columns,
+                               (uint16_t)next_width,
+                               (uint16_t)next_height);
+    }
 
     *width = next_width;
     *height = next_height;
@@ -246,4 +582,54 @@ bool ili9341_init(void)
 const display_backend_ops_t *ili9341_display_backend(void)
 {
     return ili9341_ready ? &ili9341_backend : NULL;
+}
+
+int ili9341_attach_auxiliary_tty(int tty_id)
+{
+    auxiliary_framebuffer_config_t config;
+    int ret;
+
+    if (!ili9341_ready)
+        return -ENODEV;
+
+    spin_lock(&ili9341_aux.lock);
+    ili9341_aux.attached = true;
+    ili9341_aux.tty_id = tty_id;
+    ili9341_aux.columns = ili9341_width / font_vga_8x16.width;
+    ili9341_aux.rows = ili9341_height / font_vga_8x16.height;
+    ili9341_aux.cursor_x = 0;
+    ili9341_aux.cursor_y = 0;
+    ili9341_aux.fg = 0xffaaaaaau;
+    ili9341_aux.bg = 0xff000000u;
+    ili9341_aux.ansi_state = ILI9341_ANSI_NORMAL;
+    ili9341_aux.ansi_count = 0;
+    ili9341_aux.ansi_active = false;
+    for (uint32_t i = 0; i < ili9341_width * ili9341_height; i++)
+        ili9341_aux_pixels[i] = ili9341_aux.bg;
+    spin_unlock(&ili9341_aux.lock);
+
+    memset(&config, 0, sizeof(config));
+    config.name = "ili9341";
+    config.framebuffer = (uint8_t *)(void *)ili9341_aux_pixels;
+    config.width = ili9341_width;
+    config.height = ili9341_height;
+    config.pitch = ili9341_width * sizeof(uint32_t);
+    config.bpp = 32u;
+    config.size = sizeof(ili9341_aux_pixels);
+    config.orientation = ili9341_orientation;
+    config.backend = &ili9341_backend;
+
+    ret = display_register_auxiliary_framebuffer(&config);
+    if (ret < 0)
+        return ret;
+    ret = tty_attach_output_backend_to(tty_id, &ili9341_aux_tty_backend);
+    if (ret < 0)
+        return ret;
+
+    tty_set_winsize_for_id(tty_id,
+                           (uint16_t)ili9341_aux.rows,
+                           (uint16_t)ili9341_aux.columns,
+                           (uint16_t)ili9341_width,
+                           (uint16_t)ili9341_height);
+    return 0;
 }

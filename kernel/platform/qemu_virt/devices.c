@@ -12,7 +12,7 @@
  * - Probe and attach QEMU virt devices that are not part of the core CPU/MMU
  *   bring-up.
  * - Keep VirtIO GPU/input/net details out of kernel/main.c.
- * - Preserve tty0/UART as the always-available recovery console.
+ * - Register UART as tty0 and optional VirtIO display/input as tty1.
  *
  * Notes:
  * - The implementation is shared by ARM32 and ARM64 QEMU virt. Architecture
@@ -25,6 +25,7 @@
 #include <kernel/keyboard.h>
 #include <kernel/platform_devices.h>
 #include <kernel/tty.h>
+#include <kernel/uart.h>
 #include <kernel/virtio_block.h>
 #include <kernel/virtio_gpu.h>
 #include <kernel/virtio_input.h>
@@ -47,6 +48,18 @@ static const display_backend_ops_t qemu_display_backend = {
     .set_mode = NULL,
 };
 
+void platform_console_early_init(void)
+{
+    uart_init();
+    uart_attach_tty_backend_to(TTY_CONSOLE_ID);
+    tty_set_kernel_console(TTY_CONSOLE_ID, false);
+}
+
+void platform_console_enable_rx(void)
+{
+    uart_enable_rx_interrupts();
+}
+
 platform_devices_state_t platform_devices_init(void)
 {
     platform_devices_state_t state = {0};
@@ -57,7 +70,7 @@ platform_devices_state_t platform_devices_init(void)
         display_set_backend(&qemu_display_backend);
         KBOOT_OKF("GPU: virtio-gpu %ux%ux%u", FB_WIDTH, FB_HEIGHT, FB_BPP);
         if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0) {
-            state.tty1_graphics_ready = true;
+            state.display_ready = true;
             tty_set_active(TTY_GRAPHICS_ID);
             KBOOT_OKF("TTY: console tty1 on virtio-gpu");
             if (virtio_input_init(TTY_GRAPHICS_ID)) {

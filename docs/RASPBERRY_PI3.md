@@ -8,8 +8,9 @@ TARGET_ARCH=arm64 TARGET_PLATFORM=raspi3
 ```
 
 It boots through the Raspberry Pi firmware as `kernel8.img`, runs all four
-Cortex-A53 cores in the common scheduler, and keeps PL011 `tty0` as the
-mandatory recovery console. QEMU `virt` remains the reference environment for
+Cortex-A53 cores in the common scheduler, and exposes PL011 as the recovery
+transport `/dev/ttyS0`. HDMI or ILI9341 plus USB input becomes the
+primary `/dev/tty0`. QEMU `virt` remains the reference environment for
 kernel feature development and regression testing. QEMU's `raspi3b` machine is
 also supported as a focused CPU-entry and SD/eMMC functional test; it does not
 replace hardware timing and signal validation.
@@ -20,7 +21,7 @@ replace hardware timing and signal validation.
 - Kernel load address: `0x02010000`
 - Firmware image: `kernel8.img` with `arm_64bit=1`
 - Firmware DTB: `bcm2710-rpi-3-b-plus.dtb`
-- UART: PL011 `uart0`, 115200 baud
+- UART: PL011 `uart0`, 115200 baud, exposed as recovery `/dev/ttyS0`
 - Bluetooth overlay: `disable-bt`, preserving PL011 on GPIO14/GPIO15
 - Storage: BCM2835/BCM2837 SD/eMMC controller
 - Root: ext2 partition
@@ -88,17 +89,17 @@ ENABLE_USB=yes
 ```
 
 The HDMI driver asks the VideoCore firmware for a 32-bit RGB framebuffer. It
-then attaches the common ArmOS framebuffer, `/dev/fb0`, and graphical `tty1`
-to that memory. The monitor must be connected before power-on so the firmware
+then attaches the common ArmOS framebuffer, `/dev/fb0`, and primary `tty0` to
+that memory. The monitor must be connected before power-on so the firmware
 can establish a compatible display mode. The requested geometry is currently
 strict: if firmware cannot supply the configured width, height, depth, and
-tightly packed pitch, the driver leaves UART `tty0` available and reports a
-warning instead of using an unsafe layout.
+tightly packed pitch, the driver falls back to UART-backed `tty0` and reports
+a warning instead of using an unsafe layout.
 
 The USB driver brings up the BCM2837 DWC2 controller in host mode, enumerates
 the Pi 3 internal USB hub, and recognizes USB boot-protocol HID interfaces.
-Keyboard input is routed to `tty1` when HDMI is active and otherwise to UART
-`tty0`; a mouse wheel controls graphical console scrollback. The initial key
+Keyboard input is routed to display-backed `tty0`; a mouse wheel controls
+graphical console scrollback. The initial key
 map is French AZERTY, matching the Logitech 920-009795 keyboard/receiver used
 for hardware validation.
 
@@ -107,17 +108,19 @@ boot lines with both devices present are:
 
 ```text
 GPU: firmware HDMI 1280x720x32                         [ OK ]
-TTY: console tty1 on HDMI /dev/fb0                     [ OK ]
+TTY: console tty0 on HDMI /dev/fb0                     [ OK ]
 USB: DWC2 host and hub initialized                     [ OK ]
 Input: USB HID polling worker                          [ OK ]
 ```
 
-Keep the UART cable connected during the first tests. From `tty0`, verify the
-display and input path with:
+Keep the UART cable connected during the first tests. Early diagnostics are
+emitted there before the framebuffer is ready and then replayed on HDMI. After
+handoff, PL011 remains available as `/dev/ttyS0` without an automatic login
+shell. From the HDMI `tty0`, verify the display and input path with:
 
 ```sh
 ttyinfo
-echo 'HDMI_OK' > /dev/tty1
+echo 'HDMI_OK' > /dev/tty0
 fbtest
 fbview /home/user/images/test-pattern.png
 ```
@@ -130,7 +133,7 @@ fbctl mode 1280x720
 ```
 
 `fbctl` reports the mode accepted by the firmware. The framebuffer address,
-geometry, graphical `tty1` window size, and console font are updated together.
+geometry, `tty0` window size, and console font are updated together.
 At 1920x1080 the console selects the 12x24 font and exposes 160 columns by 45
 lines. Unsupported exact modes return an error. If firmware partially applies
 a rejected request, the driver immediately requests the previous mode again.
@@ -214,8 +217,9 @@ program. It uses the same framebuffer ABI as QEMU:
 - kernel rendering remains ARGB8888 and the ILI9341 backend converts dirty
 rectangles to RGB565 while flushing them.
 
-The backend is enabled by default for `raspi3`. Set `ENABLE_ILI9341=no` in
-`armos.conf` to leave the GPIOs untouched and keep an UART-only profile.
+The tracked `raspi3-arm64` profile selects HDMI by default. To use this panel,
+set `ENABLE_HDMI=no` and `ENABLE_ILI9341=yes` in `armos.conf`. Leave both
+disabled for an UART-only diagnostic profile.
 
 The initial mode is portrait `240x320x32`. With the current VGA `8x16` TTY
 font this provides a readable `30x20` terminal. Runtime landscape mode is
@@ -252,24 +256,24 @@ rails through the shield. `LCD_RD` must remain high because this first driver
 does not read the controller bus.
 
 The selected GPIOs leave PL011 on GPIO14/GPIO15 untouched and avoid the SPI0
-pins. The display is output-only, so `tty0` remains the interactive UART and
-`tty1` renders to the panel.
+pins. The display backend renders `tty0`; enable USB input for an interactive
+session. PL011 remains available separately as `/dev/ttyS0`.
 
 After wiring and rebuilding the Pi 3 target, expect these boot lines:
 
 ```text
 GPU: ILI9341 GPIO parallel 240x320x32                   [ OK ]
-TTY: console tty1 on ILI9341 /dev/fb0                   [ OK ]
+TTY: console tty0 on ILI9341 /dev/fb0                   [ OK ]
 Input: GPIO display is output-only                      [WARN]
 ```
 
-Use the UART console for the first smoke test:
+Use a USB keyboard on the display console for the smoke test:
 
 ```sh
 fbtest
 fbview /path/to/image.png
 ttyinfo
-echo 'ILI9341_OK' > /dev/tty1
+echo 'ILI9341_OK' > /dev/tty0
 ```
 
 The panel starts in portrait mode. Its orientation can be changed while the
@@ -281,9 +285,9 @@ fbctl rotate landscape
 fbctl rotate portrait
 ```
 
-The landscape geometry is 320x240 and gives a 40-column by 15-line `tty1`
+The landscape geometry is 320x240 and gives a 40-column by 15-line `tty0`
 with the current 8x16 font. Portrait mode is 240x320 and gives 30 columns by
-20 lines. A successful rotation redraws the framebuffer, updates the tty1
+20 lines. A successful rotation redraws the framebuffer, updates the `tty0`
 window size, and sends `SIGWINCH` to its foreground process group. Backends
 without hardware rotation support reject `ARMOS_FBIOSET_ORIENTATION` with
 `ENOTSUP`.
@@ -297,7 +301,7 @@ fbview /home/user/images/jpeg-landscape.jpg
 fbview /home/user/images/test-pattern-320x240.tiff
 ```
 
-The panel should start black, then show the `tty1` output. Keep the UART
+The panel should start black, then show the `tty0` output. Keep the UART
 connected during initial tests so a wiring error cannot hide kernel logs.
 
 ## A53 Boot Invariant

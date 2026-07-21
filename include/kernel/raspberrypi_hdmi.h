@@ -24,6 +24,7 @@ typedef struct raspberrypi_hdmi_info {
     uint32_t pitch;
     uint32_t bpp;
     uint32_t size;
+    uint32_t virtual_height;
     paddr_t physical;
     uint8_t *virtual_address;
 } raspberrypi_hdmi_info_t;

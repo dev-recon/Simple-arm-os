@@ -4,10 +4,13 @@ This document describes the current high-level architecture of ArmOS. It is
 intended for contributors who need to understand the kernel before touching MMU,
 task switching, process memory, filesystems, drivers, or userland ABI code.
 
-ArmOS currently targets ARMv7-A on the QEMU `virt` machine, using a Cortex-A15
-CPU model, short-descriptor page tables, split `TTBR0` / `TTBR1`, ASIDs, an
-ext2 root filesystem, a FAT32 compatibility mount, procfs, VirtIO block I/O,
-an UART-backed rescue TTY, and an optional VirtIO-GPU graphical TTY.
+ArmOS targets ARMv7-A and AArch64 on QEMU `virt`, Raspberry Pi 2, and
+Raspberry Pi 3. Both architectures enter one common kernel and share process,
+VFS, filesystem, syscall, scheduler, and TTY policy. Platform code maps the
+available UART, framebuffer, keyboard, block, and network devices onto those
+common interfaces. QEMU keeps serial `/dev/tty0` and an optional graphical
+`/dev/tty1`; Raspberry Pi 3 uses HDMI or ILI9341 plus USB input as primary
+`/dev/tty0` and retains PL011 as recovery `/dev/ttyS0`.
 
 ## Common-Kernel Architecture Rule
 
@@ -580,14 +583,20 @@ ArmOS exposes a small Unix-like TTY model with multiple backends.
 Current consoles:
 
 ```text
-tty0  UART/QEMU serial console
-tty1  optional VirtIO-GPU framebuffer console with VirtIO input keyboard
+QEMU virt:
+  tty0   UART serial console
+  tty1   optional VirtIO-GPU console with VirtIO input
+
+Raspberry Pi:
+  tty0   HDMI or ILI9341 display with USB input
+  ttyS0  PL011 recovery transport, without an automatic login shell
 ```
 
-The most important stability rule is that `tty0` must remain a complete UART
-rescue path. Graphical-console work must not make boot, login, shell access, or
-shutdown depend on `tty1`. If VirtIO-GPU or VirtIO input is missing or broken,
-the system should still boot and remain usable through `boot.sh` and `tty0`.
+TTY identity is common-kernel policy; UART, framebuffer, and keyboard drivers
+are transports registered by a platform. QEMU keeps serial `tty0` usable when
+graphics are absent. Raspberry Pi promotes its display/input pair to `tty0`
+and retains PL011 as `/dev/ttyS0`; if display initialization fails, PL011 is
+attached to `tty0` as the boot fallback.
 
 ### TTY Core
 
@@ -598,7 +607,8 @@ The TTY layer owns:
 - control characters such as `VINTR`, `VSUSP`, `VEOF`, `VERASE`, `VKILL`;
 - foreground process group checks;
 - terminal-generated signals such as `SIGINT`, `SIGTSTP`, and `SIGTTIN`;
-- `/dev/tty`, `/dev/tty0`, `/dev/tty1`, and `/dev/console` behavior.
+- `/dev/tty`, `/dev/tty0`, `/dev/tty1`, `/dev/ttyS0`, and `/dev/console`
+  behavior.
 
 Backends should feed characters into the TTY core and consume output from it.
 They should not reimplement line discipline rules independently.
@@ -610,16 +620,17 @@ transport used by QEMU's terminal.
 
 Contributor rules:
 
-1. Keep `tty0` fully functional after every graphical-console change.
+1. Keep the platform's primary `tty0` fully functional after every
+   graphical-console change.
 2. Preserve serial-console carriage-return behavior. Interactive command
    injection through QEMU/screen typically needs `\r`, not just `\n`.
 3. Avoid long IRQ-disabled sections in UART or TTY output paths.
-4. Do not route graphical keyboard events into `tty0` unless explicitly
-   implementing a console-switching feature.
+4. Route input to the logical TTY chosen by platform policy, never to a
+   transport-specific driver object.
 
 ### Graphical Backend
 
-The graphical console uses VirtIO-GPU as a framebuffer-style text console. It
+The QEMU graphical console uses VirtIO-GPU as a framebuffer-style text console. It
 keeps its own text cell snapshot, renders a bitmap font, handles ANSI color and
 cursor movement, and flushes dirty framebuffer regions to the device.
 
@@ -667,7 +678,8 @@ The graphical console is usable, but it is not a full terminal emulator:
 - no virtual-console switching such as Alt-F1 / Alt-F2;
 - no full UTF-8/accent rendering;
 - scrollback is intentionally simple;
-- `tty1` currently starts a root shell in graphical boot mode for development.
+- QEMU graphical boot starts ordinary `user` shells on both available TTYs;
+- Raspberry Pi starts one ordinary `user` shell on its display-backed `tty0`.
 
 Future work should move toward a clearer split between TTY core, line
 discipline, backend drivers, and session startup (`getty`/login-style policy).
@@ -958,8 +970,8 @@ Contributor rules:
 
 1. Keep shutdown logs concise but explicit: signal phase, sync phase, unmount
    phase, block-device phase, final poweroff.
-2. Do not depend on graphical TTY state for shutdown. UART `tty0` must remain
-   the recovery path.
+2. Do not depend on a specific display backend for shutdown. QEMU retains
+   UART `tty0`; Raspberry Pi retains the separate PL011 `/dev/ttyS0` path.
 3. If storage code changes, validate with `sync`, `shutdown`, and a fresh
    `boot.sh`, not only with `Ctrl+A, X`.
 4. If process lifecycle changes, test shutdown while a long-running background

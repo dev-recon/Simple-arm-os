@@ -13,7 +13,7 @@
  * - Preserve canonical/raw terminal semantics and job-control signals.
  *
  * Notes:
- * - tty0/UART must remain a reliable fallback path.
+ * - The platform selects the logical TTY served by this transport.
  */
 
 #include <kernel/types.h>
@@ -679,9 +679,27 @@ static const tty_backend_ops_t uart_tty_backend = {
     .getc = uart_getc,
 };
 
+static int uart_tty_id = TTY_CONSOLE_ID;
+
 void uart_attach_tty_backend(void)
 {
-    tty_attach_backend(&uart_tty_backend);
+    uart_attach_tty_backend_to(TTY_CONSOLE_ID);
+}
+
+void uart_attach_tty_backend_to(int tty_id)
+{
+    if (tty_attach_backend_to(tty_id, &uart_tty_backend) == 0)
+        uart_tty_id = tty_id;
+}
+
+int uart_mirror_tty_output_to(int tty_id)
+{
+    return tty_attach_output_mirror_to(tty_id, &uart_tty_backend);
+}
+
+int uart_attached_tty_id(void)
+{
+    return uart_tty_id;
 }
 
 static ssize_t uart_console_write(file_t* file, const void* buf, size_t count) {
@@ -792,7 +810,7 @@ void uart_irq_handler(void) {
             if (c < 0) break;
             
             /* Envoyer au TTY */
-            tty_input_char((char)c);
+            tty_input_char_to_id(uart_tty_id, (char)c);
         }
         if (mis & UART_INT_ERR)
             UART_RSR = 0;

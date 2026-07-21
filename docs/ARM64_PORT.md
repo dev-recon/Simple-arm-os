@@ -156,7 +156,8 @@ The network boot must report a VirtIO MAC and IRQ. Running `netecho` in the
 guest and connecting to the displayed forwarded host port validates RX, TX and
 interrupt delivery. The graphics boot must report a 32-bit VirtIO framebuffer,
 attach `tty1`, detect the VirtIO keyboard and start the cursor daemon while
-keeping UART `tty0` usable.
+keeping UART `tty0` usable. Both automatic QEMU login shells run as the
+ordinary `user`.
 
 Expected behavior matches ARM32: the initial directory is `/home/user`, disk
 commands use the common VFS, sleeps use the common timer/scheduler path, and

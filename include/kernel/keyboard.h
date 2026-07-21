@@ -9,11 +9,11 @@
  * Layer: Kernel / terminal and character devices
  *
  * Responsibilities:
- * - Drive UART/framebuffer console backends and TTY line discipline.
- * - Preserve canonical/raw terminal semantics and job-control signals.
+ * - Define the common keyboard state and input translation contract.
+ * - Feed translated input into a platform-selected logical TTY.
  *
  * Notes:
- * - tty0/UART must remain a reliable fallback path.
+ * - Keyboard drivers must not own login-session or console policy.
  */
 
 #ifndef _KERNEL_KEYBOARD_H

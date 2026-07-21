@@ -1023,9 +1023,11 @@ static int sys_open_resolved(task_t *task, char *full_path,
             return ret;
         }
 
-        if (!tty_has_backend_for_id(tty_id)) {
+        int tty_open_ret = tty_check_open_for_id(tty_id, flags);
+
+        if (tty_open_ret < 0) {
             kfree(full_path);
-            return -ENODEV;
+            return tty_open_ret;
         }
 
         fd = allocate_fd(task);
@@ -1037,7 +1039,8 @@ static int sys_open_resolved(task_t *task, char *full_path,
         tty_file = create_tty_console_file(
             strcmp(full_path, "/dev/tty") == 0 ? "tty" :
             strcmp(full_path, "/dev/console") == 0 ? "console" :
-            strcmp(full_path, "/dev/tty1") == 0 ? "tty1" : "tty0",
+            strcmp(full_path, "/dev/tty1") == 0 ? "tty1" :
+            strcmp(full_path, "/dev/ttyS0") == 0 ? "ttyS0" : "tty0",
             flags & ~O_CLOEXEC);
         if (!tty_file) {
             free_fd(task, fd);
@@ -1088,7 +1091,9 @@ static int sys_open_resolved(task_t *task, char *full_path,
             return fd;
         }
 
-        fb_file = create_framebuffer_device_file("fb0", flags & ~O_CLOEXEC);
+        fb_file = create_framebuffer_device_file(
+            strcmp(full_path, "/dev/fb1") == 0 ? "fb1" : "fb0",
+            flags & ~O_CLOEXEC);
         if (!fb_file) {
             free_fd(task, fd);
             kfree(full_path);
@@ -1305,7 +1310,7 @@ static int stat_resolved_path(char *full_path, struct stat *kstat,
     }
 
     if (is_framebuffer_device_path(full_path)) {
-        fill_framebuffer_device_stat(kstat);
+        fill_framebuffer_device_stat(full_path, kstat);
         kfree(full_path);
         return 0;
     }

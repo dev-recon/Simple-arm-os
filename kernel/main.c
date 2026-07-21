@@ -13,7 +13,7 @@
  * - Report high-level boot status and enter the scheduler.
  *
  * Notes:
- * - Keep tty0/UART usable as the recovery console.
+ * - Platforms register devices while common code owns logical console policy.
  */
 
 #include <kernel/arch_platform.h>
@@ -162,13 +162,8 @@ void kernel_main(void)
     bool block_ready;
     bool rootfs_ready = false;
 
-    /*
-     * Real Raspberry Pi firmware does not guarantee a configured PL011 UART.
-     * Bring up the physical UART and tty0 before the first KBOOT line.
-     */
-    uart_init();
     tty_init();
-    uart_attach_tty_backend();
+    platform_console_early_init();
 
     /* Phase 0: etats du processeur */
     arch_enable_async_abort();
@@ -208,7 +203,7 @@ void kernel_main(void)
 
     /* Phase 3: Controleurs materiels de base */
     irq_init_controller();
-    uart_enable_rx_interrupts();
+    platform_console_enable_rx();
     KBOOT_OKF("%s, %u IRQs", irq_controller_name(), irq_controller_line_count());
 
     //init_timer_software();
@@ -265,7 +260,7 @@ void kernel_main(void)
             KBOOT_WARN("Core: coredump daemon unavailable");
     }
 
-    if (platform_devices.tty1_graphics_ready) {
+    if (platform_devices.display_ready) {
         if (display_start_daemon() == 0)
             KBOOT_OK("Display: cursor daemon");
         else

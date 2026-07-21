@@ -15,6 +15,8 @@
  * Notes:
  * - The in-memory framebuffer remains ARGB8888. Backends may convert pixels
  *   while flushing to their native format.
+ * - scroll_up is optional. The common renderer retains a software fallback
+ *   for devices that cannot pan their scanout buffer.
  */
 
 #ifndef _KERNEL_DISPLAY_BACKEND_H
@@ -45,6 +47,8 @@ typedef struct display_backend_ops {
                            uint32_t *width, uint32_t *height);
     int (*set_mode)(uint32_t width, uint32_t height,
                     display_backend_mode_t *mode);
+    int (*scroll_up)(uint32_t rows, uint32_t clear_color,
+                     display_backend_mode_t *mode);
 } display_backend_ops_t;
 
 #endif /* _KERNEL_DISPLAY_BACKEND_H */

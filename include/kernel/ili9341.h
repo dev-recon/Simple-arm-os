@@ -10,7 +10,8 @@
  *
  * Responsibilities:
  * - Initialize an ILI9341-compatible 240x320 TFT controller.
- * - Publish its display backend for the common /dev/fb0 framebuffer.
+ * - Publish its display backend for a primary or auxiliary framebuffer.
+ * - Attach an output-only text terminal to its independent framebuffer.
  */
 
 #ifndef _KERNEL_ILI9341_H
@@ -23,5 +24,6 @@
 
 bool ili9341_init(void);
 const display_backend_ops_t *ili9341_display_backend(void);
+int ili9341_attach_auxiliary_tty(int tty_id);
 
 #endif /* _KERNEL_ILI9341_H */

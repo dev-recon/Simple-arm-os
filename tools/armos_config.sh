@@ -183,11 +183,6 @@ armos_config_validate() {
         return 1
     fi
 
-    if [ "${ENABLE_HDMI:-0}" = 1 ] && [ "${ENABLE_ILI9341:-0}" = 1 ]; then
-        armos_config_error "ENABLE_HDMI and ENABLE_ILI9341 are mutually exclusive"
-        return 1
-    fi
-
     for dimension in HDMI_WIDTH HDMI_HEIGHT; do
         [ -n "${!dimension:-}" ] || continue
         case "${!dimension}" in

@@ -9,11 +9,11 @@
  * Layer: Kernel / terminal and character devices
  *
  * Responsibilities:
- * - Drive UART/framebuffer console backends and TTY line discipline.
- * - Preserve canonical/raw terminal semantics and job-control signals.
+ * - Define the common framebuffer and display-control contract.
+ * - Keep rendering policy independent from platform display transports.
  *
  * Notes:
- * - tty0/UART must remain a reliable fallback path.
+ * - Platform code decides which logical TTY receives a display backend.
  */
 
 #ifndef _KERNEL_DISPLAY_H
@@ -35,6 +35,7 @@ extern paddr_t framebuffer_phys;   /* Physical/DMA address of framebuffer_base *
 
 #define FB_BASE         ((vaddr_t)(uintptr_t)framebuffer_base)
 #define DEV_FB0_RDEV   ((29u << 8) | 0u)
+#define DEV_FB1_RDEV   ((29u << 8) | 1u)
 
 #define ARMOS_FBIOGET_INFO      0x4600u
 #define ARMOS_FBIOGET_ORIENTATION 0x4601u
@@ -83,6 +84,18 @@ typedef struct {
     const font_t *font;
 } display_state_t;
 
+typedef struct {
+    const char *name;
+    uint8_t *framebuffer;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint32_t size;
+    uint32_t orientation;
+    const display_backend_ops_t *backend;
+} auxiliary_framebuffer_config_t;
+
 extern const font_t font_meslo_12x24;
 extern const font_t font_meslo_10x20;
 extern const font_t font_meslo_8x16;
@@ -98,6 +111,10 @@ bool init_display_external(uint32_t width, uint32_t height, uint32_t bpp,
 void display_set_backend(const display_backend_ops_t *backend);
 const char *display_backend_name(void);
 void display_flush_all(void);
+int display_register_auxiliary_framebuffer(
+    const auxiliary_framebuffer_config_t *config);
+void display_mark_auxiliary_dirty(uint32_t x, uint32_t y,
+                                  uint32_t width, uint32_t height);
 void clear_screen(void);
 void put_pixel(uint32_t x, uint32_t y, uint32_t color);
 void draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg);
@@ -114,11 +131,13 @@ void display_scrollback_down(uint32_t lines);
 ssize_t framebuffer_read(file_t* file, void* buffer, size_t count);
 ssize_t framebuffer_write(file_t* file, const void* buffer, size_t count);
 bool is_framebuffer_device_path(const char* path);
-void fill_framebuffer_device_stat(struct stat* st);
-int framebuffer_get_info(struct armos_fb_info* info);
-int framebuffer_get_orientation(struct armos_fb_orientation *orientation);
-int framebuffer_set_orientation(const struct armos_fb_orientation *orientation);
-int framebuffer_set_mode(const struct armos_fb_mode *mode);
+void fill_framebuffer_device_stat(const char *path, struct stat* st);
+int framebuffer_get_info(file_t *file, struct armos_fb_info* info);
+int framebuffer_get_orientation(file_t *file,
+                                struct armos_fb_orientation *orientation);
+int framebuffer_set_orientation(file_t *file,
+                                const struct armos_fb_orientation *orientation);
+int framebuffer_set_mode(file_t *file, const struct armos_fb_mode *mode);
 file_t* create_framebuffer_device_file(const char* name, int flags);
 
 #endif

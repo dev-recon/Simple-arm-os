@@ -25,11 +25,13 @@
 
 #define TTY_INPUT_BUF_SIZE  512
 #define TTY_OUTPUT_BUF_SIZE 4096
-#define TTY_MAX             2
+#define TTY_MAX             3
 #define TTY_CONSOLE_ID      0
 #define TTY_GRAPHICS_ID     1
+#define TTY_SERIAL_ID       2
 #define DEV_TTY_RDEV        ((4u << 8) | 0u)
 #define DEV_TTY1_RDEV       ((4u << 8) | 1u)
+#define DEV_TTYS0_RDEV      ((4u << 8) | 64u)
 #define DEV_CTTY_RDEV       ((5u << 8) | 0u)
 #define DEV_CONSOLE_RDEV    ((5u << 8) | 1u)
 
@@ -97,6 +99,8 @@ typedef struct tty_backend_ops {
 struct tty_struct {
     int id;
     const tty_backend_ops_t *backend;
+    const tty_backend_ops_t *output_mirror;
+    bool output_only;
 
     /* Buffers circulaires */
     char input_buf[TTY_INPUT_BUF_SIZE];
@@ -183,13 +187,20 @@ struct tty_struct {
 
 extern struct tty_struct tty0;
 extern struct tty_struct tty1;
+extern struct tty_struct ttyS0;
 
 void tty_init(void);
 int tty_attach_backend(const tty_backend_ops_t *ops);
 int tty_attach_backend_to(int tty_id, const tty_backend_ops_t *ops);
+int tty_attach_output_backend_to(int tty_id, const tty_backend_ops_t *ops);
+int tty_attach_output_mirror_to(int tty_id, const tty_backend_ops_t *ops);
 int tty_set_active(int tty_id);
 int tty_get_active(void);
+void tty_set_kernel_console(int tty_id, bool replay_log);
+bool tty_kernel_console_putc(char c);
 bool tty_has_backend_for_id(int tty_id);
+bool tty_is_output_only_for_id(int tty_id);
+int tty_check_open_for_id(int tty_id, int flags);
 bool tty_output_pending_for_id(int tty_id);
 void tty_input_char(char c);
 void tty_input_char_to_id(int tty_id, char c);

@@ -9,11 +9,11 @@
  * Layer: Kernel / terminal and character devices
  *
  * Responsibilities:
- * - Drive UART/framebuffer console backends and TTY line discipline.
- * - Preserve canonical/raw terminal semantics and job-control signals.
+ * - Translate legacy keyboard scan codes into ArmOS input events.
+ * - Route keyboard activity through the common TTY and display contracts.
  *
  * Notes:
- * - tty0/UART must remain a reliable fallback path.
+ * - Platform-specific input drivers select their target logical TTY.
  */
 
 #include <kernel/keyboard.h>

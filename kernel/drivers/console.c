@@ -9,11 +9,11 @@
  * Layer: Kernel / terminal and character devices
  *
  * Responsibilities:
- * - Drive UART/framebuffer console backends and TTY line discipline.
- * - Preserve canonical/raw terminal semantics and job-control signals.
+ * - Provide the legacy console character-device operations.
+ * - Keep device I/O separate from platform transport registration.
  *
  * Notes:
- * - tty0/UART must remain a reliable fallback path.
+ * - New console routing belongs to the common TTY layer.
  */
 
 #include <kernel/vfs.h>

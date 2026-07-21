@@ -73,8 +73,10 @@ userland used by the QEMU targets.
 The graphical captures come from `arm64/qemu-virt`. The Raspberry Pi 3 target
 can drive either an HSD028309 B6 / ILI9341 panel through GPIO or an HDMI
 monitor through the firmware framebuffer, using the same `/dev/fb0` and
-`tty1` interfaces. Its opt-in USB host supports boot keyboards and mice through
-the Pi 3 internal hub. The UART rescue console remains available as `tty0`.
+common display interfaces. On Raspberry Pi, the display and USB keyboard form
+the primary `tty0`; the PL011 recovery transport remains available separately
+as `/dev/ttyS0`. Its opt-in USB host supports boot keyboards and mice through
+the Pi 3 internal hub.
 
 ## Quick Start
 
