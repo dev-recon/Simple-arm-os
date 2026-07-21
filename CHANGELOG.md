@@ -5,6 +5,15 @@ Release tags use the bare version number starting with `0.7` (`0.7`, `0.7.1`,
 
 ## Unreleased
 
+- Made logical console identity independent from hardware transport.
+- Routed Raspberry Pi HDMI or ILI9341 output and USB keyboard input through
+  the primary `/dev/tty0`, while exposing PL011 separately as `/dev/ttyS0`.
+- Kept QEMU serial on `tty0` and optional VirtIO-GPU/input on `tty1`.
+- Removed the implicit graphical root login: every automatically spawned shell
+  now runs as the ordinary `user`; administrative access remains explicit.
+- Added early kernel-log replay when Raspberry Pi hands the boot console from
+  UART diagnostics to the framebuffer.
+
 ## ArmOS 0.7.3 - 2026-07-21
 
 ArmOS 0.7.3 turns the Raspberry Pi 3 into a directly usable workstation target

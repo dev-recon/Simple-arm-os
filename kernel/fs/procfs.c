@@ -529,6 +529,8 @@ static int proc_fd_target(process_t* proc, int fd, char* target, size_t size)
         tty_id = tty_id_from_file(file);
         if (tty_id == TTY_GRAPHICS_ID)
             snprintf(target, size, "/dev/tty1");
+        else if (tty_id == TTY_SERIAL_ID)
+            snprintf(target, size, "/dev/ttyS0");
         else if (tty_id == TTY_CONSOLE_ID)
             snprintf(target, size, "/dev/tty0");
         else
@@ -1306,6 +1308,15 @@ static const proc_flag_name_t proc_tty_cflag_names[] = {
     { HUPCL, "HUPCL" },
 };
 
+static struct tty_struct *proc_tty_by_id(int tty_id)
+{
+    if (tty_id == TTY_GRAPHICS_ID)
+        return &tty1;
+    if (tty_id == TTY_SERIAL_ID)
+        return &ttyS0;
+    return &tty0;
+}
+
 static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
                               int tty_id, const char* name)
 {
@@ -1336,7 +1347,7 @@ static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
     int last_signal_delivered = 0;
     uart_stats_t uart_stats;
     struct termios tio;
-    struct tty_struct *tty = tty_id == TTY_GRAPHICS_ID ? &tty1 : &tty0;
+    struct tty_struct *tty = proc_tty_by_id(tty_id);
     uint16_t rows = 0;
     uint16_t cols = 0;
     uint16_t xpixel = 0;
@@ -1356,7 +1367,7 @@ static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
     tty_get_termios_for_id(tty_id, &tio);
     tty_get_winsize_for_id(tty_id, &rows, &cols, &xpixel, &ypixel);
     memset(&uart_stats, 0, sizeof(uart_stats));
-    if (tty_id == TTY_CONSOLE_ID)
+    if (tty_id == uart_attached_tty_id())
         uart_get_stats(&uart_stats);
 
     spin_lock_irqsave(&tty->lock, &flags);
@@ -1373,12 +1384,14 @@ static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
     spin_unlock_irqrestore(&tty->lock, flags);
 
     proc_append(buf, cap, len, "%s\n", name);
-    proc_append(buf, cap, len, "device backend %s active %u output_pending %u input_route %s\n",
+    proc_append(buf, cap, len, "device backend %s mode %s active %u output_pending %u input_route %s\n",
                 backend ? "present" : "none",
+                tty_is_output_only_for_id(tty_id) ? "output-only" : "interactive",
                 active ? 1 : 0,
                 pending ? 1 : 0,
-                tty_id == TTY_CONSOLE_ID ? "uart/default" :
-                virtio_input_is_initialized() ? "virtio-keyboard" : "none");
+                tty_id == uart_attached_tty_id() ? "uart" :
+                (tty_id == TTY_GRAPHICS_ID && virtio_input_is_initialized()) ?
+                "virtio-keyboard" : "platform-input");
     proc_append(buf, cap, len, "winsize rows %u cols %u xpixel %u ypixel %u\n",
                 rows, cols, xpixel, ypixel);
     proc_append(buf, cap, len, "input depth %u capacity %u chars %u eof %u\n",
@@ -1387,7 +1400,7 @@ static void proc_fill_tty_one(char* buf, size_t cap, size_t* len,
                 tty_char_wakeups, tty_line_wakeups, tty_eof_wakeups);
     proc_append(buf, cap, len, "output enq %u drain %u full %u drain_calls %u\n",
                 tty_tx_enqueued, tty_tx_drained, tty_tx_full_waits, tty_tx_drain_calls);
-    if (tty_id == TTY_CONSOLE_ID) {
+    if (tty_id == uart_attached_tty_id()) {
         proc_append(buf, cap, len,
                     "uart irq_rx %u irq_tx %u irq_err %u rx_chars %u\n",
                     uart_stats.rx_irq,
@@ -1488,6 +1501,10 @@ static void proc_fill_tty(char* buf, size_t cap, size_t* len)
         proc_append(buf, cap, len, "\n");
         proc_fill_tty_one(buf, cap, len, TTY_GRAPHICS_ID, "tty1");
     }
+    if (tty_has_backend_for_id(TTY_SERIAL_ID)) {
+        proc_append(buf, cap, len, "\n");
+        proc_fill_tty_one(buf, cap, len, TTY_SERIAL_ID, "ttyS0");
+    }
 }
 
 static void proc_fill_stat(char* buf, size_t cap, size_t* len)
@@ -1529,11 +1546,13 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
     pid_t tty_foreground_pgid = 0;
     pid_t tty_read_wait_pid = 0;
     int tty_read_wait_state = -1;
-    const int tty_ids[] = { TTY_CONSOLE_ID, TTY_GRAPHICS_ID };
+    const int tty_ids[] = {
+        TTY_CONSOLE_ID, TTY_GRAPHICS_ID, TTY_SERIAL_ID
+    };
 
     for (size_t i = 0; i < sizeof(tty_ids) / sizeof(tty_ids[0]); i++) {
         int tty_id = tty_ids[i];
-        struct tty_struct *tty = tty_id == TTY_GRAPHICS_ID ? &tty1 : &tty0;
+        struct tty_struct *tty = proc_tty_by_id(tty_id);
         uint32_t tx_enqueued = 0;
         uint32_t tx_drained = 0;
         uint32_t tx_full_waits = 0;

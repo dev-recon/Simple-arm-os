@@ -14,7 +14,8 @@
  *   probing details.
  *
  * Notes:
- * - tty0/UART is initialized earlier and must remain the recovery console.
+ * - Platforms register transports; the common TTY layer owns terminal
+ *   semantics and the logical console policy.
  */
 
 #ifndef _KERNEL_PLATFORM_DEVICES_H
@@ -23,9 +24,11 @@
 #include <kernel/types.h>
 
 typedef struct {
-    bool tty1_graphics_ready;
+    bool display_ready;
 } platform_devices_state_t;
 
+void platform_console_early_init(void);
+void platform_console_enable_rx(void);
 platform_devices_state_t platform_devices_init(void);
 bool platform_block_init(void);
 void platform_block_shutdown(void);

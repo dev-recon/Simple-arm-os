@@ -34,19 +34,10 @@ static char *const init_envp[] = {
     NULL
 };
 
-static char *const root_envp[] = {
-    "PATH=/bin:/usr/bin:/sbin:/opt/kilo/bin:/opt/nano/bin",
-    "HOME=/root",
-    "USER=root",
-    "PS1=root# ",
-    "MASH_BANNER=0",
-    NULL
-};
-
 static volatile sig_atomic_t init_shutting_down = 0;
 static volatile sig_atomic_t init_term_sent = 0;
 static int shell_pid = -1;
-static int root_shell_pid = -1;
+static int graphics_shell_pid = -1;
 
 static void init_write_all(const char *s)
 {
@@ -89,8 +80,8 @@ static void request_shell_shutdown(void)
 
     if (shell_pid > 0)
         kill(shell_pid, SIGTERM);
-    if (root_shell_pid > 0)
-        kill(root_shell_pid, SIGTERM);
+    if (graphics_shell_pid > 0)
+        kill(graphics_shell_pid, SIGTERM);
 }
 
 static int attach_stdio_fd(int fd)
@@ -106,27 +97,29 @@ static int attach_stdio_fd(int fd)
     return 0;
 }
 
-static int attach_stdio_to(const char *tty_path)
-{
-    int fd = open(tty_path, O_RDWR, 0);
-
-    return attach_stdio_fd(fd);
-}
-
-static int spawn_shell(void)
+static int spawn_user_shell(const char *tty_path, int optional)
 {
     char *const argv[] = { "mash", NULL };
+    int tty_fd;
     int pid;
+
+    tty_fd = open(tty_path, O_RDWR, 0);
+    if (tty_fd < 0) {
+        if (!optional)
+            fprintf(stderr, "init: cannot open %s\n", tty_path);
+        return optional ? 0 : -1;
+    }
 
     pid = fork();
     if (pid < 0) {
         perror("init: fork");
+        close(tty_fd);
         return -1;
     }
 
     if (pid == 0) {
-        if (attach_stdio_to("/dev/tty0") < 0)
-            perror("init: attach /dev/tty0");
+        if (attach_stdio_fd(tty_fd) < 0)
+            _exit(127);
         chdir("/home/user");
         if (setgid(1000) < 0)
             perror("init: setgid");
@@ -134,37 +127,6 @@ static int spawn_shell(void)
             perror("init: setuid");
         execve("/sbin/mash", argv, init_envp);
         perror("init: exec /sbin/mash");
-        _exit(127);
-    }
-
-    return pid;
-}
-
-static int spawn_root_graphics_shell(void)
-{
-    char *const argv[] = { "mash", NULL };
-    int tty_fd;
-    int pid;
-
-    tty_fd = open("/dev/tty1", O_RDWR, 0);
-    if (tty_fd < 0) {
-        fprintf(stderr, "init: tty1 unavailable, graphics shell disabled\n");
-        return 0;
-    }
-
-    pid = fork();
-    if (pid < 0) {
-        perror("init: fork tty1");
-        close(tty_fd);
-        return -1;
-    }
-
-    if (pid == 0) {
-        if (attach_stdio_fd(tty_fd) < 0)
-            _exit(0);
-        chdir("/root");
-        execve("/sbin/mash", argv, root_envp);
-        perror("init: exec /sbin/mash tty1");
         _exit(127);
     }
 
@@ -184,20 +146,20 @@ int main(void)
     signal(SIGTTOU, SIG_IGN);
     chdir("/");
 
-    root_shell_pid = spawn_root_graphics_shell();
+    graphics_shell_pid = spawn_user_shell("/dev/tty1", 1);
 
     while (1) {
         if (init_shutting_down)
             request_shell_shutdown();
 
         if (!init_shutting_down && shell_pid < 0) {
-            shell_pid = spawn_shell();
+            shell_pid = spawn_user_shell("/dev/tty0", 0);
             if (shell_pid > 0)
                 init_log_pid("init: tty0 shell pid ", shell_pid);
         }
 
-        if (!init_shutting_down && root_shell_pid < 0)
-            root_shell_pid = spawn_root_graphics_shell();
+        if (!init_shutting_down && graphics_shell_pid < 0)
+            graphics_shell_pid = spawn_user_shell("/dev/tty1", 1);
 
         status = 0;
         waited = waitpid(-1, &status, 0);
@@ -220,12 +182,12 @@ int main(void)
             else
                 init_write_all("init: tty0 shell exited, restarting\n");
             shell_pid = -1;
-        } else if (waited == root_shell_pid) {
+        } else if (waited == graphics_shell_pid) {
             if (init_shutting_down)
                 init_write_all("init: tty1 shell stopped for shutdown\n");
             else
                 init_write_all("init: tty1 shell exited, restarting\n");
-            root_shell_pid = -1;
+            graphics_shell_pid = -1;
         }
 
         /*

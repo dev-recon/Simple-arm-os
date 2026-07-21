@@ -18,11 +18,11 @@ PLATFORM_DISK_LAYOUT ?= fat32-first
 # Pi 3 firmware and macOS both require a standard FAT32 LBA partition type.
 PLATFORM_DISK_HIDDEN_BOOT ?= 0
 
-ENABLE_HDMI ?= 0
+ENABLE_HDMI ?= 1
 ENABLE_USB ?= 0
 HDMI_WIDTH ?= 1280
 HDMI_HEIGHT ?= 720
-ENABLE_ILI9341 ?= 1
+ENABLE_ILI9341 ?= 0
 PLATFORM_OBJS = \
 	kernel/platform/raspberrypi/devices.o \
 	kernel/platform/raspberrypi/irq.o \

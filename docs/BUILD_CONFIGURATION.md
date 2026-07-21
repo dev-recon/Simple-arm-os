@@ -95,18 +95,25 @@ device. Both can be enabled together. These two launch options require the
 
 `boot-graphics.sh` always enables the graphical device for that invocation.
 It does not require networking: with `ENABLE_NET=no`, no network arguments are
-passed to QEMU. `boot-net.sh` similarly provides the explicit network-oriented
-entry point.
+passed to QEMU. The QEMU serial console remains `/dev/tty0`; the framebuffer
+console is `/dev/tty1`. When both are present, `init` starts an ordinary
+`user` login shell on each console. Neither console receives an implicit root
+shell. `boot-net.sh` similarly provides the explicit network-oriented entry
+point.
 
 `ENABLE_ILI9341` controls the HSD028309 B6 / ILI9341 GPIO display backend on
-Raspberry Pi 3. The `raspi3` platform enables it by default; set it to `no`
-when those GPIO pins are needed by another peripheral. It is not a QEMU launch
-option and has no effect on `qemu-virt`.
+Raspberry Pi 3. The tracked `raspi3-arm64` profile enables it alongside HDMI
+as the independent `/dev/fb1` and output-only `/dev/tty1` auxiliary display.
+It is not a QEMU launch option and has no effect on `qemu-virt`.
 
 `ENABLE_HDMI=yes` selects the Raspberry Pi firmware framebuffer and exposes it
-through the same `/dev/fb0` and graphical `tty1` contract. It requires
+through `/dev/fb0` and the Raspberry Pi primary `/dev/tty0`. USB keyboard
+input is routed to that console. PL011 remains separately accessible as
+`/dev/ttyS0`, without an automatic login shell. HDMI requires
 `TARGET_PLATFORM=raspi3`; `HDMI_WIDTH` and `HDMI_HEIGHT` request an exact mode.
-HDMI and ILI9341 are mutually exclusive because both are framebuffer backends.
+The tracked Raspberry Pi 3 profile requests `1920x1080`. If either dimension
+is omitted, the platform defaults remain `1280x720`.
+HDMI remains the primary `/dev/fb0`; an enabled ILI9341 does not mirror it.
 These values select the boot mode. On a running Raspberry Pi HDMI system,
 `fbctl mode WIDTHxHEIGHT` requests another exact firmware mode through
 `/dev/fb0`.

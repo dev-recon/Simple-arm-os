@@ -151,11 +151,12 @@ First milestone: implemented.
 Status: active and usable.
 
 Immediate goals:
-- Preserve tty0/UART as the recovery console in every boot mode.
-- Keep tty1/virtio-gpu optional and isolated from tty0 failure paths.
+- Keep logical TTY policy independent from UART, display, and input drivers.
+- Keep QEMU `tty1`/VirtIO-GPU optional and isolated from serial `tty0`.
+- Keep Raspberry Pi display/input on `tty0` and PL011 recovery on `ttyS0`.
 - Continue improving termios, canonical/raw behavior, job control, and device
-  aliases such as `/dev/tty`, `/dev/tty0`, `/dev/tty1`, `/dev/console`, and
-  `/dev/null`.
+  aliases such as `/dev/tty`, `/dev/tty0`, `/dev/tty1`, `/dev/ttyS0`,
+  `/dev/console`, and `/dev/null`.
 - Prepare the line discipline so future framebuffer/keyboard backends do not
   leak backend details into userland.
 
@@ -246,7 +247,8 @@ Immediate goals:
   remains stable.
 
 First milestone:
-- Preserve tty0 user shell and optional tty1 root shell startup behavior.
+- Start ordinary `user` shells on available primary TTYs and require explicit
+  `su` for administrative access.
 
 ## 8. Terminal UI Stack
 
@@ -258,7 +260,8 @@ Immediate goals:
 - Use `cursestest`, `nano`, `kilo`, `top`, and `ttytest --interactive-*` as the
   terminal UI regression set.
 - Keep ncurses/nano optional until build time and runtime behavior are boring.
-- Preserve UART `tty0` behavior before every graphical or curses-related change.
+- Preserve the platform console mapping before every graphical or
+  curses-related change.
 
 First milestone: implemented.
 - Static ncurses cross-build with compiled fallback terminfo.

@@ -9,11 +9,11 @@
  * Layer: Kernel / terminal and character devices
  *
  * Responsibilities:
- * - Drive UART/framebuffer console backends and TTY line discipline.
- * - Preserve canonical/raw terminal semantics and job-control signals.
+ * - Render the common framebuffer console and expose /dev/fb0.
+ * - Delegate hardware flush, resize, and orientation to display backends.
  *
  * Notes:
- * - tty0/UART must remain a reliable fallback path.
+ * - Logical TTY selection remains a platform registration decision.
  */
 
 #include <kernel/display.h>
@@ -65,12 +65,35 @@ static uint32_t dirty_y0;
 static uint32_t dirty_x1;
 static uint32_t dirty_y1;
 
+typedef struct {
+    bool registered;
+    const char *name;
+    uint8_t *framebuffer;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint32_t size;
+    uint32_t orientation;
+    const display_backend_ops_t *backend;
+    bool dirty;
+    uint32_t dirty_x0;
+    uint32_t dirty_y0;
+    uint32_t dirty_x1;
+    uint32_t dirty_y1;
+    spinlock_t lock;
+} auxiliary_framebuffer_t;
+
+static auxiliary_framebuffer_t auxiliary_fb = {
+    .lock = SPINLOCK_INIT("fb1"),
+};
+
 /* Variable globale pour le framebuffer */
 uint8_t* framebuffer_base = NULL;
 paddr_t framebuffer_phys = 0;
 
-#define CONSOLE_MAX_COLS 160
-#define CONSOLE_MAX_ROWS 64
+#define CONSOLE_MAX_COLS 240
+#define CONSOLE_MAX_ROWS 68
 #define SCROLLBACK_ROWS 256
 
 static const font_t *display_font_for_geometry(uint32_t width, uint32_t height)
@@ -324,6 +347,99 @@ static void display_request_flush(void)
         framebuffer_flush_dirty();
 }
 
+int display_register_auxiliary_framebuffer(
+    const auxiliary_framebuffer_config_t *config)
+{
+    uint64_t required;
+
+    if (!config || !config->framebuffer || !config->backend ||
+        !config->backend->flush_rect || !config->width || !config->height ||
+        config->bpp != 32u || config->pitch != config->width * 4u)
+        return -EINVAL;
+
+    required = (uint64_t)config->pitch * config->height;
+    if (required > config->size || required > 0xffffffffu)
+        return -EINVAL;
+
+    spin_lock(&auxiliary_fb.lock);
+    auxiliary_fb.registered = true;
+    auxiliary_fb.name = config->name;
+    auxiliary_fb.framebuffer = config->framebuffer;
+    auxiliary_fb.width = config->width;
+    auxiliary_fb.height = config->height;
+    auxiliary_fb.pitch = config->pitch;
+    auxiliary_fb.bpp = config->bpp;
+    auxiliary_fb.size = config->size;
+    auxiliary_fb.orientation = config->orientation;
+    auxiliary_fb.backend = config->backend;
+    auxiliary_fb.dirty = true;
+    auxiliary_fb.dirty_x0 = 0;
+    auxiliary_fb.dirty_y0 = 0;
+    auxiliary_fb.dirty_x1 = config->width;
+    auxiliary_fb.dirty_y1 = config->height;
+    spin_unlock(&auxiliary_fb.lock);
+    return 0;
+}
+
+void display_mark_auxiliary_dirty(uint32_t x, uint32_t y,
+                                  uint32_t width, uint32_t height)
+{
+    uint32_t x1;
+    uint32_t y1;
+
+    spin_lock(&auxiliary_fb.lock);
+    if (!auxiliary_fb.registered || !width || !height ||
+        x >= auxiliary_fb.width || y >= auxiliary_fb.height) {
+        spin_unlock(&auxiliary_fb.lock);
+        return;
+    }
+
+    x1 = MIN(x + width, auxiliary_fb.width);
+    y1 = MIN(y + height, auxiliary_fb.height);
+    if (!auxiliary_fb.dirty) {
+        auxiliary_fb.dirty_x0 = x;
+        auxiliary_fb.dirty_y0 = y;
+        auxiliary_fb.dirty_x1 = x1;
+        auxiliary_fb.dirty_y1 = y1;
+        auxiliary_fb.dirty = true;
+    } else {
+        auxiliary_fb.dirty_x0 = MIN(auxiliary_fb.dirty_x0, x);
+        auxiliary_fb.dirty_y0 = MIN(auxiliary_fb.dirty_y0, y);
+        auxiliary_fb.dirty_x1 = MAX(auxiliary_fb.dirty_x1, x1);
+        auxiliary_fb.dirty_y1 = MAX(auxiliary_fb.dirty_y1, y1);
+    }
+    spin_unlock(&auxiliary_fb.lock);
+}
+
+static void display_flush_auxiliary(void)
+{
+    const display_backend_ops_t *backend;
+    uint8_t *buffer;
+    uint32_t pitch;
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
+
+    spin_lock(&auxiliary_fb.lock);
+    if (!auxiliary_fb.registered || !auxiliary_fb.dirty) {
+        spin_unlock(&auxiliary_fb.lock);
+        return;
+    }
+
+    backend = auxiliary_fb.backend;
+    buffer = auxiliary_fb.framebuffer;
+    pitch = auxiliary_fb.pitch;
+    x = auxiliary_fb.dirty_x0;
+    y = auxiliary_fb.dirty_y0;
+    width = auxiliary_fb.dirty_x1 - x;
+    height = auxiliary_fb.dirty_y1 - y;
+    auxiliary_fb.dirty = false;
+    spin_unlock(&auxiliary_fb.lock);
+
+    backend->flush_rect(buffer, pitch, x, y, width, height);
+}
+
 static void displayd_main(void *arg)
 {
     (void)arg;
@@ -340,6 +456,7 @@ static void displayd_main(void *arg)
         display_process_scrollback_request();
         display_cursor_tick();
         framebuffer_flush_dirty();
+        display_flush_auxiliary();
     }
 }
 
@@ -1232,24 +1349,37 @@ void console_puts(const char* str)
 void scroll_screen(void)
 {
     uint32_t font_h = display.font ? display.font->height : 16;
-    uint32_t line_bytes = display.width * font_h * 4;
-    uint32_t y;
-    
-    /* Copy lines up */
-    for (y = 0; y < display.height - font_h; y += font_h) {
-        memcpy(display.framebuffer + (y * display.pitch),
-               display.framebuffer + ((y + font_h) * display.pitch),
-               line_bytes);
-    }
-    
-    /* Clear last line */
-    uint32_t* last_line = (uint32_t*)(display.framebuffer + 
-                                     ((display.height - font_h) * display.pitch));
-    uint32_t i;
-    for (i = 0; i < display.width * font_h; i++) {
-        last_line[i] = display.bg_color;
+    bool backend_scrolled = false;
+
+    if (display_backend && display_backend->scroll_up) {
+        display_backend_mode_t mode;
+
+        memset(&mode, 0, sizeof(mode));
+        if (display_backend->scroll_up(font_h, display.bg_color, &mode) == 0 &&
+            mode.width == display.width && mode.height == display.height &&
+            mode.pitch == display.pitch && mode.bpp == display.bpp &&
+            mode.physical && mode.virtual_address &&
+            mode.size >= mode.pitch * mode.height) {
+            framebuffer_phys = mode.physical;
+            framebuffer_base = mode.virtual_address;
+            framebuffer_capacity = mode.size;
+            display.framebuffer = mode.virtual_address;
+            backend_scrolled = true;
+        }
     }
 
+    if (!backend_scrolled) {
+        uint32_t retained_rows = display.height - font_h;
+        uint32_t retained_bytes = retained_rows * display.pitch;
+        uint32_t *last_line;
+
+        memmove(display.framebuffer,
+                display.framebuffer + font_h * display.pitch,
+                retained_bytes);
+        last_line = (uint32_t *)(void *)(display.framebuffer + retained_bytes);
+        for (uint32_t i = 0; i < display.width * font_h; i++)
+            last_line[i] = display.bg_color;
+    }
     if (console_cells_ready) {
         uint32_t rows = display.text_rows;
         uint32_t cols = display.text_cols;
@@ -1277,7 +1407,12 @@ void scroll_screen(void)
     
     display.cursor_y = display.text_rows - 1;
     pending_wrap = false;
-    framebuffer_mark_dirty(0, 0, display.width, display.height);
+    if (backend_scrolled) {
+        framebuffer_mark_dirty(0, display.height - font_h,
+                               display.width, font_h);
+    } else {
+        framebuffer_mark_dirty(0, 0, display.width, display.height);
+    }
 }
 
 ssize_t framebuffer_write(file_t* file, const void* buffer, size_t count)
@@ -1324,10 +1459,30 @@ static uint32_t framebuffer_size_bytes(void)
     return display.pitch * display.height;
 }
 
-int framebuffer_get_info(struct armos_fb_info* info)
+static int framebuffer_index(const file_t *file)
+{
+    return file ? (int)(uintptr_t)file->private_data : 0;
+}
+
+int framebuffer_get_info(file_t *file, struct armos_fb_info* info)
 {
     if (!info)
         return -EINVAL;
+    if (framebuffer_index(file) == 1) {
+        spin_lock(&auxiliary_fb.lock);
+        if (!auxiliary_fb.registered) {
+            spin_unlock(&auxiliary_fb.lock);
+            return -ENODEV;
+        }
+        info->width = auxiliary_fb.width;
+        info->height = auxiliary_fb.height;
+        info->pitch = auxiliary_fb.pitch;
+        info->bpp = auxiliary_fb.bpp;
+        info->size = auxiliary_fb.pitch * auxiliary_fb.height;
+        info->format = ARMOS_FB_FORMAT_ARGB8888;
+        spin_unlock(&auxiliary_fb.lock);
+        return 0;
+    }
     if (!framebuffer_base)
         return -ENODEV;
 
@@ -1342,10 +1497,21 @@ int framebuffer_get_info(struct armos_fb_info* info)
     return 0;
 }
 
-int framebuffer_get_orientation(struct armos_fb_orientation *orientation)
+int framebuffer_get_orientation(file_t *file,
+                                struct armos_fb_orientation *orientation)
 {
     if (!orientation)
         return -EINVAL;
+    if (framebuffer_index(file) == 1) {
+        spin_lock(&auxiliary_fb.lock);
+        if (!auxiliary_fb.registered) {
+            spin_unlock(&auxiliary_fb.lock);
+            return -ENODEV;
+        }
+        orientation->orientation = auxiliary_fb.orientation;
+        spin_unlock(&auxiliary_fb.lock);
+        return 0;
+    }
     if (!framebuffer_base)
         return -ENODEV;
 
@@ -1355,7 +1521,8 @@ int framebuffer_get_orientation(struct armos_fb_orientation *orientation)
     return 0;
 }
 
-int framebuffer_set_orientation(const struct armos_fb_orientation *orientation)
+int framebuffer_set_orientation(file_t *file,
+                                const struct armos_fb_orientation *orientation)
 {
     uint32_t old_orientation;
     uint32_t old_rows;
@@ -1373,6 +1540,45 @@ int framebuffer_set_orientation(const struct armos_fb_orientation *orientation)
     if (orientation->orientation != ARMOS_FB_ORIENTATION_PORTRAIT &&
         orientation->orientation != ARMOS_FB_ORIENTATION_LANDSCAPE)
         return -EINVAL;
+    if (framebuffer_index(file) == 1) {
+        uint32_t aux_width;
+        uint32_t aux_height;
+
+        spin_lock(&auxiliary_fb.lock);
+        if (!auxiliary_fb.registered || !auxiliary_fb.backend) {
+            spin_unlock(&auxiliary_fb.lock);
+            return -ENODEV;
+        }
+        if (!auxiliary_fb.backend->set_orientation) {
+            spin_unlock(&auxiliary_fb.lock);
+            return -ENOTSUP;
+        }
+        if (orientation->orientation == auxiliary_fb.orientation) {
+            spin_unlock(&auxiliary_fb.lock);
+            return 0;
+        }
+
+        aux_width = auxiliary_fb.width;
+        aux_height = auxiliary_fb.height;
+        ret = auxiliary_fb.backend->set_orientation(
+            orientation->orientation, &aux_width, &aux_height);
+        if (ret < 0 || !aux_width || !aux_height ||
+            (uint64_t)aux_width * aux_height * 4u > auxiliary_fb.size) {
+            spin_unlock(&auxiliary_fb.lock);
+            return ret < 0 ? ret : -EINVAL;
+        }
+        auxiliary_fb.width = aux_width;
+        auxiliary_fb.height = aux_height;
+        auxiliary_fb.pitch = aux_width * 4u;
+        auxiliary_fb.orientation = orientation->orientation;
+        auxiliary_fb.dirty = true;
+        auxiliary_fb.dirty_x0 = 0;
+        auxiliary_fb.dirty_y0 = 0;
+        auxiliary_fb.dirty_x1 = aux_width;
+        auxiliary_fb.dirty_y1 = aux_height;
+        spin_unlock(&auxiliary_fb.lock);
+        return 0;
+    }
     if (!framebuffer_base || !display_backend)
         return -ENODEV;
     if (!display_backend->set_orientation)
@@ -1450,7 +1656,7 @@ int framebuffer_set_orientation(const struct armos_fb_orientation *orientation)
     return 0;
 }
 
-int framebuffer_set_mode(const struct armos_fb_mode *mode)
+int framebuffer_set_mode(file_t *file, const struct armos_fb_mode *mode)
 {
     display_backend_mode_t backend_mode;
     const font_t *font;
@@ -1467,6 +1673,8 @@ int framebuffer_set_mode(const struct armos_fb_mode *mode)
 
     if (!mode || !mode->width || !mode->height)
         return -EINVAL;
+    if (framebuffer_index(file) == 1)
+        return -ENOTSUP;
     if (!framebuffer_base || !display_backend)
         return -ENODEV;
     if (!display_backend->set_mode)
@@ -1561,10 +1769,30 @@ static ssize_t fb0_read(file_t* file, void* buffer, size_t count)
     uint32_t available;
     uint32_t to_copy;
 
-    if (!framebuffer_base)
-        return -ENODEV;
     if (!file || !buffer)
         return -EINVAL;
+
+    if (framebuffer_index(file) == 1) {
+        spin_lock(&auxiliary_fb.lock);
+        if (!auxiliary_fb.registered) {
+            spin_unlock(&auxiliary_fb.lock);
+            return -ENODEV;
+        }
+        fb_size = auxiliary_fb.pitch * auxiliary_fb.height;
+        offset = file->offset;
+        if (offset >= fb_size) {
+            spin_unlock(&auxiliary_fb.lock);
+            return 0;
+        }
+        available = fb_size - offset;
+        to_copy = MIN(count, available);
+        memcpy(buffer, auxiliary_fb.framebuffer + offset, to_copy);
+        file->offset += to_copy;
+        spin_unlock(&auxiliary_fb.lock);
+        return (ssize_t)to_copy;
+    }
+    if (!framebuffer_base)
+        return -ENODEV;
 
     spin_lock(&display_geometry_lock);
     fb_size = framebuffer_size_bytes();
@@ -1589,10 +1817,32 @@ static ssize_t fb0_write(file_t* file, const void* buffer, size_t count)
     uint32_t available;
     uint32_t to_copy;
 
-    if (!framebuffer_base)
-        return -ENODEV;
     if (!file || !buffer)
         return -EINVAL;
+
+    if (framebuffer_index(file) == 1) {
+        spin_lock(&auxiliary_fb.lock);
+        if (!auxiliary_fb.registered) {
+            spin_unlock(&auxiliary_fb.lock);
+            return -ENODEV;
+        }
+        fb_size = auxiliary_fb.pitch * auxiliary_fb.height;
+        offset = file->offset;
+        if (offset >= fb_size) {
+            spin_unlock(&auxiliary_fb.lock);
+            return 0;
+        }
+        available = fb_size - offset;
+        to_copy = MIN(count, available);
+        memcpy(auxiliary_fb.framebuffer + offset, buffer, to_copy);
+        file->offset += to_copy;
+        spin_unlock(&auxiliary_fb.lock);
+        display_mark_auxiliary_dirty(0, 0, auxiliary_fb.width,
+                                     auxiliary_fb.height);
+        return (ssize_t)to_copy;
+    }
+    if (!framebuffer_base)
+        return -ENODEV;
 
     spin_lock(&display_geometry_lock);
     fb_size = framebuffer_size_bytes();
@@ -1622,8 +1872,20 @@ static off_t fb0_lseek(file_t* file, off_t offset, int whence)
     if (!file)
         return -EINVAL;
 
-    spin_lock(&display_geometry_lock);
-    fb_size = framebuffer_size_bytes();
+    if (framebuffer_index(file) == 1) {
+        spin_lock(&auxiliary_fb.lock);
+        if (!auxiliary_fb.registered) {
+            spin_unlock(&auxiliary_fb.lock);
+            return -ENODEV;
+        }
+        fb_size = auxiliary_fb.pitch * auxiliary_fb.height;
+        spin_unlock(&auxiliary_fb.lock);
+    } else {
+        spin_lock(&display_geometry_lock);
+        fb_size = framebuffer_size_bytes();
+        spin_unlock(&display_geometry_lock);
+    }
+
     switch (whence) {
     case SEEK_SET:
         base = 0;
@@ -1635,18 +1897,15 @@ static off_t fb0_lseek(file_t* file, off_t offset, int whence)
         base = (off_t)fb_size;
         break;
     default:
-        spin_unlock(&display_geometry_lock);
         return -EINVAL;
     }
 
     next = base + offset;
     if (next < 0 || next > (off_t)fb_size) {
-        spin_unlock(&display_geometry_lock);
         return -EINVAL;
     }
 
     file->offset = (uint32_t)next;
-    spin_unlock(&display_geometry_lock);
     return next;
 }
 
@@ -1662,28 +1921,44 @@ static file_operations_t fb0_file_ops = {
 
 bool is_framebuffer_device_path(const char* path)
 {
-    return path && strcmp(path, "/dev/fb0") == 0;
+    return path && (strcmp(path, "/dev/fb0") == 0 ||
+                    strcmp(path, "/dev/fb1") == 0);
 }
 
-void fill_framebuffer_device_stat(struct stat* st)
+void fill_framebuffer_device_stat(const char *path, struct stat* st)
 {
     uint32_t now;
-    uint32_t fb_size = framebuffer_size_bytes();
+    uint32_t fb_size;
+    uint32_t pitch;
+    uint32_t rdev;
 
     if (!st)
         return;
 
+    if (path && strcmp(path, "/dev/fb1") == 0) {
+        spin_lock(&auxiliary_fb.lock);
+        fb_size = auxiliary_fb.registered ?
+            auxiliary_fb.pitch * auxiliary_fb.height : 0;
+        pitch = auxiliary_fb.registered ? auxiliary_fb.pitch : 0;
+        spin_unlock(&auxiliary_fb.lock);
+        rdev = DEV_FB1_RDEV;
+    } else {
+        fb_size = framebuffer_size_bytes();
+        pitch = display.pitch;
+        rdev = DEV_FB0_RDEV;
+    }
+
     now = get_current_time();
     memset(st, 0, sizeof(*st));
     st->st_dev = 0;
-    st->st_ino = DEV_FB0_RDEV;
+    st->st_ino = rdev;
     st->st_mode = S_IFCHR | 0666;
     st->st_nlink = 1;
     st->st_uid = 0;
     st->st_gid = 0;
-    st->st_rdev = DEV_FB0_RDEV;
+    st->st_rdev = rdev;
     st->st_size = fb_size ? (off_t)fb_size : (off_t)FB_SIZE;
-    st->st_blksize = display.pitch ? display.pitch : FB_WIDTH * (FB_BPP / 8);
+    st->st_blksize = pitch ? pitch : FB_WIDTH * (FB_BPP / 8);
     st->st_blocks = (st->st_size + 511) / 512;
     st->st_atime = now;
     st->st_mtime = now;
@@ -1696,7 +1971,11 @@ file_t* create_framebuffer_device_file(const char* name, int flags)
     inode_t* inode;
     struct stat st;
 
-    if (!framebuffer_base)
+    int framebuffer_id = name && strcmp(name, "fb1") == 0 ? 1 : 0;
+
+    if (framebuffer_id == 0 && !framebuffer_base)
+        return NULL;
+    if (framebuffer_id == 1 && !auxiliary_fb.registered)
         return NULL;
 
     file = create_file();
@@ -1709,7 +1988,8 @@ file_t* create_framebuffer_device_file(const char* name, int flags)
         return NULL;
     }
 
-    fill_framebuffer_device_stat(&st);
+    fill_framebuffer_device_stat(framebuffer_id == 1 ? "/dev/fb1" : "/dev/fb0",
+                                 &st);
     inode->mode = st.st_mode;
     inode->uid = st.st_uid;
     inode->gid = st.st_gid;
@@ -1730,6 +2010,7 @@ file_t* create_framebuffer_device_file(const char* name, int flags)
     file->pos = 0;
     file->offset = 0;
     file->inode = inode;
+    file->private_data = (void *)(uintptr_t)framebuffer_id;
 
     if (name) {
         strncpy(file->name, name, sizeof(file->name) - 1);

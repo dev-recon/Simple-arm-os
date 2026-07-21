@@ -45,6 +45,12 @@ __attribute__((weak)) void tty_console_output_unlock(unsigned long flags)
     (void)flags;
 }
 
+__attribute__((weak)) bool tty_kernel_console_putc(char c)
+{
+    (void)c;
+    return false;
+}
+
 /* Variable globale de debug */
 int DEBUG = 0;
 int kernel_log_level = KLOG_WARN;
@@ -59,6 +65,14 @@ static DEFINE_SPINLOCK(kprintf_lock);
 static void kmsg_putc(char c)
 {
     unsigned long flags;
+
+    if (!arch_mmu_enabled()) {
+        kmsg_buf[kmsg_head] = c;
+        kmsg_head = (kmsg_head + 1) % KMSG_BUF_SIZE;
+        if (kmsg_count < KMSG_BUF_SIZE)
+            kmsg_count++;
+        return;
+    }
 
     spin_lock_irqsave(&kmsg_lock, &flags);
     /*
@@ -105,9 +119,9 @@ size_t kmsg_read(char* out, size_t max)
 
 static void kprintf_emit_char(char c)
 {
-    if (arch_mmu_enabled())
-        kmsg_putc(c);
-    putchar_kernel(c);
+    kmsg_putc(c);
+    if (!tty_kernel_console_putc(c))
+        putchar_kernel(c);
 }
 
 #define putchar_kernel(c) kprintf_emit_char(c)

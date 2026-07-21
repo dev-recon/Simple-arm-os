@@ -13,7 +13,7 @@
  * - Preserve canonical/raw terminal semantics and job-control signals.
  *
  * Notes:
- * - tty0/UART must remain a reliable fallback path.
+ * - Platforms choose whether PL011 backs tty0 or the recovery ttyS0.
  */
 
 #ifndef UART_H
@@ -38,6 +38,9 @@ typedef struct uart_stats {
 
 void uart_init(void);
 void uart_attach_tty_backend(void);
+void uart_attach_tty_backend_to(int tty_id);
+int uart_mirror_tty_output_to(int tty_id);
+int uart_attached_tty_id(void);
 void uart_use_kernel_mmio_alias(void);
 void uart_enable_rx_interrupts(void);
 void uart_putc(char c);

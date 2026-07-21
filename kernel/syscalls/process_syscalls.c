@@ -968,7 +968,7 @@ int sys_ioctl(int fd, uint32_t request, uintptr_t arg)
             return -ENOTTY;
         if (!arg)
             return -EFAULT;
-        fbret = framebuffer_get_info(&fbinfo);
+        fbret = framebuffer_get_info(file, &fbinfo);
         if (fbret < 0)
             return fbret;
         return copy_to_user((void*)arg, &fbinfo, sizeof(fbinfo)) < 0 ? -EFAULT : 0;
@@ -978,7 +978,7 @@ int sys_ioctl(int fd, uint32_t request, uintptr_t arg)
             return -ENOTTY;
         if (!arg)
             return -EFAULT;
-        fbret = framebuffer_get_orientation(&fborientation);
+        fbret = framebuffer_get_orientation(file, &fborientation);
         if (fbret < 0)
             return fbret;
         return copy_to_user((void*)arg, &fborientation,
@@ -992,7 +992,7 @@ int sys_ioctl(int fd, uint32_t request, uintptr_t arg)
         if (copy_from_user(&fborientation, (void*)arg,
                            sizeof(fborientation)) < 0)
             return -EFAULT;
-        return framebuffer_set_orientation(&fborientation);
+        return framebuffer_set_orientation(file, &fborientation);
 
     case ARMOS_FBIOSET_MODE:
         if (file->type != FILE_TYPE_FRAMEBUFFER)
@@ -1001,7 +1001,7 @@ int sys_ioctl(int fd, uint32_t request, uintptr_t arg)
             return -EFAULT;
         if (copy_from_user(&fbmode, (void*)arg, sizeof(fbmode)) < 0)
             return -EFAULT;
-        return framebuffer_set_mode(&fbmode);
+        return framebuffer_set_mode(file, &fbmode);
 
     case TIOCGWINSZ:
         if (!file_is_tty(file))

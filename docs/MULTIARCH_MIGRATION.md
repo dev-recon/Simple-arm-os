@@ -23,7 +23,8 @@ Good migration steps:
 - keep generated `asm-offsets` as the only source of truth for C/ASM structure
   offsets;
 - keep FDT discovery centralized;
-- preserve UART `tty0` as the recovery console.
+- preserve the common logical-console contract while platforms map their UART,
+  display, and input transports to `tty0`, `tty1`, or `ttyS0`.
 
 Bad migration steps:
 

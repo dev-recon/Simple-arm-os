@@ -265,6 +265,8 @@ config:
 	@echo "  ENABLE_NET:      $(if $(ENABLE_NET),$(ENABLE_NET),no)"
 	@echo "  ENABLE_GPU:      $(if $(ENABLE_GPU),$(ENABLE_GPU),no)"
 	@echo "  ENABLE_HDMI:     $(if $(ENABLE_HDMI),$(ENABLE_HDMI),platform default)"
+	@echo "  HDMI_WIDTH:      $(HDMI_WIDTH)"
+	@echo "  HDMI_HEIGHT:     $(HDMI_HEIGHT)"
 	@echo "  ENABLE_ILI9341:  $(if $(ENABLE_ILI9341),$(ENABLE_ILI9341),platform default)"
 	@echo "  ENABLE_USB:      $(if $(ENABLE_USB),$(ENABLE_USB),platform default)"
 
@@ -380,7 +382,7 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(US
 	   done; \
 	   find $(USERFS_DIR) -path "$(USERFS_DIR)/legacy" -prune -o -type f -print | sort | while read f; do \
 	       relpath=$$(echo "$$f" | sed 's|$(USERFS_DIR)/||'); \
-	       case "$$relpath" in dev/tty0|dev/tty1|dev/console|dev/fb0) continue ;; esac; \
+	       case "$$relpath" in dev/tty0|dev/tty1|dev/console|dev/fb0|dev/fb1) continue ;; esac; \
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
 	       case "$$relpath" in \
 	           sbin/init) mode=0100700 ;; \
@@ -423,6 +425,10 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(US
 	   printf 'set_inode_field fb0 mode 020666\n'; \
 	   printf 'set_inode_field fb0 uid 0\n'; \
 	   printf 'set_inode_field fb0 gid 0\n'; \
+	   printf 'mknod fb1 c 29 1\n'; \
+	   printf 'set_inode_field fb1 mode 020666\n'; \
+	   printf 'set_inode_field fb1 uid 0\n'; \
+	   printf 'set_inode_field fb1 gid 0\n'; \
 	   printf 'quit\n' ) | $(DEBUGFS) -w -f - $(EXT2_IMG) >/dev/null
 	$(DEBUGFS) -R 'ls -l /bin' $(EXT2_IMG) >/dev/null
 	@echo "ext2 image created"
@@ -507,7 +513,7 @@ $(USERFS_DIR):
 	echo "Temporary files directory" > $(USERFS_DIR)/tmp/README
 	
 	mkdir -p $(USERFS_DIR)/dev
-	touch $(USERFS_DIR)/dev/tty0 $(USERFS_DIR)/dev/tty1 $(USERFS_DIR)/dev/console $(USERFS_DIR)/dev/fb0
+	touch $(USERFS_DIR)/dev/tty0 $(USERFS_DIR)/dev/tty1 $(USERFS_DIR)/dev/console $(USERFS_DIR)/dev/fb0 $(USERFS_DIR)/dev/fb1
 	
 	@echo "$(USERFS_DIR) directory created with test files"
 

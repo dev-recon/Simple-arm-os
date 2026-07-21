@@ -26,6 +26,7 @@
 #include <kernel/raspberrypi_hdmi.h>
 #include <kernel/string.h>
 #include <kernel/tty.h>
+#include <kernel/uart.h>
 #include <kernel/usb.h>
 #include <kernel/usb/dwc2.h>
 
@@ -51,11 +52,34 @@ static bool raspberrypi_usb_node_available(void)
 }
 #endif
 
+void platform_console_early_init(void)
+{
+    uart_init();
+    uart_attach_tty_backend_to(TTY_SERIAL_ID);
+}
+
+void platform_console_enable_rx(void)
+{
+    uart_enable_rx_interrupts();
+}
+
+static void raspberrypi_use_uart_fallback_console(void)
+{
+    uart_attach_tty_backend_to(TTY_CONSOLE_ID);
+    tty_set_active(TTY_CONSOLE_ID);
+    tty_set_kernel_console(TTY_CONSOLE_ID, false);
+    KBOOT_WARN("TTY: display unavailable, tty0 using PL011 uart0");
+}
+
 platform_devices_state_t platform_devices_init(void)
 {
     platform_devices_state_t state = {0};
+#if defined(ARMOS_PLATFORM_RASPI3) && \
+    (defined(ARMOS_ENABLE_HDMI) || defined(ARMOS_ENABLE_ILI9341))
+    bool primary_display_ready = false;
+#endif
 
-    KBOOT_OK("TTY: console tty0 on raspberry-pi PL011 uart0");
+    KBOOT_OK("TTY: recovery serial on PL011 /dev/ttyS0");
 #if defined(ARMOS_PLATFORM_RASPI3) && defined(ARMOS_ENABLE_HDMI)
     if (raspberrypi_hdmi_init(ARMOS_HDMI_WIDTH, ARMOS_HDMI_HEIGHT)) {
         const raspberrypi_hdmi_info_t *hdmi = raspberrypi_hdmi_get_info();
@@ -67,13 +91,21 @@ platform_devices_state_t platform_devices_init(void)
                                           hdmi->size)) {
             display_set_backend(raspberrypi_hdmi_display_backend());
             display_flush_all();
-            KBOOT_OKF("GPU: firmware HDMI %ux%ux%u",
-                      hdmi->width, hdmi->height, hdmi->bpp);
-            if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0) {
-                state.tty1_graphics_ready = true;
-                KBOOT_OK("TTY: console tty1 on HDMI /dev/fb0");
+            KBOOT_OKF("GPU: firmware HDMI %ux%ux%u, virtual height %u",
+                      hdmi->width, hdmi->height, hdmi->bpp,
+                      hdmi->virtual_height);
+            if (framebuffer_attach_tty_backend(TTY_CONSOLE_ID) == 0) {
+                state.display_ready = true;
+                primary_display_ready = true;
+                tty_set_active(TTY_CONSOLE_ID);
+                tty_set_kernel_console(TTY_CONSOLE_ID, true);
+                KBOOT_OK("TTY: console tty0 on HDMI /dev/fb0");
+                if (uart_mirror_tty_output_to(TTY_CONSOLE_ID) == 0)
+                    KBOOT_OK("TTY: tty0 output mirrored on PL011 /dev/ttyS0");
+                else
+                    KBOOT_WARN("TTY: PL011 output mirror unavailable");
             } else {
-                KBOOT_WARN("TTY: tty1 framebuffer backend unavailable");
+                KBOOT_WARN("TTY: tty0 framebuffer backend unavailable");
             }
         } else {
             KBOOT_WARN("GPU: HDMI framebuffer attachment failed");
@@ -81,37 +113,62 @@ platform_devices_state_t platform_devices_init(void)
     } else {
         KBOOT_WARN("GPU: firmware HDMI unavailable");
     }
-#elif defined(ARMOS_PLATFORM_RASPI3) && defined(ARMOS_ENABLE_ILI9341)
-    if (ili9341_init() &&
-        init_display(ILI9341_WIDTH, ILI9341_HEIGHT, FB_BPP)) {
+#endif
+
+#if defined(ARMOS_PLATFORM_RASPI3) && defined(ARMOS_ENABLE_ILI9341)
+    if (primary_display_ready) {
+        if (ili9341_init() &&
+            ili9341_attach_auxiliary_tty(TTY_GRAPHICS_ID) == 0) {
+            KBOOT_OKF("GPU: auxiliary ILI9341 %ux%ux%u on /dev/fb1",
+                      ILI9341_WIDTH, ILI9341_HEIGHT, FB_BPP);
+            KBOOT_OK("TTY: output-only tty1 on ILI9341 /dev/fb1");
+        } else {
+            KBOOT_WARN("GPU: auxiliary ILI9341 unavailable");
+        }
+    } else if (ili9341_init() &&
+               init_display(ILI9341_WIDTH, ILI9341_HEIGHT, FB_BPP)) {
         display_set_backend(ili9341_display_backend());
         display_flush_all();
         KBOOT_OKF("GPU: ILI9341 GPIO parallel %ux%ux%u",
                   ILI9341_WIDTH, ILI9341_HEIGHT, FB_BPP);
-        if (framebuffer_attach_tty_backend(TTY_GRAPHICS_ID) == 0) {
-            state.tty1_graphics_ready = true;
-            KBOOT_OK("TTY: console tty1 on ILI9341 /dev/fb0");
+        if (framebuffer_attach_tty_backend(TTY_CONSOLE_ID) == 0) {
+            state.display_ready = true;
+            primary_display_ready = true;
+            tty_set_active(TTY_CONSOLE_ID);
+            tty_set_kernel_console(TTY_CONSOLE_ID, true);
+            KBOOT_OK("TTY: console tty0 on ILI9341 /dev/fb0");
         } else {
-            KBOOT_WARN("TTY: tty1 framebuffer backend unavailable");
+            KBOOT_WARN("TTY: tty0 framebuffer backend unavailable");
         }
     } else {
         KBOOT_WARN("GPU: ILI9341 GPIO display unavailable");
     }
     KBOOT_WARN("Input: GPIO display is output-only");
-#elif defined(ARMOS_PLATFORM_RASPI3)
+#endif
+
+#if defined(ARMOS_PLATFORM_RASPI3)
+    if (!primary_display_ready) {
+#if !defined(ARMOS_ENABLE_HDMI) && !defined(ARMOS_ENABLE_ILI9341)
     KBOOT_WARN("GPU: Raspberry Pi display disabled");
     KBOOT_WARN("Input: unavailable on Raspberry Pi 3 milestone 1");
+#else
+        KBOOT_WARN("GPU: no configured Raspberry Pi display available");
+#endif
+    }
 #else
     KBOOT_WARNF("GPU: unavailable on %s milestone 1", arch_platform_name());
     KBOOT_WARNF("Input: unavailable on %s milestone 1", arch_platform_name());
 #endif
+
+    if (!state.display_ready)
+        raspberrypi_use_uart_fallback_console();
+
     KBOOT_WARNF("Net: unavailable on %s milestone 1", arch_platform_name());
 
 #if defined(ARMOS_PLATFORM_RASPI3) && defined(ARMOS_ENABLE_USB)
     if (!raspberrypi_usb_node_available()) {
         KBOOT_WARN("USB: enabled DWC2 controller not found in boot DTB");
-    } else if (dwc2_usb_register(state.tty1_graphics_ready ?
-                                 TTY_GRAPHICS_ID : TTY_CONSOLE_ID) == 0) {
+    } else if (dwc2_usb_register(TTY_CONSOLE_ID) == 0) {
         KBOOT_OK("USB: DWC2 host registered from boot DTB");
     } else {
         KBOOT_WARN("USB: DWC2 host registration failed");

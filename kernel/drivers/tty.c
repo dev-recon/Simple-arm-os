@@ -13,7 +13,7 @@
  * - Preserve canonical/raw terminal semantics and job-control signals.
  *
  * Notes:
- * - tty0/UART must remain a reliable fallback path.
+ * - Logical TTY identities are independent from their hardware backends.
  */
 
 #include <kernel/tty.h>
@@ -25,13 +25,17 @@
 #include <kernel/timer.h>
 #include <kernel/memory.h>
 #include <kernel/smp.h>
+#include <kernel/kprintf.h>
+#include <kernel/file.h>
 
 struct tty_struct tty0;
 struct tty_struct tty1;
+struct tty_struct ttyS0;
 
 #define TTY_TX_DRAIN_BUDGET 64
 
 static int active_tty_id = TTY_CONSOLE_ID;
+static int kernel_console_tty_id = -1;
 static bool tty_initialized = false;
 
 static bool tty_output_empty_locked(struct tty_struct *tty);
@@ -44,12 +48,16 @@ static struct tty_struct *tty_by_id(int tty_id)
         return &tty0;
     case TTY_GRAPHICS_ID:
         return &tty1;
+    case TTY_SERIAL_ID:
+        return &ttyS0;
     default:
         return NULL;
     }
 }
 
-int tty_attach_backend_to(int tty_id, const tty_backend_ops_t *ops)
+static int tty_attach_backend_mode_to(int tty_id,
+                                      const tty_backend_ops_t *ops,
+                                      bool output_only)
 {
     struct tty_struct *tty = tty_by_id(tty_id);
 
@@ -60,6 +68,30 @@ int tty_attach_backend_to(int tty_id, const tty_backend_ops_t *ops)
         return -EINVAL;
 
     tty->backend = ops;
+    tty->output_only = output_only;
+    return 0;
+}
+
+int tty_attach_backend_to(int tty_id, const tty_backend_ops_t *ops)
+{
+    return tty_attach_backend_mode_to(tty_id, ops, false);
+}
+
+int tty_attach_output_backend_to(int tty_id, const tty_backend_ops_t *ops)
+{
+    return tty_attach_backend_mode_to(tty_id, ops, true);
+}
+
+int tty_attach_output_mirror_to(int tty_id, const tty_backend_ops_t *ops)
+{
+    struct tty_struct *tty = tty_by_id(tty_id);
+
+    if (!tty)
+        return -ENODEV;
+    if (!ops || !ops->putc)
+        return -EINVAL;
+
+    tty->output_mirror = ops;
     return 0;
 }
 
@@ -88,6 +120,24 @@ bool tty_has_backend_for_id(int tty_id)
     return tty && tty->backend != NULL;
 }
 
+bool tty_is_output_only_for_id(int tty_id)
+{
+    struct tty_struct *tty = tty_by_id(tty_id);
+
+    return tty && tty->backend && tty->output_only;
+}
+
+int tty_check_open_for_id(int tty_id, int flags)
+{
+    struct tty_struct *tty = tty_by_id(tty_id);
+
+    if (!tty || !tty->backend)
+        return -ENODEV;
+    if (tty->output_only && (flags & O_ACCMODE) != O_WRONLY)
+        return -EACCES;
+    return 0;
+}
+
 bool tty_output_pending_for_id(int tty_id)
 {
     unsigned long flags;
@@ -114,36 +164,34 @@ static void tty_backend_putc_to(struct tty_struct *tty, char c)
 
     if (backend)
         backend->putc(c);
-}
-
-static void tty_backend_putc(char c)
-{
-    tty_backend_putc_to(&tty0, c);
+    if (tty && tty->output_mirror)
+        tty->output_mirror->putc(c);
 }
 
 static bool tty_backend_try_putc_to(struct tty_struct *tty, char c)
 {
     const tty_backend_ops_t *backend = tty_backend_for(tty);
 
-    return backend ? backend->try_putc(c) : false;
-}
+    if (!backend || !backend->try_putc(c))
+        return false;
 
-static bool tty_backend_try_putc(char c)
-{
-    return tty_backend_try_putc_to(&tty0, c);
+    /* The primary backend owns queue progress; mirror the accepted byte once. */
+    if (tty->output_mirror)
+        tty->output_mirror->putc(c);
+    return true;
 }
 
 static void tty_backend_puts_to(struct tty_struct *tty, const char *s)
 {
     const tty_backend_ops_t *backend = tty_backend_for(tty);
+    const char *p;
 
     if (backend)
         backend->puts(s);
-}
-
-static void tty_backend_puts(const char *s)
-{
-    tty_backend_puts_to(&tty0, s);
+    if (tty && tty->output_mirror) {
+        for (p = s; p && *p; p++)
+            tty->output_mirror->putc(*p);
+    }
 }
 
 static void tty_backend_set_tx_irq_enabled_to(struct tty_struct *tty, bool enabled)
@@ -152,25 +200,6 @@ static void tty_backend_set_tx_irq_enabled_to(struct tty_struct *tty, bool enabl
 
     if (backend)
         backend->set_tx_irq_enabled(enabled);
-}
-
-static void tty_backend_set_tx_irq_enabled(bool enabled)
-{
-    tty_backend_set_tx_irq_enabled_to(&tty0, enabled);
-}
-
-static bool tty_backend_has_data(void)
-{
-    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
-
-    return backend ? backend->has_data() : false;
-}
-
-static int tty_backend_getc(void)
-{
-    const tty_backend_ops_t *backend = tty_backend_for(&tty0);
-
-    return backend ? backend->getc() : -1;
 }
 
 static uint32_t tty_output_next(uint32_t pos)
@@ -236,9 +265,57 @@ static void tty_init_one(struct tty_struct *tty, int id)
 
 void tty_init(void) {
     tty_initialized = false;
+    kernel_console_tty_id = -1;
     tty_init_one(&tty0, TTY_CONSOLE_ID);
     tty_init_one(&tty1, TTY_GRAPHICS_ID);
+    tty_init_one(&ttyS0, TTY_SERIAL_ID);
     tty_initialized = true;
+}
+
+static void tty_kernel_putc_to(struct tty_struct *tty, char c)
+{
+    if (!tty || !tty->backend)
+        return;
+
+    if (c == '\n')
+        tty_backend_putc_to(tty, '\r');
+    tty_backend_putc_to(tty, c);
+}
+
+bool tty_kernel_console_putc(char c)
+{
+    struct tty_struct *tty;
+
+    if (!tty_initialized || kernel_console_tty_id < 0)
+        return false;
+
+    tty = tty_by_id(kernel_console_tty_id);
+    if (!tty || !tty->backend)
+        return false;
+
+    tty_kernel_putc_to(tty, c);
+    return true;
+}
+
+void tty_set_kernel_console(int tty_id, bool replay_log)
+{
+    struct tty_struct *tty = tty_by_id(tty_id);
+
+    if (!tty || !tty->backend)
+        return;
+
+    kernel_console_tty_id = tty_id;
+    if (replay_log) {
+        char *log = kmalloc(8192);
+        size_t length;
+
+        if (!log)
+            return;
+        length = kmsg_read(log, 8192);
+        for (size_t i = 0; i < length; i++)
+            tty_kernel_putc_to(tty, log[i]);
+        kfree(log);
+    }
 }
 
 bool tty_console_output_lock(unsigned long *flags)
@@ -700,16 +777,15 @@ bool tty_has_pending_output(void)
     unsigned long flags;
     bool pending = false;
 
-    spin_lock_irqsave(&tty0.lock, &flags);
-    pending = !tty_output_empty_locked(&tty0);
-    spin_unlock_irqrestore(&tty0.lock, flags);
+    for (int tty_id = 0; tty_id < TTY_MAX; tty_id++) {
+        struct tty_struct *tty = tty_by_id(tty_id);
 
-    if (pending)
-        return true;
-
-    spin_lock_irqsave(&tty1.lock, &flags);
-    pending = !tty_output_empty_locked(&tty1);
-    spin_unlock_irqrestore(&tty1.lock, flags);
+        spin_lock_irqsave(&tty->lock, &flags);
+        pending = !tty_output_empty_locked(tty);
+        spin_unlock_irqrestore(&tty->lock, flags);
+        if (pending)
+            return true;
+    }
 
     return pending;
 }
@@ -956,8 +1032,7 @@ void tty_input_char_to_id(int tty_id, char c)
     tty_input_char_to(tty_by_id(tty_id), c);
 }
 
-/* Appelé par l'IRQ UART (ou polling). L'UART reste la console de secours tty0,
- * indépendamment du TTY graphique actif. */
+/* Compatibility entry point for input drivers that target the primary TTY. */
 void tty_input_char(char c) {
     tty_input_char_to_id(TTY_CONSOLE_ID, c);
 }
@@ -973,12 +1048,12 @@ bool tty_read_ready_for_id(int tty_id)
     if (!tty)
         return false;
 
-    if (tty == &tty0) {
-        while (tty_backend_has_data()) {
-            int c = tty_backend_getc();
+    if (tty->backend) {
+        while (tty->backend->has_data()) {
+            int c = tty->backend->getc();
             if (c < 0)
                 break;
-            tty_input_char((char)c);
+            tty_input_char_to(tty, (char)c);
         }
     }
 
@@ -1028,10 +1103,10 @@ static ssize_t tty_read_to(struct tty_struct *tty, char *buf, size_t count)
     }
     
     while (read < count) {
-        while (tty == &tty0 && tty_backend_has_data()) {
-            int c = tty_backend_getc();
+        while (tty->backend && tty->backend->has_data()) {
+            int c = tty->backend->getc();
             if (c < 0) break;
-            tty_input_char((char)c);
+            tty_input_char_to(tty, (char)c);
         }
 
         spin_lock_irqsave(&tty->lock, &flags);
@@ -1308,6 +1383,7 @@ static void tty_drain_output_limited(uint32_t budget)
 {
     tty_drain_output_limited_to(&tty0, budget);
     tty_drain_output_limited_to(&tty1, budget);
+    tty_drain_output_limited_to(&ttyS0, budget);
 }
 
 void tty_drain_output(void)
@@ -1319,6 +1395,8 @@ static ssize_t tty_file_read(file_t* file, void* buf, size_t count) {
     int tty_id = file ? (int)(uintptr_t)file->private_data : TTY_CONSOLE_ID;
     struct tty_struct *tty = tty_by_id(tty_id);
 
+    if (tty && tty->output_only)
+        return -EACCES;
     return tty_read_to(tty, (char*)buf, count);
 }
 
@@ -1343,6 +1421,7 @@ bool is_tty_device_path(const char* path)
     return path && (strcmp(path, "/dev/tty") == 0 ||
                     strcmp(path, "/dev/tty0") == 0 ||
                     strcmp(path, "/dev/tty1") == 0 ||
+                    strcmp(path, "/dev/ttyS0") == 0 ||
                     strcmp(path, "/dev/console") == 0);
 }
 
@@ -1369,6 +1448,8 @@ int tty_id_from_device_path(const char* path)
         return tty_current_controlling_id();
     if (strcmp(path, "/dev/tty1") == 0)
         return TTY_GRAPHICS_ID;
+    if (strcmp(path, "/dev/ttyS0") == 0)
+        return TTY_SERIAL_ID;
     if (strcmp(path, "/dev/tty0") == 0 ||
         strcmp(path, "/dev/console") == 0)
         return TTY_CONSOLE_ID;
@@ -1394,6 +1475,8 @@ static uint32_t tty_rdev_from_path(const char* path)
         return DEV_CONSOLE_RDEV;
     if (path && strcmp(path, "/dev/tty1") == 0)
         return DEV_TTY1_RDEV;
+    if (path && strcmp(path, "/dev/ttyS0") == 0)
+        return DEV_TTYS0_RDEV;
     return DEV_TTY_RDEV;
 }
 
@@ -1405,6 +1488,8 @@ static int tty_id_from_name(const char* name)
         return tty_current_controlling_id();
     if (strcmp(name, "tty1") == 0)
         return TTY_GRAPHICS_ID;
+    if (strcmp(name, "ttyS0") == 0)
+        return TTY_SERIAL_ID;
     return TTY_CONSOLE_ID;
 }
 
@@ -1448,7 +1533,7 @@ file_t* create_tty_console_file(const char* name, int flags) {
     }
 
     tty_id = tty_id_from_name(name);
-    if (!tty_has_backend_for_id(tty_id)) {
+    if (tty_check_open_for_id(tty_id, flags) < 0) {
         kfree(inode);
         kfree(file);
         return NULL;
@@ -1460,6 +1545,8 @@ file_t* create_tty_console_file(const char* name, int flags) {
         fill_tty_device_stat("/dev/console", &st);
     else if (tty_id == TTY_GRAPHICS_ID)
         fill_tty_device_stat("/dev/tty1", &st);
+    else if (tty_id == TTY_SERIAL_ID)
+        fill_tty_device_stat("/dev/ttyS0", &st);
     else
         fill_tty_device_stat("/dev/tty0", &st);
     inode->mode = st.st_mode;
