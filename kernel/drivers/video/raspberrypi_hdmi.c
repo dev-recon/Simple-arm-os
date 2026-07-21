@@ -31,7 +31,7 @@
 #define RPI_TAG_SET_VIRTUAL_OFF   0x00048009u
 #define RPI_TAG_ALLOCATE_BUFFER   0x00040001u
 #define RPI_TAG_GET_PITCH         0x00040008u
-#define RPI_PIXEL_ORDER_RGB       1u
+#define RPI_PIXEL_ORDER_BGR       0u
 #define RPI_GPU_BUS_ADDRESS_MASK  0x3fffffffu
 #define RPI_HDMI_SCROLL_BUFFERS   2u
 
@@ -72,7 +72,12 @@ static bool hdmi_request_mode(uint32_t width, uint32_t height,
     hdmi_message[18] = 4; hdmi_message[19] = 0; hdmi_message[20] = 32;
     hdmi_message[21] = RPI_TAG_SET_PIXEL_ORDER;
     hdmi_message[22] = 4; hdmi_message[23] = 0;
-    hdmi_message[24] = RPI_PIXEL_ORDER_RGB;
+    /*
+     * ArmOS exposes framebuffer pixels as 0xAARRGGBB.  On little-endian ARM,
+     * requesting the firmware BGR byte order makes that in-memory contract
+     * appear as RGB on the display.  Requesting RGB swaps red and blue.
+     */
+    hdmi_message[24] = RPI_PIXEL_ORDER_BGR;
     hdmi_message[25] = RPI_TAG_ALLOCATE_BUFFER;
     hdmi_message[26] = 8; hdmi_message[27] = 0;
     hdmi_message[28] = 4096; hdmi_message[29] = 0;
@@ -96,6 +101,7 @@ static bool hdmi_request_mode(uint32_t width, uint32_t height,
     if (!bus_address || !candidate.size || candidate.bpp != 32u ||
         candidate.width != width || candidate.height != height ||
         candidate.virtual_height < height ||
+        hdmi_message[24] != RPI_PIXEL_ORDER_BGR ||
         candidate.pitch != candidate.width * 4u ||
         (uint64_t)candidate.size <
             (uint64_t)candidate.pitch * candidate.virtual_height ||
