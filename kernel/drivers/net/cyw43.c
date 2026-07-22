@@ -1380,13 +1380,14 @@ static void cyw43_update_sdpcm_flow(const uint8_t *header, uint32_t length)
         CYW43_TX_WINDOW_MAX_ADVANCE) {
         //KWARN("CYW43: SDPCM window clamp raw=%u txseq=%u rxseq=%u\n",
         //      window, cyw43_state.tx_sequence, header[4]);
-        window = (uint8_t)(cyw43_state.tx_sequence + 2u);
+        //window = (uint8_t)(cyw43_state.tx_sequence + 2u);
     }
     if (window != cyw43_state.tx_max) {
         //KWARN("CYW43: SDPCM window %u -> %u txseq=%u rxseq=%u "
         //      "channel=%u fc=0x%02X\n",
-              cyw43_state.tx_max, window, cyw43_state.tx_sequence,
-              header[4], channel, header[8]);
+        //      cyw43_state.tx_max, window, cyw43_state.tx_sequence,
+        //      header[4], channel, header[8]);
+        for(int i=0; i<10000; i++);   // Delay to allow the firmware to process the window change
         cyw43_state.tx_max = window;
     }
 }
