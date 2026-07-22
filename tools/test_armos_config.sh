@@ -49,10 +49,7 @@ printf '%s\n' \
     'TARGET_PLATFORM=raspi3' \
     'ENABLE_HDMI=yes' \
     'ENABLE_ILI9341=yes' > "$TMP_CONFIG"
-if ARMOS_CONFIG="$TMP_CONFIG" "$ROOT_DIR/tools/armos_config.sh" --show >/dev/null 2>&1; then
-    echo "configuration accepted two framebuffer backends" >&2
-    exit 1
-fi
+ARMOS_CONFIG="$TMP_CONFIG" "$ROOT_DIR/tools/armos_config.sh" --show >/dev/null
 
 printf 'UNKNOWN_OPTION=yes\n' > "$TMP_CONFIG"
 if ARMOS_CONFIG="$TMP_CONFIG" "$ROOT_DIR/tools/armos_config.sh" --show >/dev/null 2>&1; then
@@ -61,6 +58,12 @@ if ARMOS_CONFIG="$TMP_CONFIG" "$ROOT_DIR/tools/armos_config.sh" --show >/dev/nul
 fi
 if ARMOS_CONFIG="$TMP_CONFIG" make -s -C "$ROOT_DIR" config >/dev/null 2>&1; then
     echo "make accepted an unknown configuration key" >&2
+    exit 1
+fi
+
+if make -s -C "$ROOT_DIR" \
+    ARMOS_CONFIG="$TMP_CONFIG.missing" config >/dev/null 2>&1; then
+    echo "make accepted a missing explicit configuration file" >&2
     exit 1
 fi
 

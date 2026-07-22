@@ -310,12 +310,25 @@ static void usb_delay_ms(uint32_t milliseconds)
         arch_cpu_relax();
 }
 
+static uint64_t timer_ticks_from_ms(uint32_t milliseconds)
+{
+    uint32_t frequency = get_timer_frequency();
+    uint32_t per_ms = frequency / 1000u;
+    uint32_t remainder = frequency % 1000u;
+    uint64_t ticks = (uint64_t)per_ms * milliseconds +
+        (remainder * milliseconds + 999u) / 1000u;
+
+    return ticks != 0u ? ticks : 1u;
+}
+
 static void usb_delay_us(uint32_t microseconds)
 {
     uint64_t start = get_timer_count();
     uint32_t frequency = get_timer_frequency();
-    uint64_t duration =
-        ((uint64_t)frequency * microseconds + 999999u) / 1000000u;
+    uint32_t per_us = frequency / 1000000u;
+    uint32_t remainder = frequency % 1000000u;
+    uint64_t duration = (uint64_t)per_us * microseconds +
+        (remainder * microseconds + 999999u) / 1000000u;
 
     if (!duration)
         duration = 1;
@@ -477,9 +490,7 @@ static int channel_wait(uint32_t channel, uint32_t *status)
 {
     uint32_t base = DWC2_HC_BASE + channel * DWC2_HC_STRIDE;
     uint64_t start = get_timer_count();
-    uint64_t timeout_ticks =
-        ((uint64_t)get_timer_frequency() * USB_CHANNEL_WAIT_MS + 999u) /
-        1000u;
+    uint64_t timeout_ticks = timer_ticks_from_ms(USB_CHANNEL_WAIT_MS);
 
     while ((get_timer_count() - start) < timeout_ticks) {
         uint32_t value = reg_read(base + DWC2_HCINT);
@@ -501,8 +512,7 @@ static uint32_t current_microframe(void)
 static bool wait_for_microframe(uint32_t target)
 {
     uint64_t start = get_timer_count();
-    uint64_t timeout_ticks = ((uint64_t)get_timer_frequency() * 2u + 999u) /
-        1000u;
+    uint64_t timeout_ticks = timer_ticks_from_ms(2u);
 
     target &= 7u;
     while ((get_timer_count() - start) < timeout_ticks) {
@@ -1235,14 +1245,6 @@ static bool key_already_pressed(const uint8_t *previous, uint8_t usage)
         if (previous[i] == usage)
             return true;
     return false;
-}
-
-static uint64_t timer_ticks_from_ms(uint32_t milliseconds)
-{
-    uint64_t ticks =
-        ((uint64_t)get_timer_frequency() * milliseconds + 999u) / 1000u;
-
-    return ticks != 0u ? ticks : 1u;
 }
 
 static void emit_string(const char *text)

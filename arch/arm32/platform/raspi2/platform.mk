@@ -24,6 +24,7 @@ RASPBERRYPI_PLATFORM_DIR = kernel/platform/raspberrypi
 PLATFORM_OBJS = \
 	$(RASPBERRYPI_PLATFORM_DIR)/devices.o \
 	$(RASPBERRYPI_PLATFORM_DIR)/irq.o \
+	$(RASPBERRYPI_PLATFORM_DIR)/mailbox.o \
 	$(RASPBERRYPI_PLATFORM_DIR)/power.o \
 	kernel/drivers/mmc/bcm2835_emmc.o \
 	kernel/drivers/keyboard.o \

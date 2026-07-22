@@ -23,12 +23,14 @@ ENABLE_USB ?= 0
 HDMI_WIDTH ?= 1280
 HDMI_HEIGHT ?= 720
 ENABLE_ILI9341 ?= 0
+ENABLE_WIFI ?= 0
 PLATFORM_OBJS = \
 	$(RASPBERRYPI_PLATFORM_DIR)/devices.o \
 	$(RASPBERRYPI_PLATFORM_DIR)/irq.o \
 	$(RASPBERRYPI_PLATFORM_DIR)/mailbox.o \
 	$(RASPBERRYPI_PLATFORM_DIR)/power.o \
 	kernel/drivers/mmc/bcm2835_emmc.o \
+	kernel/drivers/gpio/bcm283x_gpio.o \
 	kernel/drivers/keyboard.o \
 	kernel/drivers/display.o \
 	kernel/drivers/virtio_input.o \
@@ -49,7 +51,15 @@ endif
 ifneq ($(filter 1 yes true on,$(ENABLE_ILI9341)),)
 PLATFORM_CFLAGS += -DARMOS_ENABLE_ILI9341
 PLATFORM_OBJS += \
-	kernel/drivers/gpio/bcm283x_gpio.o \
 	kernel/drivers/gpio/gpio_parallel8.o \
 	kernel/drivers/video/ili9341.o
+endif
+
+
+ifneq ($(filter 1 yes true on,$(ENABLE_WIFI)),)
+PLATFORM_CFLAGS += -DARMOS_ENABLE_WIFI
+PLATFORM_OBJS += \
+	kernel/drivers/mmc/bcm2835_sdhost.o \
+	kernel/drivers/mmc/bcm2835_sdio.o \
+	kernel/drivers/net/cyw43.o
 endif

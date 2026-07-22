@@ -6,6 +6,11 @@ ARMOS_VERSION := 0.7.3
 # highest priority; environment values are restored after the include so the
 # repository-wide precedence matches the shell entry points.
 ARMOS_CONFIG ?= armos.conf
+ifeq ($(origin ARMOS_CONFIG),command line)
+ifeq ($(wildcard $(ARMOS_CONFIG)),)
+$(error Selected ArmOS configuration does not exist: $(ARMOS_CONFIG))
+endif
+endif
 _ARMOS_ENV_TARGET_ARCH := $(if $(filter environment environment\ override,$(origin TARGET_ARCH)),$(TARGET_ARCH))
 _ARMOS_ENV_TARGET_PLATFORM := $(if $(filter environment environment\ override,$(origin TARGET_PLATFORM)),$(TARGET_PLATFORM))
 _ARMOS_ENV_CROSS_COMPILE := $(if $(filter environment environment\ override,$(origin CROSS_COMPILE)),$(CROSS_COMPILE))
@@ -139,6 +144,8 @@ COMMON_KERNEL_OBJS = \
 	kernel/process/exec_stack.o \
 	kernel/process/signal.o \
 	kernel/core/coredump.o \
+	kernel/core/device_service.o \
+	kernel/net/device.o \
 	kernel/fs/vfs.o \
 	kernel/fs/mount.o \
 	kernel/fs/fat32.o \
@@ -263,6 +270,7 @@ config:
 	@echo "  CROSS_COMPILE:   $(CROSS_COMPILE)"
 	@echo "  SMP_CPUS:        $(SMP_CPUS)"
 	@echo "  ENABLE_NET:      $(if $(ENABLE_NET),$(ENABLE_NET),no)"
+	@echo "  ENABLE_WIFI:     $(if $(ENABLE_WIFI),$(ENABLE_WIFI),no)"
 	@echo "  ENABLE_GPU:      $(if $(ENABLE_GPU),$(ENABLE_GPU),no)"
 	@echo "  ENABLE_HDMI:     $(if $(ENABLE_HDMI),$(ENABLE_HDMI),platform default)"
 	@echo "  HDMI_WIDTH:      $(HDMI_WIDTH)"

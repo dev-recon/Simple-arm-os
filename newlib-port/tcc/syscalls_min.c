@@ -1687,7 +1687,8 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
 
 int tcflush(int fd, int queue_selector)
 {
-    return ret_errno(sys_ioctl(fd, TCFLSH, (void *)queue_selector));
+    return ret_errno(sys_ioctl(fd, TCFLSH,
+                               (void *)(intptr_t)queue_selector));
 }
 
 int tcdrain(int fd)

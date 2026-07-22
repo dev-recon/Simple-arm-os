@@ -37,6 +37,7 @@
 #include <kernel/debug_print.h>
 #include <kernel/stdarg.h>
 #include <kernel/disk_layout.h>
+#include <kernel/device_service.h>
 
 #include <kernel/task.h>
 #include <kernel/kernel_tasks.h>
@@ -252,6 +253,9 @@ void kernel_main(void)
         KBOOT_WARN("Init: skipped, no root filesystem");
     }
     timer_enable_scheduling();
+
+    if (rootfs_ready)
+        device_services_start();
 
     if (rootfs_ready) {
         if (coredumpd_start() == 0)

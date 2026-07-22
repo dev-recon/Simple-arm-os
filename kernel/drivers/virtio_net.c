@@ -33,6 +33,7 @@
 #include <kernel/task.h>
 #include <kernel/arch_barrier.h>
 #include <kernel/arch_platform.h>
+#include <kernel/net/device.h>
 
 #define VIRTIO_NET_F_MAC      (1u << 5)
 
@@ -168,6 +169,7 @@ typedef struct net_socket {
 } net_socket_t;
 
 typedef struct {
+    net_device_t device;
     paddr_t phys;
     uint32_t irq;
     volatile uint32_t *mmio;
@@ -538,7 +540,7 @@ static int net_tx_alloc_desc(void)
     return -1;
 }
 
-static int net_send_frame(const uint8_t *frame, uint32_t frame_len)
+static int virtio_net_send_frame(const uint8_t *frame, uint32_t frame_len)
 {
     if (!frame || frame_len == 0)
         return -EINVAL;
@@ -578,6 +580,20 @@ static int net_send_frame(const uint8_t *frame, uint32_t frame_len)
     return 0;
 }
 
+static int virtio_net_device_transmit(net_device_t *device,
+                                      const uint8_t *frame,
+                                      uint32_t frame_len)
+{
+    (void)device;
+    return virtio_net_send_frame(frame, frame_len);
+}
+
+static const net_device_ops_t virtio_net_device_ops = {
+    .transmit = virtio_net_device_transmit,
+    .poll = NULL,
+    .shutdown = NULL,
+};
+
 static void net_build_arp(uint8_t *frame, const uint8_t dst_mac[6],
                           const uint8_t target_mac[6], uint32_t op,
                           uint32_t sender_ip, uint32_t target_ip)
@@ -608,7 +624,7 @@ static void net_send_arp_request(uint32_t target_ip)
 
     net_build_arp(frame, bcast, zero, ARP_OPER_REQUEST,
                   VIRTIO_NET_IP, target_ip);
-    if (net_send_frame(frame, sizeof(frame)) == 0)
+    if (net_device_transmit(&net.device, frame, sizeof(frame)) == 0)
         net.tx_arp++;
 }
 
@@ -618,7 +634,7 @@ static void net_send_arp_reply(const arp_pkt_t *request)
 
     net_build_arp(frame, request->sha, request->sha, ARP_OPER_REPLY,
                   VIRTIO_NET_IP, net_ip_from_bytes(request->spa));
-    if (net_send_frame(frame, sizeof(frame)) == 0)
+    if (net_device_transmit(&net.device, frame, sizeof(frame)) == 0)
         net.tx_arp++;
 }
 
@@ -664,7 +680,7 @@ static void net_send_icmp_echo_reply(const eth_hdr_t *rx_eth,
     icmp_hdr->checksum = 0;
     icmp_hdr->checksum = net_bswap16(net_checksum(icmp, icmp_len));
 
-    if (net_send_frame(frame, frame_len) == 0)
+    if (net_device_transmit(&net.device, frame, frame_len) == 0)
         net.tx_icmp++;
 }
 
@@ -719,7 +735,7 @@ static void net_send_tcp_packet(const uint8_t dst_mac[6], uint32_t dst_ip,
     tcp->checksum = 0;
     tcp->checksum = net_bswap16(net_tcp_checksum(ip, (const uint8_t *)tcp, tcp_len));
 
-    if (net_send_frame(frame, frame_len) == 0)
+    if (net_device_transmit(&net.device, frame, frame_len) == 0)
         net.tx_tcp++;
 }
 
@@ -1375,6 +1391,14 @@ static void net_handle_frame(const uint8_t *frame, uint32_t len)
     }
 }
 
+static void virtio_net_receive_frame(net_device_t *device,
+                                     const uint8_t *frame,
+                                     uint32_t length)
+{
+    (void)device;
+    net_handle_frame(frame, length);
+}
+
 static void net_rx_process_used(void)
 {
     vq_legacy_t *vq = &net.rx_vq;
@@ -1405,8 +1429,10 @@ static void net_rx_process_used(void)
         if (len > sizeof(virtio_net_hdr_t)) {
             net.rx_packets++;
             net.rx_bytes += len - sizeof(virtio_net_hdr_t);
-            net_handle_frame(net.rx_bufs[id].bytes + sizeof(virtio_net_hdr_t),
-                             len - sizeof(virtio_net_hdr_t));
+            net_device_receive(
+                &net.device,
+                net.rx_bufs[id].bytes + sizeof(virtio_net_hdr_t),
+                len - sizeof(virtio_net_hdr_t));
         } else {
             net.rx_drops++;
         }
@@ -1599,6 +1625,18 @@ bool virtio_net_init(void)
         return false;
     if (!net_tx_queue_init())
         return false;
+
+    net.device.name = "eth0";
+    memcpy(net.device.mac, net.mac, sizeof(net.mac));
+    net.device.mtu = NET_DEVICE_DEFAULT_MTU;
+    net.device.ops = &virtio_net_device_ops;
+    net.device.receive = virtio_net_receive_frame;
+    net.device.driver_data = &net;
+    net_device_set_link(&net.device, NET_LINK_UP);
+    if (net_device_register(&net.device) < 0) {
+        KERROR("virtio_net: failed to register eth0\n");
+        return false;
+    }
 
     /*
      * DRIVER_OK is set only after RX buffers are posted. Otherwise QEMU may

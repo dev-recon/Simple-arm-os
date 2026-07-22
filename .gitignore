@@ -40,6 +40,8 @@ userfs/opt/bsdelftools/
 userfs/opt/bsdinstall/
 userfs/opt/bsdmtree/
 userfs/opt/bsdsed/
+# Cypress/Broadcom firmware is downloaded separately under its own license.
+userfs/lib/firmware/brcm/
 userland/*/*.o
 userland/nl-*
 userland/legacy/homegrown-libc/**/*.o
@@ -62,6 +64,7 @@ output/
 .vscode/
 CONTEXT_REPRISE*.md
 armos.conf
+userfs/etc/wifi.conf
 
 # Third-party archives
 *.tar.gz

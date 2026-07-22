@@ -84,6 +84,12 @@ struct statfs {
     uint32_t f_frsize;
 };
 
+typedef struct kernel_file {
+    file_t file;
+    inode_t* inode;
+    bool opened;
+} kernel_file_t;
+
 
 
 /* VFS functions */
@@ -112,6 +118,13 @@ inode_t* get_root_inode(void);
 void put_inode(inode_t* inode);
 inode_t* path_lookup(const char* path);
 inode_t* path_lookup_ex(const char* path, bool follow_final_symlink);
+
+/* Kernel-internal streaming file access without a process descriptor table. */
+int vfs_kernel_file_open(const char* path, kernel_file_t* handle);
+ssize_t vfs_kernel_file_read(kernel_file_t* handle, void* buffer,
+                             size_t count);
+uint32_t vfs_kernel_file_size(const kernel_file_t* handle);
+void vfs_kernel_file_close(kernel_file_t* handle);
 
 /* File descriptor management */
 void free_fd(task_t* proc, int fd);

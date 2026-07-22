@@ -150,6 +150,7 @@ typedef enum {
 #define ELOOP          40       /* Too many symbolic links */
 #define EOVERFLOW      75       /* Value too large for defined data type */
 #define EADDRINUSE     98       /* Address already in use */
+#define ENETDOWN      100       /* Network is down */
 #define ENOTCONN      107       /* Transport endpoint is not connected */
 #define ETIMEDOUT     110       /* Connection timed out */
 #define EINPROGRESS   115       /* Operation now in progress */
