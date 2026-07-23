@@ -1134,8 +1134,10 @@ int sys_times(void* buf)
 
     if (buf) {
         memset(&ktms, 0, sizeof(ktms));
-        if (task)
-            ktms.tms_utime = (int32_t)task->total_runtime;
+        if (task) {
+            ktms.tms_utime = (int32_t)task->user_runtime;
+            ktms.tms_stime = (int32_t)task->system_runtime;
+        }
         if (copy_to_user(buf, &ktms, sizeof(ktms)) < 0)
             return -EFAULT;
     }
@@ -1187,15 +1189,23 @@ int sys_sysconf(int name)
 
 static void fill_rusage_for_task(task_t *task, struct rusage_kernel *usage)
 {
-    uint32_t runtime;
+    uint32_t user_runtime;
+    uint32_t system_runtime;
 
     memset(usage, 0, sizeof(*usage));
     if (!task)
         return;
 
-    runtime = task->total_runtime > 0xffffffffu ? 0xffffffffu : (uint32_t)task->total_runtime;
-    usage->ru_utime.tv_sec = (time_t)(runtime / TIMER_FREQ);
-    usage->ru_utime.tv_usec = (uint32_t)((runtime % TIMER_FREQ) * (1000000u / TIMER_FREQ));
+    user_runtime = task->user_runtime > 0xffffffffu ?
+                   0xffffffffu : (uint32_t)task->user_runtime;
+    system_runtime = task->system_runtime > 0xffffffffu ?
+                     0xffffffffu : (uint32_t)task->system_runtime;
+    usage->ru_utime.tv_sec = (time_t)(user_runtime / TIMER_FREQ);
+    usage->ru_utime.tv_usec =
+        (uint32_t)((user_runtime % TIMER_FREQ) * (1000000u / TIMER_FREQ));
+    usage->ru_stime.tv_sec = (time_t)(system_runtime / TIMER_FREQ);
+    usage->ru_stime.tv_usec =
+        (uint32_t)((system_runtime % TIMER_FREQ) * (1000000u / TIMER_FREQ));
     usage->ru_minflt = (int32_t)task->page_faults;
     usage->ru_majflt = 0;
     usage->ru_nvcsw = (int32_t)task->switch_count;

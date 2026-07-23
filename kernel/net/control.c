@@ -11,6 +11,7 @@
  * Responsibilities:
  * - Present interface state through /dev/netctl reads.
  * - Execute bounded ICMP echo requests requested by userland utilities.
+ * - Control optional Wi-Fi devices without exposing driver-specific ioctls.
  * - Keep command presentation separate from NIC and protocol internals.
  *
  * Notes:
@@ -22,10 +23,12 @@
 #include <kernel/net/control.h>
 #include <kernel/net/device.h>
 #include <kernel/net/stack.h>
+#include <kernel/net/wifi.h>
 #include <kernel/string.h>
+#include <kernel/task.h>
 #include <kernel/timer.h>
 
-#define NET_CONTROL_BUFFER_SIZE 2048u
+#define NET_CONTROL_BUFFER_SIZE 4096u
 
 typedef struct net_control_file {
     char response[NET_CONTROL_BUFFER_SIZE];
@@ -65,6 +68,123 @@ static int net_control_show(net_control_file_t *control, const char *name)
     return 0;
 }
 
+static net_device_t *net_control_device(const char *name)
+{
+    if (name && *name)
+        return net_device_find(name);
+    return net_device_get_default();
+}
+
+static void net_control_error(net_control_file_t *control, int error)
+{
+    control->length = (uint32_t)snprintf(control->response,
+        sizeof(control->response), "error %d\n", error);
+}
+
+static int net_control_wifi_scan(net_control_file_t *control,
+                                 net_device_t *device)
+{
+    net_wifi_scan_result_t results[NET_WIFI_SCAN_MAX];
+    uint32_t count = 0u;
+    uint32_t index;
+    uint32_t length;
+    int ret;
+
+    ret = net_wifi_scan(device, results, NET_WIFI_SCAN_MAX, &count);
+    if (ret < 0) {
+        net_control_error(control, ret);
+        return ret;
+    }
+    length = (uint32_t)snprintf(control->response,
+        sizeof(control->response),
+        "SSID                             SECURITY SIGNAL CHANNEL BSSID\n");
+    for (index = 0u; index < count; index++) {
+        net_wifi_scan_result_t *result = &results[index];
+        int written;
+
+        written = snprintf(control->response + length,
+            sizeof(control->response) - length,
+            "%-32s %-8s %6d %7u %02X:%02X:%02X:%02X:%02X:%02X\n",
+            result->ssid[0] ? result->ssid : "<hidden>",
+            result->security == NET_WIFI_SECURITY_OPEN ? "open" : "secured",
+            result->signal_dbm, result->channel,
+            result->bssid[0], result->bssid[1], result->bssid[2],
+            result->bssid[3], result->bssid[4], result->bssid[5]);
+        if (written < 0 ||
+            (uint32_t)written >= sizeof(control->response) - length) {
+            net_control_error(control, -ENOSPC);
+            return -ENOSPC;
+        }
+        length += (uint32_t)written;
+    }
+    control->length = length;
+    return 0;
+}
+
+static int net_control_wifi(net_control_file_t *control, const char *action,
+                            const char *interface, const char *argument)
+{
+    net_device_t *device = net_control_device(interface);
+    char resolved[NET_WIFI_PROFILE_PATH_MAX];
+    int ret;
+
+    if (!action || !device || !net_wifi_supported(device)) {
+        net_control_error(control, !device ? -ENODEV : -ENOTSUP);
+        return !device ? -ENODEV : -ENOTSUP;
+    }
+    if (strcmp(action, "status") == 0)
+        return net_control_show(control, device->name);
+    if (strcmp(action, "scan") == 0)
+        return net_control_wifi_scan(control, device);
+    if (current_uid() != 0u) {
+        net_control_error(control, -EPERM);
+        return -EPERM;
+    }
+    if (strcmp(action, "country") == 0) {
+        if (!argument) {
+            net_control_error(control, -EINVAL);
+            return -EINVAL;
+        }
+        ret = net_wifi_set_country(device, argument);
+        if (ret == 0) {
+            control->length = (uint32_t)snprintf(control->response,
+                sizeof(control->response), "%s country %s active\n",
+                device->name, argument);
+            return 0;
+        }
+    } else if (strcmp(action, "disconnect") == 0) {
+        ret = net_wifi_disconnect(device);
+        if (ret == 0) {
+            control->length = (uint32_t)snprintf(control->response,
+                sizeof(control->response), "%s disconnected\n",
+                device->name);
+            return 0;
+        }
+    } else if (strcmp(action, "reload") == 0 ||
+               strcmp(action, "connect") == 0) {
+        const char *path = strcmp(action, "reload") == 0 ?
+            NET_WIFI_DEFAULT_CONFIG : argument;
+
+        if (!path) {
+            net_control_error(control, -EINVAL);
+            return -EINVAL;
+        }
+        ret = net_wifi_connect_profile(device, path, resolved,
+                                       sizeof(resolved));
+        if (ret == 0) {
+            control->length = (uint32_t)snprintf(control->response,
+                sizeof(control->response),
+                "%s associated using %s; DHCP started\n",
+                device->name, resolved);
+            return 0;
+        }
+    } else {
+        ret = -EINVAL;
+    }
+    net_control_error(control, ret);
+    return ret;
+}
+
 static ssize_t net_control_read(file_t *file, void *buffer, size_t count)
 {
     net_control_file_t *control;
@@ -89,7 +209,7 @@ static ssize_t net_control_write(file_t *file, const void *buffer,
                                  size_t count)
 {
     net_control_file_t *control;
-    char command[128];
+    char command[256];
     char *save = NULL;
     char *verb;
     char *first;
@@ -121,6 +241,10 @@ static ssize_t net_control_write(file_t *file, const void *buffer,
 
     if (verb && strcmp(verb, "show") == 0) {
         (void)net_control_show(control, first);
+        return (ssize_t)count;
+    }
+    if (verb && strcmp(verb, "wifi") == 0) {
+        (void)net_control_wifi(control, first, second, third);
         return (ssize_t)count;
     }
     if (!verb || strcmp(verb, "ping") != 0 || !first) {

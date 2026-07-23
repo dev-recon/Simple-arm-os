@@ -1187,6 +1187,8 @@ task_t* task_create_copy(task_t* parent, bool from_user)
     /* Statistiques */
     child->created_time = get_current_time();
     child->total_runtime = 0;
+    child->user_runtime = 0;
+    child->system_runtime = 0;
     child->switch_count = 0;
     child->page_faults = 0;
     child->cow_faults = 0;
@@ -1604,6 +1606,8 @@ task_t* task_create(const char* name, void (*entry)(void* arg), void* arg, uint3
     /* Statistiques */
     task->created_time = 0;
     task->total_runtime = 0;
+    task->user_runtime = 0;
+    task->system_runtime = 0;
     task->switch_count = 0;
     task->page_faults = 0;
     task->cow_faults = 0;
@@ -3533,6 +3537,23 @@ void task_sleep_ms(uint32_t ms)
     schedule();
 
     task_set_wakeup_time(task, 0);
+}
+
+int task_sleep_interruptible_ms(uint32_t ms)
+{
+    task_t *task = task_current_local();
+
+    if (task && task->type == TASK_TYPE_PROCESS && task->process &&
+        has_pending_signals(task))
+        return -EINTR;
+
+    task_sleep_ms(ms);
+
+    task = task_current_local();
+    if (task && task->type == TASK_TYPE_PROCESS && task->process &&
+        has_pending_signals(task))
+        return -EINTR;
+    return 0;
 }
 
 /**

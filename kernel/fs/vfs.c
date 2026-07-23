@@ -836,6 +836,48 @@ void vfs_kernel_file_close(kernel_file_t* handle)
     memset(handle, 0, sizeof(*handle));
 }
 
+int vfs_kernel_dir_open(const char* path, kernel_file_t* handle)
+{
+    int ret;
+
+    if (!path || !handle)
+        return -EINVAL;
+    memset(handle, 0, sizeof(*handle));
+    handle->inode = path_lookup(path);
+    if (!handle->inode)
+        return -ENOENT;
+    if (!S_ISDIR(handle->inode->mode) || !handle->inode->f_op ||
+        !handle->inode->f_op->readdir) {
+        put_inode(handle->inode);
+        handle->inode = NULL;
+        return -ENOTDIR;
+    }
+
+    handle->file.inode = handle->inode;
+    handle->file.flags = O_RDONLY;
+    handle->file.ref_count = 1u;
+    handle->file.f_op = handle->inode->f_op;
+    handle->file.offset = 0u;
+    if (handle->file.f_op->open) {
+        ret = handle->file.f_op->open(handle->inode, &handle->file);
+        if (ret < 0) {
+            put_inode(handle->inode);
+            handle->inode = NULL;
+            return ret;
+        }
+    }
+    handle->opened = true;
+    return 0;
+}
+
+int vfs_kernel_dir_read(kernel_file_t* handle, dirent_t* entry)
+{
+    if (!handle || !handle->opened || !entry || !handle->file.f_op ||
+        !handle->file.f_op->readdir)
+        return -EINVAL;
+    return handle->file.f_op->readdir(&handle->file, entry);
+}
+
 /**
  * Allouer un descripteur de fichier - CORRIGe
  */

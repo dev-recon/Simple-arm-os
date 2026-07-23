@@ -1499,6 +1499,9 @@ static void proc_fill_tty(char* buf, size_t cap, size_t* len)
 
 static void proc_fill_stat(char* buf, size_t cap, size_t* len)
 {
+    timer_cpu_accounting_t cpu_accounting[ARMOS_MAX_CPUS];
+    timer_cpu_accounting_t cpu_total = {0};
+    uint32_t cpu_count = smp_possible_cpu_count();
     uint32_t live_tasks = kernel_lifecycle_stats.tasks_created -
                           kernel_lifecycle_stats.tasks_destroyed;
     uint32_t live_zombies = kernel_lifecycle_stats.zombies_created -
@@ -1539,6 +1542,16 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
     const int tty_ids[] = {
         TTY_CONSOLE_ID, TTY_GRAPHICS_ID, TTY_SERIAL_ID
     };
+
+    if (cpu_count > ARMOS_MAX_CPUS)
+        cpu_count = ARMOS_MAX_CPUS;
+    for (uint32_t cpu = 0; cpu < cpu_count; cpu++) {
+        timer_cpu_accounting_read(cpu, &cpu_accounting[cpu]);
+        cpu_total.user_ticks += cpu_accounting[cpu].user_ticks;
+        cpu_total.system_ticks += cpu_accounting[cpu].system_ticks;
+        cpu_total.irq_ticks += cpu_accounting[cpu].irq_ticks;
+        cpu_total.idle_ticks += cpu_accounting[cpu].idle_ticks;
+    }
 
     for (size_t i = 0; i < sizeof(tty_ids) / sizeof(tty_ids[0]); i++) {
         int tty_id = tty_ids[i];
@@ -1608,7 +1621,19 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
         spin_unlock_irqrestore(&tty->lock, flags);
     }
 
-    proc_append(buf, cap, len, "cpu  0 0 0 %u 0 0 0 0 0 0\n", get_system_ticks());
+    proc_append(buf, cap, len, "cpu  %u 0 %u %u 0 %u 0 0 0 0\n",
+                cpu_total.user_ticks,
+                cpu_total.system_ticks,
+                cpu_total.idle_ticks,
+                cpu_total.irq_ticks);
+    for (uint32_t cpu = 0; cpu < cpu_count; cpu++) {
+        proc_append(buf, cap, len, "cpu%u %u 0 %u %u 0 %u 0 0 0 0\n",
+                    cpu,
+                    cpu_accounting[cpu].user_ticks,
+                    cpu_accounting[cpu].system_ticks,
+                    cpu_accounting[cpu].idle_ticks,
+                    cpu_accounting[cpu].irq_ticks);
+    }
     proc_append(buf, cap, len, "intr %u\n", irq_get_total_count());
     task_t *task = task_current_local();
     proc_append(buf, cap, len, "ctxt %u\n",
@@ -1785,6 +1810,8 @@ static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "L2Tables:\t%u\n", vm_page_table_count(vm));
     proc_append(buf, cap, len, "CtxSwitches:\t%u\n", task->switch_count);
     proc_append(buf, cap, len, "RuntimeTicks:\t%u\n", (uint32_t)task_runtime_ticks(task));
+    proc_append(buf, cap, len, "UserTicks:\t%u\n", (uint32_t)task->user_runtime);
+    proc_append(buf, cap, len, "SystemTicks:\t%u\n", (uint32_t)task->system_runtime);
     proc_append(buf, cap, len, "PageFaults:\t%u\n", task->page_faults);
     proc_append(buf, cap, len, "CowFaults:\t%u\n", task->cow_faults);
     proc_append(buf, cap, len, "StackFaults:\t%u\n", task->stack_faults);
@@ -1806,7 +1833,7 @@ static void proc_fill_pid_stat(pid_t pid, char* buf, size_t cap, size_t* len)
     }
 
     proc = proc_task_process(task);
-    proc_append(buf, cap, len, "%d (%s) %c %d %d %d %d %u %u %u %u %u\n",
+    proc_append(buf, cap, len, "%d (%s) %c %d %d %d %d %u %u %u %u %u %u %u\n",
                 proc ? proc->pid : 0,
                 task->name,
                 proc_task_state_char(task->state),
@@ -1818,7 +1845,9 @@ static void proc_fill_pid_stat(pid_t pid, char* buf, size_t cap, size_t* len)
                 task->cow_faults,
                 task->stack_faults,
                 task->switch_count,
-                (uint32_t)task_runtime_ticks(task));
+                (uint32_t)task_runtime_ticks(task),
+                (uint32_t)task->user_runtime,
+                (uint32_t)task->system_runtime);
     spin_unlock_irqrestore(&task_lock, flags);
 }
 

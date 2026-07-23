@@ -39,7 +39,7 @@ static bool raspberrypi_wifi_sdio_ready;
 static bool raspberrypi_wifi_chip_ready;
 #endif
 
-#if defined(ARMOS_PLATFORM_RASPI3) && defined(ARMOS_ENABLE_USB)
+#if defined(ARMOS_ENABLE_USB)
 static bool raspberrypi_usb_node_available(void)
 {
     void *dtb = (void *)(uintptr_t)dtb_address;
@@ -83,13 +83,13 @@ static void raspberrypi_use_uart_fallback_console(void)
 platform_devices_state_t platform_devices_init(void)
 {
     platform_devices_state_t state = {0};
-#if defined(ARMOS_PLATFORM_RASPI3) && \
-    (defined(ARMOS_ENABLE_HDMI) || defined(ARMOS_ENABLE_ILI9341))
+#if defined(ARMOS_ENABLE_HDMI) || \
+    (defined(ARMOS_PLATFORM_RASPI3) && defined(ARMOS_ENABLE_ILI9341))
     bool primary_display_ready = false;
 #endif
 
     KBOOT_OK("TTY: recovery serial on PL011 /dev/ttyS0");
-#if defined(ARMOS_PLATFORM_RASPI3) && defined(ARMOS_ENABLE_HDMI)
+#if defined(ARMOS_ENABLE_HDMI)
     if (raspberrypi_hdmi_init(ARMOS_HDMI_WIDTH, ARMOS_HDMI_HEIGHT)) {
         const raspberrypi_hdmi_info_t *hdmi = raspberrypi_hdmi_get_info();
 
@@ -157,11 +157,13 @@ platform_devices_state_t platform_devices_init(void)
     KBOOT_WARN("Input: GPIO display is output-only");
 #endif
 
-#if defined(ARMOS_PLATFORM_RASPI3)
+#if defined(ARMOS_ENABLE_HDMI) || \
+    (defined(ARMOS_PLATFORM_RASPI3) && defined(ARMOS_ENABLE_ILI9341))
     if (!primary_display_ready) {
 #if !defined(ARMOS_ENABLE_HDMI) && !defined(ARMOS_ENABLE_ILI9341)
-    KBOOT_WARN("GPU: Raspberry Pi display disabled");
-    KBOOT_WARN("Input: unavailable on Raspberry Pi 3 milestone 1");
+        KBOOT_WARN("GPU: Raspberry Pi display disabled");
+        KBOOT_WARNF("Input: unavailable on %s milestone 1",
+                    arch_platform_name());
 #else
         KBOOT_WARN("GPU: no configured Raspberry Pi display available");
 #endif
@@ -180,7 +182,7 @@ platform_devices_state_t platform_devices_init(void)
     KBOOT_WARNF("Net: unavailable on %s milestone 1", arch_platform_name());
 #endif
 
-#if defined(ARMOS_PLATFORM_RASPI3) && defined(ARMOS_ENABLE_USB)
+#if defined(ARMOS_ENABLE_USB)
     if (!raspberrypi_usb_node_available()) {
         KBOOT_WARN("USB: enabled DWC2 controller not found in boot DTB");
     } else if (dwc2_usb_register(TTY_CONSOLE_ID) == 0) {

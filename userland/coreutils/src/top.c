@@ -27,8 +27,8 @@
 #define TOP_MAX_CPUS 8
 #define TOP_DEFAULT_ROWS 24
 #define TOP_DEFAULT_COLS 80
-#define TOP_HEADER_ROWS 6
-#define TOP_FULL_WIDTH 112
+#define TOP_HEADER_ROWS 7
+#define TOP_FULL_WIDTH 128
 
 #define C_RESET   "\033[0m"
 #define C_BOLD    "\033[1m"
@@ -44,7 +44,11 @@ typedef struct top_task {
     int pid;
     int tty;
     unsigned runtime_ticks;
+    unsigned user_ticks;
+    unsigned system_ticks;
     unsigned cpu_pct_x10;
+    unsigned user_pct_x10;
+    unsigned system_pct_x10;
     unsigned priority;
     unsigned debt_score;
     unsigned ctx;
@@ -64,7 +68,16 @@ typedef struct top_mem {
 typedef struct top_sample {
     int pid;
     unsigned runtime_ticks;
+    unsigned user_ticks;
+    unsigned system_ticks;
 } top_sample_t;
+
+typedef struct top_cpu_sample {
+    unsigned user_ticks;
+    unsigned system_ticks;
+    unsigned irq_ticks;
+    unsigned idle_ticks;
+} top_cpu_sample_t;
 
 typedef struct top_buf {
     char *data;
@@ -80,6 +93,13 @@ static int top_have_prev = 0;
 static struct termios top_saved_termios;
 static int top_termios_saved = 0;
 static unsigned top_cpu_load_x10[TOP_MAX_CPUS];
+static unsigned top_cpu_user_x10[TOP_MAX_CPUS];
+static unsigned top_cpu_system_x10[TOP_MAX_CPUS];
+static unsigned top_cpu_irq_x10[TOP_MAX_CPUS];
+static unsigned top_cpu_idle_x10[TOP_MAX_CPUS];
+static top_cpu_sample_t top_prev_cpu[TOP_MAX_CPUS];
+static int top_have_cpu_prev = 0;
+static unsigned top_cpu_elapsed_ticks = TOP_HZ;
 static unsigned top_cpu_count = 1;
 static char top_proc_dirbuf[TOP_PROC_BUF];
 static char top_frame_data[TOP_FRAME_BUF];
@@ -229,6 +249,7 @@ static void handle_key(char c, unsigned *delay_sec)
     case 'R':
         top_have_prev = 0;
         top_prev_count = 0;
+        top_have_cpu_prev = 0;
         break;
     default:
         break;
@@ -374,6 +395,93 @@ static unsigned read_cpu_count(void)
     return cpus;
 }
 
+static int parse_cpu_sample(const char *p, top_cpu_sample_t *sample)
+{
+    unsigned ignored;
+
+    memset(sample, 0, sizeof(*sample));
+    p = parse_uint(p, &sample->user_ticks);
+    if (!p) return -1;
+    p = parse_uint(p, &ignored);               /* nice */
+    if (!p) return -1;
+    p = parse_uint(p, &sample->system_ticks);
+    if (!p) return -1;
+    p = parse_uint(p, &sample->idle_ticks);
+    if (!p) return -1;
+    p = parse_uint(p, &ignored);               /* iowait */
+    if (!p) return -1;
+    p = parse_uint(p, &sample->irq_ticks);
+    return p ? 0 : -1;
+}
+
+static void update_cpu_accounting(void)
+{
+    top_cpu_sample_t current[TOP_MAX_CPUS];
+    char buf[1024];
+    const char *p;
+    unsigned max_elapsed = 0;
+
+    memset(current, 0, sizeof(current));
+    memset(top_cpu_load_x10, 0, sizeof(top_cpu_load_x10));
+    memset(top_cpu_user_x10, 0, sizeof(top_cpu_user_x10));
+    memset(top_cpu_system_x10, 0, sizeof(top_cpu_system_x10));
+    memset(top_cpu_irq_x10, 0, sizeof(top_cpu_irq_x10));
+    memset(top_cpu_idle_x10, 0, sizeof(top_cpu_idle_x10));
+
+    if (read_file("/proc/stat", buf, sizeof(buf)) < 0)
+        return;
+
+    p = buf;
+    while (*p) {
+        if (p[0] == 'c' && p[1] == 'p' && p[2] == 'u' && is_digit(p[3])) {
+            unsigned cpu;
+            const char *values = parse_uint(p + 3, &cpu);
+
+            if (values && cpu < top_cpu_count && cpu < TOP_MAX_CPUS)
+                parse_cpu_sample(values, &current[cpu]);
+        }
+        while (*p && *p != '\n')
+            p++;
+        if (*p == '\n')
+            p++;
+    }
+
+    if (top_have_cpu_prev) {
+        for (unsigned cpu = 0; cpu < top_cpu_count; cpu++) {
+            unsigned user = current[cpu].user_ticks -
+                            top_prev_cpu[cpu].user_ticks;
+            unsigned system = current[cpu].system_ticks -
+                              top_prev_cpu[cpu].system_ticks;
+            unsigned irq = current[cpu].irq_ticks -
+                           top_prev_cpu[cpu].irq_ticks;
+            unsigned idle = current[cpu].idle_ticks -
+                            top_prev_cpu[cpu].idle_ticks;
+            unsigned total = user + system + irq + idle;
+
+            if (total == 0)
+                continue;
+            if (total > max_elapsed)
+                max_elapsed = total;
+
+            top_cpu_user_x10[cpu] = (user * 1000u) / total;
+            top_cpu_system_x10[cpu] = (system * 1000u) / total;
+            top_cpu_irq_x10[cpu] = (irq * 1000u) / total;
+            top_cpu_idle_x10[cpu] = (idle * 1000u) / total;
+            top_cpu_load_x10[cpu] =
+                top_cpu_user_x10[cpu] +
+                top_cpu_system_x10[cpu] +
+                top_cpu_irq_x10[cpu];
+            if (top_cpu_load_x10[cpu] > 1000u)
+                top_cpu_load_x10[cpu] = 1000u;
+        }
+    }
+
+    memcpy(top_prev_cpu, current, sizeof(top_prev_cpu));
+    top_have_cpu_prev = 1;
+    if (max_elapsed != 0)
+        top_cpu_elapsed_ticks = max_elapsed;
+}
+
 static int parse_proc_stat(const char *buf, top_task_t *task)
 {
     const char *p;
@@ -424,6 +532,10 @@ static int parse_proc_stat(const char *buf, top_task_t *task)
     p = parse_uint(p, &task->ctx);
     if (!p) return 0;
     p = parse_uint(p, &task->runtime_ticks);
+    if (!p) return 0;
+    p = parse_uint(p, &task->user_ticks);
+    if (!p) return 0;
+    parse_uint(p, &task->system_ticks);
 
     return 0;
 }
@@ -515,11 +627,11 @@ static int load_tasks(top_task_t *tasks, int max_tasks)
     return count;
 }
 
-static int find_prev_runtime(int pid, unsigned *runtime_ticks)
+static int find_prev_runtime(int pid, top_sample_t *sample)
 {
     for (int i = 0; i < top_prev_count; i++) {
         if (top_prev_samples[i].pid == pid) {
-            *runtime_ticks = top_prev_samples[i].runtime_ticks;
+            *sample = top_prev_samples[i];
             return 1;
         }
     }
@@ -529,29 +641,36 @@ static int find_prev_runtime(int pid, unsigned *runtime_ticks)
 
 static void update_cpu_percent(top_task_t *tasks, int count, unsigned delay_sec)
 {
-    unsigned elapsed_ticks = delay_sec * TOP_HZ;
+    unsigned elapsed_ticks = top_cpu_elapsed_ticks;
 
     if (elapsed_ticks == 0)
-        elapsed_ticks = TOP_HZ;
+        elapsed_ticks = delay_sec ? delay_sec * TOP_HZ : TOP_HZ;
 
     for (int i = 0; i < count; i++) {
-        unsigned prev_ticks = 0;
+        top_sample_t previous = {0};
 
         tasks[i].cpu_pct_x10 = 0;
-        if (top_have_prev && find_prev_runtime(tasks[i].pid, &prev_ticks)) {
-            unsigned delta = tasks[i].runtime_ticks >= prev_ticks ?
-                             tasks[i].runtime_ticks - prev_ticks : 0;
-            tasks[i].cpu_pct_x10 = (delta * 1000u) / elapsed_ticks;
-        }
+        tasks[i].user_pct_x10 = 0;
+        tasks[i].system_pct_x10 = 0;
+        if (top_have_prev && find_prev_runtime(tasks[i].pid, &previous)) {
+            unsigned runtime_delta = tasks[i].runtime_ticks -
+                                     previous.runtime_ticks;
+            unsigned user_delta = tasks[i].user_ticks - previous.user_ticks;
+            unsigned system_delta = tasks[i].system_ticks -
+                                    previous.system_ticks;
 
-        if (tasks[i].cpu >= 0 && tasks[i].cpu < (int)TOP_MAX_CPUS)
-            top_cpu_load_x10[tasks[i].cpu] += tasks[i].cpu_pct_x10;
+            tasks[i].cpu_pct_x10 = (runtime_delta * 1000u) / elapsed_ticks;
+            tasks[i].user_pct_x10 = (user_delta * 1000u) / elapsed_ticks;
+            tasks[i].system_pct_x10 = (system_delta * 1000u) / elapsed_ticks;
+        }
     }
 
     top_prev_count = count > TOP_MAX_TASKS ? TOP_MAX_TASKS : count;
     for (int i = 0; i < top_prev_count; i++) {
         top_prev_samples[i].pid = tasks[i].pid;
         top_prev_samples[i].runtime_ticks = tasks[i].runtime_ticks;
+        top_prev_samples[i].user_ticks = tasks[i].user_ticks;
+        top_prev_samples[i].system_ticks = tasks[i].system_ticks;
     }
     top_have_prev = 1;
 }
@@ -716,6 +835,10 @@ static void render_top(unsigned delay_sec, int iteration)
     unsigned pct_x10;
     unsigned cpu_total_x10 = 0;
     unsigned cpu_average_x100;
+    unsigned cpu_user_average_x10 = 0;
+    unsigned cpu_system_average_x10 = 0;
+    unsigned cpu_irq_average_x10 = 0;
+    unsigned cpu_idle_average_x10 = 0;
     unsigned terminal_rows;
     unsigned terminal_cols;
     int visible_count;
@@ -724,14 +847,20 @@ static void render_top(unsigned delay_sec, int iteration)
 
     read_mem(&mem);
     top_cpu_count = read_cpu_count();
-    memset(top_cpu_load_x10, 0, sizeof(top_cpu_load_x10));
+    update_cpu_accounting();
     count = load_tasks(top_tasks, TOP_MAX_TASKS);
     update_cpu_percent(top_tasks, count, delay_sec);
     for (unsigned cpu = 0; cpu < top_cpu_count; cpu++) {
-        if (top_cpu_load_x10[cpu] > 1000u)
-            top_cpu_load_x10[cpu] = 1000u;
         cpu_total_x10 += top_cpu_load_x10[cpu];
+        cpu_user_average_x10 += top_cpu_user_x10[cpu];
+        cpu_system_average_x10 += top_cpu_system_x10[cpu];
+        cpu_irq_average_x10 += top_cpu_irq_x10[cpu];
+        cpu_idle_average_x10 += top_cpu_idle_x10[cpu];
     }
+    cpu_user_average_x10 /= top_cpu_count;
+    cpu_system_average_x10 /= top_cpu_count;
+    cpu_irq_average_x10 /= top_cpu_count;
+    cpu_idle_average_x10 /= top_cpu_count;
     cpu_average_x100 = (cpu_total_x10 * 10u + top_cpu_count / 2u) /
                        top_cpu_count;
     qsort(top_tasks, (size_t)count, sizeof(top_tasks[0]), compare_tasks);
@@ -765,6 +894,20 @@ static void render_top(unsigned delay_sec, int iteration)
     }
     top_buf_append(&frame, "\033[0K\r\n", 6);
     top_buf_printf(&frame,
+                   C_BOLD "Mode:" C_RESET
+                   " user " C_GREEN "%u.%u%%" C_RESET
+                   " system " C_YELLOW "%u.%u%%" C_RESET
+                   " irq " C_MAGENTA "%u.%u%%" C_RESET
+                   " idle %u.%u%%\033[0K\r\n",
+                   cpu_user_average_x10 / 10u,
+                   cpu_user_average_x10 % 10u,
+                   cpu_system_average_x10 / 10u,
+                   cpu_system_average_x10 % 10u,
+                   cpu_irq_average_x10 / 10u,
+                   cpu_irq_average_x10 % 10u,
+                   cpu_idle_average_x10 / 10u,
+                   cpu_idle_average_x10 % 10u);
+    top_buf_printf(&frame,
                    C_BOLD "Mem:" C_RESET " %uM total, " C_GREEN "%uM free" C_RESET
                    ", " C_YELLOW "%u.%u%% used" C_RESET ", tasks: %d\033[0K\r\n\033[0K\r\n",
                    mem.total_kb / 1024u,
@@ -774,8 +917,9 @@ static void render_top(unsigned delay_sec, int iteration)
                    count);
 
     if (full_width) {
-        top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %4s %3s %5s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
-                       "PID", "TTY", "STATE", "LAST", "PRI", "DEBT", "%CPU", "TIME", "CTX", "PF", "RSS", "CMD");
+        top_buf_printf(&frame, C_BOLD "%5s %-8s %-8s %4s %3s %5s %5s %5s %5s %8s %8s %6s %6s %s" C_RESET "\033[0K\r\n",
+                       "PID", "TTY", "STATE", "LAST", "PRI", "DEBT",
+                       "%CPU", "%USR", "%SYS", "TIME", "CTX", "PF", "RSS", "CMD");
     } else {
         top_buf_printf(&frame, C_BOLD "%5s %-4s %-5s %3s %3s %5s %7s %6s %6s %s" C_RESET "\033[0K\r\n",
                        "PID", "TTY", "STATE", "CPU", "PRI", "%CPU", "TIME", "CTX", "RSS", "CMD");
@@ -802,11 +946,16 @@ static void render_top(unsigned delay_sec, int iteration)
                        color,
                        state_name(&top_tasks[i]));
         append_cpu(&frame, top_tasks[i].cpu);
-        top_buf_printf(&frame, " %3u %5u %3u.%u %8s %8s %6u %5uK %s\033[0K\r\n",
+        top_buf_printf(&frame,
+                       " %3u %5u %3u.%u %3u.%u %3u.%u %8s %8s %6u %5uK %s\033[0K\r\n",
                        top_tasks[i].priority,
                        top_tasks[i].debt_score,
                        top_tasks[i].cpu_pct_x10 / 10u,
                        top_tasks[i].cpu_pct_x10 % 10u,
+                       top_tasks[i].user_pct_x10 / 10u,
+                       top_tasks[i].user_pct_x10 % 10u,
+                       top_tasks[i].system_pct_x10 / 10u,
+                       top_tasks[i].system_pct_x10 % 10u,
                        timebuf,
                        ctxbuf,
                        top_tasks[i].pf,

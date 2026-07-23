@@ -34,6 +34,8 @@ typedef enum net_link_state {
 } net_link_state_t;
 
 struct net_device;
+struct net_wifi_profile;
+struct net_wifi_scan_result;
 
 typedef int (*net_device_transmit_t)(struct net_device *device,
                                      const uint8_t *frame,
@@ -46,6 +48,14 @@ typedef struct net_device_ops {
     net_device_transmit_t transmit;
     int (*poll)(struct net_device *device);
     void (*shutdown)(struct net_device *device);
+    int (*wifi_set_country)(struct net_device *device,
+                            const char country[3]);
+    int (*wifi_scan)(struct net_device *device,
+                     struct net_wifi_scan_result *results,
+                     uint32_t capacity, uint32_t *count);
+    int (*wifi_connect)(struct net_device *device,
+                        const struct net_wifi_profile *profile);
+    int (*wifi_disconnect)(struct net_device *device);
 } net_device_ops_t;
 
 typedef struct net_device {

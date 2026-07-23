@@ -56,9 +56,16 @@ irq_handler:
     /* Padding 4 octets pour aligner la pile à 8 avant appel C */
     sub     sp, sp, #4           /* maintenant (56+4+4)=64 bytes => alignée 8 */
 
-    /* Passer l'adresse du contexte à la C handler (r0 = &saved_spsr/pile) */
-    mov     r0, sp               /* r0 pointe sur la zone pad (utilisable en C pour index) */
+    /* Record whether this IRQ interrupted user or privileged execution. */
+    ldr     r0, [sp, #IRQ_FRAME_SPSR]
+    and     r0, r0, #0x1F
+    cmp     r0, #0x10
+    moveq   r0, #1
+    movne   r0, #0
+    bl      timer_accounting_irq_enter
+
     bl      irq_c_handler
+    bl      timer_accounting_irq_exit
 
     /*
      * Return-to-user slow path, equivalent in spirit to Linux ARM's ret_to_user.
@@ -163,8 +170,15 @@ irq_handler2:
     /* Desactiver les interruptions pendant le traitement */
     cpsid i
     
-    /* Appeler le handler C avec context */
+    ldr     r0, [sp, #IRQ_FRAME_SPSR]
+    and     r0, r0, #0x1F
+    cmp     r0, #0x10
+    moveq   r0, #1
+    movne   r0, #0
+    bl      timer_accounting_irq_enter
+
     bl irq_c_handler
+    bl timer_accounting_irq_exit
     
     /* Retirer le padding (on retourne à l'adresse de SPSR) */
     add     sp, sp, #4

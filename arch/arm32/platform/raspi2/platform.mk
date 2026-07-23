@@ -1,7 +1,6 @@
 # ArmOS ARM32 Raspberry Pi 2 platform fragment.
 #
-# First milestone: QEMU raspi2b UART-only boot. Platform init only advertises
-# devices that exist on this board.
+# Shared BCM2836 platform with optional firmware HDMI and DWC2 USB host.
 
 PLATFORM_CPU_CFLAGS = -mcpu=cortex-a7
 PLATFORM_CFLAGS = $(PLATFORM_CPU_CFLAGS) -DARMOS_PLATFORM_RASPI2 -DARMOS_PLATFORM_RASPBERRYPI
@@ -21,6 +20,10 @@ PLATFORM_DISK_LAYOUT ?= fat32-first
 PLATFORM_DISK_HIDDEN_BOOT ?= 0
 
 RASPBERRYPI_PLATFORM_DIR = kernel/platform/raspberrypi
+ENABLE_HDMI ?= 0
+ENABLE_USB ?= 0
+HDMI_WIDTH ?= 1280
+HDMI_HEIGHT ?= 720
 PLATFORM_OBJS = \
 	$(RASPBERRYPI_PLATFORM_DIR)/devices.o \
 	$(RASPBERRYPI_PLATFORM_DIR)/irq.o \
@@ -33,6 +36,17 @@ PLATFORM_OBJS = \
 	kernel/drivers/virtio_input.o \
 	kernel/drivers/virtio_net.o \
 	kernel/drivers/virtio_block.o
+
+ifneq ($(filter 1 yes true on,$(ENABLE_HDMI)),)
+PLATFORM_CFLAGS += -DARMOS_ENABLE_HDMI \
+	-DARMOS_HDMI_WIDTH=$(HDMI_WIDTH) -DARMOS_HDMI_HEIGHT=$(HDMI_HEIGHT)
+PLATFORM_OBJS += kernel/drivers/video/raspberrypi_hdmi.o
+endif
+
+ifneq ($(filter 1 yes true on,$(ENABLE_USB)),)
+PLATFORM_CFLAGS += -DARMOS_ENABLE_USB
+PLATFORM_OBJS += kernel/drivers/usb/dwc2.o
+endif
 
 QEMU_MACHINE ?= raspi2b
 QEMU_RUN_MACHINE ?= raspi2b

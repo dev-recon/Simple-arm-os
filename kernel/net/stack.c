@@ -53,7 +53,11 @@
 #define NET_DHCP_TIMEOUT_MS      5000u
 #define NET_DHCP_RETRY_MS        5000u
 #define NET_ARP_TIMEOUT_MS       1000u
+#define NET_WAIT_POLL_MS         10u
 #define NETD_PRIORITY            9u
+#define NETD_ACTIVE_POLL_MS      1u
+#define NETD_IDLE_POLL_MS        10u
+#define NETD_ACTIVE_POLLS        8u
 
 typedef struct net_eth_header {
     uint8_t dst[6];
@@ -400,7 +404,12 @@ static bool net_dhcp_option_u32(const uint8_t *options, uint32_t length,
         span = options[offset++];
         if (span > length - offset)
             break;
-        if (type == wanted && span == 4u) {
+        /*
+         * Router and DNS options may contain an ordered list of IPv4
+         * addresses.  ArmOS currently keeps one address, so retain the first
+         * entry instead of rejecting a perfectly valid multi-address option.
+         */
+        if (type == wanted && span >= 4u) {
             *value = net_ip_from_bytes(options + offset);
             return true;
         }
@@ -483,6 +492,21 @@ static bool net_receive_dhcp(net_interface_t *interface,
         interface->config.address = net_ip_from_bytes(dhcp->your_ip);
         if (interface->config.address == 0u)
             interface->config.address = interface->offered_address;
+        /*
+         * DHCP servers may repeat or provide final routing parameters only
+         * in the ACK.  Merge them into the accepted lease instead of relying
+         * exclusively on the earlier OFFER.
+         */
+        (void)net_dhcp_option_u32(dhcp->options, options_length, 1u,
+                                  &interface->config.netmask);
+        (void)net_dhcp_option_u32(dhcp->options, options_length, 3u,
+                                  &interface->config.gateway);
+        (void)net_dhcp_option_u32(dhcp->options, options_length, 6u,
+                                  &interface->config.dns);
+        (void)net_dhcp_option_u32(dhcp->options, options_length, 51u,
+                                  &interface->config.lease_seconds);
+        (void)net_dhcp_option_u32(dhcp->options, options_length, 54u,
+                                  &interface->config.dhcp_server);
         interface->config.configured = true;
         interface->config.dhcp = true;
         interface->dhcp_state = NET_DHCP_BOUND;
@@ -653,6 +677,42 @@ int net_stack_get_config(net_device_t *device, net_ipv4_config_t *config)
     return 0;
 }
 
+int net_stack_interface_down(net_device_t *device)
+{
+    net_interface_t *interface = net_interface_for_device(device);
+
+    if (!interface)
+        return -ENODEV;
+    memset(&interface->config, 0, sizeof(interface->config));
+    interface->config.dhcp = interface->method == NET_CONFIG_DHCP;
+    interface->dhcp_pending = false;
+    interface->dhcp_retry_at = 0u;
+    interface->dhcp_state = NET_DHCP_IDLE;
+    interface->arp_valid = false;
+    interface->ping_pending = false;
+    interface->ping_received = false;
+    return 0;
+}
+
+int net_stack_restart_dhcp(net_device_t *device)
+{
+    net_interface_t *interface = net_interface_for_device(device);
+
+    if (!interface)
+        return -ENODEV;
+    if (interface->method != NET_CONFIG_DHCP)
+        return -ENOTSUP;
+    memset(&interface->config, 0, sizeof(interface->config));
+    interface->config.dhcp = true;
+    interface->dhcp_pending = true;
+    interface->dhcp_retry_at = get_time_ms();
+    interface->dhcp_state = NET_DHCP_IDLE;
+    interface->arp_valid = false;
+    interface->ping_pending = false;
+    interface->ping_received = false;
+    return 0;
+}
+
 static int net_stack_wait_state(net_interface_t *interface,
                                 net_dhcp_state_t wanted,
                                 uint32_t timeout_ms)
@@ -714,7 +774,8 @@ static int net_wait_for_arp(net_interface_t *interface, uint32_t address,
             memcpy(mac, interface->arp_mac, 6u);
             return 0;
         }
-        task_sleep_ms(1u);
+        if (task_sleep_interruptible_ms(NET_WAIT_POLL_MS) < 0)
+            return -EINTR;
     }
     return -ETIMEDOUT;
 }
@@ -803,7 +864,10 @@ int net_stack_ping(net_device_t *device, uint32_t address,
             result->elapsed_ms = interface->ping_elapsed_ms;
             return 0;
         }
-        task_sleep_ms(1u);
+        if (task_sleep_interruptible_ms(NET_WAIT_POLL_MS) < 0) {
+            interface->ping_pending = false;
+            return -EINTR;
+        }
     }
     interface->ping_pending = false;
     return -ETIMEDOUT;
@@ -888,11 +952,14 @@ int net_stack_format_interfaces(char *buffer, uint32_t capacity,
 
 static void netd_main(void *argument)
 {
+    uint32_t active_polls = 0u;
+
     (void)argument;
 
     for (;;) {
         uint32_t now = get_time_ms();
         uint32_t index;
+        bool work_done = false;
 
         for (index = 0u; index < interface_count; index++) {
             net_interface_t *interface = &interfaces[index];
@@ -917,12 +984,22 @@ static void netd_main(void *argument)
                     KINFO("Net: %s DHCP failed (%d), retrying\n",
                           interface->device->name, ret);
                 }
+                work_done = true;
             }
-            if (interface->device->ops && interface->device->ops->poll)
-                (void)interface->device->ops->poll(interface->device);
+            if (interface->device->ops && interface->device->ops->poll) {
+                int ret = interface->device->ops->poll(interface->device);
+
+                if (ret > 0)
+                    work_done = true;
+            }
         }
         net_transport_tick(now);
-        task_sleep_ms(1u);
+        if (work_done)
+            active_polls = NETD_ACTIVE_POLLS;
+        else if (active_polls != 0u)
+            active_polls--;
+        task_sleep_ms(active_polls != 0u ?
+                      NETD_ACTIVE_POLL_MS : NETD_IDLE_POLL_MS);
     }
 }
 

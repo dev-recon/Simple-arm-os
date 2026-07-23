@@ -26,9 +26,9 @@ replace hardware timing and signal validation.
 - Storage: BCM2835/BCM2837 SD/eMMC controller
 - Root: ext2 partition
 - Boot: dedicated FAT32 LBA firmware partition
-- Graphics: optional firmware HDMI framebuffer or HSD028309 B6 / ILI9341
-  GPIO parallel display on `/dev/fb0`
-- USB input: optional DWC2 host with boot-protocol keyboards and mice behind
+- Graphics: firmware HDMI framebuffer on `/dev/fb0`, with an optional
+  HSD028309 B6 / ILI9341 GPIO auxiliary display on `/dev/fb1`
+- USB input: DWC2 host with boot-protocol keyboards and mice behind
   the Pi 3 internal USB hub
 - Networking: optional CYW43455 SDIO firmware, WPA2 station association,
   BCDC Ethernet transport, DHCPv4, ARP, IPv4, and ICMP echo
@@ -74,9 +74,10 @@ when the corresponding toolchain or sysroot changed.
 
 ## HDMI And USB Input
 
-The first HDMI and USB hardware profile is opt-in. HDMI and ILI9341 both own
-`/dev/fb0`, so they cannot be enabled together. A useful `armos.conf` for a
-Pi 3 connected to a monitor and a USB keyboard/mouse receiver is:
+The tracked Raspberry Pi 3 profile enables HDMI and USB input. HDMI is the
+primary `/dev/fb0` and `tty0`; ILI9341 may be enabled independently as
+auxiliary `/dev/fb1` and output-only `tty1`. A useful `armos.conf` for a Pi 3
+connected to a monitor and a USB keyboard/mouse receiver is:
 
 ```ini
 TARGET_ARCH=arm64
@@ -154,8 +155,9 @@ Raspberry Pi 3 B+ contains a CYW43455 radio connected through SDIO. ArmOS can
 initialize the SDHOST/SDIO bus, identify the chip, upload its separately
 licensed firmware, configure station mode, associate with a WPA2 access point,
 exchange Ethernet frames through BCDC, and acquire an IPv4 configuration
-through DHCP. Wi-Fi remains opt-in because its firmware has a separate license
-and the local network credentials are not tracked.
+through DHCP. The driver is enabled in the tracked ARM64 hardware profile,
+while its separately licensed firmware and local network credentials remain
+untracked.
 
 Install the pinned firmware after reviewing and accepting its separate
 Cypress/Broadcom license:
@@ -164,30 +166,52 @@ Cypress/Broadcom license:
 tools/fetch_raspi3_wifi_firmware.sh --accept-license
 ```
 
-Create the local network configuration:
+The firmware may be installed in the root image without embedding local
+credentials. A missing or incomplete `/etc/wifi.conf` is not a boot failure:
+the radio remains available for runtime configuration. Build with the tracked
+hardware profile:
 
 ```sh
-cp userfs/etc/wifi.conf.example userfs/etc/wifi.conf
-```
-
-Edit `userfs/etc/wifi.conf` with the country, SSID, and WPA2 password. The
-local file and downloaded firmware are ignored by Git. Build with the tracked
-Wi-Fi profile:
-
-```sh
-ARMOS_CONFIG=configs/raspi3-arm64-wifi.conf \
+ARMOS_CONFIG=configs/raspi3-arm64.conf \
   tools/build_pi3_sd.sh --mode none
 ```
 
-A complete raw image write is required the first time, or whenever firmware
-or `/etc/wifi.conf` changes, because those files live in the ext2 root
-partition. Once the root partition contains them, kernel-only iterations can
-update the mounted boot partition:
+On the running system, scan and connect as root:
 
 ```sh
-ARMOS_CONFIG=configs/raspi3-arm64-wifi.conf \
-  tools/build_pi3_sd.sh --mode boot --boot-volume /Volumes/ARMBOOT
+su
+wifi scan
+wifi connect YOUR_WIFI_SSID
 ```
+
+On the first connection, `wifi` asks for the two-letter ISO 3166-1 country
+code and a password. Both values are echoed once for hardware-console
+validation; the password therefore remains visible on the active console and
+its UART mirror during entry. The country is global and is stored in
+`/etc/wifi.conf`; SSID-specific credentials are stored mode `0600` under
+`/etc/wifi.d`. An access point may advertise an 802.11 Country Information
+Element, but ArmOS does not treat that untrusted advertisement as regulatory
+authority. Users testing ArmOS outside France must enter the code for their
+actual location. The first scan on a fresh disk must run as root so ArmOS can
+persist that country policy.
+
+If saved credentials fail, `wifi connect` asks for a replacement password and
+allows at most three association attempts. A profile is replaced only after a
+successful association. State-changing operations are root-only:
+
+```sh
+wifi profiles
+wifi status
+wifi reload
+wifi disconnect
+```
+
+At boot, ArmOS scans for visible networks, tries the configured default
+profile first, then the other known profiles. If no known network is visible,
+or configuration is absent, boot continues with `wlan0` idle. No SD-card
+rewrite is needed when credentials change. A complete raw image write remains
+necessary when the firmware or initial root filesystem changes; kernel-only
+iterations can still update the mounted boot partition.
 
 The validated boot sequence includes lines equivalent to:
 
@@ -220,7 +244,7 @@ path. It supports plain `http://` URLs; TLS is not yet available.
 For an independent association check, the access point should list the ArmOS
 station MAC. A useful reliability test is ten cold boots with ten successful
 associations and DHCP leases, followed by a negative control using an invalid
-password.
+password and verification that the previous profile remains intact.
 
 The Raspberry Pi 3 wired Ethernet port is not supported yet. It is exposed by
 the LAN9514 USB hub through an SMSC95xx Ethernet controller and requires a
@@ -228,7 +252,11 @@ separate USB network driver. That future driver will attach to the same common
 `net_device`, DHCP, `ifconfig`, and `ping` contracts.
 
 The current hardware stabilization publishes firmware SDPCM transmit-credit
-window changes after a short empty busy loop. Kernel builds currently use
+window changes after a short empty busy loop. Receive handling accepts both
+the frame indication and the firmware data-available indication, drains stale
+scan frames before returning an error, and limits each CMD53 FIFO transaction
+to 512 bytes. These details keep the control channel live across scans,
+country changes, association, and DHCP. Kernel builds currently use
 `-O0`, so the loop is retained. It is technical debt rather than a timing
 contract: before optimized kernel builds are enabled, replace it with an
 explicit timer-based delay or a firmware-state condition that the compiler

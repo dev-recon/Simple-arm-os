@@ -20,7 +20,10 @@ Raspberry Pi firmware and uses the physical SD/eMMC controller.
 - Storage: BCM2835/BCM2836 SD/eMMC controller
 - Root: ext2 partition
 - Boot: dedicated FAT32 LBA firmware partition
-- Graphics, USB input and networking: not yet provided by this profile
+- Graphics: firmware HDMI framebuffer on `/dev/fb0` and console `/dev/tty0`
+- USB input: DWC2 host with hub and boot-protocol keyboard/mouse support
+- Recovery console: PL011 on `/dev/ttyS0`, mirroring `/dev/tty0` output
+- Networking: not yet provided by this profile
 
 ## Build And SD Card
 
@@ -68,8 +71,9 @@ tools/pi2_uart_screen.sh --list
 tools/pi2_uart_screen.sh --device /dev/cu.usbserial-XXXX --baud 115200
 ```
 
-UART `tty0` is the mandatory recovery console. QEMU success does not replace a
-hardware boot, SD I/O, scheduler and shutdown validation on the Model B v1.1.
+UART `/dev/ttyS0` is the recovery console and receives a mirror of the HDMI
+`/dev/tty0` output. QEMU success does not replace hardware boot, HDMI, USB,
+SD I/O, scheduler and shutdown validation on the Model B v1.1.
 
 ## HSD028309 B6 / ILI9341 Wiring
 
@@ -131,7 +135,9 @@ labelled `3V3` pin disconnected. `LCD_RD` must be held high because the ArmOS
 driver is write-only. Do not connect the shield's `SD_*` pins; ArmOS boots from
 the Pi SD/eMMC controller, not from the shield's microSD socket.
 
-This section records the hardware contract shared with raspi3. The current
-raspi2 profile remains UART-only until the GPIO/ILI9341 objects and display
-routing are enabled and validated for `arm32/raspi2`; the wiring itself does
-not need to change when that support is enabled.
+This section records the hardware contract shared with raspi3. The tracked
+`raspi2-arm32.conf` profile enables the firmware HDMI framebuffer as `/dev/fb0`
+and `/dev/tty0`, plus the DWC2 USB host for boot-protocol keyboards and mice.
+PL011 remains available as the recovery serial console and output mirror.
+ILI9341 remains disabled by default until its GPIO path is validated on real
+Pi 2 hardware; the wiring itself is shared with raspi3.

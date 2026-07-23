@@ -207,7 +207,9 @@ void arm64_exception_dispatch(arm64_exception_frame_t *frame)
     if (frame->vector == ARM64_VECTOR_IRQ_SPX ||
         frame->vector == ARM64_VECTOR_IRQ_LOWER) {
         arm64_exception_depth_enter();
+        timer_accounting_irq_enter(frame->vector == ARM64_VECTOR_IRQ_LOWER);
         irq_c_handler();
+        timer_accounting_irq_exit();
         arm64_exception_depth_leave();
         if (frame->vector == ARM64_VECTOR_IRQ_LOWER)
             dispatch_irq_return_to_user(frame);

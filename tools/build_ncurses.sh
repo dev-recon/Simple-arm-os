@@ -12,6 +12,7 @@ AR="${ARCH}ar"
 RANLIB="${ARCH}ranlib"
 STRIP="${ARCH}strip"
 HOST_CC="${HOST_CC:-cc}"
+HOST_TIC="${HOST_TIC:-$(command -v tic)}"
 NCURSES_VERSION="${NCURSES_VERSION:-6.5}"
 NCURSES_URL="${NCURSES_URL:-https://ftp.gnu.org/pub/gnu/ncurses/ncurses-$NCURSES_VERSION.tar.gz}"
 
@@ -27,8 +28,17 @@ BUNDLE_USR_BIN="$BUNDLE_ROOT/usr/bin"
 LIBGCC="${LIBGCC:-$("$CC" $ARM_FLAGS -print-libgcc-file-name)}"
 TERMINFO_SRC="$ROOT_DIR/third_party/ncurses/armos.ti"
 CURSESTEST_SRC="$ROOT_DIR/third_party/ncurses/cursestest.c"
+TIC_PATH="$HOST_TIC"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# Apple's ncurses 6.0 tic cannot compile the current ncurses source with -x.
+# The ArmOS fallback entries use standard capabilities, so a wrapper that
+# removes only that flag is sufficient on affected hosts.
+if "$HOST_TIC" -V 2>&1 | grep -q '^ncurses 6\.0\.20150808$'; then
+    export ARMOS_HOST_TIC="$HOST_TIC"
+    TIC_PATH="$ROOT_DIR/tools/tic_compat.sh"
+fi
 
 if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_LIBC" ]; then
     echo "error: newlib sysroot is incomplete: $NEWLIB_SYSROOT" >&2
@@ -87,6 +97,7 @@ LIBS="$NEWLIB_LIBC $LIBGCC" \
     --disable-database \
     --disable-db-install \
     --with-fallbacks=armos,ansi \
+    --with-tic-path="$TIC_PATH" \
     --without-hashed-db \
     --without-gpm \
     --without-dlsym

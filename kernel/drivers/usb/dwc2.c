@@ -194,6 +194,8 @@
 #define USB_MAX_ADDRESS           127u
 #define USB_KEY_REPEAT_DELAY_MS   500u
 #define USB_KEY_REPEAT_RATE_MS    33u
+#define USB_HID_MIN_POLL_MS       8u
+#define USB_IDLE_POLL_MS          100u
 
 /* Raspberry Pi's legacy DWC driver defaults, in 32-bit FIFO words. */
 #define DWC2_HOST_RX_FIFO_WORDS   774u
@@ -319,6 +321,29 @@ static uint64_t timer_ticks_from_ms(uint32_t milliseconds)
         (remainder * milliseconds + 999u) / 1000u;
 
     return ticks != 0u ? ticks : 1u;
+}
+
+static uint32_t timer_ms_until(uint64_t now, uint64_t deadline)
+{
+    uint32_t frequency;
+    uint32_t ticks_per_ms;
+    uint32_t milliseconds = 1u;
+    uint64_t delta;
+
+    if (deadline <= now)
+        return 1u;
+    frequency = get_timer_frequency();
+    if (frequency == 0u)
+        return 1u;
+    ticks_per_ms = frequency / 1000u;
+    if (ticks_per_ms == 0u)
+        ticks_per_ms = 1u;
+    delta = deadline - now;
+    while (delta > ticks_per_ms && milliseconds < USB_IDLE_POLL_MS) {
+        delta -= ticks_per_ms;
+        milliseconds++;
+    }
+    return milliseconds;
 }
 
 static void usb_delay_us(uint32_t microseconds)
@@ -967,6 +992,8 @@ static bool configure_hid_device(usb_device_t *device, uint8_t next_address)
                 }
                 if (hid->poll_interval_ms == 0u)
                     hid->poll_interval_ms = 1u;
+                if (hid->poll_interval_ms < USB_HID_MIN_POLL_MS)
+                    hid->poll_interval_ms = USB_HID_MIN_POLL_MS;
                 if (hid->max_packet > sizeof(hid->report))
                     hid->max_packet = sizeof(hid->report);
                 control_transfer(device, USB_TYPE_CLASS | USB_RECIP_INTERFACE,
@@ -1403,13 +1430,14 @@ static void process_mouse(usb_hid_endpoint_t *hid)
         display_scrollback_down((uint32_t)(-wheel) * 3u);
 }
 
-static void dwc2_poll(void *argument)
+static uint32_t dwc2_poll(void *argument)
 {
     uint64_t now;
+    uint64_t next_deadline = 0u;
 
     (void)argument;
     if (!usb_ready)
-        return;
+        return USB_IDLE_POLL_MS;
 
     now = get_timer_count();
     for (uint32_t i = 0; i < hid_count; i++) {
@@ -1418,8 +1446,16 @@ static void dwc2_poll(void *argument)
 
         if (hid->protocol == USB_HID_KEYBOARD)
             process_keyboard_repeat(hid, now);
-        if (hid->next_poll_tick != 0u && now < hid->next_poll_tick)
+        if (hid->next_poll_tick != 0u && now < hid->next_poll_tick) {
+            if (hid->repeat_next_tick != 0u &&
+                (next_deadline == 0u ||
+                 hid->repeat_next_tick < next_deadline))
+                next_deadline = hid->repeat_next_tick;
+            if (next_deadline == 0u ||
+                hid->next_poll_tick < next_deadline)
+                next_deadline = hid->next_poll_tick;
             continue;
+        }
         interval_ticks = timer_ticks_from_ms(hid->poll_interval_ms);
         hid->next_poll_tick = now + interval_ticks;
         memset(hid->report, 0, sizeof(hid->report));
@@ -1434,7 +1470,16 @@ static void dwc2_poll(void *argument)
             else if (hid->protocol == USB_HID_MOUSE)
                 process_mouse(hid);
         }
+        if (hid->next_poll_tick != 0u &&
+            (next_deadline == 0u || hid->next_poll_tick < next_deadline))
+            next_deadline = hid->next_poll_tick;
+        if (hid->repeat_next_tick != 0u &&
+            (next_deadline == 0u || hid->repeat_next_tick < next_deadline))
+            next_deadline = hid->repeat_next_tick;
     }
+    if (next_deadline == 0u)
+        return USB_IDLE_POLL_MS;
+    return timer_ms_until(get_timer_count(), next_deadline);
 }
 
 static bool dwc2_initialize(int tty_id)

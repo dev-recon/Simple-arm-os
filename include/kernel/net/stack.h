@@ -52,6 +52,8 @@ int net_stack_attach(net_device_t *device, net_config_method_t method,
 bool net_stack_receive(net_device_t *device, const uint8_t *frame,
                        uint32_t length);
 int net_stack_get_config(net_device_t *device, net_ipv4_config_t *config);
+int net_stack_restart_dhcp(net_device_t *device);
+int net_stack_interface_down(net_device_t *device);
 int net_stack_send_ipv4(net_device_t *device, uint32_t destination,
                         uint8_t protocol, const void *payload,
                         uint32_t payload_length);

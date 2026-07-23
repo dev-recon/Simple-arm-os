@@ -45,6 +45,16 @@ printf '%s\n' \
 ARMOS_CONFIG="$TMP_CONFIG" "$ROOT_DIR/tools/armos_config.sh" --show >/dev/null
 
 printf '%s\n' \
+    'TARGET_ARCH=arm32' \
+    'TARGET_PLATFORM=raspi2' \
+    'ENABLE_HDMI=yes' \
+    'ENABLE_ILI9341=no' \
+    'ENABLE_USB=yes' \
+    'HDMI_WIDTH=1280' \
+    'HDMI_HEIGHT=720' > "$TMP_CONFIG"
+ARMOS_CONFIG="$TMP_CONFIG" "$ROOT_DIR/tools/armos_config.sh" --show >/dev/null
+
+printf '%s\n' \
     'TARGET_ARCH=arm64' \
     'TARGET_PLATFORM=raspi3' \
     'ENABLE_HDMI=yes' \

@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dev-recon/ArmOS/releases/tag/0.7.3"><img src="https://img.shields.io/badge/release-0.7.3-2878d7" alt="ArmOS 0.7.3"></a>
+  <a href="https://github.com/dev-recon/ArmOS/releases/tag/0.7.4"><img src="https://img.shields.io/badge/release-0.7.4-2878d7" alt="ArmOS 0.7.4"></a>
   <img src="https://img.shields.io/badge/architectures-ARMv7%20%7C%20AArch64-22a06b" alt="ARMv7 and AArch64">
   <img src="https://img.shields.io/badge/SMP-4%20cores-7557d3" alt="SMP on four cores">
   <img src="https://img.shields.io/badge/QEMU-10.0.2-e65d19" alt="QEMU 10.0.2">
@@ -20,8 +20,8 @@
 
 ArmOS is an educational and research operating system, not a Linux
 distribution. Version 0.7 brought ARM64 onto the same common kernel used by
-ARM32; version 0.7.3 adds Raspberry Pi HDMI and USB HID support alongside the
-GPIO display driver introduced in 0.7.2. The
+ARM32. Version 0.7.4 adds a common IPv4, TCP, UDP and DNS stack, plus
+CYW43455 Wi-Fi association and DHCP on Raspberry Pi 3 B+. The
 architecture layer handles CPU and MMU details while processes, syscalls,
 scheduling, VFS, filesystems, drivers, and userland contracts remain shared.
 
@@ -75,8 +75,8 @@ can drive either an HSD028309 B6 / ILI9341 panel through GPIO or an HDMI
 monitor through the firmware framebuffer, using the same `/dev/fb0` and
 common display interfaces. On Raspberry Pi, the display and USB keyboard form
 the primary `tty0`; the PL011 recovery transport remains available separately
-as `/dev/ttyS0`. Its opt-in USB host supports boot keyboards and mice through
-the Pi 3 internal hub.
+as `/dev/ttyS0`. Its USB host supports boot keyboards and mice through the
+Pi 3 internal hub.
 
 ## Quick Start
 
@@ -107,6 +107,10 @@ tracked configuration profiles, so architecture, platform, networking, GPU,
 memory, and optional userland bundles do not have to be repeated on every
 command line.
 
+Prebuilt QEMU images are attached to each release. See
+[`images/README.md`](images/README.md) to boot ARM32 or ARM64 without compiling
+the kernel or userland.
+
 ## What Is Inside
 
 | Area | Current implementation |
@@ -114,7 +118,8 @@ command line.
 | Processes | Preemptive scheduling, SMP, `fork`, ELF `execve`, `waitpid`, signals, job control |
 | Virtual memory | Split user/kernel address spaces, MMU, ASIDs, copy-on-write, anonymous `mmap` |
 | Files and IPC | VFS, descriptors, pipes, `dup`, ext2 root, FAT32, `/proc` |
-| Devices | PL011 UART, TTYs, VirtIO block/net/GPU/input, Raspberry Pi SD/eMMC, HDMI, ILI9341 and USB boot HID |
+| Devices | PL011 UART, TTYs, VirtIO block/net/GPU/input, Raspberry Pi SD/eMMC, HDMI, ILI9341, USB boot HID and CYW43455 Wi-Fi |
+| Networking | Common ARP/IPv4, DHCP, ICMP, UDP, DNS and TCP stack with POSIX sockets |
 | Userland | newlib, `mash`, core Unix tools, editors, tests, optional BSD utilities |
 | Native development | TinyCC can compile and run small C programs from inside ArmOS |
 
@@ -128,7 +133,7 @@ release build system.
 | --- | --- | --- | --- |
 | `arm32/qemu-virt` | Fresh-checkout default | ARMv7-A | GICv2, PL011, VirtIO |
 | `arm64/qemu-virt` | Kernel feature reference | AArch64 | GICv2, PL011, VirtIO, 4-core SMP |
-| `arm64/raspi3` | Hardware reference | AArch64 | Raspberry Pi 3 B+, PL011, SD/eMMC, HDMI/ILI9341, USB HID, CYW43455 Wi-Fi/DHCP/ICMP, 4-core SMP |
+| `arm64/raspi3` | Hardware reference | AArch64 | Raspberry Pi 3 B+, PL011, SD/eMMC, HDMI/ILI9341, USB HID, CYW43455 Wi-Fi, DHCP, DNS, ICMP and TCP, 4-core SMP |
 | `arm32/raspi2` | Supported hardware | ARMv7-A | Raspberry Pi 2 B v1.1, PL011, SD/eMMC |
 
 QEMU 10.0.2 is the reference emulator for the 0.7 line. Hardware images use a

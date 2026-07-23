@@ -1,6 +1,6 @@
 # ArmOS kernel Makefile
 
-ARMOS_VERSION := 0.7.3
+ARMOS_VERSION := 0.7.4
 
 # Local configuration is optional. Command-line assignments retain GNU make's
 # highest priority; environment values are restored after the include so the
@@ -149,6 +149,7 @@ COMMON_KERNEL_OBJS = \
 	kernel/net/stack.o \
 	kernel/net/socket.o \
 	kernel/net/control.o \
+	kernel/net/wifi.o \
 	kernel/fs/vfs.o \
 	kernel/fs/mount.o \
 	kernel/fs/fat32.o \
@@ -375,7 +376,11 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(US
 	fi
 	dd if=/dev/zero of=$(EXT2_IMG) bs=1048576 count=$(EXT2_SIZE_MB) 2>/dev/null
 	$(MKE2FS) -q -t ext2 -F -L OS_EXT2 $(EXT2_IMG)
-	@( find $(USERFS_DIR) -path "$(USERFS_DIR)/legacy" -prune -o -type d -print | sort | while read dir; do \
+	@( find $(USERFS_DIR) \( \
+	       -path "$(USERFS_DIR)/legacy" -o \
+	       -name ".DS_Store" -o -name "._*" -o \
+	       -name ".Spotlight-V100" -o -name ".Trashes" \
+	   \) -prune -o -type d -print | sort | while read dir; do \
 	       if [ "$$dir" != "$(USERFS_DIR)" ]; then \
 	           relpath=$$(echo "$$dir" | sed 's|$(USERFS_DIR)/||'); \
 	           printf 'mkdir /%s\n' "$$relpath"; \
@@ -391,7 +396,11 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(US
 	           printf 'set_inode_field /%s gid %s\n' "$$relpath" "$$gid"; \
 	       fi; \
 	   done; \
-	   find $(USERFS_DIR) -path "$(USERFS_DIR)/legacy" -prune -o -type f -print | sort | while read f; do \
+	   find $(USERFS_DIR) \( \
+	       -path "$(USERFS_DIR)/legacy" -o \
+	       -name ".DS_Store" -o -name "._*" -o \
+	       -name ".Spotlight-V100" -o -name ".Trashes" \
+	   \) -prune -o -type f -print | sort | while read f; do \
 	       relpath=$$(echo "$$f" | sed 's|$(USERFS_DIR)/||'); \
 	       case "$$relpath" in dev/tty0|dev/tty1|dev/console|dev/fb0|dev/fb1) continue ;; esac; \
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
@@ -410,7 +419,11 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(US
 	       printf 'set_inode_field /%s uid %s\n' "$$relpath" "$$uid"; \
 	       printf 'set_inode_field /%s gid %s\n' "$$relpath" "$$gid"; \
 	   done; \
-	   find $(USERFS_DIR) -path "$(USERFS_DIR)/legacy" -prune -o -type l -print | sort | while read l; do \
+	   find $(USERFS_DIR) \( \
+	       -path "$(USERFS_DIR)/legacy" -o \
+	       -name ".DS_Store" -o -name "._*" -o \
+	       -name ".Spotlight-V100" -o -name ".Trashes" \
+	   \) -prune -o -type l -print | sort | while read l; do \
 	       relpath=$$(echo "$$l" | sed 's|$(USERFS_DIR)/||'); \
 	       target=$$(readlink "$$l"); \
 	       printf 'symlink /%s %s\n' "$$relpath" "$$target"; \

@@ -10,13 +10,12 @@
  *
  * Responsibilities:
  * - Define the first concrete Raspberry Pi 2 memory and MMIO contract.
- * - Keep the bring-up honest: UART-only first, no fake VirtIO/GIC devices.
+ * - Publish the BCM2836 UART, SD/eMMC and DWC2 host-controller windows.
  *
  * Notes:
  * - QEMU `raspi2b` and the real board both expose BCM2836-style peripherals,
  *   but the real board remains the final authority for timer, IRQ and SD/MMC
- *   behavior. This header deliberately publishes only the pieces we are ready
- *   to use.
+ *   behavior.
  */
 
 #ifndef _ASM_ARM32_PLATFORM_RASPI2_H
@@ -42,11 +41,14 @@
 #define RASPI2_UART0_SECTION_BASE    0x3F200000u
 #define RASPI2_EMMC_BASE             0x3F300000u
 #define RASPI2_EMMC_SECTION_BASE     0x3F300000u
+#define RASPI2_USB_BASE              0x3F980000u
+#define RASPI2_USB_SECTION_BASE      0x3F900000u
 
 #define RASPI2_KERNEL_MMIO_IRQ_BASE  0xF0000000u
 #define RASPI2_KERNEL_MMIO_UART_BASE 0xF0100000u
 #define RASPI2_KERNEL_MMIO_EMMC_BASE 0xF0200000u
 #define RASPI2_KERNEL_MMIO_IRQCTRL2_BASE 0xF0300000u
+#define RASPI2_KERNEL_MMIO_USB_BASE  0xF0400000u
 #define RASPI2_KERNEL_MMIO_SECTION   0x00100000u
 
 #define ARMOS_PLATFORM_NAME                      "Raspberry Pi 2"
@@ -55,6 +57,12 @@
 #define ARMOS_PLATFORM_HARDWARE_NAME             "ArmOS Raspberry Pi 2"
 #define ARMOS_PLATFORM_RAM_START                 RASPI2_RAM_START
 #define ARMOS_PLATFORM_RAM_FALLBACK_SIZE         (RASPI2_PERIPHERAL_BASE - RASPI2_RAM_START)
+/*
+ * VideoCore allocates the firmware framebuffer from its reserved SDRAM above
+ * the ARM-reported usable-memory limit. Keep that RAM mapped, but outside the
+ * physical allocator, so the HDMI driver can access the returned buffer.
+ */
+#define ARMOS_PLATFORM_KERNEL_DIRECT_MAP_PHYS_END RASPI2_PERIPHERAL_BASE
 #define ARMOS_PLATFORM_RAM_PROBE_MAX_MB          1008u
 #define ARMOS_PLATFORM_DEFAULT_CPU_COUNT         4u
 #define ARMOS_PLATFORM_TIMER_FALLBACK_HZ         1000000u
@@ -84,6 +92,10 @@
 #define ARMOS_PLATFORM_KERNEL_MMIO_EMMC_BASE     RASPI2_KERNEL_MMIO_EMMC_BASE
 #define ARMOS_PLATFORM_KERNEL_MMIO_IRQCTRL2_BASE \
     RASPI2_KERNEL_MMIO_IRQCTRL2_BASE
+#define ARMOS_PLATFORM_KERNEL_MMIO_USB_BASE \
+    (RASPI2_KERNEL_MMIO_USB_BASE + (RASPI2_USB_BASE - RASPI2_USB_SECTION_BASE))
+#define ARMOS_PLATFORM_KERNEL_MMIO_USB_SECTION_BASE RASPI2_KERNEL_MMIO_USB_BASE
+#define ARMOS_PLATFORM_USB_PHYS_SECTION_BASE RASPI2_USB_SECTION_BASE
 #define ARMOS_PLATFORM_IRQCTRL2_PHYS_SECTION_BASE \
     RASPI2_IRQCTRL_SECTION_BASE
 #define ARMOS_PLATFORM_IRQCTRL2_PHYS_BASE         RASPI2_IRQCTRL_BASE

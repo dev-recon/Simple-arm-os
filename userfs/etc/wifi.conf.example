@@ -1,6 +1,5 @@
-# ArmOS Raspberry Pi Wi-Fi configuration.
-# Copy this file to /etc/wifi.conf in the target userfs.
-country=FR
-security=wpa2
-ssid=YOUR_WIFI_SSID
-password=YOUR_WIFI_PASSWORD
+# ArmOS Raspberry Pi Wi-Fi policy.
+# Replace 00 with the ISO 3166-1 alpha-2 code for the system location.
+# The root-only `wifi connect SSID` workflow fills this file automatically.
+country=00
+# default=home

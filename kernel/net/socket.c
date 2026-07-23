@@ -52,6 +52,7 @@
 #define NET_TCP_FIN_RETRIES      3u
 #define NET_TCP_ZERO_WINDOW_MS   5000u
 #define NET_TCP_HALF_OPEN_MS     10000u
+#define NET_SOCKET_WAIT_MS       10u
 #define NET_DNS_TIMEOUT_MS       1500u
 #define NET_DNS_RETRIES          3u
 #define NET_EPHEMERAL_FIRST      49152u
@@ -382,7 +383,8 @@ static int net_wait_for_state(net_socket_t *socket,
             return socket->error != 0 ? socket->error : -ECONNRESET;
         if (socket->state == NET_SOCKET_CLOSED)
             return socket->error != 0 ? socket->error : -ECONNABORTED;
-        task_sleep_ms(1u);
+        if (task_sleep_interruptible_ms(NET_SOCKET_WAIT_MS) < 0)
+            return -EINTR;
     }
     return -ETIMEDOUT;
 }
@@ -397,7 +399,8 @@ static int net_wait_for_ack(net_socket_t *socket, uint32_t expected,
             return 0;
         if (socket->state == NET_SOCKET_RESET)
             return socket->error != 0 ? socket->error : -ECONNRESET;
-        task_sleep_ms(1u);
+        if (task_sleep_interruptible_ms(NET_SOCKET_WAIT_MS) < 0)
+            return -EINTR;
     }
     return -ETIMEDOUT;
 }
@@ -423,6 +426,8 @@ static int net_tcp_send_fin(net_socket_t *socket)
                                NET_TCP_TIMEOUT_MS);
         if (ret == 0)
             break;
+        if (ret == -EINTR)
+            return ret;
     }
     return ret;
 }
@@ -796,8 +801,10 @@ static ssize_t net_socket_read(file_t *file, void *buffer, size_t count)
     if (!socket || !buffer)
         return -EINVAL;
     while (socket->rx_length == 0u && !socket->peer_closed &&
-           socket->state != NET_SOCKET_RESET)
-        task_sleep_ms(1u);
+           socket->state != NET_SOCKET_RESET) {
+        if (task_sleep_interruptible_ms(NET_SOCKET_WAIT_MS) < 0)
+            return -EINTR;
+    }
     if (socket->state == NET_SOCKET_RESET)
         return socket->error != 0 ? socket->error : -ECONNRESET;
     if (socket->rx_length == 0u && socket->peer_closed)
@@ -832,8 +839,10 @@ static ssize_t net_tcp_write(net_socket_t *socket, const uint8_t *buffer,
         while (socket->peer_window == 0u && !socket->peer_closed &&
                socket->state != NET_SOCKET_RESET &&
                (uint32_t)(get_time_ms() - window_start) <
-                   NET_TCP_ZERO_WINDOW_MS)
-            task_sleep_ms(1u);
+                   NET_TCP_ZERO_WINDOW_MS) {
+            if (task_sleep_interruptible_ms(NET_SOCKET_WAIT_MS) < 0)
+                return written != 0u ? (ssize_t)written : -EINTR;
+        }
         if (socket->state == NET_SOCKET_RESET)
             return written != 0u ? (ssize_t)written :
                 (socket->error != 0 ? socket->error : -ECONNRESET);
@@ -857,6 +866,8 @@ static ssize_t net_tcp_write(net_socket_t *socket, const uint8_t *buffer,
             ret = net_wait_for_ack(socket, expected, NET_TCP_TIMEOUT_MS);
             if (ret == 0)
                 break;
+            if (ret == -EINTR)
+                return written != 0u ? (ssize_t)written : ret;
         }
         if (ret < 0) {
             socket->error = ret;
@@ -1148,6 +1159,8 @@ int sys_connect(int fd, const void *address, uint32_t address_length)
                                  NET_TCP_TIMEOUT_MS);
         if (ret == 0)
             return 0;
+        if (ret == -EINTR)
+            break;
     }
     socket->error = ret;
     socket->state = NET_SOCKET_CLOSED;
@@ -1185,8 +1198,10 @@ int sys_accept(int fd, void *address, uint32_t *address_length)
 
     if (!listener || listener->state != NET_SOCKET_LISTEN)
         return -EINVAL;
-    while (listener->accept_head == NULL)
-        task_sleep_ms(1u);
+    while (listener->accept_head == NULL) {
+        if (task_sleep_interruptible_ms(NET_SOCKET_WAIT_MS) < 0)
+            return -EINTR;
+    }
     spin_lock_irqsave(&socket_lock, &irq_flags);
     socket = listener->accept_head;
     listener->accept_head = socket->accept_next;
@@ -1426,7 +1441,10 @@ int net_dns_resolve(const char *name, uint32_t *address)
                     *address = dns_pending.result;
                 goto out;
             }
-            task_sleep_ms(1u);
+            if (task_sleep_interruptible_ms(NET_SOCKET_WAIT_MS) < 0) {
+                ret = -EINTR;
+                goto out;
+            }
         }
         ret = -ETIMEDOUT;
     }

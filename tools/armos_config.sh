@@ -183,10 +183,26 @@ armos_config_validate() {
         return 1
     fi
 
-    if { [ "${ENABLE_HDMI:-0}" = 1 ] || [ "${ENABLE_USB:-0}" = 1 ]; } &&
-       [ "${TARGET_PLATFORM:-qemu-virt}" != raspi3 ]; then
-        armos_config_error "ENABLE_HDMI and ENABLE_USB require TARGET_PLATFORM=raspi3"
-        return 1
+    if [ "${ENABLE_HDMI:-0}" = 1 ]; then
+        case "${TARGET_PLATFORM:-qemu-virt}" in
+            raspi2|raspi3) ;;
+            *)
+                armos_config_error \
+                    "ENABLE_HDMI requires TARGET_PLATFORM=raspi2 or raspi3"
+                return 1
+                ;;
+        esac
+    fi
+
+    if [ "${ENABLE_USB:-0}" = 1 ]; then
+        case "${TARGET_PLATFORM:-qemu-virt}" in
+            raspi2|raspi3) ;;
+            *)
+                armos_config_error \
+                    "ENABLE_USB requires TARGET_PLATFORM=raspi2 or raspi3"
+                return 1
+                ;;
+        esac
     fi
 
     for dimension in HDMI_WIDTH HDMI_HEIGHT; do

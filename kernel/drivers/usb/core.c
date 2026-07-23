@@ -32,6 +32,7 @@
 #define USB_HID_PROTOCOL_MOUSE    2u
 #define USB_HOST_CONTROLLER_MAX   4u
 #define USBD_PRIORITY             8u
+#define USBD_IDLE_POLL_MS         100u
 
 typedef struct usb_host_controller {
     const usb_host_controller_ops_t *ops;
@@ -193,13 +194,22 @@ static void usbd_main(void *argument)
     (void)argument;
 
     for (;;) {
+        uint32_t sleep_ms = USBD_IDLE_POLL_MS;
+
         for (size_t i = 0; i < usb_controller_count; i++) {
             usb_host_controller_t *controller = &usb_controllers[i];
 
-            if (controller->active)
-                controller->ops->poll(controller->context);
+            if (controller->active) {
+                uint32_t controller_sleep_ms =
+                    controller->ops->poll(controller->context);
+
+                if (controller_sleep_ms == 0u)
+                    controller_sleep_ms = 1u;
+                if (controller_sleep_ms < sleep_ms)
+                    sleep_ms = controller_sleep_ms;
+            }
         }
-        task_sleep_ms(1u);
+        task_sleep_ms(sleep_ms);
     }
 }
 

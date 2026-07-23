@@ -125,6 +125,8 @@ ssize_t vfs_kernel_file_read(kernel_file_t* handle, void* buffer,
                              size_t count);
 uint32_t vfs_kernel_file_size(const kernel_file_t* handle);
 void vfs_kernel_file_close(kernel_file_t* handle);
+int vfs_kernel_dir_open(const char* path, kernel_file_t* handle);
+int vfs_kernel_dir_read(kernel_file_t* handle, dirent_t* entry);
 
 /* File descriptor management */
 void free_fd(task_t* proc, int fd);

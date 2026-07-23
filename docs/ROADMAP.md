@@ -5,9 +5,9 @@ ArmOS. The goal is not to clone Linux line by line, but to converge toward the
 same useful Unix contracts while keeping the kernel understandable and
 debuggable.
 
-## 0.7.3 Current Baseline
+## 0.7.4 Current Baseline
 
-The 0.7.3 release keeps the 0.7 common-kernel architecture and adds:
+The 0.7.4 release keeps the 0.7 common-kernel architecture and adds:
 
 - one POSIX implementation path for ARM32 and ARM64, including clocks,
   positioned I/O, directory-relative operations, filesystem capacity,
@@ -30,6 +30,14 @@ The 0.7.3 release keeps the 0.7 common-kernel architecture and adds:
 - a Raspberry Pi 3 CYW43455 path that initializes SDHOST/SDIO, loads pinned
   firmware, completes WPA2 association, acquires a DHCP lease, and exchanges
   ARP and ICMP traffic on hardware;
+- one common ARP, IPv4, DHCP, ICMP, UDP, DNS and TCP implementation shared by
+  VirtIO-net and CYW43455, with POSIX socket I/O and an HTTP/1.1 validation
+  client;
+- runtime Wi-Fi scans, regulatory-country policy, root-managed per-SSID
+  profiles, known-network selection at boot, and nonfatal startup without
+  credentials;
+- separate user, kernel, IRQ and idle accounting in `top`, plus adaptive idle
+  polling for the `usbd` and `netd` kernel services;
 - deterministic boot ordering that admits secondary schedulers before PID 1
   can print the first framebuffer shell banner.
 
@@ -38,7 +46,7 @@ architecture-private implementation of a common kernel policy.
 
 ## HDMI And USB Follow-up
 
-The 0.7.3 hardware baseline includes two Raspberry Pi 3 backends while
+The 0.7.4 hardware baseline includes two Raspberry Pi 3 backends while
 preserving UART as the recovery path:
 
 - a VideoCore mailbox framebuffer exposed through the common `/dev/fb0` and

@@ -26,12 +26,19 @@
 #include <kernel/smp.h>
 #include <kernel/arch_platform.h>
 #include <kernel/arch_cpu.h>
+#include <kernel/string.h>
 
 
 /* Flag pour savoir si le systeme de processus est pret */
 static bool process_system_ready = false;
 static uint32_t system_ticks = 0;
 static volatile uint32_t timer_cpu_ticks[ARMOS_MAX_CPUS];
+static volatile timer_cpu_accounting_t timer_cpu_accounting[ARMOS_MAX_CPUS];
+static volatile uint64_t timer_irq_start[ARMOS_MAX_CPUS];
+static volatile uint64_t timer_irq_pending_cycles[ARMOS_MAX_CPUS];
+static volatile uint64_t timer_irq_fraction[ARMOS_MAX_CPUS];
+static volatile uint32_t timer_irq_depth[ARMOS_MAX_CPUS];
+static volatile bool timer_irq_interrupted_user[ARMOS_MAX_CPUS];
 
 static uint64_t last_timer_count = 0;
 static uint32_t software_system_ticks = 0;
@@ -280,6 +287,9 @@ void timer_irq_handler(void)
 {
     uint32_t cpu_id = smp_processor_id();
     uint32_t elapsed_ticks;
+    uint32_t irq_ticks = 0;
+    uint32_t execution_ticks;
+    task_t* current = NULL;
 
     /* 1. Acquitter l'interruption ARM Generic Timer */
     uint32_t timer_ctrl = get_cntp_ctl();
@@ -292,12 +302,46 @@ void timer_irq_handler(void)
     
     /* 2. Program the next absolute compare and catch up delayed ticks. */
     elapsed_ticks = timer_program_next_tick(get_timer_frequency());
+    execution_ticks = elapsed_ticks;
     
     /* 4. Per-CPU accounting, plus one global wall-clock on the boot CPU. */
     if (cpu_id < ARMOS_MAX_CPUS)
         timer_cpu_ticks[cpu_id] += elapsed_ticks;
     if (smp_is_boot_cpu())
         system_ticks += elapsed_ticks;
+
+    if (cpu_id < ARMOS_MAX_CPUS) {
+        uint64_t frequency = get_timer_frequency();
+        uint64_t pending = timer_irq_pending_cycles[cpu_id];
+        uint64_t scaled;
+
+        timer_irq_pending_cycles[cpu_id] = 0;
+        scaled = timer_irq_fraction[cpu_id] + pending * TIMER_FREQ;
+        if (frequency != 0) {
+            while (scaled >= frequency) {
+                scaled -= frequency;
+                irq_ticks++;
+            }
+            timer_irq_fraction[cpu_id] = scaled;
+        }
+        if (irq_ticks > elapsed_ticks)
+            irq_ticks = elapsed_ticks;
+
+        execution_ticks = elapsed_ticks - irq_ticks;
+        timer_cpu_accounting[cpu_id].irq_ticks += irq_ticks;
+
+        if (process_system_ready)
+            current = task_current_on_cpu(cpu_id);
+
+        if (current && task_is_idle_task(current)) {
+            timer_cpu_accounting[cpu_id].idle_ticks += execution_ticks;
+        } else if (current && current->type == TASK_TYPE_PROCESS &&
+                   timer_irq_interrupted_user[cpu_id]) {
+            timer_cpu_accounting[cpu_id].user_ticks += execution_ticks;
+        } else {
+            timer_cpu_accounting[cpu_id].system_ticks += execution_ticks;
+        }
+    }
 
     /*
      * Some UART backends can miss a TX wake-up under dense console bursts.
@@ -315,10 +359,17 @@ void timer_irq_handler(void)
     
     /* 6. Scheduling sans messages debug */
     if (process_system_ready) {
-        task_t* current = task_current_on_cpu(cpu_id);
+        if (!current)
+            current = task_current_on_cpu(cpu_id);
         
         if (current && !task_is_idle_task(current) && current->state == TASK_RUNNING) {
-            current->total_runtime += elapsed_ticks;
+            current->total_runtime += execution_ticks;
+            if (current->type == TASK_TYPE_PROCESS &&
+                cpu_id < ARMOS_MAX_CPUS &&
+                timer_irq_interrupted_user[cpu_id])
+                current->user_runtime += execution_ticks;
+            else
+                current->system_runtime += execution_ticks;
             if (current->sched_debt <= 0xffffffffu - elapsed_ticks)
                 current->sched_debt += elapsed_ticks;
             else
@@ -381,6 +432,49 @@ uint32_t timer_cpu_tick_count(uint32_t cpu_id)
     if (cpu_id >= ARMOS_MAX_CPUS)
         return 0;
     return timer_cpu_ticks[cpu_id];
+}
+
+void timer_accounting_irq_enter(bool interrupted_user)
+{
+    uint32_t cpu_id = smp_processor_id();
+
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return;
+
+    if (timer_irq_depth[cpu_id]++ == 0) {
+        timer_irq_interrupted_user[cpu_id] = interrupted_user;
+        timer_irq_start[cpu_id] = get_timer_count();
+    }
+}
+
+void timer_accounting_irq_exit(void)
+{
+    uint32_t cpu_id = smp_processor_id();
+    uint64_t now;
+
+    if (cpu_id >= ARMOS_MAX_CPUS || timer_irq_depth[cpu_id] == 0)
+        return;
+
+    if (--timer_irq_depth[cpu_id] != 0)
+        return;
+
+    now = get_timer_count();
+    timer_irq_pending_cycles[cpu_id] += now - timer_irq_start[cpu_id];
+}
+
+void timer_cpu_accounting_read(uint32_t cpu_id, timer_cpu_accounting_t* accounting)
+{
+    if (!accounting)
+        return;
+
+    memset(accounting, 0, sizeof(*accounting));
+    if (cpu_id >= ARMOS_MAX_CPUS)
+        return;
+
+    accounting->user_ticks = timer_cpu_accounting[cpu_id].user_ticks;
+    accounting->system_ticks = timer_cpu_accounting[cpu_id].system_ticks;
+    accounting->irq_ticks = timer_cpu_accounting[cpu_id].irq_ticks;
+    accounting->idle_ticks = timer_cpu_accounting[cpu_id].idle_ticks;
 }
 
 /* Fonction pour obtenir le temps en millisecondes */

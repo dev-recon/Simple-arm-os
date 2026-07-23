@@ -65,6 +65,8 @@ output/
 CONTEXT_REPRISE*.md
 armos.conf
 userfs/etc/wifi.conf
+!userfs/etc/wifi.d/
+userfs/etc/wifi.d/*.conf
 
 # Third-party archives
 *.tar.gz
