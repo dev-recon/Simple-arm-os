@@ -34,6 +34,7 @@
 #include <kernel/arch_barrier.h>
 #include <kernel/arch_platform.h>
 #include <kernel/net/device.h>
+#include <kernel/net/stack.h>
 
 #define VIRTIO_NET_F_MAC      (1u << 5)
 
@@ -1395,8 +1396,8 @@ static void virtio_net_receive_frame(net_device_t *device,
                                      const uint8_t *frame,
                                      uint32_t length)
 {
-    (void)device;
-    net_handle_frame(frame, length);
+    if (!net_stack_receive(device, frame, length))
+        net_handle_frame(frame, length);
 }
 
 static void net_rx_process_used(void)
@@ -1636,6 +1637,20 @@ bool virtio_net_init(void)
     if (net_device_register(&net.device) < 0) {
         KERROR("virtio_net: failed to register eth0\n");
         return false;
+    }
+    {
+        net_ipv4_config_t config;
+
+        memset(&config, 0, sizeof(config));
+        config.address = VIRTIO_NET_IP;
+        config.netmask = 0xffffff00u;
+        config.gateway = VIRTIO_NET_GW_IP;
+        config.dns = VIRTIO_NET_GW_IP + 1u;
+        config.configured = true;
+        if (net_stack_attach(&net.device, NET_CONFIG_STATIC, &config) < 0) {
+            KERROR("virtio_net: failed to attach common IPv4 stack\n");
+            return false;
+        }
     }
 
     /*

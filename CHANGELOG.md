@@ -13,6 +13,15 @@ Release tags use the bare version number starting with `0.7` (`0.7`, `0.7.1`,
   now runs as the ordinary `user`; administrative access remains explicit.
 - Added early kernel-log replay when Raspberry Pi hands the boot console from
   UART diagnostics to the framebuffer.
+- Added opt-in Raspberry Pi 3 CYW43455 bring-up through the common device
+  architecture: SDHOST/SDIO enumeration, pinned firmware loading, station
+  setup, WPA2 association, and reproducible ARM32/ARM64 Wi-Fi profiles.
+- Connected VirtIO-net and CYW43455 BCDC Ethernet transport to a common
+  architecture-neutral ARP, IPv4, DHCPv4, and ICMP echo stack.
+- Added `/dev/netctl`, generic `/proc/net/dev` reporting, the `netd` kernel
+  task, and userland `ifconfig` and numeric-address `ping` commands.
+- Fixed kernel `printf` handling of `long long` arguments, keeping 64-bit
+  network counters aligned and correctly formatted on ARM32.
 
 ## ArmOS 0.7.3 - 2026-07-21
 

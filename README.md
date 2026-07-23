@@ -128,7 +128,7 @@ release build system.
 | --- | --- | --- | --- |
 | `arm32/qemu-virt` | Fresh-checkout default | ARMv7-A | GICv2, PL011, VirtIO |
 | `arm64/qemu-virt` | Kernel feature reference | AArch64 | GICv2, PL011, VirtIO, 4-core SMP |
-| `arm64/raspi3` | Hardware reference | AArch64 | Raspberry Pi 3 B+, PL011, SD/eMMC, HDMI/ILI9341, USB HID, 4-core SMP |
+| `arm64/raspi3` | Hardware reference | AArch64 | Raspberry Pi 3 B+, PL011, SD/eMMC, HDMI/ILI9341, USB HID, CYW43455 Wi-Fi/DHCP/ICMP, 4-core SMP |
 | `arm32/raspi2` | Supported hardware | ARMv7-A | Raspberry Pi 2 B v1.1, PL011, SD/eMMC |
 
 QEMU 10.0.2 is the reference emulator for the 0.7 line. Hardware images use a
@@ -143,6 +143,8 @@ uname -a
 ps
 ls -la /
 ls -la /proc
+ifconfig
+ping -c 4 10.0.2.2
 systest
 ```
 

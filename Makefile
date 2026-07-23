@@ -146,6 +146,8 @@ COMMON_KERNEL_OBJS = \
 	kernel/core/coredump.o \
 	kernel/core/device_service.o \
 	kernel/net/device.o \
+	kernel/net/stack.o \
+	kernel/net/control.o \
 	kernel/fs/vfs.o \
 	kernel/fs/mount.o \
 	kernel/fs/fat32.o \

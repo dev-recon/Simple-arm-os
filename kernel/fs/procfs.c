@@ -41,6 +41,8 @@
 #include <kernel/arch_platform.h>
 #include <kernel/block_device.h>
 #include <kernel/usb.h>
+#include <kernel/net/device.h>
+#include <kernel/net/stack.h>
 
 extern uint32_t task_count;
 extern task_t* task_list_head;
@@ -881,53 +883,43 @@ static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
 
 static void proc_fill_net_dev(char* buf, size_t cap, size_t* len)
 {
-    uint8_t mac[6] = {0};
-    uint32_t irq_count = 0;
-    uint32_t last_irq_status = 0;
-    uint32_t status = 0;
-    uint32_t phys = 0;
-    uint32_t irq = 0;
-    uint32_t rx_packets = 0;
-    uint32_t rx_bytes = 0;
-    uint32_t rx_drops = 0;
-    uint32_t rx_last_len = 0;
-    uint32_t tx_packets = 0;
-    uint32_t tx_bytes = 0;
-    uint32_t tx_drops = 0;
-    uint32_t rx_arp = 0;
-    uint32_t tx_arp = 0;
-    uint32_t rx_ipv4 = 0;
-    uint32_t rx_icmp = 0;
-    uint32_t tx_icmp = 0;
-    uint32_t rx_tcp = 0;
-    uint32_t tx_tcp = 0;
-    uint32_t tcp_echo = 0;
-    uint32_t echo_enabled = 0;
+    uint32_t index;
 
     proc_append(buf, cap, len,
                 "Inter-|   Receive                                                |  Transmit\n");
     proc_append(buf, cap, len,
                 " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n");
 
-    if (!virtio_net_is_initialized())
-        return;
+    for (index = 0u; index < net_device_count(); index++) {
+        net_device_t *device = net_device_get(index);
+        net_ipv4_config_t config;
+        char address[20];
 
-    virtio_net_get_mac(mac);
-    virtio_net_get_stats(&irq_count, &last_irq_status, &status, &phys, &irq,
-                         &rx_packets, &rx_bytes, &rx_drops, &rx_last_len,
-                         &tx_packets, &tx_bytes, &tx_drops, &rx_arp,
-                         &tx_arp, &rx_ipv4, &rx_icmp, &tx_icmp, &rx_tcp,
-                         &tx_tcp, &tcp_echo, &echo_enabled);
-    proc_append(buf, cap, len,
-                "vnet0: %8u %7u %4u %4u %4u %5u %10u %9u %8u %7u %4u %4u %4u %5u %7u %10u\n",
-                rx_bytes, rx_packets, 0, rx_drops, 0, 0, 0, 0,
-                tx_bytes, tx_packets, 0, tx_drops, 0, 0, 0, 0);
-    proc_append(buf, cap, len,
-                "      mac %02X:%02X:%02X:%02X:%02X:%02X irq %u irq_count %u last_irq 0x%X status 0x%02X phys 0x%08X rx_last_len %u arp rx %u tx %u ipv4 rx %u icmp rx %u tx %u tcp rx %u tx %u echo %u enabled %u\n",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-                irq, irq_count, last_irq_status, status, phys, rx_last_len,
-                rx_arp, tx_arp, rx_ipv4, rx_icmp, tx_icmp, rx_tcp, tx_tcp,
-                tcp_echo, echo_enabled);
+        if (!device)
+            continue;
+        proc_append(buf, cap, len,
+                    "%6s: %8llu %7llu %4u %4llu %4u %5u %10u %9u %8llu %7llu %4u %4llu %4u %5u %7u %10u\n",
+                    device->name,
+                    (unsigned long long)device->rx_bytes,
+                    (unsigned long long)device->rx_packets,
+                    0u, (unsigned long long)device->rx_drops,
+                    0u, 0u, 0u, 0u,
+                    (unsigned long long)device->tx_bytes,
+                    (unsigned long long)device->tx_packets,
+                    0u, (unsigned long long)device->tx_drops,
+                    0u, 0u, 0u, 0u);
+        if (net_stack_get_config(device, &config) == 0 &&
+            config.configured) {
+            net_stack_format_ipv4(config.address, address, sizeof(address));
+        } else {
+            snprintf(address, sizeof(address), "unconfigured");
+        }
+        proc_append(buf, cap, len,
+                    "        mac %02X:%02X:%02X:%02X:%02X:%02X link %u inet %s mtu %u\n",
+                    device->mac[0], device->mac[1], device->mac[2],
+                    device->mac[3], device->mac[4], device->mac[5],
+                    (uint32_t)device->link_state, address, device->mtu);
+    }
 }
 
 static uint32_t proc_tcp_addr_le(uint32_t ip)

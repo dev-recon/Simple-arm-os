@@ -30,7 +30,8 @@ replace hardware timing and signal validation.
   GPIO parallel display on `/dev/fb0`
 - USB input: optional DWC2 host with boot-protocol keyboards and mice behind
   the Pi 3 internal USB hub
-- Networking: not yet provided by this profile
+- Networking: optional CYW43455 SDIO firmware, WPA2 station association,
+  BCDC Ethernet transport, DHCPv4, ARP, IPv4, and ICMP echo
 
 The separate `arm32/raspi2` target supports Raspberry Pi 2 Model B v1.1
 hardware and is also exercised with QEMU's `raspi2b` machine.
@@ -146,6 +147,90 @@ channel with DMA, supports the internal hub and split transactions, and
 handles boot keyboards and mice detected during startup. It does not yet
 provide hotplug, USB mass storage, audio, Bluetooth, isochronous transfers, or
 an interrupt-driven host-controller scheduler.
+
+## CYW43455 Wi-Fi Bring-up
+
+Raspberry Pi 3 B+ contains a CYW43455 radio connected through SDIO. ArmOS can
+initialize the SDHOST/SDIO bus, identify the chip, upload its separately
+licensed firmware, configure station mode, associate with a WPA2 access point,
+exchange Ethernet frames through BCDC, and acquire an IPv4 configuration
+through DHCP. Wi-Fi remains opt-in because its firmware has a separate license
+and the local network credentials are not tracked.
+
+Install the pinned firmware after reviewing and accepting its separate
+Cypress/Broadcom license:
+
+```sh
+tools/fetch_raspi3_wifi_firmware.sh --accept-license
+```
+
+Create the local network configuration:
+
+```sh
+cp userfs/etc/wifi.conf.example userfs/etc/wifi.conf
+```
+
+Edit `userfs/etc/wifi.conf` with the country, SSID, and WPA2 password. The
+local file and downloaded firmware are ignored by Git. Build with the tracked
+Wi-Fi profile:
+
+```sh
+ARMOS_CONFIG=configs/raspi3-arm64-wifi.conf \
+  tools/build_pi3_sd.sh --mode none
+```
+
+A complete raw image write is required the first time, or whenever firmware
+or `/etc/wifi.conf` changes, because those files live in the ext2 root
+partition. Once the root partition contains them, kernel-only iterations can
+update the mounted boot partition:
+
+```sh
+ARMOS_CONFIG=configs/raspi3-arm64-wifi.conf \
+  tools/build_pi3_sd.sh --mode boot --boot-volume /Volumes/ARMBOOT
+```
+
+The validated boot sequence includes lines equivalent to:
+
+```text
+WiFi: SDIO funcs=3 rca=0x0001 id=02D0:A9A6 SDIO=3 CCCR=2 [ OK ]
+WiFi: CYW43455 chip=0x4345 rev=6 pkg=2 signature=0x15264345 [ OK ]
+WiFi: CYW43455 ready xx:xx:xx:xx:xx:xx                  [ OK ]
+WiFi: associated with <ssid>, BSSID xx:xx:xx:xx:xx:xx   [ OK ]
+Net: wlan0 DHCP address 192.0.2.10                       [ OK ]
+```
+
+The DHCP line is asynchronous and can appear after the shell prompt. Confirm
+the complete path from userland:
+
+```sh
+ifconfig wlan0
+ping -c 4 <gateway-reported-by-ifconfig>
+cat /proc/net/dev
+```
+
+`ifconfig` must report `wlan0` as `UP`, show a nonzero DHCP address, netmask,
+gateway, and DNS server, and identify the configuration method as `dhcp`.
+Successful gateway replies prove bidirectional BCDC transport, ARP, IPv4, and
+ICMP. The `wlan0` RX and TX counters in `ifconfig` and `/proc/net/dev` must
+increase during the test. `ping` currently accepts numeric IPv4 addresses;
+DNS name resolution is a later socket/resolver milestone.
+
+For an independent association check, the access point should list the ArmOS
+station MAC. A useful reliability test is ten cold boots with ten successful
+associations and DHCP leases, followed by a negative control using an invalid
+password.
+
+The Raspberry Pi 3 wired Ethernet port is not supported yet. It is exposed by
+the LAN9514 USB hub through an SMSC95xx Ethernet controller and requires a
+separate USB network driver. That future driver will attach to the same common
+`net_device`, DHCP, `ifconfig`, and `ping` contracts.
+
+The current hardware stabilization publishes firmware SDPCM transmit-credit
+window changes after a short empty busy loop. Kernel builds currently use
+`-O0`, so the loop is retained. It is technical debt rather than a timing
+contract: before optimized kernel builds are enabled, replace it with an
+explicit timer-based delay or a firmware-state condition that the compiler
+cannot remove.
 
 ## Write An SD Card
 

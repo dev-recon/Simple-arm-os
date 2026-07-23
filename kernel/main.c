@@ -42,6 +42,7 @@
 #include <kernel/task.h>
 #include <kernel/kernel_tasks.h>
 #include <kernel/usb.h>
+#include <kernel/net/stack.h>
 
 #include <kernel/tty.h>
 #include <kernel/exceptions.h>
@@ -278,6 +279,15 @@ void kernel_main(void)
             KBOOT_OK("USB: service daemon");
         else if (usb_daemon < 0)
             KBOOT_WARN("USB: service daemon unavailable");
+    }
+
+    {
+        int net_daemon = net_start_daemon();
+
+        if (net_daemon > 0)
+            KBOOT_OK("Net: service daemon");
+        else if (net_daemon < 0)
+            KBOOT_WARN("Net: service daemon unavailable");
     }
 
     KBOOT_OK("Process: scheduler ready");

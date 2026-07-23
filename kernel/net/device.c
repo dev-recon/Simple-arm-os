@@ -23,7 +23,7 @@
 #define NET_DEVICE_MAX 4u
 
 static net_device_t *net_devices[NET_DEVICE_MAX];
-static uint32_t net_device_count;
+static uint32_t registered_device_count;
 static net_device_t *net_default_device;
 
 int net_device_register(net_device_t *device)
@@ -36,10 +36,10 @@ int net_device_register(net_device_t *device)
         return -ENAMETOOLONG;
     if (net_device_find(device->name))
         return -EEXIST;
-    if (net_device_count >= NET_DEVICE_MAX)
+    if (registered_device_count >= NET_DEVICE_MAX)
         return -ENOSPC;
 
-    net_devices[net_device_count++] = device;
+    net_devices[registered_device_count++] = device;
     if (!net_default_device)
         net_default_device = device;
     return 0;
@@ -54,11 +54,23 @@ net_device_t *net_device_find(const char *name)
 {
     if (!name)
         return NULL;
-    for (uint32_t index = 0u; index < net_device_count; index++) {
+    for (uint32_t index = 0u; index < registered_device_count; index++) {
         if (strcmp(net_devices[index]->name, name) == 0)
             return net_devices[index];
     }
     return NULL;
+}
+
+uint32_t net_device_count(void)
+{
+    return registered_device_count;
+}
+
+net_device_t *net_device_get(uint32_t index)
+{
+    if (index >= registered_device_count)
+        return NULL;
+    return net_devices[index];
 }
 
 int net_device_transmit(net_device_t *device, const uint8_t *frame,

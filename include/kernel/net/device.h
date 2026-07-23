@@ -67,6 +67,8 @@ typedef struct net_device {
 int net_device_register(net_device_t *device);
 net_device_t *net_device_get_default(void);
 net_device_t *net_device_find(const char *name);
+uint32_t net_device_count(void);
+net_device_t *net_device_get(uint32_t index);
 int net_device_transmit(net_device_t *device, const uint8_t *frame,
                         uint32_t length);
 void net_device_receive(net_device_t *device, const uint8_t *frame,

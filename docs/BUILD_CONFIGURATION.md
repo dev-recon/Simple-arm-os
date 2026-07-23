@@ -42,6 +42,7 @@ ARMOS_CONFIG=configs/qemu-virt-arm32.conf ./run.sh
 ARMOS_CONFIG=configs/qemu-virt-arm64.conf ./run.sh
 ARMOS_CONFIG=configs/raspi2-arm32.conf tools/build_pi2_sd.sh --mode none
 ARMOS_CONFIG=configs/raspi3-arm64.conf tools/build_pi3_sd.sh --mode none
+ARMOS_CONFIG=configs/raspi3-arm64-wifi.conf tools/build_pi3_sd.sh --mode none
 ```
 
 `ARMOS_CONFIG` paths are resolved from the repository root.
@@ -80,6 +81,7 @@ TARGET_ARCH=arm32
 TARGET_PLATFORM=qemu-virt
 SMP_CPUS=1
 ENABLE_NET=no
+ENABLE_WIFI=no
 ENABLE_GPU=no
 ENABLE_HDMI=no
 ENABLE_ILI9341=no
@@ -92,6 +94,15 @@ HDMI_HEIGHT=720
 starts. `ENABLE_GPU=yes` opens the VirtIO-GPU display and adds the keyboard
 device. Both can be enabled together. These two launch options require the
 `qemu-virt` platform.
+
+`ENABLE_WIFI=yes` selects the Raspberry Pi 3 CYW43455 SDIO bring-up path. It
+requires `TARGET_PLATFORM=raspi3`, firmware installed by
+`tools/fetch_raspi3_wifi_firmware.sh --accept-license`, and a local
+`userfs/etc/wifi.conf` based on the tracked example. The current milestone
+loads firmware, associates with a WPA2 access point, exchanges BCDC Ethernet
+frames, and configures `wlan0` through DHCP. The dedicated
+`raspi3-arm32-wifi.conf` and `raspi3-arm64-wifi.conf` profiles keep this path
+opt-in.
 
 `boot-graphics.sh` always enables the graphical device for that invocation.
 It does not require networking: with `ENABLE_NET=no`, no network arguments are

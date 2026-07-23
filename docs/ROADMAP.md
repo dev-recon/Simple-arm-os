@@ -27,6 +27,9 @@ The 0.7.3 release keeps the 0.7 common-kernel architecture and adds:
 - a common USB core and `usbd` task, with the Raspberry Pi DWC2 controller,
   internal hub enumeration, HID keyboard/mouse input, `/proc/usb`, and
   `lsusb`;
+- a Raspberry Pi 3 CYW43455 path that initializes SDHOST/SDIO, loads pinned
+  firmware, completes WPA2 association, acquires a DHCP lease, and exchanges
+  ARP and ICMP traffic on hardware;
 - deterministic boot ordering that admits secondary schedulers before PID 1
   can print the first framebuffer shell banner.
 
@@ -229,11 +232,19 @@ Immediate goals:
 - Maintain `/proc/net/dev` counters and IRQ visibility.
 - Keep the current TCP echo path as a diagnostic stepping stone, not a full TCP
   stack contract.
-- Add small userland tools before adding broad socket semantics.
+- Add DNS resolution, UDP and TCP socket syscalls, and broader POSIX socket
+  behavior over the common IPv4 layer.
+- Add an SMSC95xx USB Ethernet driver for the Raspberry Pi 3 wired port.
+- Extend configuration mutation beyond the current read-only `ifconfig`
+  surface once privilege and routing semantics are defined.
 
-First milestone: started.
+First milestone: complete.
 - Expose TCP diagnostic state in `/proc/net/tcp`.
 - Add a small `netstat` command based on `/proc/net/dev` and `/proc/net/tcp`.
+- Initialize CYW43455 firmware, complete WPA2 association and DHCP on Raspberry
+  Pi 3 B+, and validate BCDC Ethernet RX/TX with ARP and ICMP.
+- Provide `ifconfig`, numeric-address `ping`, and generic interface counters
+  through `/dev/netctl` and `/proc/net/dev`.
 
 ## 7. Userland Init
 

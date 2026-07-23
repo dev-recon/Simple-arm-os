@@ -27,7 +27,11 @@
 #include <kernel/memory.h>
 #include <kernel/mmc/bcm2835_sdio.h>
 #include <kernel/net/cyw43.h>
+#include <kernel/net/device.h>
+#include <kernel/net/stack.h>
+#include <kernel/spinlock.h>
 #include <kernel/string.h>
+#include <kernel/task.h>
 #include <kernel/timer.h>
 #include <kernel/types.h>
 #include <kernel/vfs.h>
@@ -90,7 +94,7 @@
 #define CYW43_TX_WINDOW_MAX_ADVANCE          0x40u
 #define CYW43_EROM_SIZE                      512u
 #define CYW43_FIRMWARE_CHUNK_SIZE            512u
-#define CYW43_SDPCM_PACKET_SIZE              512u
+#define CYW43_SDPCM_PACKET_SIZE              2048u
 #define CYW43_SDPCM_FRAME_TAG_SIZE           4u
 #define CYW43_SDPCM_SOFTWARE_HEADER_SIZE     8u
 #define CYW43_SDPCM_HEADER_SIZE              12u
@@ -99,7 +103,11 @@
 #define CYW43_F2_FIFO_ADDRESS                0x8000u
 #define CYW43_SDPCM_CONTROL_CHANNEL          0u
 #define CYW43_SDPCM_EVENT_CHANNEL            1u
+#define CYW43_SDPCM_DATA_CHANNEL             2u
 #define CYW43_BCDC_DATA_HEADER_SIZE          4u
+#define CYW43_BCDC_DATA_FRAME_OFFSET         16u
+#define CYW43_BCDC_PROTOCOL_VERSION          2u
+#define CYW43_BCDC_VERSION_SHIFT             4u
 #define CYW43_BCDC_FLAG_ERROR                0x00000001u
 #define CYW43_BCDC_FLAG_SET                  0x00000002u
 #define CYW43_WLC_UP                         2u
@@ -199,6 +207,7 @@
 #define CYW43_CLM_PATH "/lib/firmware/brcm/brcmfmac43455-sdio.clm_blob"
 
 typedef struct cyw43_state {
+    net_device_t device;
     cyw43_identity_t identity;
     uint32_t backplane_window;
     bool present;
@@ -207,6 +216,7 @@ typedef struct cyw43_state {
     bool radio_ready;
     bool regulatory_ready;
     bool associated;
+    bool device_registered;
     uint8_t tx_sequence;
     uint8_t tx_max;
     uint8_t wireless_flow_control;
@@ -237,6 +247,7 @@ typedef struct cyw43_wifi_config {
 } cyw43_wifi_config_t;
 
 static cyw43_state_t cyw43_state;
+static spinlock_t cyw43_data_lock = SPINLOCK_INIT("cyw43_data");
 
 static int cyw43_backplane_read(uint32_t address, void *buffer,
                                 uint32_t length);
@@ -686,6 +697,8 @@ bool cyw43_probe(cyw43_identity_t *identity)
     cyw43_state.firmware_running = false;
     cyw43_state.radio_ready = false;
     cyw43_state.regulatory_ready = false;
+    cyw43_state.associated = false;
+    cyw43_state.device_registered = false;
     /* One bootstrap control credit: 0 - 255 wraps to one SDPCM slot. */
     cyw43_state.tx_sequence = 0xffu;
     cyw43_state.tx_max = 0u;
@@ -1526,6 +1539,31 @@ static int cyw43_process_event_packet(const uint8_t *packet, uint32_t length)
     return 0;
 }
 
+static int cyw43_process_data_packet(const uint8_t *packet, uint32_t length)
+{
+    uint32_t header_length;
+    uint32_t payload_offset;
+    uint32_t frame_length;
+
+    if (!packet || length < CYW43_SDPCM_HEADER_SIZE)
+        return -EINVAL;
+    header_length = packet[7];
+    if (header_length < CYW43_SDPCM_HEADER_SIZE ||
+        header_length + CYW43_BCDC_DATA_HEADER_SIZE > length)
+        return -EIO;
+    payload_offset = header_length + CYW43_BCDC_DATA_HEADER_SIZE +
+        (uint32_t)packet[header_length + 3u] * 4u;
+    if (payload_offset > length)
+        return -EIO;
+    frame_length = length - payload_offset;
+    if (frame_length < 14u)
+        return -EIO;
+    if (cyw43_state.device_registered)
+        net_device_receive(&cyw43_state.device, packet + payload_offset,
+                           frame_length);
+    return 0;
+}
+
 static bool cyw43_txctl_window_open(void)
 {
     uint8_t available = (uint8_t)(cyw43_state.tx_max -
@@ -1568,6 +1606,10 @@ static int cyw43_wait_txctl_window(void)
         channel = packet[5] & 0x0fu;
         if (channel == CYW43_SDPCM_EVENT_CHANNEL) {
             ret = cyw43_process_event_packet(packet, packet_length);
+            if (ret < 0)
+                return ret;
+        } else if (channel == CYW43_SDPCM_DATA_CHANNEL) {
+            ret = cyw43_process_data_packet(packet, packet_length);
             if (ret < 0)
                 return ret;
         }
@@ -1914,6 +1956,12 @@ static int cyw43_bcdc_ioctl(uint32_t command, const char *name,
                     return ret;
                 continue;
             }
+            if ((receive[5] & 0x0fu) == CYW43_SDPCM_DATA_CHANNEL) {
+                ret = cyw43_process_data_packet(receive, received_length);
+                if (ret < 0)
+                    return ret;
+                continue;
+            }
             if ((receive[5] & 0x0fu) != CYW43_SDPCM_CONTROL_CHANNEL)
                 continue;
             header_length = receive[7];
@@ -2253,6 +2301,12 @@ static int cyw43_wait_association(void)
                 cyw43_state.join_in_progress = false;
                 return ret;
             }
+        } else if ((packet[5] & 0x0fu) == CYW43_SDPCM_DATA_CHANNEL) {
+            ret = cyw43_process_data_packet(packet, packet_length);
+            if (ret < 0) {
+                cyw43_state.join_in_progress = false;
+                return ret;
+            }
         }
     }
     KWARN("CYW43: association timeout set_ssid=%u link=%u psk=%u\n",
@@ -2340,6 +2394,127 @@ int cyw43_get_mac_address(uint8_t address[6])
     if (!cyw43_is_radio_ready())
         return -ENODEV;
     memcpy(address, cyw43_state.mac_address, 6u);
+    return 0;
+}
+
+static void cyw43_receive_frame(net_device_t *device, const uint8_t *frame,
+                                uint32_t length)
+{
+    (void)net_stack_receive(device, frame, length);
+}
+
+static int cyw43_device_poll(net_device_t *device)
+{
+    uint8_t packet[CYW43_SDPCM_PACKET_SIZE];
+    bool wait_for_interrupt = true;
+    uint32_t processed = 0u;
+
+    (void)device;
+    while (processed < 8u) {
+        uint32_t packet_length = 0u;
+        uint8_t channel;
+        unsigned long flags;
+        int ret;
+
+        spin_lock_irqsave(&cyw43_data_lock, &flags);
+        ret = cyw43_f2_read_packet(packet, sizeof(packet),
+                                   wait_for_interrupt, 1u,
+                                   &packet_length);
+        spin_unlock_irqrestore(&cyw43_data_lock, flags);
+        if (ret == -ETIMEDOUT || ret == -EAGAIN)
+            return 0;
+        if (ret < 0)
+            return ret;
+        wait_for_interrupt = false;
+        processed++;
+        channel = packet[5] & 0x0fu;
+        if (channel == CYW43_SDPCM_EVENT_CHANNEL)
+            ret = cyw43_process_event_packet(packet, packet_length);
+        else if (channel == CYW43_SDPCM_DATA_CHANNEL)
+            ret = cyw43_process_data_packet(packet, packet_length);
+        else
+            ret = 0;
+        if (ret < 0)
+            return ret;
+    }
+    return (int)processed;
+}
+
+static int cyw43_device_transmit(net_device_t *device, const uint8_t *frame,
+                                 uint32_t length)
+{
+    uint8_t packet[CYW43_SDPCM_PACKET_SIZE];
+    uint32_t protocol_length;
+    uint32_t start;
+
+    if (!device || !frame || length < 14u || length > device->mtu + 14u)
+        return -EINVAL;
+    protocol_length = CYW43_BCDC_DATA_FRAME_OFFSET + length;
+    if (protocol_length > sizeof(packet))
+        return -EFBIG;
+
+    start = get_time_ms();
+    while ((uint32_t)(get_time_ms() - start) < CYW43_CONTROL_TIMEOUT_MS) {
+        unsigned long flags;
+        int ret;
+
+        spin_lock_irqsave(&cyw43_data_lock, &flags);
+        if (!cyw43_txctl_window_open()) {
+            spin_unlock_irqrestore(&cyw43_data_lock, flags);
+            (void)cyw43_device_poll(device);
+            task_sleep_ms(1u);
+            continue;
+        }
+        memset(packet, 0, protocol_length);
+        cyw43_put_le16(packet, (uint16_t)protocol_length);
+        cyw43_put_le16(packet + 2u, (uint16_t)~protocol_length);
+        packet[4] = cyw43_state.tx_sequence;
+        packet[5] = CYW43_SDPCM_DATA_CHANNEL;
+        packet[7] = CYW43_SDPCM_HEADER_SIZE;
+        packet[CYW43_SDPCM_HEADER_SIZE] =
+            CYW43_BCDC_PROTOCOL_VERSION << CYW43_BCDC_VERSION_SHIFT;
+        memcpy(packet + CYW43_BCDC_DATA_FRAME_OFFSET, frame, length);
+        ret = cyw43_f2_write_packet(packet, protocol_length);
+        if (ret == 0)
+            cyw43_state.tx_sequence++;
+        spin_unlock_irqrestore(&cyw43_data_lock, flags);
+        return ret;
+    }
+    return -ETIMEDOUT;
+}
+
+static void cyw43_device_shutdown(net_device_t *device)
+{
+    (void)device;
+    cyw43_shutdown();
+}
+
+static const net_device_ops_t cyw43_device_ops = {
+    .transmit = cyw43_device_transmit,
+    .poll = cyw43_device_poll,
+    .shutdown = cyw43_device_shutdown,
+};
+
+static int cyw43_register_network_device(void)
+{
+    int ret;
+
+    if (cyw43_state.device_registered)
+        return 0;
+    memset(&cyw43_state.device, 0, sizeof(cyw43_state.device));
+    cyw43_state.device.name = "wlan0";
+    memcpy(cyw43_state.device.mac, cyw43_state.mac_address, 6u);
+    cyw43_state.device.mtu = NET_DEVICE_DEFAULT_MTU;
+    cyw43_state.device.ops = &cyw43_device_ops;
+    cyw43_state.device.receive = cyw43_receive_frame;
+    cyw43_state.device.driver_data = &cyw43_state;
+    ret = net_device_register(&cyw43_state.device);
+    if (ret < 0)
+        return ret;
+    ret = net_stack_attach(&cyw43_state.device, NET_CONFIG_DHCP, NULL);
+    if (ret < 0)
+        return ret;
+    cyw43_state.device_registered = true;
     return 0;
 }
 
@@ -2431,13 +2606,20 @@ int cyw43_start(void)
               cyw43_state.mac_address[4], cyw43_state.mac_address[5]);
     KBOOT_OKF("WiFi: firmware %uK, NVRAM %u, CLM %u bytes",
               firmware_size / 1024u, nvram_size, clm_size);
+    ret = cyw43_register_network_device();
+    if (ret < 0) {
+        KBOOT_WARNF("Net: CYW43455 device registration failed (%d)", ret);
+        return ret;
+    }
     if (!have_wifi_config) {
+        net_device_set_link(&cyw43_state.device, NET_LINK_DOWN);
         KBOOT_WARNF("WiFi: no valid %s, radio idle",
                     CYW43_WIFI_CONFIG_PATH);
-        KBOOT_WARN("Net: CYW43455 Ethernet data path pending");
+        KBOOT_WARN("Net: wlan0 waiting for WiFi association");
         return 0;
     }
 
+    net_device_set_link(&cyw43_state.device, NET_LINK_ASSOCIATING);
     KBOOT_WARNF("WiFi: associating with %s", wifi_config.ssid);
     ret = cyw43_join_network(&wifi_config);
     if (ret < 0) {
@@ -2454,7 +2636,9 @@ int cyw43_start(void)
               cyw43_state.bssid[0], cyw43_state.bssid[1],
               cyw43_state.bssid[2], cyw43_state.bssid[3],
               cyw43_state.bssid[4], cyw43_state.bssid[5]);
-    KBOOT_WARN("Net: CYW43455 Ethernet data path pending");
+    cyw43_state.associated = true;
+    net_device_set_link(&cyw43_state.device, NET_LINK_UP);
+    KBOOT_OK("Net: wlan0 Ethernet data path ready");
     return 0;
 }
 
