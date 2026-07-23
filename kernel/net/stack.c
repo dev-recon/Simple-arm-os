@@ -11,17 +11,17 @@
  * Responsibilities:
  * - Implement Ethernet ARP, IPv4, ICMP echo and a DHCPv4 client.
  * - Hold interface addressing independently from hardware drivers.
- * - Poll registered NICs from the common netd kernel task.
+ * - Route common TCP and UDP traffic to architecture-neutral transports.
  *
  * Notes:
  * - The initial stack intentionally handles one IPv4 address and a compact
- *   ARP cache per interface. TCP remains in the existing VirtIO backend until
- *   the socket layer is extracted into this common subsystem.
+ *   ARP cache per interface.
  */
 
 #include <kernel/address_space.h>
 #include <kernel/arch_memory.h>
 #include <kernel/kprintf.h>
+#include <kernel/net/socket.h>
 #include <kernel/net/stack.h>
 #include <kernel/process.h>
 #include <kernel/stdarg.h>
@@ -38,6 +38,7 @@
 #define NET_ARP_REQUEST          1u
 #define NET_ARP_REPLY            2u
 #define NET_IP_PROTO_ICMP        1u
+#define NET_IP_PROTO_TCP         6u
 #define NET_IP_PROTO_UDP         17u
 #define NET_ICMP_ECHO_REPLY      0u
 #define NET_ICMP_ECHO_REQUEST    8u
@@ -599,11 +600,20 @@ bool net_stack_receive(net_device_t *device, const uint8_t *frame,
         return false;
     payload += ihl;
     payload_length = ip_length - ihl;
-    if (ip->protocol == NET_IP_PROTO_UDP)
-        return net_receive_dhcp(interface, payload, payload_length);
+    if (ip->protocol == NET_IP_PROTO_UDP) {
+        if (net_receive_dhcp(interface, payload, payload_length))
+            return true;
+        return net_transport_receive(device, ip->protocol,
+            net_ip_from_bytes(ip->source),
+            net_ip_from_bytes(ip->destination), payload, payload_length);
+    }
     if (ip->protocol == NET_IP_PROTO_ICMP)
         return net_receive_icmp(interface, ethernet, ip, payload,
                                 payload_length);
+    if (ip->protocol == NET_IP_PROTO_TCP)
+        return net_transport_receive(device, ip->protocol,
+            net_ip_from_bytes(ip->source),
+            net_ip_from_bytes(ip->destination), payload, payload_length);
     return false;
 }
 
@@ -707,6 +717,34 @@ static int net_wait_for_arp(net_interface_t *interface, uint32_t address,
         task_sleep_ms(1u);
     }
     return -ETIMEDOUT;
+}
+
+int net_stack_send_ipv4(net_device_t *device, uint32_t destination,
+                        uint8_t protocol, const void *payload,
+                        uint32_t payload_length)
+{
+    net_interface_t *interface = net_interface_for_device(device);
+    uint8_t target_mac[6];
+    uint32_t next_hop;
+    int ret;
+
+    if (!interface)
+        return -ENODEV;
+    if (!interface->config.configured)
+        return -ENETDOWN;
+    if (!payload || payload_length == 0u)
+        return -EINVAL;
+    next_hop = destination;
+    if ((destination & interface->config.netmask) !=
+        (interface->config.address & interface->config.netmask))
+        next_hop = interface->config.gateway;
+    if (next_hop == 0u)
+        return -ENETUNREACH;
+    ret = net_wait_for_arp(interface, next_hop, target_mac);
+    if (ret < 0)
+        return ret;
+    return net_send_ipv4(interface, target_mac, interface->config.address,
+                         destination, protocol, payload, payload_length);
 }
 
 int net_stack_ping(net_device_t *device, uint32_t address,
@@ -883,6 +921,7 @@ static void netd_main(void *argument)
             if (interface->device->ops && interface->device->ops->poll)
                 (void)interface->device->ops->poll(interface->device);
         }
+        net_transport_tick(now);
         task_sleep_ms(1u);
     }
 }

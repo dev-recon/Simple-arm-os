@@ -145,6 +145,7 @@ ls -la /
 ls -la /proc
 ifconfig
 ping -c 4 10.0.2.2
+httpget http://example.com/
 systest
 ```
 

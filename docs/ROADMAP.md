@@ -230,10 +230,10 @@ Status: active.
 Immediate goals:
 - Keep virtio-net DTB probing automatic.
 - Maintain `/proc/net/dev` counters and IRQ visibility.
-- Keep the current TCP echo path as a diagnostic stepping stone, not a full TCP
-  stack contract.
-- Add DNS resolution, UDP and TCP socket syscalls, and broader POSIX socket
-  behavior over the common IPv4 layer.
+- Preserve the common UDP, DNS and TCP transport layer across VirtIO-net and
+  CYW43 without driver-specific socket policy.
+- Extend the current TCP client with congestion control, adaptive buffering
+  and broader socket options.
 - Add an SMSC95xx USB Ethernet driver for the Raspberry Pi 3 wired port.
 - Extend configuration mutation beyond the current read-only `ifconfig`
   surface once privilege and routing semantics are defined.
@@ -245,6 +245,8 @@ First milestone: complete.
   Pi 3 B+, and validate BCDC Ethernet RX/TX with ARP and ICMP.
 - Provide `ifconfig`, numeric-address `ping`, and generic interface counters
   through `/dev/netctl` and `/proc/net/dev`.
+- Provide common active/passive TCP, UDP, DNS A resolution, POSIX socket data
+  transfer, and an HTTP/1.1 `httpget` validation client.
 
 ## 7. Userland Init
 

@@ -160,6 +160,10 @@ static syscall_func_t syscall_table[MAX_SYSCALLS] = {
     [__NR_connect]   = (syscall_func_t)sys_connect,
     [__NR_listen]    = (syscall_func_t)sys_listen,
     [__NR_accept]    = (syscall_func_t)sys_accept,
+    [__NR_sendto]    = (syscall_func_t)sys_sendto,
+    [__NR_recvfrom]  = (syscall_func_t)sys_recvfrom,
+    [__NR_socket_shutdown] = (syscall_func_t)sys_socket_shutdown,
+    [__NR_resolve]   = (syscall_func_t)sys_resolve,
 
 };
 

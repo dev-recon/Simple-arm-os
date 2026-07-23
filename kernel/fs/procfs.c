@@ -42,6 +42,7 @@
 #include <kernel/block_device.h>
 #include <kernel/usb.h>
 #include <kernel/net/device.h>
+#include <kernel/net/socket.h>
 #include <kernel/net/stack.h>
 
 extern uint32_t task_count;
@@ -941,11 +942,8 @@ static void proc_fill_net_tcp(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len,
                 "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
 
-    if (!virtio_net_is_initialized())
-        return;
-
-    virtio_net_get_tcp_diag(&local_ip, &local_port, &listener_state,
-                            &pending_accept, &accepted_state);
+    net_socket_get_tcp_diag(&local_ip, &local_port, &listener_state,
+                            &accepted_state, &pending_accept);
 
     if (listener_state) {
         proc_append(buf, cap, len,

@@ -11,7 +11,7 @@
  * Responsibilities:
  * - Define the architecture-neutral IPv4 configuration owned by the kernel.
  * - Attach Ethernet devices to static or DHCP-managed interfaces.
- * - Provide common ARP, ICMP echo and daemon polling services.
+ * - Provide common ARP, ICMP echo, routed transport and daemon services.
  *
  * Notes:
  * - Hardware drivers exchange Ethernet frames only; address policy and
@@ -52,6 +52,9 @@ int net_stack_attach(net_device_t *device, net_config_method_t method,
 bool net_stack_receive(net_device_t *device, const uint8_t *frame,
                        uint32_t length);
 int net_stack_get_config(net_device_t *device, net_ipv4_config_t *config);
+int net_stack_send_ipv4(net_device_t *device, uint32_t destination,
+                        uint8_t protocol, const void *payload,
+                        uint32_t payload_length);
 int net_stack_ping(net_device_t *device, uint32_t address,
                    uint32_t sequence, uint32_t timeout_ms,
                    net_ping_result_t *result);

@@ -147,6 +147,7 @@ COMMON_KERNEL_OBJS = \
 	kernel/core/device_service.o \
 	kernel/net/device.o \
 	kernel/net/stack.o \
+	kernel/net/socket.o \
 	kernel/net/control.o \
 	kernel/fs/vfs.o \
 	kernel/fs/mount.o \

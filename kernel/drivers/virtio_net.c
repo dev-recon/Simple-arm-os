@@ -921,6 +921,12 @@ static file_t *net_socket_create_file(net_socket_t *sock)
     return file;
 }
 
+#if 0
+/*
+ * Socket syscalls moved to kernel/net/socket.c. Keep this old passive-only
+ * implementation visible for the moment while the remaining built-in QEMU
+ * netecho diagnostics are retired.
+ */
 int sys_socket(int domain, int type, int protocol)
 {
     task_t *task = task_current_local();
@@ -1121,6 +1127,7 @@ int sys_accept(int sockfd, void* addr, uint32_t* addrlen)
     task->process->fd_flags[fd] = 0;
     return fd;
 }
+#endif
 
 static void net_handle_tcp_echo(const eth_hdr_t *eth, const ipv4_hdr_t *ip,
                                 const uint8_t *tcp_payload,

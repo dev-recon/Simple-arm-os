@@ -6,7 +6,7 @@ syscall ABI. POSIX specifies application-visible behavior; ArmOS remains free
 to implement that behavior with a smaller architecture-neutral kernel ABI and
 newlib wrappers.
 
-The current common dispatcher exposes 115 syscall entries. It already covers
+The current common dispatcher exposes 119 syscall entries. It already covers
 the central Unix process, VFS, descriptor, signal, virtual-memory, TTY, polling
 and identity contracts. The next stage is therefore semantic completion and a
 small number of missing primitives, not one syscall for every function listed
@@ -44,7 +44,7 @@ The following families are already connected to the common kernel:
 | Memory | `brk`, private `mmap`, `munmap`, partial `mprotect` and ArmOS shared-memory calls |
 | Waiting | `select`, `poll`, `nanosleep`, pipes and blocking TTY I/O |
 | Time and accounting | `time`, `gettimeofday`, `clock_gettime`, `clock_getres`, `times`, `getrusage`, priorities and capability-aware `sysconf` |
-| Networking | Minimal passive IPv4/TCP socket, `bind`, `listen` and `accept` path |
+| Networking | Common IPv4, ICMP, DHCP, UDP, DNS and TCP sockets with active and passive connections |
 
 ## Priority Axes
 
@@ -209,21 +209,26 @@ Acceptance criteria:
 
 ### P3 - Complete Socket And Asynchronous Interfaces
 
-The existing network path is a diagnostic passive TCP server, not yet a POSIX
-socket implementation.
+The architecture-neutral network core now serves both VirtIO-net and CYW43.
+It provides UDP, DNS A-record resolution, passive and active TCP sockets,
+bounded retransmission, peer-window handling, FIN/RST processing, socket
+timeouts, `shutdown()`, and ordinary `read()`/`write()` on connected sockets.
+Newlib exposes `getaddrinfo()`, `send()`, `recv()`, `sendto()` and
+`recvfrom()` over the common kernel ABI.
 
-| Family | Required work |
-| --- | --- |
-| Connected TCP | Complete active `connect`, retransmission, close and error state |
-| Data transfer | Add `sendto`, `recvfrom`, `sendmsg` and `recvmsg` |
-| Socket control | Add `getsockopt`, `setsockopt`, `getsockname`, `getpeername` and socket `shutdown` |
-| Local IPC | Add `socketpair`, preferably over a generic local socket backend |
-| Datagram support | Add UDP only after generic socket state and addressing are separated from netecho |
-| POSIX timers | Add `timer_create`, `timer_settime`, `timer_gettime`, overrun accounting and deletion |
-| Asynchronous I/O | Begin with a newlib worker-thread implementation; add kernel support only if measurements justify it |
+| Family | Current state | Remaining work |
+| --- | --- | --- |
+| Connected TCP | Implemented for IPv4 clients and servers | Add congestion control, selective acknowledgements and larger adaptive queues |
+| Data transfer | `read`, `write`, `send`, `recv`, `sendto` and `recvfrom` implemented | Add `sendmsg` and `recvmsg` |
+| Socket control | `shutdown` implemented | Add `getsockopt`, `setsockopt`, `getsockname` and `getpeername` |
+| Name resolution | DNS A records through `getaddrinfo` | Add search domains, multiple answers, IPv6 and `/etc/hosts` |
+| Local IPC | Pipes are available | Add `socketpair`, preferably over a generic local socket backend |
+| POSIX timers | Not implemented | Add `timer_create`, `timer_settime`, `timer_gettime`, overrun accounting and deletion |
+| Asynchronous I/O | Not implemented | Begin with a newlib worker-thread implementation; add kernel support only if measurements justify it |
 
-Network work must not bake VirtIO details into the socket API. Raspberry Pi
-and QEMU network drivers must feed the same protocol and descriptor layers.
+`httpget` is the end-to-end acceptance tool: the same HTTP/1.1 client binary
+must resolve a host and retrieve a response over VirtIO-net on QEMU and CYW43
+Wi-Fi on Raspberry Pi 3.
 
 ## Interfaces That Should Stay In Newlib
 

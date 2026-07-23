@@ -14,6 +14,8 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <libgen.h>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -27,6 +29,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/select.h>
+#include <sys/socket.h>
 #include <sys/times.h>
 #include <sys/types.h>
 #include <time.h>
@@ -175,6 +178,12 @@ extern long sys_bind(int sockfd, const void *addr, unsigned long addrlen);
 extern long sys_connect(int sockfd, const void *addr, unsigned long addrlen);
 extern long sys_listen(int sockfd, int backlog);
 extern long sys_accept(int sockfd, void *addr, unsigned long *addrlen);
+extern long sys_sendto(int sockfd, const void *buf, unsigned long length,
+                       int flags, const void *addr, unsigned long addrlen);
+extern long sys_recvfrom(int sockfd, void *buf, unsigned long length,
+                         int flags, void *addr, unsigned long *addrlen);
+extern long sys_socket_shutdown(int sockfd, int how);
+extern long sys_resolve(const char *name, uint32_t *address);
 extern void sys_exit(int status);
 extern void __signal_return_trampoline(void);
 
@@ -1470,7 +1479,7 @@ int socket(int domain, int type, int protocol)
     return ret_errno(sys_socket(domain, type, protocol));
 }
 
-int bind(int sockfd, const void *addr, unsigned long addrlen)
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
 {
     return ret_errno(sys_bind(sockfd, addr, addrlen));
 }
@@ -1480,14 +1489,103 @@ int listen(int sockfd, int backlog)
     return ret_errno(sys_listen(sockfd, backlog));
 }
 
-int accept(int sockfd, void *addr, unsigned long *addrlen)
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
 {
-    return ret_errno(sys_accept(sockfd, addr, addrlen));
+    return ret_errno(sys_accept(sockfd, addr, (unsigned long *)addrlen));
 }
 
-int connect(int sockfd, const void *addr, unsigned long addrlen)
+int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
 {
     return ret_errno(sys_connect(sockfd, addr, addrlen));
+}
+
+ssize_t send(int sockfd, const void *buf, size_t len, int flags)
+{
+    return ret_errno(sys_sendto(sockfd, buf, len, flags, NULL, 0));
+}
+
+ssize_t recv(int sockfd, void *buf, size_t len, int flags)
+{
+    return ret_errno(sys_recvfrom(sockfd, buf, len, flags, NULL, NULL));
+}
+
+ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
+               const struct sockaddr *addr, socklen_t addrlen)
+{
+    return ret_errno(sys_sendto(sockfd, buf, len, flags, addr, addrlen));
+}
+
+ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
+                 struct sockaddr *addr, socklen_t *addrlen)
+{
+    return ret_errno(sys_recvfrom(sockfd, buf, len, flags, addr,
+                                  (unsigned long *)addrlen));
+}
+
+int shutdown(int sockfd, int how)
+{
+    return ret_errno(sys_socket_shutdown(sockfd, how));
+}
+
+int getaddrinfo(const char *node, const char *service,
+                const struct addrinfo *hints, struct addrinfo **result)
+{
+    struct addrinfo *entry;
+    struct sockaddr_in *address;
+    uint32_t resolved;
+    unsigned long port = 0u;
+    char *end = NULL;
+    long ret;
+
+    if (!node || !result)
+        return EAI_NONAME;
+    if (hints && hints->ai_family != AF_UNSPEC &&
+        hints->ai_family != AF_INET)
+        return EAI_FAMILY;
+    if (service && *service != '\0') {
+        port = strtoul(service, &end, 10);
+        if (!end || *end != '\0' || port > 65535u)
+            return EAI_SERVICE;
+    }
+    ret = sys_resolve(node, &resolved);
+    if (ret < 0)
+        return ret == -ENOENT ? EAI_NONAME : EAI_AGAIN;
+    entry = calloc(1u, sizeof(*entry) + sizeof(*address));
+    if (!entry)
+        return EAI_MEMORY;
+    address = (struct sockaddr_in *)(entry + 1);
+    address->sin_family = AF_INET;
+    address->sin_port = htons((uint16_t)port);
+    address->sin_addr.s_addr = htonl(resolved);
+    entry->ai_family = AF_INET;
+    entry->ai_socktype = hints ? hints->ai_socktype : 0;
+    entry->ai_protocol = hints ? hints->ai_protocol : 0;
+    entry->ai_addrlen = sizeof(*address);
+    entry->ai_addr = (struct sockaddr *)address;
+    *result = entry;
+    return 0;
+}
+
+void freeaddrinfo(struct addrinfo *result)
+{
+    while (result) {
+        struct addrinfo *next = result->ai_next;
+        free(result);
+        result = next;
+    }
+}
+
+const char *gai_strerror(int error)
+{
+    switch (error) {
+    case 0: return "success";
+    case EAI_AGAIN: return "temporary name resolution failure";
+    case EAI_FAMILY: return "address family not supported";
+    case EAI_MEMORY: return "out of memory";
+    case EAI_NONAME: return "name or service not known";
+    case EAI_SERVICE: return "service not supported";
+    default: return "address resolution failure";
+    }
 }
 
 int fcntl(int fd, int cmd, ...)

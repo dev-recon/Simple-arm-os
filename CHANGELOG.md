@@ -20,6 +20,14 @@ Release tags use the bare version number starting with `0.7` (`0.7`, `0.7.1`,
   architecture-neutral ARP, IPv4, DHCPv4, and ICMP echo stack.
 - Added `/dev/netctl`, generic `/proc/net/dev` reporting, the `netd` kernel
   task, and userland `ifconfig` and numeric-address `ping` commands.
+- Added an architecture-neutral UDP, DNS and TCP socket layer shared by
+  VirtIO-net and CYW43, including active connect, bounded retransmission,
+  peer-window handling, FIN/RST processing, timeouts, passive accept, and
+  ordinary descriptor `read`/`write`.
+- Added newlib socket transfer and resolver interfaces, including
+  `sendto`, `recvfrom`, `shutdown`, and IPv4 `getaddrinfo`.
+- Added `httpget`, a compact HTTP/1.1 client used to validate DHCP, DNS and TCP
+  end to end on QEMU and Raspberry Pi 3 Wi-Fi.
 - Fixed kernel `printf` handling of `long long` arguments, keeping 64-bit
   network counters aligned and correctly formatted on ARM32.
 

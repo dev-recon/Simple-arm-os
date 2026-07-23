@@ -205,6 +205,7 @@ the complete path from userland:
 ```sh
 ifconfig wlan0
 ping -c 4 <gateway-reported-by-ifconfig>
+httpget http://example.com/
 cat /proc/net/dev
 ```
 
@@ -212,8 +213,9 @@ cat /proc/net/dev
 gateway, and DNS server, and identify the configuration method as `dhcp`.
 Successful gateway replies prove bidirectional BCDC transport, ARP, IPv4, and
 ICMP. The `wlan0` RX and TX counters in `ifconfig` and `/proc/net/dev` must
-increase during the test. `ping` currently accepts numeric IPv4 addresses;
-DNS name resolution is a later socket/resolver milestone.
+increase during the test. `httpget` then proves DNS A resolution, active TCP,
+socket `read`/`write`, orderly close, and HTTP/1.1 over the same CYW43 data
+path. It supports plain `http://` URLs; TLS is not yet available.
 
 For an independent association check, the access point should list the ArmOS
 station MAC. A useful reliability test is ten cold boots with ten successful
