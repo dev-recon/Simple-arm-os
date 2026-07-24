@@ -17,15 +17,22 @@ OBJ_DIR="$BUILD_ROOT/obj-$TARGET"
 PATCH_DIR="${NEWLIB_PATCH_DIR:-$ROOT_DIR/patches/newlib-$NEWLIB_VERSION}"
 PATCH_SERIES="$PATCH_DIR/series"
 PATCH_STAMP="$SRC_DIR/.arm-os-patches-applied"
+REPRODUCIBLE_ROOT="${ARMOS_REPRODUCIBLE_ROOT:-/usr/src/armos}"
+REPRODUCIBLE_STAMP="$SYSROOT/.armos-reproducible-paths-v1"
+OBJECT_CONTRACT_STAMP="$OBJ_DIR/.armos-build-contract"
+REPRODUCIBLE_FLAGS="\
+-ffile-prefix-map=$ROOT_DIR=$REPRODUCIBLE_ROOT \
+-fmacro-prefix-map=$ROOT_DIR=$REPRODUCIBLE_ROOT \
+-fdebug-prefix-map=$ROOT_DIR=$REPRODUCIBLE_ROOT"
 
 export PATH="/opt/homebrew/Cellar/arm-none-eabi-gcc/15.1.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
 
 case "$TARGET" in
     arm-none-eabi)
-        TARGET_CFLAGS="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft -Os"
+        TARGET_CFLAGS="-mcpu=cortex-a15 -marm -mfpu=neon-vfpv4 -mfloat-abi=soft -Os $REPRODUCIBLE_FLAGS"
         ;;
     aarch64-elf)
-        TARGET_CFLAGS="-mcpu=cortex-a53 -Os"
+        TARGET_CFLAGS="-mcpu=cortex-a53 -Os $REPRODUCIBLE_FLAGS"
         ;;
     *)
         echo "Error: unsupported newlib target: $TARGET" >&2
@@ -50,7 +57,18 @@ if [ ! -f "$ARCHIVE" ]; then
     curl -L "$NEWLIB_URL" -o "$ARCHIVE"
 fi
 
-mkdir -p "$BUILD_ROOT/src" "$OBJ_DIR" "$INSTALL_ROOT"
+BUILD_CONTRACT="ArmOS Newlib reproducible paths v1
+target=$TARGET
+cflags=$TARGET_CFLAGS"
+
+mkdir -p "$BUILD_ROOT/src" "$INSTALL_ROOT"
+if [ -d "$OBJ_DIR" ] &&
+   { [ ! -f "$OBJECT_CONTRACT_STAMP" ] ||
+     [ "$(cat "$OBJECT_CONTRACT_STAMP")" != "$BUILD_CONTRACT" ]; }; then
+    echo "=== Newlib build contract changed; recreating target objects ==="
+    rm -rf "$OBJ_DIR"
+fi
+mkdir -p "$OBJ_DIR"
 
 patch_state()
 {
@@ -136,6 +154,10 @@ if [ ! -f "$SYSROOT/include/stdio.h" ] || [ ! -f "$SYSROOT/lib/libc.a" ]; then
     echo "  $SYSROOT/lib/libc.a" >&2
     exit 1
 fi
+
+printf '%s\n' "$BUILD_CONTRACT" > "$OBJECT_CONTRACT_STAMP"
+printf '%s\n' "ArmOS reproducible paths v1: $REPRODUCIBLE_ROOT" \
+    > "$REPRODUCIBLE_STAMP"
 
 echo "Newlib sysroot ready:"
 echo "  NEWLIB_SYSROOT=$SYSROOT"

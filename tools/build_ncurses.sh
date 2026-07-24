@@ -105,6 +105,23 @@ LIBS="$NEWLIB_LIBC $LIBGCC" \
 make -j"${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}" libs
 make DESTDIR="$BUNDLE_ROOT" install.libs install.includes
 
+# Generated ncurses headers retain source arguments in comments, while
+# ncurses*-config otherwise records host-only linker paths. Keep the installed
+# development bundle reproducible and meaningful inside ArmOS.
+while IFS= read -r header; do
+    sed -i.bak "s|$ROOT_DIR|$ARMOS_REPRODUCIBLE_ROOT|g" "$header"
+    rm -f "$header.bak"
+done < <(find "$BUNDLE_PREFIX/include" -type f -print)
+
+NCURSES_CONFIG="$BUNDLE_PREFIX/bin/ncurses${NCURSES_VERSION%%.*}-config"
+if [ -f "$NCURSES_CONFIG" ]; then
+    sed -i.bak \
+        -e 's|^LIBS=.*$|LIBS=""|' \
+        -e 's|^for opt in .*  \$LIBS$|for opt in -L$libdir $LIBS|' \
+        "$NCURSES_CONFIG"
+    rm -f "$NCURSES_CONFIG.bak"
+fi
+
 for header in curses.h term.h termcap.h unctrl.h panel.h menu.h form.h eti.h; do
     if [ -f "$BUNDLE_PREFIX/include/ncurses/$header" ]; then
         ln -sf "ncurses/$header" "$BUNDLE_PREFIX/include/$header"

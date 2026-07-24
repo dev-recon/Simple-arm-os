@@ -81,7 +81,8 @@ elif [ "${#TARGETS[@]}" -eq 0 ]; then
 fi
 
 if [ "$REBUILD_NEWLIB" -eq 1 ] ||
-   [ ! -f "$SYSROOT/include/stdio.h" ] || [ ! -f "$LIBC" ]; then
+   [ ! -f "$SYSROOT/include/stdio.h" ] || [ ! -f "$LIBC" ] ||
+   [ ! -f "$SYSROOT/.armos-reproducible-paths-v1" ]; then
     TARGET=aarch64-elf ARCH=aarch64-elf- \
         "$ROOT_DIR/tools/build_newlib.sh"
 fi

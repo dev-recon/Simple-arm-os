@@ -70,6 +70,7 @@ userfs/etc/wifi.d/*.conf
 
 # Third-party archives
 *.tar.gz
+!/images/ArmOS-*-qemu-virt-*.tar.gz
 
 # Local-only xv experiments.  xv sources, source-derived shims, and patches
 # must not be committed unless redistribution rights are clarified separately.

@@ -107,7 +107,9 @@ if [ "$BUILD_ALL_USERLAND" != "1" ] &&
 fi
 
 if [ "$BUILD_NEWLIB" = "1" ]; then
-    if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_SYSROOT/lib/libc.a" ]; then
+    if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] ||
+       [ ! -f "$NEWLIB_SYSROOT/lib/libc.a" ] ||
+       [ ! -f "$NEWLIB_SYSROOT/.armos-reproducible-paths-v1" ]; then
         echo "=== Building repo-local newlib sysroot ==="
         TARGET="$TARGET_TRIPLET" ARCH="$ARCH" \
             NEWLIB_INSTALL_ROOT="$ROOT_DIR/build/newlib-sysroot" \
@@ -264,6 +266,11 @@ make platform-disk ARCH="$ARCH" CROSS_COMPILE="$ARCH" TARGET_ARCH="$TARGET_ARCH"
 
 echo "=== Validating installed userfs ELF architecture ==="
 TARGET_ARCH="$TARGET_ARCH" ARCH="$ARCH" ./tools/validate_userfs_arch.sh
+
+echo "=== Auditing generated images for host information ==="
+./tools/check_release_image_hygiene.sh \
+    "build/images/kernel-${IMAGE_SUFFIX}.bin" \
+    "build/images/disk-${IMAGE_SUFFIX}.img"
 
 echo "=== BUILD DONE ==="
 echo "Kernel image: build/images/kernel-${IMAGE_SUFFIX}.bin"

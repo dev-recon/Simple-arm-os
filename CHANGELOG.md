@@ -5,6 +5,19 @@ Release tags use the bare version number starting with `0.7` (`0.7`, `0.7.1`,
 
 ## Unreleased
 
+### Release images
+
+- Added complete ARM32 and ARM64 QEMU Virt archives under `images/`, including
+  TinyCC/Newlib, BSD tools, nano/ncurses and the supported image libraries.
+- Added directly usable QEMU kernel binaries and a generated `SHA256SUMS`
+  manifest alongside the disk archives.
+- Added `images/run-image.sh` to extract and boot either prebuilt target
+  without invoking the build system.
+- Removed host checkout paths from kernel, newlib, userland and third-party
+  development artifacts through reproducible compiler path mappings.
+- Added release-image validation for ext2 consistency, required userland
+  content, host paths, credentials and macOS metadata.
+
 ## ArmOS 0.7.4 - 2026-07-23
 
 ArmOS 0.7.4 connects the common network stack to Raspberry Pi 3 Wi-Fi and

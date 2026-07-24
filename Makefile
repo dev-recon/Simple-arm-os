@@ -97,6 +97,7 @@ LINKER_SCRIPT ?= linker.ld
 ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated $(PLATFORM_ASFLAGS)
 
 CFLAGS = -std=gnu99 $(ARCH_CFLAGS) $(PLATFORM_CFLAGS) $(MATH_FLAGS) \
+         $(REPRO_FLAGS) \
          -DARMOS_VERSION=\"$(ARMOS_VERSION)\" \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
          -Wall -Wextra -Werror -g -O0 -fno-omit-frame-pointer -Wformat -Wformat-security \
@@ -226,6 +227,10 @@ PLATFORM_KERNEL_BIN = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).bin
 PLATFORM_KERNEL_MAP = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).map
 PLATFORM_KERNEL_DIS = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).dis
 PLATFORM_DISK_IMG   = $(IMAGE_DIR)/disk-$(IMAGE_SUFFIX).img
+ARMOS_REPRODUCIBLE_ROOT ?= /usr/src/armos
+REPRO_FLAGS = -ffile-prefix-map=$(CURDIR)=$(ARMOS_REPRODUCIBLE_ROOT) \
+              -fmacro-prefix-map=$(CURDIR)=$(ARMOS_REPRODUCIBLE_ROOT) \
+              -fdebug-prefix-map=$(CURDIR)=$(ARMOS_REPRODUCIBLE_ROOT)
 FAT32_SIZE_MB = 64
 FAT32_LABEL ?= ARMBOOT
 EXT2_SIZE_MB = 512
@@ -363,7 +368,7 @@ ifeq ($(strip $(DEBUGFS)),)
 DEBUGFS := $(if $(E2FSPROGS_PREFIX),$(E2FSPROGS_PREFIX)/sbin/debugfs,debugfs)
 endif
 
-$(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
+$(EXT2_IMG): Makefile $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	@echo "=== Creating ext2 image ($(EXT2_SIZE_MB) MB) ==="
 	@if ! command -v "$(MKE2FS)" >/dev/null 2>&1 || \
 	    ! command -v "$(DEBUGFS)" >/dev/null 2>&1; then \

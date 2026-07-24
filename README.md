@@ -111,6 +111,13 @@ Prebuilt QEMU images are attached to each release. See
 [`images/README.md`](images/README.md) to boot ARM32 or ARM64 without compiling
 the kernel or userland.
 
+For a build-free launch from a checkout containing the release images:
+
+```sh
+./images/run-image.sh
+./images/run-image.sh arm64
+```
+
 ## What Is Inside
 
 | Area | Current implementation |
