@@ -17,6 +17,12 @@
 # - This file is sourced by build scripts after ROOT_DIR and ARCH are set.
 # - The shared userfs contains one active architecture at a time.
 
+ARMOS_REPRODUCIBLE_ROOT="${ARMOS_REPRODUCIBLE_ROOT:-/usr/src/armos}"
+ARMOS_REPRO_FLAGS="\
+-ffile-prefix-map=$ROOT_DIR=$ARMOS_REPRODUCIBLE_ROOT \
+-fmacro-prefix-map=$ROOT_DIR=$ARMOS_REPRODUCIBLE_ROOT \
+-fdebug-prefix-map=$ROOT_DIR=$ARMOS_REPRODUCIBLE_ROOT"
+
 case "${ARCH:-}" in
     arm-none-eabi-)
         TARGET_ARCH="${TARGET_ARCH:-arm32}"
@@ -38,10 +44,18 @@ case "${ARCH:-}" in
         ;;
 esac
 
+case " $ARM_FLAGS " in
+    *" -ffile-prefix-map=$ROOT_DIR=$ARMOS_REPRODUCIBLE_ROOT "*)
+        ;;
+    *)
+        ARM_FLAGS="$ARM_FLAGS $ARMOS_REPRO_FLAGS"
+        ;;
+esac
 NEWLIB_SYSROOT="${NEWLIB_SYSROOT:-$ROOT_DIR/build/newlib-sysroot/$TARGET_TRIPLET}"
 NEWLIB_LIBC="${NEWLIB_LIBC:-$NEWLIB_SYSROOT/lib/libc.a}"
 NEWLIB_LIBM="${NEWLIB_LIBM:-$NEWLIB_SYSROOT/lib/libm.a}"
 RUNTIME_OBJECTS="${RUNTIME_OBJECTS:-$NEWLIB_RUNTIME_DIR/crt0_newlib.o $NEWLIB_RUNTIME_DIR/syscall_raw.o $NEWLIB_RUNTIME_DIR/syscalls.o}"
 
 export TARGET_ARCH TARGET_TRIPLET ARM_FLAGS TARGET_TEXT_ADDRESS
+export ARMOS_REPRODUCIBLE_ROOT ARMOS_REPRO_FLAGS
 export NEWLIB_SYSROOT NEWLIB_LIBC NEWLIB_LIBM NEWLIB_RUNTIME_DIR RUNTIME_OBJECTS

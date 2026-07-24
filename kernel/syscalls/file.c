@@ -32,6 +32,7 @@
 #include <kernel/null.h>
 #include <kernel/display.h>
 #include <kernel/virtio_net.h>
+#include <kernel/net/control.h>
 #include <kernel/spinlock.h>
 
 #define SYSCALL_IO_BOUNCE_SIZE     (64u * 1024u)
@@ -997,6 +998,7 @@ static int sys_open_resolved(task_t *task, char *full_path,
     file_t* null_file;
     file_t* fb_file;
     file_t* net_echo_file;
+    file_t* net_control_file;
 
     int fd;
 
@@ -1126,6 +1128,32 @@ static int sys_open_resolved(task_t *task, char *full_path,
         }
 
         task->process->files[fd] = net_echo_file;
+        task->process->fd_flags[fd] = flags & O_CLOEXEC;
+        kfree(full_path);
+        return fd;
+    }
+
+    if (is_net_control_device_path(full_path)) {
+        if (flags & O_DIRECTORY) {
+            kfree(full_path);
+            return -ENOTDIR;
+        }
+
+        fd = allocate_fd(task);
+        if (fd < 0) {
+            kfree(full_path);
+            return fd;
+        }
+
+        net_control_file = create_net_control_device_file(
+            "netctl", flags & ~O_CLOEXEC);
+        if (!net_control_file) {
+            free_fd(task, fd);
+            kfree(full_path);
+            return -ENODEV;
+        }
+
+        task->process->files[fd] = net_control_file;
         task->process->fd_flags[fd] = flags & O_CLOEXEC;
         kfree(full_path);
         return fd;
@@ -1317,6 +1345,12 @@ static int stat_resolved_path(char *full_path, struct stat *kstat,
 
     if (is_net_echo_device_path(full_path)) {
         fill_net_echo_device_stat(kstat);
+        kfree(full_path);
+        return 0;
+    }
+
+    if (is_net_control_device_path(full_path)) {
+        fill_net_control_device_stat(kstat);
         kfree(full_path);
         return 0;
     }

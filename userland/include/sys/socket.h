@@ -19,9 +19,15 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+#define AF_UNSPEC    0
 #define AF_INET      2
 #define PF_INET      AF_INET
 #define SOCK_STREAM  1
+#define SOCK_DGRAM   2
+
+#define SHUT_RD      0
+#define SHUT_WR      1
+#define SHUT_RDWR    2
 
 typedef unsigned int socklen_t;
 typedef unsigned short sa_family_t;
@@ -36,5 +42,12 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 int listen(int sockfd, int backlog);
 int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+ssize_t send(int sockfd, const void *buffer, size_t length, int flags);
+ssize_t recv(int sockfd, void *buffer, size_t length, int flags);
+ssize_t sendto(int sockfd, const void *buffer, size_t length, int flags,
+               const struct sockaddr *address, socklen_t address_length);
+ssize_t recvfrom(int sockfd, void *buffer, size_t length, int flags,
+                 struct sockaddr *address, socklen_t *address_length);
+int shutdown(int sockfd, int how);
 
 #endif /* _ARMOS_SYS_SOCKET_H */

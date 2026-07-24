@@ -181,6 +181,7 @@ typedef enum file_type {
     FILE_TYPE_NETECHO,
     FILE_TYPE_SOCKET,
     FILE_TYPE_FRAMEBUFFER,
+    FILE_TYPE_NETCTL,
 } file_type_t;
 typedef struct inode_operations inode_operations_t;
 
@@ -456,6 +457,8 @@ typedef struct task {
     uint32_t running_cpu;                   /* CPU currently owning TASK_RUNNING */
     uint32_t last_cpu;                      /* Last CPU that executed this task */
     uint32_t magic;                         /* Object lifetime guard for SMP diagnostics */
+    uint64_t user_runtime;                  /* EL0 execution time in timer ticks */
+    uint64_t system_runtime;                /* Kernel time charged to this task */
 
 } __attribute__((aligned(8))) task_t;
 
@@ -478,6 +481,7 @@ void yield(void);                           /* Ceder le CPU volontairement */
 void schedule(void);                        /* Forcer une commutation */
 void sched_start(void);                     /* Demarrer le scheduler */
 void task_sleep_ms(uint32_t ms);
+int task_sleep_interruptible_ms(uint32_t ms);
 void schedule_to(task_t *next_task);
 uint64_t task_runtime_ticks(task_t* task);  /* Temps CPU cumule en ticks */
 

@@ -157,6 +157,10 @@ struct process;
 #define __NR_connect            283
 #define __NR_listen             284
 #define __NR_accept             285
+#define __NR_sendto             ARMOS_NR_SENDTO
+#define __NR_recvfrom           ARMOS_NR_RECVFROM
+#define __NR_socket_shutdown    ARMOS_NR_SOCKET_SHUTDOWN
+#define __NR_resolve            ARMOS_NR_RESOLVE
 #define __NR_sysinfo            116     /* reused for getprocs — remplacer par /proc plus tard */
 
 #define MAX_SYSCALLS            ARMOS_SYSCALL_MAX
@@ -327,6 +331,12 @@ int sys_bind(int sockfd, const void* addr, uint32_t addrlen);
 int sys_connect(int sockfd, const void* addr, uint32_t addrlen);
 int sys_listen(int sockfd, int backlog);
 int sys_accept(int sockfd, void* addr, uint32_t* addrlen);
+ssize_t sys_sendto(int sockfd, const void* buffer, size_t length, int flags,
+                   const void* addr, uint32_t addrlen);
+ssize_t sys_recvfrom(int sockfd, void* buffer, size_t length, int flags,
+                     void* addr, uint32_t* addrlen);
+int sys_socket_shutdown(int sockfd, int how);
+int sys_resolve(const char* name, uint32_t* address);
 int sys_select(int nfds, void* readfds, void* writefds, void* exceptfds, void* timeout);
 int sys_poll(struct pollfd_kernel* fds, uint32_t nfds, int timeout_ms);
 

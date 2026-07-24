@@ -60,7 +60,8 @@ typedef struct usb_device_info {
 typedef struct usb_host_controller_ops {
     const char *name;
     int (*probe)(void *context);
-    void (*poll)(void *context);
+    /* Return the number of milliseconds before the controller needs service. */
+    uint32_t (*poll)(void *context);
 } usb_host_controller_ops_t;
 
 void usb_topology_reset(void);

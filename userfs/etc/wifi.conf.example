@@ -1,0 +1,5 @@
+# ArmOS Raspberry Pi Wi-Fi policy.
+# Replace 00 with the ISO 3166-1 alpha-2 code for the system location.
+# The root-only `wifi connect SSID` workflow fills this file automatically.
+country=00
+# default=home

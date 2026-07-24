@@ -2,6 +2,11 @@ ARCH ?= arm-none-eabi-
 TARGET_ARCH ?= arm32
 CC := $(ARCH)gcc
 AS := $(ARCH)as
+ARMOS_SOURCE_ROOT := $(abspath ..)
+ARMOS_REPRODUCIBLE_ROOT ?= /usr/src/armos
+REPRO_FLAGS := -ffile-prefix-map=$(ARMOS_SOURCE_ROOT)=$(ARMOS_REPRODUCIBLE_ROOT) \
+               -fmacro-prefix-map=$(ARMOS_SOURCE_ROOT)=$(ARMOS_REPRODUCIBLE_ROOT) \
+               -fdebug-prefix-map=$(ARMOS_SOURCE_ROOT)=$(ARMOS_REPRODUCIBLE_ROOT)
 
 ifeq ($(TARGET_ARCH),arm64)
 ARCH_FLAGS := -mcpu=cortex-a53
@@ -22,6 +27,7 @@ NEWLIB_INCLUDE ?= $(NEWLIB_SYSROOT)/include
 NEWLIB_LIBC ?= $(shell $(CC) $(ARCH_FLAGS) --sysroot=$(NEWLIB_SYSROOT) -print-file-name=libc.a 2>/dev/null)
 
 CFLAGS := $(ARCH_FLAGS) -std=gnu99 -ffreestanding -nostdlib -fno-builtin \
+          $(REPRO_FLAGS) \
           -fno-stack-protector -ffunction-sections -fdata-sections \
           -Os -I../userland/include -I../include -I$(NEWLIB_INCLUDE)
 OBJECTS := $(BUILD_DIR)/crt0_newlib.o \

@@ -20,7 +20,10 @@ BUILD_XV_DEPS="${BUILD_XV_DEPS:-0}"
 BUILD_ALL_USERLAND="${BUILD_ALL_USERLAND:-0}"
 BUILD_NEWLIB="${BUILD_NEWLIB:-1}"
 BUILD_BSD="${BUILD_BSD:-0}"
-if [ "$BUILD_ALL_USERLAND" = "1" ]; then
+
+enable_complete_userland_build()
+{
+    BUILD_ALL_USERLAND=1
     BUILD_TCC=1
     BUILD_BSD=1
     BUILD_NCURSES=1
@@ -31,6 +34,10 @@ if [ "$BUILD_ALL_USERLAND" = "1" ]; then
     BUILD_LIBTIFF=1
     BUILD_FBVIEW=1
     BUILD_XV_DEPS=1
+}
+
+if [ "$BUILD_ALL_USERLAND" = "1" ]; then
+    enable_complete_userland_build
 fi
 if [ "$BUILD_XV_DEPS" = "1" ]; then
     BUILD_TCC="${BUILD_TCC:-0}"
@@ -50,6 +57,7 @@ fi
 BUILD_NCURSES="${BUILD_NCURSES:-0}"
 BUILD_NANO="${BUILD_NANO:-0}"
 ENABLE_NET="${ENABLE_NET:-0}"
+ENABLE_WIFI="${ENABLE_WIFI:-0}"
 ENABLE_GPU="${ENABLE_GPU:-0}"
 armos_config_validate "$ROOT_DIR"
 
@@ -84,15 +92,24 @@ for dir in userfs userland kernel newlib-port; do
     fi
 done
 
-for tool in make python3 "${ARCH}gcc" "${ARCH}ld" "${ARCH}objcopy" "${ARCH}objdump" mkfs.fat mcopy mmd mke2fs debugfs; do
+for tool in make python3 "${ARCH}gcc" "${ARCH}ld" "${ARCH}objcopy" "${ARCH}objdump" "${ARCH}readelf" mkfs.fat mcopy mmd mke2fs debugfs; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Error: required tool '$tool' not found in PATH" >&2
         exit 1
     fi
 done
 
+if [ "$BUILD_ALL_USERLAND" != "1" ] &&
+   ! TARGET_ARCH="$TARGET_ARCH" ARCH="$ARCH" \
+       ./tools/validate_userfs_arch.sh --allow-empty --quiet; then
+    echo "=== Shared userfs architecture changed; rebuilding all userland ==="
+    enable_complete_userland_build
+fi
+
 if [ "$BUILD_NEWLIB" = "1" ]; then
-    if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] || [ ! -f "$NEWLIB_SYSROOT/lib/libc.a" ]; then
+    if [ ! -f "$NEWLIB_SYSROOT/include/stdio.h" ] ||
+       [ ! -f "$NEWLIB_SYSROOT/lib/libc.a" ] ||
+       [ ! -f "$NEWLIB_SYSROOT/.armos-reproducible-paths-v1" ]; then
         echo "=== Building repo-local newlib sysroot ==="
         TARGET="$TARGET_TRIPLET" ARCH="$ARCH" \
             NEWLIB_INSTALL_ROOT="$ROOT_DIR/build/newlib-sysroot" \
@@ -249,6 +266,11 @@ make platform-disk ARCH="$ARCH" CROSS_COMPILE="$ARCH" TARGET_ARCH="$TARGET_ARCH"
 
 echo "=== Validating installed userfs ELF architecture ==="
 TARGET_ARCH="$TARGET_ARCH" ARCH="$ARCH" ./tools/validate_userfs_arch.sh
+
+echo "=== Auditing generated images for host information ==="
+./tools/check_release_image_hygiene.sh \
+    "build/images/kernel-${IMAGE_SUFFIX}.bin" \
+    "build/images/disk-${IMAGE_SUFFIX}.img"
 
 echo "=== BUILD DONE ==="
 echo "Kernel image: build/images/kernel-${IMAGE_SUFFIX}.bin"

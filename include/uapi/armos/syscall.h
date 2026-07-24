@@ -59,6 +59,10 @@
 #define ARMOS_NR_FSTATVFS        267
 #define ARMOS_NR_UTIMENSAT       268
 #define ARMOS_NR_FUTIMENS        269
+#define ARMOS_NR_SENDTO          286
+#define ARMOS_NR_RECVFROM        287
+#define ARMOS_NR_SOCKET_SHUTDOWN 288
+#define ARMOS_NR_RESOLVE         289
 #define ARMOS_NR_OPENAT        322
 #define ARMOS_NR_MKDIRAT       323
 #define ARMOS_NR_FSTATAT       327

@@ -11,6 +11,11 @@ ARCH ?= arm-none-eabi-
 endif
 CC := $(ARCH)gcc
 STRIP := $(ARCH)strip
+ARMOS_SOURCE_ROOT := $(abspath ..)
+ARMOS_REPRODUCIBLE_ROOT ?= /usr/src/armos
+REPRO_FLAGS := -ffile-prefix-map=$(ARMOS_SOURCE_ROOT)=$(ARMOS_REPRODUCIBLE_ROOT) \
+               -fmacro-prefix-map=$(ARMOS_SOURCE_ROOT)=$(ARMOS_REPRODUCIBLE_ROOT) \
+               -fdebug-prefix-map=$(ARMOS_SOURCE_ROOT)=$(ARMOS_REPRODUCIBLE_ROOT)
 
 BUILD_DIR := ../build/userland-$(TARGET_ARCH)
 OUT_DIR := $(BUILD_DIR)/out
@@ -39,6 +44,7 @@ NEWLIB_LIBC ?= $(NEWLIB_SYSROOT)/lib/libc.a
 LIBGCC := $(shell $(CC) $(ARCH_FLAGS) -print-libgcc-file-name 2>/dev/null)
 
 CFLAGS := $(ARCH_FLAGS) -std=gnu99 -Os -ffreestanding -fno-builtin \
+          $(REPRO_FLAGS) \
           -ffunction-sections -fdata-sections \
           -fno-stack-protector -DARM_OS_NEWLIB \
           -DARMOS_USER_TEXT_ADDRESS=$(USER_TEXT_ADDRESS) \

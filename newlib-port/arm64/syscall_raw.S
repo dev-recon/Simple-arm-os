@@ -136,6 +136,10 @@ RAW_SYSCALL sys_bind, 282
 RAW_SYSCALL sys_connect, 283
 RAW_SYSCALL sys_listen, 284
 RAW_SYSCALL sys_accept, 285
+RAW_SYSCALL sys_sendto, 286
+RAW_SYSCALL sys_recvfrom, 287
+RAW_SYSCALL sys_socket_shutdown, 288
+RAW_SYSCALL sys_resolve, 289
 RAW_SYSCALL sys_openat, 322
 RAW_SYSCALL sys_mkdirat, 323
 RAW_SYSCALL sys_fstatat, 327

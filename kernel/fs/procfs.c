@@ -41,6 +41,9 @@
 #include <kernel/arch_platform.h>
 #include <kernel/block_device.h>
 #include <kernel/usb.h>
+#include <kernel/net/device.h>
+#include <kernel/net/socket.h>
+#include <kernel/net/stack.h>
 
 extern uint32_t task_count;
 extern task_t* task_list_head;
@@ -881,53 +884,43 @@ static void proc_fill_interrupts(char* buf, size_t cap, size_t* len)
 
 static void proc_fill_net_dev(char* buf, size_t cap, size_t* len)
 {
-    uint8_t mac[6] = {0};
-    uint32_t irq_count = 0;
-    uint32_t last_irq_status = 0;
-    uint32_t status = 0;
-    uint32_t phys = 0;
-    uint32_t irq = 0;
-    uint32_t rx_packets = 0;
-    uint32_t rx_bytes = 0;
-    uint32_t rx_drops = 0;
-    uint32_t rx_last_len = 0;
-    uint32_t tx_packets = 0;
-    uint32_t tx_bytes = 0;
-    uint32_t tx_drops = 0;
-    uint32_t rx_arp = 0;
-    uint32_t tx_arp = 0;
-    uint32_t rx_ipv4 = 0;
-    uint32_t rx_icmp = 0;
-    uint32_t tx_icmp = 0;
-    uint32_t rx_tcp = 0;
-    uint32_t tx_tcp = 0;
-    uint32_t tcp_echo = 0;
-    uint32_t echo_enabled = 0;
+    uint32_t index;
 
     proc_append(buf, cap, len,
                 "Inter-|   Receive                                                |  Transmit\n");
     proc_append(buf, cap, len,
                 " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n");
 
-    if (!virtio_net_is_initialized())
-        return;
+    for (index = 0u; index < net_device_count(); index++) {
+        net_device_t *device = net_device_get(index);
+        net_ipv4_config_t config;
+        char address[20];
 
-    virtio_net_get_mac(mac);
-    virtio_net_get_stats(&irq_count, &last_irq_status, &status, &phys, &irq,
-                         &rx_packets, &rx_bytes, &rx_drops, &rx_last_len,
-                         &tx_packets, &tx_bytes, &tx_drops, &rx_arp,
-                         &tx_arp, &rx_ipv4, &rx_icmp, &tx_icmp, &rx_tcp,
-                         &tx_tcp, &tcp_echo, &echo_enabled);
-    proc_append(buf, cap, len,
-                "vnet0: %8u %7u %4u %4u %4u %5u %10u %9u %8u %7u %4u %4u %4u %5u %7u %10u\n",
-                rx_bytes, rx_packets, 0, rx_drops, 0, 0, 0, 0,
-                tx_bytes, tx_packets, 0, tx_drops, 0, 0, 0, 0);
-    proc_append(buf, cap, len,
-                "      mac %02X:%02X:%02X:%02X:%02X:%02X irq %u irq_count %u last_irq 0x%X status 0x%02X phys 0x%08X rx_last_len %u arp rx %u tx %u ipv4 rx %u icmp rx %u tx %u tcp rx %u tx %u echo %u enabled %u\n",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-                irq, irq_count, last_irq_status, status, phys, rx_last_len,
-                rx_arp, tx_arp, rx_ipv4, rx_icmp, tx_icmp, rx_tcp, tx_tcp,
-                tcp_echo, echo_enabled);
+        if (!device)
+            continue;
+        proc_append(buf, cap, len,
+                    "%6s: %8llu %7llu %4u %4llu %4u %5u %10u %9u %8llu %7llu %4u %4llu %4u %5u %7u %10u\n",
+                    device->name,
+                    (unsigned long long)device->rx_bytes,
+                    (unsigned long long)device->rx_packets,
+                    0u, (unsigned long long)device->rx_drops,
+                    0u, 0u, 0u, 0u,
+                    (unsigned long long)device->tx_bytes,
+                    (unsigned long long)device->tx_packets,
+                    0u, (unsigned long long)device->tx_drops,
+                    0u, 0u, 0u, 0u);
+        if (net_stack_get_config(device, &config) == 0 &&
+            config.configured) {
+            net_stack_format_ipv4(config.address, address, sizeof(address));
+        } else {
+            snprintf(address, sizeof(address), "unconfigured");
+        }
+        proc_append(buf, cap, len,
+                    "        mac %02X:%02X:%02X:%02X:%02X:%02X link %u inet %s mtu %u\n",
+                    device->mac[0], device->mac[1], device->mac[2],
+                    device->mac[3], device->mac[4], device->mac[5],
+                    (uint32_t)device->link_state, address, device->mtu);
+    }
 }
 
 static uint32_t proc_tcp_addr_le(uint32_t ip)
@@ -949,11 +942,8 @@ static void proc_fill_net_tcp(char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len,
                 "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
 
-    if (!virtio_net_is_initialized())
-        return;
-
-    virtio_net_get_tcp_diag(&local_ip, &local_port, &listener_state,
-                            &pending_accept, &accepted_state);
+    net_socket_get_tcp_diag(&local_ip, &local_port, &listener_state,
+                            &accepted_state, &pending_accept);
 
     if (listener_state) {
         proc_append(buf, cap, len,
@@ -1509,6 +1499,9 @@ static void proc_fill_tty(char* buf, size_t cap, size_t* len)
 
 static void proc_fill_stat(char* buf, size_t cap, size_t* len)
 {
+    timer_cpu_accounting_t cpu_accounting[ARMOS_MAX_CPUS];
+    timer_cpu_accounting_t cpu_total = {0};
+    uint32_t cpu_count = smp_possible_cpu_count();
     uint32_t live_tasks = kernel_lifecycle_stats.tasks_created -
                           kernel_lifecycle_stats.tasks_destroyed;
     uint32_t live_zombies = kernel_lifecycle_stats.zombies_created -
@@ -1549,6 +1542,16 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
     const int tty_ids[] = {
         TTY_CONSOLE_ID, TTY_GRAPHICS_ID, TTY_SERIAL_ID
     };
+
+    if (cpu_count > ARMOS_MAX_CPUS)
+        cpu_count = ARMOS_MAX_CPUS;
+    for (uint32_t cpu = 0; cpu < cpu_count; cpu++) {
+        timer_cpu_accounting_read(cpu, &cpu_accounting[cpu]);
+        cpu_total.user_ticks += cpu_accounting[cpu].user_ticks;
+        cpu_total.system_ticks += cpu_accounting[cpu].system_ticks;
+        cpu_total.irq_ticks += cpu_accounting[cpu].irq_ticks;
+        cpu_total.idle_ticks += cpu_accounting[cpu].idle_ticks;
+    }
 
     for (size_t i = 0; i < sizeof(tty_ids) / sizeof(tty_ids[0]); i++) {
         int tty_id = tty_ids[i];
@@ -1618,7 +1621,19 @@ static void proc_fill_stat(char* buf, size_t cap, size_t* len)
         spin_unlock_irqrestore(&tty->lock, flags);
     }
 
-    proc_append(buf, cap, len, "cpu  0 0 0 %u 0 0 0 0 0 0\n", get_system_ticks());
+    proc_append(buf, cap, len, "cpu  %u 0 %u %u 0 %u 0 0 0 0\n",
+                cpu_total.user_ticks,
+                cpu_total.system_ticks,
+                cpu_total.idle_ticks,
+                cpu_total.irq_ticks);
+    for (uint32_t cpu = 0; cpu < cpu_count; cpu++) {
+        proc_append(buf, cap, len, "cpu%u %u 0 %u %u 0 %u 0 0 0 0\n",
+                    cpu,
+                    cpu_accounting[cpu].user_ticks,
+                    cpu_accounting[cpu].system_ticks,
+                    cpu_accounting[cpu].idle_ticks,
+                    cpu_accounting[cpu].irq_ticks);
+    }
     proc_append(buf, cap, len, "intr %u\n", irq_get_total_count());
     task_t *task = task_current_local();
     proc_append(buf, cap, len, "ctxt %u\n",
@@ -1795,6 +1810,8 @@ static void proc_fill_pid_status(pid_t pid, char* buf, size_t cap, size_t* len)
     proc_append(buf, cap, len, "L2Tables:\t%u\n", vm_page_table_count(vm));
     proc_append(buf, cap, len, "CtxSwitches:\t%u\n", task->switch_count);
     proc_append(buf, cap, len, "RuntimeTicks:\t%u\n", (uint32_t)task_runtime_ticks(task));
+    proc_append(buf, cap, len, "UserTicks:\t%u\n", (uint32_t)task->user_runtime);
+    proc_append(buf, cap, len, "SystemTicks:\t%u\n", (uint32_t)task->system_runtime);
     proc_append(buf, cap, len, "PageFaults:\t%u\n", task->page_faults);
     proc_append(buf, cap, len, "CowFaults:\t%u\n", task->cow_faults);
     proc_append(buf, cap, len, "StackFaults:\t%u\n", task->stack_faults);
@@ -1816,7 +1833,7 @@ static void proc_fill_pid_stat(pid_t pid, char* buf, size_t cap, size_t* len)
     }
 
     proc = proc_task_process(task);
-    proc_append(buf, cap, len, "%d (%s) %c %d %d %d %d %u %u %u %u %u\n",
+    proc_append(buf, cap, len, "%d (%s) %c %d %d %d %d %u %u %u %u %u %u %u\n",
                 proc ? proc->pid : 0,
                 task->name,
                 proc_task_state_char(task->state),
@@ -1828,7 +1845,9 @@ static void proc_fill_pid_stat(pid_t pid, char* buf, size_t cap, size_t* len)
                 task->cow_faults,
                 task->stack_faults,
                 task->switch_count,
-                (uint32_t)task_runtime_ticks(task));
+                (uint32_t)task_runtime_ticks(task),
+                (uint32_t)task->user_runtime,
+                (uint32_t)task->system_runtime);
     spin_unlock_irqrestore(&task_lock, flags);
 }
 

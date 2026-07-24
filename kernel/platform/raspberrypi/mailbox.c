@@ -39,6 +39,7 @@
 #define RPI_GPU_PHYSICAL_LIMIT   0x40000000u
 
 #define RPI_TAG_SET_POWER        0x00028001u
+#define RPI_TAG_SET_GPIO_STATE   0x00038041u
 #define RPI_POWER_NO_DEVICE      0x00000002u
 #define RPI_TAG_RESPONSE         0x80000000u
 #define RPI_TAG_LENGTH_MASK      0x7fffffffu
@@ -50,13 +51,16 @@ typedef union raspberrypi_power_message {
 } __attribute__((aligned(64))) raspberrypi_power_message_t;
 
 static raspberrypi_power_message_t power_message;
+static raspberrypi_power_message_t gpio_message;
 static const char *mailbox_failure = "none";
 
 static bool mailbox_timed_out(uint64_t start)
 {
-    uint64_t timeout_ticks =
-        ((uint64_t)get_timer_frequency() * RPI_MBOX_TIMEOUT_MS + 999u) /
-        1000u;
+    uint32_t frequency = get_timer_frequency();
+    uint32_t per_ms = frequency / 1000u;
+    uint32_t remainder = frequency % 1000u;
+    uint64_t timeout_ticks = (uint64_t)per_ms * RPI_MBOX_TIMEOUT_MS +
+        (remainder * RPI_MBOX_TIMEOUT_MS + 999u) / 1000u;
 
     if (timeout_ticks == 0u)
         timeout_ticks = 1u;
@@ -192,6 +196,44 @@ bool raspberrypi_set_power_state(uint32_t device_id, uint32_t state)
         KWARN("Raspberry Pi mailbox: SET_POWER_STATE id=%u rejected "
               "request=0x%08X response=0x%08X\n",
               device_id, state, power_message.words[6]);
+        return false;
+    }
+    return true;
+}
+
+bool raspberrypi_set_firmware_gpio(uint32_t gpio, bool high)
+{
+    for (uint32_t i = 0; i < 8u; i++)
+        gpio_message.words[i] = 0;
+
+    gpio_message.words[0] = sizeof(gpio_message.words);
+    gpio_message.words[1] = 0;
+    gpio_message.words[2] = RPI_TAG_SET_GPIO_STATE;
+    gpio_message.words[3] = 8;
+    gpio_message.words[4] = 0;
+    gpio_message.words[5] = gpio;
+    gpio_message.words[6] = high ? 1u : 0u;
+    gpio_message.words[7] = 0;
+
+    if (!raspberrypi_property_call(gpio_message.words,
+                                   sizeof(gpio_message.words))) {
+        KWARN("Raspberry Pi mailbox: SET_GPIO_STATE gpio=%u failed "
+              "reason=%s code=0x%08X tag=0x%08X\n",
+              gpio, mailbox_failure, gpio_message.words[1],
+              gpio_message.words[4]);
+        return false;
+    }
+    /*
+     * Expander GPIO replies report success by replacing the requested GPIO
+     * number with zero.  Unlike regular property tags, this firmware tag does
+     * not reliably set the per-tag response bit; the overall mailbox response
+     * was already validated by raspberrypi_property_call().
+     */
+    if (gpio_message.words[5] != 0u) {
+        KWARN("Raspberry Pi mailbox: SET_GPIO_STATE gpio=%u rejected "
+              "response tag=0x%08X status=0x%08X state=0x%08X\n",
+              gpio, gpio_message.words[4], gpio_message.words[5],
+              gpio_message.words[6]);
         return false;
     }
     return true;

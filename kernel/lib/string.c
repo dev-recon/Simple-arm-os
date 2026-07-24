@@ -301,12 +301,33 @@ char* strrchr(const char* s, int c)
 
 /* Ajouter a kernel/lib/string.c */
 
-static int itoa_helper(int value, char* str, int base)
+static unsigned long long udivmod_small(unsigned long long value,
+                                        unsigned int divisor,
+                                        unsigned int* remainder)
+{
+    unsigned long long quotient = 0u;
+    unsigned int rest = 0u;
+    int bit;
+
+    for (bit = 63; bit >= 0; bit--) {
+        rest = (rest << 1) | (unsigned int)((value >> bit) & 1u);
+        if (rest >= divisor) {
+            rest -= divisor;
+            quotient |= 1ull << bit;
+        }
+    }
+    if (remainder)
+        *remainder = rest;
+    return quotient;
+}
+
+static int itoa_helper(long long value, char* str, int base)
 {
     char* ptr = str;
     char* ptr1 = str;
     char tmp_char;
-    int tmp_value;
+    unsigned long long magnitude;
+    unsigned int digit;
     int len = 0;
     
     /* Handle 0 explicitly */
@@ -320,14 +341,15 @@ static int itoa_helper(int value, char* str, int base)
     int is_negative = 0;
     if (value < 0 && base == 10) {
         is_negative = 1;
-        value = -value;
+        magnitude = (unsigned long long)(-(value + 1)) + 1u;
+    } else {
+        magnitude = (unsigned long long)value;
     }
     
     /* Process individual digits */
-    while (value != 0) {
-        tmp_value = value;
-        value /= base;
-        *ptr++ = "0123456789abcdef"[tmp_value - value * base];
+    while (magnitude != 0u) {
+        magnitude = udivmod_small(magnitude, (unsigned int)base, &digit);
+        *ptr++ = "0123456789abcdef"[digit];
         len++;
     }
     
@@ -349,12 +371,12 @@ static int itoa_helper(int value, char* str, int base)
     return len;
 }
 
-static int utoa_helper(unsigned long value, char* str, int base)
+static int utoa_helper(unsigned long long value, char* str, int base)
 {
     char* ptr = str;
     char* ptr1 = str;
     char tmp_char;
-    unsigned long tmp_value;
+    unsigned int digit;
     int len = 0;
     
     /* Handle 0 explicitly */
@@ -366,9 +388,8 @@ static int utoa_helper(unsigned long value, char* str, int base)
     
     /* Process individual digits */
     while (value != 0) {
-        tmp_value = value;
-        value /= base;
-        *ptr++ = "0123456789abcdef"[tmp_value - value * base];
+        value = udivmod_small(value, (unsigned int)base, &digit);
+        *ptr++ = "0123456789abcdef"[digit];
         len++;
     }
     
@@ -419,7 +440,7 @@ int vsnprintf(char* str, size_t size, const char* format, va_list args)
             int zero_pad = 0;
             int width = 0;
             int precision = -1;
-            int is_long = 0;
+            int length_modifier = 0;
             char spec;
             char pad_char;
             int i;
@@ -450,13 +471,14 @@ int vsnprintf(char* str, size_t size, const char* format, va_list args)
             }
 
             if (*p == 'l') {
-                is_long = 1;
+                length_modifier = 1;
                 p++;
                 if (*p == 'l') {
+                    length_modifier = 2;
                     p++;
                 }
             } else if (*p == 'z') {
-                is_long = 1;
+                length_modifier = 1;
                 p++;
             }
 
@@ -512,8 +534,15 @@ int vsnprintf(char* str, size_t size, const char* format, va_list args)
                 
             case 'd':
             case 'i': {
-                long val = is_long ? va_arg(args, long) : va_arg(args, int);
-                temp_len = itoa_helper((int)val, temp_buf, 10);
+                long long val;
+
+                if (length_modifier == 2)
+                    val = va_arg(args, long long);
+                else if (length_modifier == 1)
+                    val = va_arg(args, long);
+                else
+                    val = va_arg(args, int);
+                temp_len = itoa_helper(val, temp_buf, 10);
                 if (!left_align && width > temp_len) {
                     if (pad_char == '0' && temp_buf[0] == '-') {
                         if (out < out_end) *out++ = '-';
@@ -547,7 +576,14 @@ int vsnprintf(char* str, size_t size, const char* format, va_list args)
             }
                 
             case 'u': {
-                unsigned long val = is_long ? va_arg(args, unsigned long) : va_arg(args, unsigned int);
+                unsigned long long val;
+
+                if (length_modifier == 2)
+                    val = va_arg(args, unsigned long long);
+                else if (length_modifier == 1)
+                    val = va_arg(args, unsigned long);
+                else
+                    val = va_arg(args, unsigned int);
                 temp_len = utoa_helper(val, temp_buf, 10);
                 if (!left_align && width > temp_len) {
                     for (i = 0; i < width - temp_len; i++) {
@@ -596,7 +632,14 @@ int vsnprintf(char* str, size_t size, const char* format, va_list args)
             case 'x':
             case 'X':
                 {
-                    unsigned long val = is_long ? va_arg(args, unsigned long) : va_arg(args, unsigned int);
+                    unsigned long long val;
+
+                    if (length_modifier == 2)
+                        val = va_arg(args, unsigned long long);
+                    else if (length_modifier == 1)
+                        val = va_arg(args, unsigned long);
+                    else
+                        val = va_arg(args, unsigned int);
                     temp_len = utoa_helper(val, temp_buf, 16);
                     if (spec == 'X') {
                         for (i = 0; i < temp_len; i++) {

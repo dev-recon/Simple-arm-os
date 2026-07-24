@@ -26,11 +26,12 @@ replace hardware timing and signal validation.
 - Storage: BCM2835/BCM2837 SD/eMMC controller
 - Root: ext2 partition
 - Boot: dedicated FAT32 LBA firmware partition
-- Graphics: optional firmware HDMI framebuffer or HSD028309 B6 / ILI9341
-  GPIO parallel display on `/dev/fb0`
-- USB input: optional DWC2 host with boot-protocol keyboards and mice behind
+- Graphics: firmware HDMI framebuffer on `/dev/fb0`, with an optional
+  HSD028309 B6 / ILI9341 GPIO auxiliary display on `/dev/fb1`
+- USB input: DWC2 host with boot-protocol keyboards and mice behind
   the Pi 3 internal USB hub
-- Networking: not yet provided by this profile
+- Networking: optional CYW43455 SDIO firmware, WPA2 station association,
+  BCDC Ethernet transport, DHCPv4, ARP, IPv4, and ICMP echo
 
 The separate `arm32/raspi2` target supports Raspberry Pi 2 Model B v1.1
 hardware and is also exercised with QEMU's `raspi2b` machine.
@@ -73,9 +74,10 @@ when the corresponding toolchain or sysroot changed.
 
 ## HDMI And USB Input
 
-The first HDMI and USB hardware profile is opt-in. HDMI and ILI9341 both own
-`/dev/fb0`, so they cannot be enabled together. A useful `armos.conf` for a
-Pi 3 connected to a monitor and a USB keyboard/mouse receiver is:
+The tracked Raspberry Pi 3 profile enables HDMI and USB input. HDMI is the
+primary `/dev/fb0` and `tty0`; ILI9341 may be enabled independently as
+auxiliary `/dev/fb1` and output-only `tty1`. A useful `armos.conf` for a Pi 3
+connected to a monitor and a USB keyboard/mouse receiver is:
 
 ```ini
 TARGET_ARCH=arm64
@@ -146,6 +148,119 @@ channel with DMA, supports the internal hub and split transactions, and
 handles boot keyboards and mice detected during startup. It does not yet
 provide hotplug, USB mass storage, audio, Bluetooth, isochronous transfers, or
 an interrupt-driven host-controller scheduler.
+
+## CYW43455 Wi-Fi Bring-up
+
+Raspberry Pi 3 B+ contains a CYW43455 radio connected through SDIO. ArmOS can
+initialize the SDHOST/SDIO bus, identify the chip, upload its separately
+licensed firmware, configure station mode, associate with a WPA2 access point,
+exchange Ethernet frames through BCDC, and acquire an IPv4 configuration
+through DHCP. The driver is enabled in the tracked ARM64 hardware profile,
+while its separately licensed firmware and local network credentials remain
+untracked.
+
+Install the pinned firmware after reviewing and accepting its separate
+Cypress/Broadcom license:
+
+```sh
+tools/fetch_raspi3_wifi_firmware.sh --accept-license
+```
+
+The firmware may be installed in the root image without embedding local
+credentials. A missing or incomplete `/etc/wifi.conf` is not a boot failure:
+the radio remains available for runtime configuration. Build with the tracked
+hardware profile:
+
+```sh
+ARMOS_CONFIG=configs/raspi3-arm64.conf \
+  tools/build_pi3_sd.sh --mode none
+```
+
+On the running system, scan and connect as root:
+
+```sh
+su
+wifi scan
+wifi connect YOUR_WIFI_SSID
+```
+
+On the first connection, `wifi` asks for the two-letter ISO 3166-1 country
+code and a password. Both values are echoed once for hardware-console
+validation; the password therefore remains visible on the active console and
+its UART mirror during entry. The country is global and is stored in
+`/etc/wifi.conf`; SSID-specific credentials are stored mode `0600` under
+`/etc/wifi.d`. An access point may advertise an 802.11 Country Information
+Element, but ArmOS does not treat that untrusted advertisement as regulatory
+authority. Users testing ArmOS outside France must enter the code for their
+actual location. The first scan on a fresh disk must run as root so ArmOS can
+persist that country policy.
+
+If saved credentials fail, `wifi connect` asks for a replacement password and
+allows at most three association attempts. A profile is replaced only after a
+successful association. State-changing operations are root-only:
+
+```sh
+wifi profiles
+wifi status
+wifi reload
+wifi disconnect
+```
+
+At boot, ArmOS scans for visible networks, tries the configured default
+profile first, then the other known profiles. If no known network is visible,
+or configuration is absent, boot continues with `wlan0` idle. No SD-card
+rewrite is needed when credentials change. A complete raw image write remains
+necessary when the firmware or initial root filesystem changes; kernel-only
+iterations can still update the mounted boot partition.
+
+The validated boot sequence includes lines equivalent to:
+
+```text
+WiFi: SDIO funcs=3 rca=0x0001 id=02D0:A9A6 SDIO=3 CCCR=2 [ OK ]
+WiFi: CYW43455 chip=0x4345 rev=6 pkg=2 signature=0x15264345 [ OK ]
+WiFi: CYW43455 ready xx:xx:xx:xx:xx:xx                  [ OK ]
+WiFi: associated with <ssid>, BSSID xx:xx:xx:xx:xx:xx   [ OK ]
+Net: wlan0 DHCP address 192.0.2.10                       [ OK ]
+```
+
+The DHCP line is asynchronous and can appear after the shell prompt. Confirm
+the complete path from userland:
+
+```sh
+ifconfig wlan0
+ping -c 4 <gateway-reported-by-ifconfig>
+httpget http://example.com/
+cat /proc/net/dev
+```
+
+`ifconfig` must report `wlan0` as `UP`, show a nonzero DHCP address, netmask,
+gateway, and DNS server, and identify the configuration method as `dhcp`.
+Successful gateway replies prove bidirectional BCDC transport, ARP, IPv4, and
+ICMP. The `wlan0` RX and TX counters in `ifconfig` and `/proc/net/dev` must
+increase during the test. `httpget` then proves DNS A resolution, active TCP,
+socket `read`/`write`, orderly close, and HTTP/1.1 over the same CYW43 data
+path. It supports plain `http://` URLs; TLS is not yet available.
+
+For an independent association check, the access point should list the ArmOS
+station MAC. A useful reliability test is ten cold boots with ten successful
+associations and DHCP leases, followed by a negative control using an invalid
+password and verification that the previous profile remains intact.
+
+The Raspberry Pi 3 wired Ethernet port is not supported yet. It is exposed by
+the LAN9514 USB hub through an SMSC95xx Ethernet controller and requires a
+separate USB network driver. That future driver will attach to the same common
+`net_device`, DHCP, `ifconfig`, and `ping` contracts.
+
+The current hardware stabilization publishes firmware SDPCM transmit-credit
+window changes after a short empty busy loop. Receive handling accepts both
+the frame indication and the firmware data-available indication, drains stale
+scan frames before returning an error, and limits each CMD53 FIFO transaction
+to 512 bytes. These details keep the control channel live across scans,
+country changes, association, and DHCP. Kernel builds currently use
+`-O0`, so the loop is retained. It is technical debt rather than a timing
+contract: before optimized kernel builds are enabled, replace it with an
+explicit timer-based delay or a firmware-state condition that the compiler
+cannot remove.
 
 ## Write An SD Card
 

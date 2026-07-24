@@ -19,6 +19,7 @@
 #include <sys/socket.h>
 
 #define IPPROTO_TCP 6
+#define IPPROTO_UDP 17
 #define INADDR_ANY 0x00000000u
 
 typedef uint16_t in_port_t;

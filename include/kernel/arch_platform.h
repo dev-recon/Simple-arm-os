@@ -72,6 +72,10 @@
 #define ARMOS_PLATFORM_KERNEL_MMIO_EMMC_BASE 0u
 #endif
 
+#ifndef ARMOS_PLATFORM_KERNEL_MMIO_SDHOST_BASE
+#define ARMOS_PLATFORM_KERNEL_MMIO_SDHOST_BASE 0u
+#endif
+
 #ifndef ARMOS_PLATFORM_KERNEL_MMIO_IRQCTRL2_BASE
 #define ARMOS_PLATFORM_KERNEL_MMIO_IRQCTRL2_BASE 0u
 #endif
@@ -322,6 +326,11 @@ static inline vaddr_t arch_platform_kernel_mmio_virtio_base(void)
 static inline vaddr_t arch_platform_kernel_mmio_emmc_base(void)
 {
     return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_EMMC_BASE;
+}
+
+static inline vaddr_t arch_platform_kernel_mmio_sdhost_base(void)
+{
+    return (vaddr_t)ARMOS_PLATFORM_KERNEL_MMIO_SDHOST_BASE;
 }
 
 static inline vaddr_t arch_platform_kernel_mmio_irqctrl2_base(void)

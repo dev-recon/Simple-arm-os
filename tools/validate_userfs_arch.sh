@@ -17,6 +17,24 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ARCH="${ARCH:-aarch64-elf-}"
+ALLOW_EMPTY=0
+QUIET=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --allow-empty)
+            ALLOW_EMPTY=1
+            ;;
+        --quiet)
+            QUIET=1
+            ;;
+        *)
+            echo "usage: $0 [--allow-empty] [--quiet]" >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
 
 # shellcheck source=tools/cross_target_env.sh
 source "$ROOT_DIR/tools/cross_target_env.sh"
@@ -41,18 +59,29 @@ while IFS= read -r file; do
     header="$(${ARCH}readelf -h "$file" 2>/dev/null || true)"
     if ! grep -q "Class:.*$EXPECTED_CLASS" <<<"$header" ||
        ! grep -q "Machine:.*$EXPECTED_MACHINE" <<<"$header"; then
-        echo "error: wrong ELF architecture in userfs: ${file#"$ROOT_DIR/"}" >&2
+        if [ "$QUIET" -ne 1 ]; then
+            echo "error: wrong ELF architecture in userfs: ${file#"$ROOT_DIR/"}" >&2
+        fi
         failed=$((failed + 1))
     fi
 done < <(find "$ROOT_DIR/userfs" -path "$ROOT_DIR/userfs/legacy" -prune -o -type f -print | sort)
 
 if [ "$checked" -eq 0 ]; then
-    echo "error: userfs contains no ELF files" >&2
+    if [ "$ALLOW_EMPTY" -eq 1 ]; then
+        exit 0
+    fi
+    if [ "$QUIET" -ne 1 ]; then
+        echo "error: userfs contains no ELF files" >&2
+    fi
     exit 1
 fi
 if [ "$failed" -ne 0 ]; then
-    echo "error: $failed of $checked userfs ELF files mismatch $TARGET_ARCH" >&2
+    if [ "$QUIET" -ne 1 ]; then
+        echo "error: $failed of $checked userfs ELF files mismatch $TARGET_ARCH" >&2
+    fi
     exit 1
 fi
 
-echo "userfs: $checked ELF files validated as $EXPECTED_CLASS/$EXPECTED_MACHINE"
+if [ "$QUIET" -ne 1 ]; then
+    echo "userfs: $checked ELF files validated as $EXPECTED_CLASS/$EXPECTED_MACHINE"
+fi

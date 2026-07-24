@@ -1,0 +1,6 @@
+# ArmOS persistent Wi-Fi profile.
+# Copy this file to home.conf (or another profile name) and keep it mode 0600.
+# Country is global in /etc/wifi.conf and credentials stay in this file.
+ssid=YOUR_WIFI_SSID
+security=wpa2
+password=YOUR_WIFI_PASSWORD

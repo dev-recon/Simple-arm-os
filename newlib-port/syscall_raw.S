@@ -24,6 +24,23 @@
     bx lr
 .endm
 
+.macro RAW_SYSCALL6 name, number
+.global \name
+.type \name, %function
+\name:
+    /*
+     * AAPCS passes arguments five and six on the user stack. ArmOS consumes
+     * syscall arguments from r0..r5, so preserve and marshal both registers.
+     */
+    push {r4, r5, r7, lr}
+    ldr r4, [sp, #16]
+    ldr r5, [sp, #20]
+    mov r7, #\number
+    swi #0
+    pop {r4, r5, r7, lr}
+    bx lr
+.endm
+
 .macro RAW_SYSCALL5 name, number
 .global \name
 .type \name, %function
@@ -148,6 +165,10 @@ RAW_SYSCALL sys_bind, 282
 RAW_SYSCALL sys_connect, 283
 RAW_SYSCALL sys_listen, 284
 RAW_SYSCALL sys_accept, 285
+RAW_SYSCALL6 sys_sendto, 286
+RAW_SYSCALL6 sys_recvfrom, 287
+RAW_SYSCALL sys_socket_shutdown, 288
+RAW_SYSCALL sys_resolve, 289
 RAW_SYSCALL sys_openat, 322
 RAW_SYSCALL sys_mkdirat, 323
 RAW_SYSCALL sys_fstatat, 327

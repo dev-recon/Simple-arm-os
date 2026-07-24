@@ -1,11 +1,16 @@
 # ArmOS kernel Makefile
 
-ARMOS_VERSION := 0.7.3
+ARMOS_VERSION := 0.7.4
 
 # Local configuration is optional. Command-line assignments retain GNU make's
 # highest priority; environment values are restored after the include so the
 # repository-wide precedence matches the shell entry points.
 ARMOS_CONFIG ?= armos.conf
+ifeq ($(origin ARMOS_CONFIG),command line)
+ifeq ($(wildcard $(ARMOS_CONFIG)),)
+$(error Selected ArmOS configuration does not exist: $(ARMOS_CONFIG))
+endif
+endif
 _ARMOS_ENV_TARGET_ARCH := $(if $(filter environment environment\ override,$(origin TARGET_ARCH)),$(TARGET_ARCH))
 _ARMOS_ENV_TARGET_PLATFORM := $(if $(filter environment environment\ override,$(origin TARGET_PLATFORM)),$(TARGET_PLATFORM))
 _ARMOS_ENV_CROSS_COMPILE := $(if $(filter environment environment\ override,$(origin CROSS_COMPILE)),$(CROSS_COMPILE))
@@ -92,6 +97,7 @@ LINKER_SCRIPT ?= linker.ld
 ASFLAGS = -g -I$(ARCH_INCLUDE) -Iinclude -I$(BUILD_DIR)/generated $(PLATFORM_ASFLAGS)
 
 CFLAGS = -std=gnu99 $(ARCH_CFLAGS) $(PLATFORM_CFLAGS) $(MATH_FLAGS) \
+         $(REPRO_FLAGS) \
          -DARMOS_VERSION=\"$(ARMOS_VERSION)\" \
          -ffreestanding -nostdlib -nostartfiles -fno-inline \
          -Wall -Wextra -Werror -g -O0 -fno-omit-frame-pointer -Wformat -Wformat-security \
@@ -139,6 +145,12 @@ COMMON_KERNEL_OBJS = \
 	kernel/process/exec_stack.o \
 	kernel/process/signal.o \
 	kernel/core/coredump.o \
+	kernel/core/device_service.o \
+	kernel/net/device.o \
+	kernel/net/stack.o \
+	kernel/net/socket.o \
+	kernel/net/control.o \
+	kernel/net/wifi.o \
 	kernel/fs/vfs.o \
 	kernel/fs/mount.o \
 	kernel/fs/fat32.o \
@@ -215,6 +227,10 @@ PLATFORM_KERNEL_BIN = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).bin
 PLATFORM_KERNEL_MAP = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).map
 PLATFORM_KERNEL_DIS = $(IMAGE_DIR)/kernel-$(IMAGE_SUFFIX).dis
 PLATFORM_DISK_IMG   = $(IMAGE_DIR)/disk-$(IMAGE_SUFFIX).img
+ARMOS_REPRODUCIBLE_ROOT ?= /usr/src/armos
+REPRO_FLAGS = -ffile-prefix-map=$(CURDIR)=$(ARMOS_REPRODUCIBLE_ROOT) \
+              -fmacro-prefix-map=$(CURDIR)=$(ARMOS_REPRODUCIBLE_ROOT) \
+              -fdebug-prefix-map=$(CURDIR)=$(ARMOS_REPRODUCIBLE_ROOT)
 FAT32_SIZE_MB = 64
 FAT32_LABEL ?= ARMBOOT
 EXT2_SIZE_MB = 512
@@ -263,6 +279,7 @@ config:
 	@echo "  CROSS_COMPILE:   $(CROSS_COMPILE)"
 	@echo "  SMP_CPUS:        $(SMP_CPUS)"
 	@echo "  ENABLE_NET:      $(if $(ENABLE_NET),$(ENABLE_NET),no)"
+	@echo "  ENABLE_WIFI:     $(if $(ENABLE_WIFI),$(ENABLE_WIFI),no)"
 	@echo "  ENABLE_GPU:      $(if $(ENABLE_GPU),$(ENABLE_GPU),no)"
 	@echo "  ENABLE_HDMI:     $(if $(ENABLE_HDMI),$(ENABLE_HDMI),platform default)"
 	@echo "  HDMI_WIDTH:      $(HDMI_WIDTH)"
@@ -351,7 +368,7 @@ ifeq ($(strip $(DEBUGFS)),)
 DEBUGFS := $(if $(E2FSPROGS_PREFIX),$(E2FSPROGS_PREFIX)/sbin/debugfs,debugfs)
 endif
 
-$(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
+$(EXT2_IMG): Makefile $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(USERFS_LINKS)
 	@echo "=== Creating ext2 image ($(EXT2_SIZE_MB) MB) ==="
 	@if ! command -v "$(MKE2FS)" >/dev/null 2>&1 || \
 	    ! command -v "$(DEBUGFS)" >/dev/null 2>&1; then \
@@ -364,7 +381,11 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(US
 	fi
 	dd if=/dev/zero of=$(EXT2_IMG) bs=1048576 count=$(EXT2_SIZE_MB) 2>/dev/null
 	$(MKE2FS) -q -t ext2 -F -L OS_EXT2 $(EXT2_IMG)
-	@( find $(USERFS_DIR) -path "$(USERFS_DIR)/legacy" -prune -o -type d -print | sort | while read dir; do \
+	@( find $(USERFS_DIR) \( \
+	       -path "$(USERFS_DIR)/legacy" -o \
+	       -name ".DS_Store" -o -name "._*" -o \
+	       -name ".Spotlight-V100" -o -name ".Trashes" \
+	   \) -prune -o -type d -print | sort | while read dir; do \
 	       if [ "$$dir" != "$(USERFS_DIR)" ]; then \
 	           relpath=$$(echo "$$dir" | sed 's|$(USERFS_DIR)/||'); \
 	           printf 'mkdir /%s\n' "$$relpath"; \
@@ -380,7 +401,11 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(US
 	           printf 'set_inode_field /%s gid %s\n' "$$relpath" "$$gid"; \
 	       fi; \
 	   done; \
-	   find $(USERFS_DIR) -path "$(USERFS_DIR)/legacy" -prune -o -type f -print | sort | while read f; do \
+	   find $(USERFS_DIR) \( \
+	       -path "$(USERFS_DIR)/legacy" -o \
+	       -name ".DS_Store" -o -name "._*" -o \
+	       -name ".Spotlight-V100" -o -name ".Trashes" \
+	   \) -prune -o -type f -print | sort | while read f; do \
 	       relpath=$$(echo "$$f" | sed 's|$(USERFS_DIR)/||'); \
 	       case "$$relpath" in dev/tty0|dev/tty1|dev/console|dev/fb0|dev/fb1) continue ;; esac; \
 	       printf 'write %s /%s\n' "$$f" "$$relpath"; \
@@ -399,7 +424,11 @@ $(EXT2_IMG): $(USERFS_DIR) $(USERFS_OS_CONF) $(USERFS_FILES) $(USERFS_DIRS) $(US
 	       printf 'set_inode_field /%s uid %s\n' "$$relpath" "$$uid"; \
 	       printf 'set_inode_field /%s gid %s\n' "$$relpath" "$$gid"; \
 	   done; \
-	   find $(USERFS_DIR) -path "$(USERFS_DIR)/legacy" -prune -o -type l -print | sort | while read l; do \
+	   find $(USERFS_DIR) \( \
+	       -path "$(USERFS_DIR)/legacy" -o \
+	       -name ".DS_Store" -o -name "._*" -o \
+	       -name ".Spotlight-V100" -o -name ".Trashes" \
+	   \) -prune -o -type l -print | sort | while read l; do \
 	       relpath=$$(echo "$$l" | sed 's|$(USERFS_DIR)/||'); \
 	       target=$$(readlink "$$l"); \
 	       printf 'symlink /%s %s\n' "$$relpath" "$$target"; \

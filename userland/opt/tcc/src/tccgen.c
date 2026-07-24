@@ -6205,7 +6205,7 @@ special_math_val:
         } else if (tok == '(') {
             SValue ret;
             Sym *sa;
-            int nb_args, ret_nregs, ret_align, regsize, variadic;
+            int nb_args, ret_nregs, ret_align = 1, regsize = 1, variadic;
             TokenString *p, *p2;
 
             /* function call  */

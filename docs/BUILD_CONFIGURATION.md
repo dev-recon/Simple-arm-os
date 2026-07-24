@@ -42,6 +42,7 @@ ARMOS_CONFIG=configs/qemu-virt-arm32.conf ./run.sh
 ARMOS_CONFIG=configs/qemu-virt-arm64.conf ./run.sh
 ARMOS_CONFIG=configs/raspi2-arm32.conf tools/build_pi2_sd.sh --mode none
 ARMOS_CONFIG=configs/raspi3-arm64.conf tools/build_pi3_sd.sh --mode none
+ARMOS_CONFIG=configs/raspi3-arm64-wifi.conf tools/build_pi3_sd.sh --mode none
 ```
 
 `ARMOS_CONFIG` paths are resolved from the repository root.
@@ -80,6 +81,7 @@ TARGET_ARCH=arm32
 TARGET_PLATFORM=qemu-virt
 SMP_CPUS=1
 ENABLE_NET=no
+ENABLE_WIFI=no
 ENABLE_GPU=no
 ENABLE_HDMI=no
 ENABLE_ILI9341=no
@@ -92,6 +94,19 @@ HDMI_HEIGHT=720
 starts. `ENABLE_GPU=yes` opens the VirtIO-GPU display and adds the keyboard
 device. Both can be enabled together. These two launch options require the
 `qemu-virt` platform.
+
+`ENABLE_WIFI=yes` selects the Raspberry Pi 3 CYW43455 SDIO bring-up path. It
+requires `TARGET_PLATFORM=raspi3`, firmware installed by
+`tools/fetch_raspi3_wifi_firmware.sh --accept-license`. Credentials do not
+need to be embedded at build time: root can use `wifi scan` and
+`wifi connect SSID` on the running system. The command stores the global
+regulatory country in `/etc/wifi.conf` and mode-`0600` network profiles under
+`/etc/wifi.d`. Boot scans for visible known profiles and otherwise leaves the
+radio idle without failing. The current milestone loads firmware, associates
+with a WPA2 access point, exchanges BCDC Ethernet frames, and configures
+`wlan0` through DHCP. The tracked `raspi3-arm64.conf` hardware reference
+enables the driver; the dedicated `raspi3-arm32-wifi.conf` and
+`raspi3-arm64-wifi.conf` profiles remain useful for focused Wi-Fi builds.
 
 `boot-graphics.sh` always enables the graphical device for that invocation.
 It does not require networking: with `ENABLE_NET=no`, no network arguments are
@@ -106,21 +121,23 @@ Raspberry Pi 3. The tracked `raspi3-arm64` profile enables it alongside HDMI
 as the independent `/dev/fb1` and output-only `/dev/tty1` auxiliary display.
 It is not a QEMU launch option and has no effect on `qemu-virt`.
 
-`ENABLE_HDMI=yes` selects the Raspberry Pi firmware framebuffer and exposes it
-through `/dev/fb0` and the Raspberry Pi primary `/dev/tty0`. USB keyboard
+`ENABLE_HDMI=yes` selects the Raspberry Pi firmware framebuffer on Raspberry
+Pi 2 or Raspberry Pi 3 and exposes it through `/dev/fb0` and the Raspberry Pi
+primary `/dev/tty0`. USB keyboard
 input is routed to that console. PL011 remains separately accessible as
 `/dev/ttyS0`, without an automatic login shell. HDMI requires
-`TARGET_PLATFORM=raspi3`; `HDMI_WIDTH` and `HDMI_HEIGHT` request an exact mode.
-The tracked Raspberry Pi 3 profile requests `1920x1080`. If either dimension
+`TARGET_PLATFORM=raspi2` or `TARGET_PLATFORM=raspi3`; `HDMI_WIDTH` and
+`HDMI_HEIGHT` request an exact mode.
+The tracked Raspberry Pi 3 profile requests `1280x720`. If either dimension
 is omitted, the platform defaults remain `1280x720`.
 HDMI remains the primary `/dev/fb0`; an enabled ILI9341 does not mirror it.
 These values select the boot mode. On a running Raspberry Pi HDMI system,
 `fbctl mode WIDTHxHEIGHT` requests another exact firmware mode through
 `/dev/fb0`.
 
-`ENABLE_USB=yes` enables the Raspberry Pi 3 DWC2 host, internal hub support,
-and boot-protocol keyboard/mouse input. This first milestone enumerates devices
-present during startup and requires `TARGET_PLATFORM=raspi3`.
+`ENABLE_USB=yes` enables the Raspberry Pi DWC2 host, external hub support, and
+boot-protocol keyboard/mouse input on Raspberry Pi 2 or Raspberry Pi 3. This
+milestone enumerates devices present during startup.
 
 Optional userland components:
 
@@ -139,6 +156,13 @@ BUILD_FBVIEW=no
 already installed in `userfs`. `BUILD_ALL_USERLAND=yes` enables the complete
 third-party toolchain and graphics dependency set already handled by
 `build.sh`.
+
+The repository intentionally shares one `userfs` source tree between ARM32
+and ARM64 builds. Before rebuilding, `build.sh` checks every installed ELF.
+When it detects files left by the other architecture, it automatically enables
+the complete userland build so optional tools and libraries are replaced
+together. Switching architecture therefore requires no manual `userfs`
+cleanup and cannot silently mix ARM32 and ARM64 programs.
 
 Useful optional overrides include:
 

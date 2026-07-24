@@ -7,7 +7,7 @@
 
 ARMOS_CONFIG_KEYS="
 TARGET_ARCH TARGET_PLATFORM ARCH CROSS_COMPILE NEWLIB_SYSROOT SMP_CPUS
-ENABLE_NET ENABLE_GPU ENABLE_HDMI ENABLE_ILI9341 ENABLE_USB HDMI_WIDTH HDMI_HEIGHT
+ENABLE_NET ENABLE_WIFI ENABLE_GPU ENABLE_HDMI ENABLE_ILI9341 ENABLE_USB HDMI_WIDTH HDMI_HEIGHT
 BUILD_NEWLIB BUILD_ALL_USERLAND BUILD_TCC BUILD_BSD BUILD_NCURSES BUILD_NANO
 BUILD_XV_DEPS BUILD_FBVIEW BUILD_ZLIB BUILD_LIBJPEG BUILD_LIBPNG BUILD_LIBTIFF
 QEMU_MEMORY QEMU_CPU QEMU_MACHINE QEMU_REQUIRED_VERSION QEMU_DISPLAY
@@ -16,7 +16,7 @@ SD_VOLUME RASPI_FIRMWARE_DIR DEVICE_TREE DTOVERLAY
 "
 
 ARMOS_CONFIG_BOOLEAN_KEYS="
-ENABLE_NET ENABLE_GPU ENABLE_HDMI ENABLE_ILI9341 ENABLE_USB
+ENABLE_NET ENABLE_WIFI ENABLE_GPU ENABLE_HDMI ENABLE_ILI9341 ENABLE_USB
 BUILD_NEWLIB BUILD_ALL_USERLAND BUILD_TCC BUILD_BSD BUILD_NCURSES BUILD_NANO
 BUILD_XV_DEPS BUILD_FBVIEW BUILD_ZLIB BUILD_LIBJPEG BUILD_LIBPNG BUILD_LIBTIFF
 "
@@ -171,16 +171,38 @@ armos_config_validate() {
         }
     fi
 
-    if { [ "${ENABLE_NET:-0}" = 1 ] || [ "${ENABLE_GPU:-0}" = 1 ]; } &&
+    if [ "${ENABLE_GPU:-0}" = 1 ] &&
        [ "${TARGET_PLATFORM:-qemu-virt}" != qemu-virt ]; then
-        armos_config_error "ENABLE_NET and ENABLE_GPU are QEMU launch options and require qemu-virt"
+        armos_config_error "ENABLE_GPU is a QEMU launch option and requires qemu-virt"
         return 1
     fi
 
-    if { [ "${ENABLE_HDMI:-0}" = 1 ] || [ "${ENABLE_USB:-0}" = 1 ]; } &&
+    if [ "${ENABLE_WIFI:-0}" = 1 ] &&
        [ "${TARGET_PLATFORM:-qemu-virt}" != raspi3 ]; then
-        armos_config_error "ENABLE_HDMI and ENABLE_USB require TARGET_PLATFORM=raspi3"
+        armos_config_error "ENABLE_WIFI requires TARGET_PLATFORM=raspi3"
         return 1
+    fi
+
+    if [ "${ENABLE_HDMI:-0}" = 1 ]; then
+        case "${TARGET_PLATFORM:-qemu-virt}" in
+            raspi2|raspi3) ;;
+            *)
+                armos_config_error \
+                    "ENABLE_HDMI requires TARGET_PLATFORM=raspi2 or raspi3"
+                return 1
+                ;;
+        esac
+    fi
+
+    if [ "${ENABLE_USB:-0}" = 1 ]; then
+        case "${TARGET_PLATFORM:-qemu-virt}" in
+            raspi2|raspi3) ;;
+            *)
+                armos_config_error \
+                    "ENABLE_USB requires TARGET_PLATFORM=raspi2 or raspi3"
+                return 1
+                ;;
+        esac
     fi
 
     for dimension in HDMI_WIDTH HDMI_HEIGHT; do
@@ -244,6 +266,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     TARGET_ARCH="${TARGET_ARCH:-arm32}"
     TARGET_PLATFORM="${TARGET_PLATFORM:-qemu-virt}"
     ENABLE_NET="${ENABLE_NET:-0}"
+    ENABLE_WIFI="${ENABLE_WIFI:-0}"
     ENABLE_GPU="${ENABLE_GPU:-0}"
     ENABLE_HDMI="${ENABLE_HDMI:-0}"
     ENABLE_ILI9341="${ENABLE_ILI9341:-0}"

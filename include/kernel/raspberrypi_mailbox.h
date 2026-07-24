@@ -25,5 +25,6 @@
 
 bool raspberrypi_property_call(volatile uint32_t *buffer, size_t size);
 bool raspberrypi_set_power_state(uint32_t device_id, uint32_t state);
+bool raspberrypi_set_firmware_gpio(uint32_t gpio, bool high);
 
 #endif /* _KERNEL_RASPBERRYPI_MAILBOX_H */

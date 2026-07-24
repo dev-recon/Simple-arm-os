@@ -5,6 +5,27 @@ Release tags use the bare version number starting with `0.7` (`0.7`, `0.7.1`,
 
 ## Unreleased
 
+### Release images
+
+- Added complete ARM32 and ARM64 QEMU Virt archives under `images/`, including
+  TinyCC/Newlib, BSD tools, nano/ncurses and the supported image libraries.
+- Added directly usable QEMU kernel binaries and a generated `SHA256SUMS`
+  manifest alongside the disk archives.
+- Added `images/run-image.sh` to extract and boot either prebuilt target
+  without invoking the build system.
+- Removed host checkout paths from kernel, newlib, userland and third-party
+  development artifacts through reproducible compiler path mappings.
+- Added release-image validation for ext2 consistency, required userland
+  content, host paths, credentials and macOS metadata.
+
+## ArmOS 0.7.4 - 2026-07-23
+
+ArmOS 0.7.4 connects the common network stack to Raspberry Pi 3 Wi-Fi and
+turns networking into a runtime-managed service rather than a fixed image
+configuration.
+
+### Highlights
+
 - Made logical console identity independent from hardware transport.
 - Routed Raspberry Pi HDMI or ILI9341 output and USB keyboard input through
   the primary `/dev/tty0`, while exposing PL011 separately as `/dev/ttyS0`.
@@ -13,6 +34,41 @@ Release tags use the bare version number starting with `0.7` (`0.7`, `0.7.1`,
   now runs as the ordinary `user`; administrative access remains explicit.
 - Added early kernel-log replay when Raspberry Pi hands the boot console from
   UART diagnostics to the framebuffer.
+- Added Raspberry Pi 3 CYW43455 bring-up through the common device
+  architecture: SDHOST/SDIO enumeration, pinned firmware loading, station
+  setup, WPA2 association, and reproducible ARM32/ARM64 Wi-Fi profiles.
+- Connected VirtIO-net and CYW43455 BCDC Ethernet transport to a common
+  architecture-neutral ARP, IPv4, DHCPv4, and ICMP echo stack.
+- Added `/dev/netctl`, generic `/proc/net/dev` reporting, the `netd` kernel
+  task, and userland `ifconfig` and numeric-address `ping` commands.
+- Added an architecture-neutral UDP, DNS and TCP socket layer shared by
+  VirtIO-net and CYW43, including active connect, bounded retransmission,
+  peer-window handling, FIN/RST processing, timeouts, passive accept, and
+  ordinary descriptor `read`/`write`.
+- Added newlib socket transfer and resolver interfaces, including
+  `sendto`, `recvfrom`, `shutdown`, and IPv4 `getaddrinfo`.
+- Added `httpget`, a compact HTTP/1.1 client used to validate DHCP, DNS and TCP
+  end to end on QEMU and Raspberry Pi 3 Wi-Fi.
+- Added runtime Wi-Fi scanning and root-only profile management with
+  interactive credential confirmation, bounded retries, hot reconnect, and
+  persistent per-SSID credentials under `/etc/wifi.d`.
+- Made the regulatory country a global `/etc/wifi.conf` policy, prompted on
+  first use instead of assuming France, and added boot-time selection of
+  visible known networks without making missing configuration fatal.
+- Stabilized the CYW43455 SDPCM transport by accepting both receive-data
+  indications, draining stale F2 frames after aborted scans, preserving the
+  firmware credit window, and splitting CMD53 FIFO transfers into
+  controller-safe 512-byte chunks.
+- Reduced idle polling by letting `usbd` and `netd` sleep according to their
+  next required service interval, and separated user, kernel, IRQ, and idle
+  CPU accounting in `top`.
+- Extended Raspberry Pi 2 configuration and bootstrap support for the common
+  firmware HDMI and DWC2 USB paths.
+- Fixed kernel `printf` handling of `long long` arguments, keeping 64-bit
+  network counters aligned and correctly formatted on ARM32.
+- Made architecture changes safe for the shared `userfs`: `build.sh` now
+  detects stale ELF files from the other target and automatically rebuilds the
+  complete userland instead of producing a mixed ARM32/ARM64 disk.
 
 ## ArmOS 0.7.3 - 2026-07-21
 
