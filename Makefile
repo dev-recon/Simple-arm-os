@@ -693,8 +693,6 @@ run: $(KERNEL_BIN) $(DISK_IMG)
 		-nographic \
 		$(QEMU_SIMPLE_DRIVE)
 
-#-machine secure=on \
-#-bios bl1.bin \
 #-global virtio-mmio.force-legacy=true
 
 debug: $(KERNEL_BIN) $(DISK_IMG)

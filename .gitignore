@@ -3,7 +3,6 @@
 *.d
 *.o
 kernel.bin
-bl1.bin
 kernel.dis
 kernel.elf
 kernel.map
